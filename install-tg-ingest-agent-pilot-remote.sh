@@ -46,9 +46,9 @@ TELEGRAM_BOT_TOKEN=REPLACE_ME
 # Comma-separated numeric chat ids allowed to feed the bot.
 ALLOWED_CHAT_IDS=REPLACE_ME
 DO_MODEL_ACCESS_KEY=REPLACE_ME
-# Comma- or pipe-separated fixed category list, e.g. news,tools,jobs,ideas
-CATEGORIES=REPLACE_ME
 # Optional overrides (defaults shown):
+# Optional seed taxonomy; categories also emerge from confirmed suggestions.
+# CATEGORIES=news,tools,ideas
 # CATEGORIES_FILE=/etc/tg-ingest-agent/categories.txt
 # FALLBACK_CATEGORY=uncategorized
 # DO_CHAT_MODEL=anthropic-claude-haiku-4.5

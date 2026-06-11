@@ -2,9 +2,12 @@
 """tg-ingest-agent: Telegram message ingest + LLM categorization.
 
 Receives messages (text, photos, forwarded channel posts) from allowed chats
-via long polling, stores them in SQLite, downloads photos, classifies each
-message against a fixed category list using DigitalOcean Gradient serverless
-inference, and replies in the chat with the category and a short summary.
+via long polling, stores them in SQLite, downloads photos, and asks a
+vision-capable LLM on DigitalOcean Gradient serverless inference to suggest a
+category (reusing the taxonomy built up from previously confirmed categories)
+and a short summary. The suggestion is sent back with inline buttons; the
+operator confirms it, picks an alternative, or replies with a custom category.
+Only confirmed categories enter the taxonomy.
 
 Stdlib-only. Deployed on Pilot-VPS as /opt/tg-ingest-agent/agent.py.
 """
@@ -69,12 +72,10 @@ def load_config(env=None):
     cfg.do_key = (env.get("DO_MODEL_ACCESS_KEY") or "").strip()
     if not cfg.do_key:
         raise SystemExit("DO_MODEL_ACCESS_KEY is required")
-    cfg.categories = load_categories(env)
-    if not cfg.categories:
-        raise SystemExit("CATEGORIES or CATEGORIES_FILE must provide at least one category")
+    # Optional seed taxonomy; the real category list grows from confirmed
+    # suggestions in the categories table.
+    cfg.seed_categories = load_categories(env)
     cfg.fallback_category = (env.get("FALLBACK_CATEGORY") or "uncategorized").strip()
-    if validate_category(cfg.fallback_category, cfg.categories) is None:
-        cfg.categories.append(cfg.fallback_category)
     cfg.do_model = (env.get("DO_CHAT_MODEL") or "anthropic-claude-haiku-4.5").strip()
     cfg.do_base_url = (env.get("DO_INFERENCE_BASE_URL") or "https://inference.do-ai.run/v1").strip()
     cfg.db_path = Path(env.get("DB_PATH") or "/var/lib/tg-ingest-agent/ingest.db")
@@ -90,12 +91,25 @@ def load_config(env=None):
 
 # ---------------------------------------------------------------------------
 # SQLite storage
+#
+# messages.status lifecycle:
+#   pending   -> stored, awaiting an LLM suggestion (retried on failure)
+#   suggested -> LLM suggestion sent, awaiting operator confirmation
+#   confirmed -> operator confirmed (category is final)
+#   failed    -> LLM gave up after LLM_MAX_ATTEMPTS
+#   duplicate -> re-forward of an already stored channel post
 
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS categories (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -112,11 +126,13 @@ CREATE TABLE IF NOT EXISTS messages (
   received_at TEXT NOT NULL,
   tg_date INTEGER,
   raw_text TEXT,
+  suggested_category TEXT,
   category TEXT,
   summary TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   llm_model TEXT,
   llm_attempts INTEGER NOT NULL DEFAULT 0,
+  suggestion_message_id INTEGER,
   duplicate_of INTEGER REFERENCES messages(id),
   UNIQUE (chat_id, tg_message_id)
 );
@@ -142,6 +158,8 @@ CREATE TABLE IF NOT EXISTS images (
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_fwd
   ON messages(forward_origin_chat_id, forward_origin_message_id);
+CREATE INDEX IF NOT EXISTS idx_messages_suggestion
+  ON messages(chat_id, suggestion_message_id);
 """
 
 
@@ -165,6 +183,44 @@ def kv_get(conn, key, default=None):
 def kv_set(conn, key, value):
     conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
+
+
+def ensure_category(conn, name):
+    """Insert the category if new (case-insensitive); return canonical name."""
+    row = conn.execute(
+        "SELECT name FROM categories WHERE name = ? COLLATE NOCASE", (name,)
+    ).fetchone()
+    if row:
+        return row["name"]
+    conn.execute(
+        "INSERT INTO categories (name, created_at) VALUES (?, ?)",
+        (name, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    return name
+
+
+def known_categories(conn, limit=50):
+    rows = conn.execute(
+        "SELECT c.name AS name,"
+        " (SELECT COUNT(*) FROM messages m WHERE m.category = c.name AND m.status = 'confirmed') AS n"
+        " FROM categories c ORDER BY n DESC, c.name LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [r["name"] for r in rows]
+
+
+def categories_text(conn):
+    rows = conn.execute(
+        "SELECT c.name AS name,"
+        " (SELECT COUNT(*) FROM messages m WHERE m.category = c.name AND m.status = 'confirmed') AS n"
+        " FROM categories c ORDER BY n DESC, c.name",
+    ).fetchall()
+    if not rows:
+        return "No categories yet. They are created when you confirm suggestions."
+    return "Categories (confirmed messages):\n" + "\n".join(
+        f"  {r['name']}: {r['n']}" for r in rows
+    )
 
 
 def insert_message(conn, fields):
@@ -219,33 +275,59 @@ def message_images(conn, message_id):
 def find_forward_duplicate(conn, fwd_chat_id, fwd_message_id, exclude_id):
     return conn.execute(
         "SELECT * FROM messages WHERE forward_origin_chat_id = ? AND forward_origin_message_id = ?"
-        " AND id != ? AND duplicate_of IS NULL ORDER BY id LIMIT 1",
+        " AND id != ? AND status != 'duplicate' ORDER BY id LIMIT 1",
         (fwd_chat_id, fwd_message_id, exclude_id),
     ).fetchone()
 
 
 def mark_duplicate(conn, message_id, original):
     conn.execute(
-        "UPDATE messages SET duplicate_of = ?, category = ?, summary = ?, llm_model = ?,"
-        " status = CASE WHEN ? IS NOT NULL THEN 'classified' ELSE status END WHERE id = ?",
+        "UPDATE messages SET duplicate_of = ?, suggested_category = ?, category = ?,"
+        " summary = ?, llm_model = ?, status = 'duplicate' WHERE id = ?",
         (
             original["id"],
+            original["suggested_category"],
             original["category"],
             original["summary"],
             original["llm_model"],
-            original["category"],
             message_id,
         ),
     )
     conn.commit()
 
 
-def set_classification(conn, message_id, category, summary, model):
+def set_suggestion(conn, message_id, suggested_category, summary, model):
     conn.execute(
-        "UPDATE messages SET category = ?, summary = ?, llm_model = ?, status = 'classified' WHERE id = ?",
-        (category, summary, model, message_id),
+        "UPDATE messages SET suggested_category = ?, summary = ?, llm_model = ?,"
+        " status = 'suggested' WHERE id = ?",
+        (suggested_category, summary, model, message_id),
     )
     conn.commit()
+
+
+def set_suggestion_message(conn, message_id, tg_suggestion_message_id):
+    conn.execute(
+        "UPDATE messages SET suggestion_message_id = ? WHERE id = ?",
+        (tg_suggestion_message_id, message_id),
+    )
+    conn.commit()
+
+
+def confirm_category(conn, message_id, category):
+    conn.execute(
+        "UPDATE messages SET category = ?, status = 'confirmed' WHERE id = ?",
+        (category, message_id),
+    )
+    conn.commit()
+
+
+def find_by_suggestion_message(conn, chat_id, suggestion_message_id):
+    if not suggestion_message_id:
+        return None
+    return conn.execute(
+        "SELECT * FROM messages WHERE chat_id = ? AND suggestion_message_id = ? LIMIT 1",
+        (chat_id, suggestion_message_id),
+    ).fetchone()
 
 
 def bump_attempts(conn, message_id):
@@ -264,24 +346,27 @@ def mark_failed(conn, message_id):
 def pending_messages(conn, max_attempts, limit=5):
     return conn.execute(
         "SELECT * FROM messages WHERE status = 'pending' AND llm_attempts < ?"
-        " AND duplicate_of IS NULL ORDER BY id LIMIT ?",
+        " ORDER BY id LIMIT ?",
         (max_attempts, limit),
     ).fetchall()
 
 
 def stats_text(conn):
-    lines = ["By status:"]
-    for row in conn.execute(
+    status_rows = conn.execute(
         "SELECT status, COUNT(*) AS n FROM messages GROUP BY status ORDER BY status"
-    ):
-        lines.append(f"  {row['status']}: {row['n']}")
-    lines.append("By category:")
-    for row in conn.execute(
-        "SELECT COALESCE(category, '(none)') AS cat, COUNT(*) AS n FROM messages"
-        " GROUP BY cat ORDER BY n DESC"
-    ):
-        lines.append(f"  {row['cat']}: {row['n']}")
-    return "\n".join(lines) if len(lines) > 2 else "No messages stored yet."
+    ).fetchall()
+    if not status_rows:
+        return "No messages stored yet."
+    lines = ["By status:"]
+    lines.extend(f"  {row['status']}: {row['n']}" for row in status_rows)
+    category_rows = conn.execute(
+        "SELECT category AS cat, COUNT(*) AS n FROM messages"
+        " WHERE status = 'confirmed' GROUP BY cat ORDER BY n DESC"
+    ).fetchall()
+    if category_rows:
+        lines.append("Confirmed by category:")
+        lines.extend(f"  {row['cat']}: {row['n']}" for row in category_rows)
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +463,7 @@ def extract_urls(text, entities):
 
 
 # ---------------------------------------------------------------------------
-# LLM classification (DigitalOcean Gradient serverless inference)
+# LLM suggestion (DigitalOcean Gradient serverless inference)
 
 
 class LLMError(Exception):
@@ -456,7 +541,17 @@ def parse_llm_json(text):
     return None
 
 
-def validate_category(value, categories):
+MAX_CATEGORY_CHARS = 40
+
+
+def normalize_category(value):
+    """Collapse whitespace, cap length; None when nothing usable remains."""
+    value = re.sub(r"\s+", " ", str(value or "")).strip()
+    return value[:MAX_CATEGORY_CHARS].strip() or None
+
+
+def match_category(value, categories):
+    """Return the canonical (existing) spelling of value, or None."""
     value = str(value or "").strip()
     for category in categories:
         if value.casefold() == category.casefold():
@@ -479,12 +574,20 @@ def build_text_block(raw_text, forward_type, forward_title, urls):
 MAX_LLM_IMAGE_BYTES = 5 * 1024 * 1024
 
 
-def build_llm_messages(cfg, text_block, image_paths):
+def build_llm_messages(cfg, known, text_block, image_paths):
+    if known:
+        taxonomy = (
+            "Categories used so far: " + ", ".join(known) + "\n"
+            "Prefer one of these when it fits; propose a new short category only when none fits."
+        )
+    else:
+        taxonomy = "There are no categories yet; propose a short (1-3 word) category."
     system = (
         "You categorize messages forwarded into a personal Telegram inbox.\n"
-        f"Allowed categories (choose exactly one): {', '.join(cfg.categories)}\n"
+        f"{taxonomy}\n"
         "Reply with ONLY a JSON object: "
-        '{"category": "<one of the allowed categories>", '
+        '{"category": "<best category>", '
+        '"alternatives": ["<up to 2 other plausible categories>"], '
         '"summary": "<short summary of the message, at most 2 sentences>"}'
     )
     content = [{"type": "text", "text": text_block}]
@@ -509,28 +612,83 @@ def build_llm_messages(cfg, text_block, image_paths):
     ]
 
 
-def classify(cfg, text_block, image_paths):
-    messages = build_llm_messages(cfg, text_block, image_paths)
+def suggest(cfg, known, text_block, image_paths):
+    """Ask the LLM for a category suggestion.
+
+    Returns (category, alternatives, summary); never raises on bad model
+    output (falls back to cfg.fallback_category), only on transport errors.
+    """
+    messages = build_llm_messages(cfg, known, text_block, image_paths)
     reply = do_chat(cfg, messages)
     parsed = parse_llm_json(reply)
-    category = validate_category((parsed or {}).get("category"), cfg.categories)
+    category = normalize_category((parsed or {}).get("category"))
     if parsed is None or category is None:
         messages.append({"role": "assistant", "content": reply})
         messages.append({
             "role": "user",
             "content": (
-                'Reply with ONLY the JSON object {"category": ..., "summary": ...}. '
-                f"The category must be exactly one of: {', '.join(cfg.categories)}"
+                'Reply with ONLY the JSON object '
+                '{"category": ..., "alternatives": [...], "summary": ...}.'
             ),
         })
         reply = do_chat(cfg, messages)
         parsed = parse_llm_json(reply)
-        category = validate_category((parsed or {}).get("category"), cfg.categories)
-    if parsed is None:
+        category = normalize_category((parsed or {}).get("category"))
+    if parsed is None or category is None:
         summary = (reply or "").strip()[:500] or "(unparseable model reply)"
-        return cfg.fallback_category, summary
+        return cfg.fallback_category, [], summary
+    category = match_category(category, known) or category
+    alternatives = []
+    raw_alternatives = parsed.get("alternatives")
+    if isinstance(raw_alternatives, list):
+        for alt in raw_alternatives[:5]:
+            alt = normalize_category(alt)
+            if not alt:
+                continue
+            alt = match_category(alt, known) or alt
+            taken = [category.casefold()] + [a.casefold() for a in alternatives]
+            if alt.casefold() not in taken:
+                alternatives.append(alt)
     summary = str(parsed.get("summary") or "").strip() or "(no summary)"
-    return category or cfg.fallback_category, summary
+    return category, alternatives[:3], summary
+
+
+# ---------------------------------------------------------------------------
+# Confirmation keyboard (callback_data is capped at 64 bytes by Telegram)
+
+
+CALLBACK_BYTE_LIMIT = 64
+
+
+def build_suggestion_keyboard(row_id, category, alternatives):
+    keyboard = [[{"text": f"✅ {category}", "callback_data": f"s|{row_id}"}]]
+    alt_row = []
+    for alt in alternatives:
+        if alt.casefold() == category.casefold():
+            continue
+        data = f"a|{row_id}|{alt}"
+        if len(data.encode("utf-8")) > CALLBACK_BYTE_LIMIT:
+            continue
+        alt_row.append({"text": alt, "callback_data": data})
+    if alt_row:
+        keyboard.append(alt_row[:3])
+    return keyboard
+
+
+def parse_callback_data(data):
+    """Parse 's|<row_id>' or 'a|<row_id>|<category>'; None when malformed."""
+    parts = str(data or "").split("|", 2)
+    if len(parts) < 2:
+        return None
+    try:
+        row_id = int(parts[1])
+    except ValueError:
+        return None
+    if parts[0] == "s" and len(parts) == 2:
+        return ("suggested", row_id, None)
+    if parts[0] == "a" and len(parts) == 3 and parts[2].strip():
+        return ("named", row_id, parts[2].strip())
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -595,6 +753,10 @@ class Agent:
         self.cfg = cfg
         self.conn = open_db(cfg.db_path)
         cfg.media_dir.mkdir(parents=True, exist_ok=True)
+        for name in cfg.seed_categories:
+            normalized = normalize_category(name)
+            if normalized:
+                ensure_category(self.conn, normalized)
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0
@@ -605,9 +767,9 @@ class Agent:
 
     # -- Telegram helpers
 
-    def reply(self, chat_id, text, reply_to=None):
+    def reply(self, chat_id, text, reply_to=None, reply_markup=None):
         try:
-            tg_call(
+            return tg_call(
                 self.cfg.token,
                 "sendMessage",
                 {
@@ -615,10 +777,39 @@ class Agent:
                     "text": text[:4000],
                     "reply_to_message_id": reply_to,
                     "allow_sending_without_reply": True,
+                    "reply_markup": reply_markup,
                 },
             )
         except TelegramError as exc:
             log(f"sendMessage failed: {exc}")
+            return None
+
+    def answer_callback(self, callback_id, text):
+        try:
+            tg_call(
+                self.cfg.token,
+                "answerCallbackQuery",
+                {"callback_query_id": callback_id, "text": text[:200]},
+            )
+        except TelegramError as exc:
+            log(f"answerCallbackQuery failed: {exc}")
+
+    def edit_suggestion_message(self, chat_id, message_id, row):
+        if not message_id:
+            return
+        summary = (row["summary"] or "")[:500]
+        try:
+            tg_call(
+                self.cfg.token,
+                "editMessageText",
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": f"Category: {row['category']} ✅\nSummary: {summary}\n(#{row['id']})",
+                },
+            )
+        except TelegramError as exc:
+            log(f"editMessageText failed: {exc}")
 
     def download_photo(self, photo):
         unique_id = photo.get("file_unique_id")
@@ -642,7 +833,8 @@ class Agent:
         offset = int(kv_get(self.conn, "offset", "0") or 0)
         errors = 0
         log(
-            f"polling started (model={self.cfg.do_model}, categories={len(self.cfg.categories)}, "
+            f"polling started (model={self.cfg.do_model}, "
+            f"known_categories={len(known_categories(self.conn))}, "
             f"allowed_chats={len(self.cfg.allowed_chat_ids)}, offset={offset})"
         )
         while not self.stop:
@@ -656,7 +848,11 @@ class Agent:
                 updates = tg_call(
                     self.cfg.token,
                     "getUpdates",
-                    {"offset": offset, "timeout": poll_timeout, "allowed_updates": ["message"]},
+                    {
+                        "offset": offset,
+                        "timeout": poll_timeout,
+                        "allowed_updates": ["message", "callback_query"],
+                    },
                     timeout=poll_timeout + 15,
                 )
                 errors = 0
@@ -688,6 +884,10 @@ class Agent:
     # -- Update handling
 
     def handle_update(self, update):
+        callback = update.get("callback_query")
+        if callback:
+            self.handle_callback(callback)
+            return
         msg = update.get("message")
         if not msg:
             return
@@ -697,9 +897,15 @@ class Agent:
             log(f"ignored message from chat_id={chat_id} user_id={from_id}")
             return
         text = (msg.get("text") or "").strip()
-        if text in ("/start", "/stats") and not msg.get("forward_origin"):
+        if text in ("/start", "/stats", "/categories") and not msg.get("forward_origin"):
             self.handle_command(chat_id, text)
             return
+        reply_to_msg = msg.get("reply_to_message")
+        if reply_to_msg and text and not msg.get("forward_origin"):
+            row = find_by_suggestion_message(self.conn, chat_id, reply_to_msg.get("message_id"))
+            if row:
+                self.handle_correction(row, chat_id, text, msg.get("message_id"))
+                return
         group_id = msg.get("media_group_id")
         if group_id:
             buffer = self.albums.setdefault(str(group_id), {"parts": []})
@@ -712,11 +918,57 @@ class Agent:
         if text == "/start":
             self.reply(
                 chat_id,
-                "tg-ingest-agent: send or forward messages (text, links, photos) and I will "
-                "categorize, summarize and store them. /stats shows stored counts.",
+                "tg-ingest-agent: send or forward messages (text, links, photos). I store "
+                "them, suggest a category and summary, and you confirm with the buttons or "
+                "by replying with your own category. /stats shows counts, /categories the "
+                "taxonomy.",
             )
-        else:
+        elif text == "/stats":
             self.reply(chat_id, stats_text(self.conn))
+        else:
+            self.reply(chat_id, categories_text(self.conn))
+
+    def handle_callback(self, callback):
+        callback_id = callback.get("id")
+        msg = callback.get("message") or {}
+        chat_id = (msg.get("chat") or {}).get("id")
+        from_id = (callback.get("from") or {}).get("id")
+        if chat_id not in self.cfg.allowed_chat_ids and from_id not in self.cfg.allowed_chat_ids:
+            self.answer_callback(callback_id, "Not allowed.")
+            return
+        parsed = parse_callback_data(callback.get("data"))
+        if not parsed:
+            self.answer_callback(callback_id, "Unknown action.")
+            return
+        kind, row_id, name = parsed
+        row = get_message(self.conn, row_id)
+        if not row:
+            self.answer_callback(callback_id, "Unknown message.")
+            return
+        if row["status"] == "confirmed":
+            self.answer_callback(callback_id, f"Already confirmed: {row['category']}")
+            return
+        category = name if kind == "named" else (row["suggested_category"] or self.cfg.fallback_category)
+        canonical = ensure_category(self.conn, category)
+        confirm_category(self.conn, row_id, canonical)
+        log(f"message #{row_id} confirmed as {canonical} (via button)")
+        self.answer_callback(callback_id, f"Saved: {canonical}")
+        self.edit_suggestion_message(
+            chat_id, msg.get("message_id") or row["suggestion_message_id"], get_message(self.conn, row_id)
+        )
+
+    def handle_correction(self, row, chat_id, text, reply_to):
+        if row["status"] == "confirmed":
+            self.reply(chat_id, f"#{row['id']} is already confirmed as {row['category']}.", reply_to)
+            return
+        category = normalize_category(text)
+        if not category:
+            return
+        canonical = ensure_category(self.conn, category)
+        confirm_category(self.conn, row["id"], canonical)
+        log(f"message #{row['id']} confirmed as {canonical} (via reply)")
+        self.reply(chat_id, f"Saved: {canonical} (#{row['id']})", reply_to)
+        self.edit_suggestion_message(chat_id, row["suggestion_message_id"], get_message(self.conn, row["id"]))
 
     def flush_albums(self, now, force=False):
         for group_id in list(self.albums):
@@ -788,76 +1040,80 @@ class Agent:
             if original:
                 mark_duplicate(self.conn, row_id, original)
                 log(f"message #{row_id} is a duplicate of #{original['id']}, skipping LLM")
-                if original["category"]:
-                    self.reply(
-                        chat_id,
-                        f"Duplicate of #{original['id']}.\nCategory: {original['category']}\n"
-                        f"Summary: {original['summary']}",
-                        reply_to,
-                    )
+                if original["status"] == "confirmed":
+                    detail = f"category: {original['category']}"
+                elif original["suggested_category"]:
+                    detail = f"suggested {original['suggested_category']}, awaiting confirmation"
                 else:
-                    self.reply(
-                        chat_id,
-                        f"Duplicate of #{original['id']} (classification still pending).",
-                        reply_to,
-                    )
+                    detail = "classification still pending"
+                self.reply(chat_id, f"Duplicate of #{original['id']} ({detail}).", reply_to)
                 return
-        result = self.classify_row(get_message(self.conn, row_id))
-        if result:
-            category, summary = result
-            self.reply(
-                chat_id,
-                f"Category: {category}\nSummary: {summary[:500]}\n"
+        suggestion = self.suggest_row(get_message(self.conn, row_id))
+        if suggestion:
+            category, alternatives, summary = suggestion
+            self.send_suggestion(
+                row_id, chat_id, reply_to, category, alternatives, summary,
                 f"(saved #{row_id}, {image_count} images, {len(urls)} URLs)",
-                reply_to,
             )
         else:
             self.reply(
                 chat_id,
-                f"Stored #{row_id}. Classification failed, will retry.",
+                f"Stored #{row_id}. Could not get a suggestion, will retry.",
                 reply_to,
             )
 
-    # -- Classification
+    # -- Suggestion flow
 
-    def classify_row(self, row):
+    def suggest_row(self, row):
+        """Get an LLM suggestion for a stored row; returns (category,
+        alternatives, summary) or None when the LLM call failed."""
         row_id = row["id"]
         urls = [r["url"] for r in message_urls(self.conn, row_id)]
         image_paths = [r["local_path"] for r in message_images(self.conn, row_id) if r["local_path"]]
+        known = known_categories(self.conn)
         if not (row["raw_text"] or urls or image_paths):
-            set_classification(
-                self.conn, row_id, self.cfg.fallback_category, "(no analyzable content)", None
+            category, alternatives, summary = self.cfg.fallback_category, [], "(no analyzable content)"
+        else:
+            text_block = build_text_block(
+                row["raw_text"], row["forward_origin_type"], row["forward_origin_title"], urls
             )
-            return self.cfg.fallback_category, "(no analyzable content)"
-        text_block = build_text_block(
-            row["raw_text"], row["forward_origin_type"], row["forward_origin_title"], urls
+            try:
+                category, alternatives, summary = suggest(self.cfg, known, text_block, image_paths)
+            except LLMError as exc:
+                attempts = bump_attempts(self.conn, row_id)
+                if attempts >= self.cfg.llm_max_attempts:
+                    mark_failed(self.conn, row_id)
+                    log(f"message #{row_id} marked failed after {attempts} attempts: {exc}")
+                else:
+                    log(f"suggestion failed for message #{row_id} (attempt {attempts}): {exc}")
+                return None
+        set_suggestion(self.conn, row_id, category, summary, self.cfg.do_model)
+        log(f"suggested {category} for message #{row_id}")
+        return category, alternatives, summary
+
+    def send_suggestion(self, row_id, chat_id, reply_to, category, alternatives, summary, counts_line):
+        keyboard = build_suggestion_keyboard(row_id, category, alternatives)
+        result = self.reply(
+            chat_id,
+            f"Suggested category: {category}\nSummary: {summary[:500]}\n{counts_line}\n"
+            "Tap a button to confirm, or reply to this message with a different category.",
+            reply_to,
+            reply_markup={"inline_keyboard": keyboard},
         )
-        try:
-            category, summary = classify(self.cfg, text_block, image_paths)
-        except LLMError as exc:
-            attempts = bump_attempts(self.conn, row_id)
-            if attempts >= self.cfg.llm_max_attempts:
-                mark_failed(self.conn, row_id)
-                log(f"message #{row_id} marked failed after {attempts} attempts: {exc}")
-            else:
-                log(f"classification failed for message #{row_id} (attempt {attempts}): {exc}")
-            return None
-        set_classification(self.conn, row_id, category, summary, self.cfg.do_model)
-        log(f"classified message #{row_id} as {category}")
-        return category, summary
+        if result and result.get("message_id"):
+            set_suggestion_message(self.conn, row_id, result["message_id"])
 
     def retry_sweep(self):
         rows = pending_messages(self.conn, self.cfg.llm_max_attempts)
         for row in rows:
             if self.stop:
                 return
-            result = self.classify_row(row)
-            if result:
-                category, summary = result
-                self.reply(
-                    row["chat_id"],
-                    f"(retry) Category: {category}\nSummary: {summary[:500]}\n(saved #{row['id']})",
-                    row["tg_message_id"],
+            suggestion = self.suggest_row(row)
+            if suggestion:
+                category, alternatives, summary = suggestion
+                self.send_suggestion(
+                    row["id"], row["chat_id"], row["tg_message_id"],
+                    category, alternatives, summary, f"(saved #{row['id']}, retried)",
                 )
 
 

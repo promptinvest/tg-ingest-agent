@@ -17,7 +17,6 @@ def make_config(**overrides):
         "TELEGRAM_BOT_TOKEN": "123:abc",
         "ALLOWED_CHAT_IDS": "111,222",
         "DO_MODEL_ACCESS_KEY": "do-key",
-        "CATEGORIES": "news,tools,jobs",
     }
     env.update(overrides)
     return agent.load_config(env)
@@ -34,28 +33,27 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             agent.parse_chat_ids("111,abc")
 
-    def test_load_config_defaults_and_fallback(self):
+    def test_load_config_defaults(self):
         cfg = make_config()
         self.assertEqual(cfg.allowed_chat_ids, {111, 222})
         self.assertEqual(cfg.do_model, "anthropic-claude-haiku-4.5")
         self.assertEqual(cfg.poll_timeout, 50)
-        # fallback category appended because not in the list
-        self.assertIn("uncategorized", cfg.categories)
-        cfg2 = make_config(CATEGORIES="news,other", FALLBACK_CATEGORY="Other")
-        # case-insensitive match: no duplicate appended
-        self.assertEqual([c.casefold() for c in cfg2.categories].count("other"), 1)
+        self.assertEqual(cfg.seed_categories, [])  # categories are optional now
+        self.assertEqual(cfg.fallback_category, "uncategorized")
 
     def test_load_config_required(self):
-        for missing in ("TELEGRAM_BOT_TOKEN", "ALLOWED_CHAT_IDS", "DO_MODEL_ACCESS_KEY", "CATEGORIES"):
+        for missing in ("TELEGRAM_BOT_TOKEN", "ALLOWED_CHAT_IDS", "DO_MODEL_ACCESS_KEY"):
             with self.assertRaises(SystemExit):
                 make_config(**{missing: ""})
 
-    def test_categories_file_precedence(self):
+    def test_seed_categories_and_file_precedence(self):
+        cfg = make_config(CATEGORIES="news, tools")
+        self.assertEqual(cfg.seed_categories, ["news", "tools"])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "categories.txt"
             path.write_text("alpha\n# comment\n\nbeta\n", encoding="utf-8")
             cfg = make_config(CATEGORIES="ignored", CATEGORIES_FILE=str(path))
-            self.assertEqual(cfg.categories[:2], ["alpha", "beta"])
+            self.assertEqual(cfg.seed_categories, ["alpha", "beta"])
 
 
 class UrlExtractionTests(unittest.TestCase):
@@ -98,12 +96,18 @@ class LlmParsingTests(unittest.TestCase):
         self.assertIsNone(agent.parse_llm_json(""))
         self.assertIsNone(agent.parse_llm_json('["list", "not", "dict"]'))
 
-    def test_validate_category(self):
+    def test_normalize_category(self):
+        self.assertEqual(agent.normalize_category("  AI   tools \n"), "AI tools")
+        self.assertEqual(len(agent.normalize_category("x" * 100)), agent.MAX_CATEGORY_CHARS)
+        self.assertIsNone(agent.normalize_category("   "))
+        self.assertIsNone(agent.normalize_category(None))
+
+    def test_match_category(self):
         cats = ["News", "Tools"]
-        self.assertEqual(agent.validate_category("news", cats), "News")
-        self.assertEqual(agent.validate_category(" TOOLS ", cats), "Tools")
-        self.assertIsNone(agent.validate_category("nope", cats))
-        self.assertIsNone(agent.validate_category(None, cats))
+        self.assertEqual(agent.match_category("news", cats), "News")
+        self.assertEqual(agent.match_category(" TOOLS ", cats), "Tools")
+        self.assertIsNone(agent.match_category("nope", cats))
+        self.assertIsNone(agent.match_category(None, cats))
 
 
 class PromptTests(unittest.TestCase):
@@ -116,6 +120,13 @@ class PromptTests(unittest.TestCase):
         self.assertIn("(no text)", block2)
         self.assertNotIn("Forwarded", block2)
 
+    def test_build_llm_messages_taxonomy_line(self):
+        cfg = make_config()
+        with_known = agent.build_llm_messages(cfg, ["news", "tools"], "text", [])
+        self.assertIn("Categories used so far: news, tools", with_known[0]["content"])
+        without_known = agent.build_llm_messages(cfg, [], "text", [])
+        self.assertIn("no categories yet", without_known[0]["content"])
+
     def test_build_llm_messages_image_cap_and_oversize(self):
         cfg = make_config(MAX_LLM_IMAGES="2")
         with tempfile.TemporaryDirectory() as tmp:
@@ -126,23 +137,50 @@ class PromptTests(unittest.TestCase):
                 paths.append(str(p))
             big = Path(tmp) / "big.jpg"
             big.write_bytes(b"x" * (agent.MAX_LLM_IMAGE_BYTES + 1))
-            messages = agent.build_llm_messages(cfg, "text", [str(big)] + paths)
+            messages = agent.build_llm_messages(cfg, [], "text", [str(big)] + paths)
             content = messages[1]["content"]
             image_parts = [c for c in content if c.get("type") == "image_url"]
             self.assertEqual(len(image_parts), 2)  # oversize skipped, cap respected
-            self.assertIn("news, tools, jobs", messages[0]["content"])
 
-    def test_classify_corrective_retry_and_fallback(self):
+    def test_suggest_with_alternatives_and_canonical_match(self):
         cfg = make_config()
-        with mock.patch.object(agent, "do_chat", side_effect=["garbage", '{"category": "news", "summary": "ok"}']):
-            self.assertEqual(agent.classify(cfg, "t", []), ("news", "ok"))
+        reply = '{"category": "NEWS", "alternatives": ["Tools", "news", "ai"], "summary": "ok"}'
+        with mock.patch.object(agent, "do_chat", return_value=reply):
+            category, alternatives, summary = agent.suggest(cfg, ["news", "tools"], "t", [])
+        self.assertEqual(category, "news")  # canonical existing spelling reused
+        self.assertEqual(alternatives, ["tools", "ai"])  # deduped vs category, canonicalized
+        self.assertEqual(summary, "ok")
+
+    def test_suggest_corrective_retry_and_fallback(self):
+        cfg = make_config()
+        good = '{"category": "ideas", "alternatives": [], "summary": "ok"}'
+        with mock.patch.object(agent, "do_chat", side_effect=["garbage", good]):
+            self.assertEqual(agent.suggest(cfg, [], "t", []), ("ideas", [], "ok"))
         with mock.patch.object(agent, "do_chat", side_effect=["garbage", "still garbage"]):
-            category, summary = agent.classify(cfg, "t", [])
+            category, alternatives, summary = agent.suggest(cfg, [], "t", [])
             self.assertEqual(category, cfg.fallback_category)
+            self.assertEqual(alternatives, [])
             self.assertEqual(summary, "still garbage")
-        with mock.patch.object(agent, "do_chat", side_effect=['{"category": "bogus", "summary": "s"}'] * 2):
-            category, _ = agent.classify(cfg, "t", [])
-            self.assertEqual(category, cfg.fallback_category)
+
+
+class KeyboardTests(unittest.TestCase):
+    def test_build_suggestion_keyboard(self):
+        keyboard = agent.build_suggestion_keyboard(7, "news", ["tools", "News", "ideas"])
+        self.assertEqual(keyboard[0][0]["callback_data"], "s|7")
+        self.assertIn("news", keyboard[0][0]["text"])
+        alt_data = [b["callback_data"] for b in keyboard[1]]
+        self.assertEqual(alt_data, ["a|7|tools", "a|7|ideas"])  # 'News' == category, dropped
+
+    def test_keyboard_callback_byte_limit(self):
+        long_cyrillic = "очень длинная категория на кириллице ww"  # > 64 bytes in UTF-8
+        keyboard = agent.build_suggestion_keyboard(7, "news", [long_cyrillic])
+        self.assertEqual(len(keyboard), 1)  # alternative dropped, no alt row
+
+    def test_parse_callback_data(self):
+        self.assertEqual(agent.parse_callback_data("s|12"), ("suggested", 12, None))
+        self.assertEqual(agent.parse_callback_data("a|12|AI tools"), ("named", 12, "AI tools"))
+        for bad in (None, "", "s", "s|x", "a|12|", "z|12|cat"):
+            self.assertIsNone(agent.parse_callback_data(bad))
 
 
 class ForwardOriginTests(unittest.TestCase):
@@ -198,9 +236,43 @@ class DbTests(unittest.TestCase):
         self.assertIsNotNone(first)
         self.assertIsNone(self._insert())  # redelivery is a no-op
 
+    def test_ensure_category_case_insensitive(self):
+        self.assertEqual(agent.ensure_category(self.conn, "News"), "News")
+        self.assertEqual(agent.ensure_category(self.conn, "NEWS"), "News")  # canonical reused
+        self.assertEqual(agent.ensure_category(self.conn, "tools"), "tools")
+        self.assertEqual(set(agent.known_categories(self.conn)), {"News", "tools"})
+
+    def test_known_categories_ordered_by_usage(self):
+        agent.ensure_category(self.conn, "rare")
+        agent.ensure_category(self.conn, "common")
+        for msg_id in (20, 21):
+            row_id = self._insert(msg_id=msg_id, raw_text="x")
+            agent.confirm_category(self.conn, row_id, "common")
+        self.assertEqual(agent.known_categories(self.conn), ["common", "rare"])
+        self.assertIn("common: 2", agent.categories_text(self.conn))
+
+    def test_suggestion_confirm_flow(self):
+        row_id = self._insert(msg_id=30, raw_text="hello")
+        agent.set_suggestion(self.conn, row_id, "AI tools", "a summary", "model-x")
+        row = agent.get_message(self.conn, row_id)
+        self.assertEqual(row["status"], "suggested")
+        self.assertEqual(row["suggested_category"], "AI tools")
+        self.assertIsNone(row["category"])
+        agent.set_suggestion_message(self.conn, row_id, 555)
+        found = agent.find_by_suggestion_message(self.conn, 1, 555)
+        self.assertEqual(found["id"], row_id)
+        self.assertIsNone(agent.find_by_suggestion_message(self.conn, 1, 556))
+        self.assertIsNone(agent.find_by_suggestion_message(self.conn, 1, None))
+        canonical = agent.ensure_category(self.conn, "AI tools")
+        agent.confirm_category(self.conn, row_id, canonical)
+        row = agent.get_message(self.conn, row_id)
+        self.assertEqual(row["status"], "confirmed")
+        self.assertEqual(row["category"], "AI tools")
+
     def test_forward_duplicate_flow(self):
         original = self._insert(msg_id=10, forward_origin_chat_id=-5, forward_origin_message_id=99)
-        agent.set_classification(self.conn, original, "news", "summary", "model-x")
+        agent.set_suggestion(self.conn, original, "news", "summary", "model-x")
+        agent.confirm_category(self.conn, original, "news")
         dup = self._insert(msg_id=11, forward_origin_chat_id=-5, forward_origin_message_id=99)
         found = agent.find_forward_duplicate(self.conn, -5, 99, dup)
         self.assertEqual(found["id"], original)
@@ -208,10 +280,10 @@ class DbTests(unittest.TestCase):
         row = agent.get_message(self.conn, dup)
         self.assertEqual(row["duplicate_of"], original)
         self.assertEqual(row["category"], "news")
-        self.assertEqual(row["status"], "classified")
+        self.assertEqual(row["status"], "duplicate")
         # duplicates are excluded from later duplicate lookups and retry sweeps
         self.assertEqual(agent.find_forward_duplicate(self.conn, -5, 99, 999)["id"], original)
-        self.assertEqual(agent.pending_messages(self.conn, 5), [])
+        self.assertEqual([r["id"] for r in agent.pending_messages(self.conn, 5)], [])
 
     def test_pending_and_failure_path(self):
         row_id = self._insert(msg_id=20, raw_text="hello")
@@ -230,10 +302,16 @@ class DbTests(unittest.TestCase):
         self.assertEqual([r["url"] for r in agent.message_urls(self.conn, row_id)], ["https://a.example"])
         images = agent.message_images(self.conn, row_id)
         self.assertEqual(images[0]["tg_file_unique_id"], "u")
-        agent.set_classification(self.conn, row_id, "news", "s", "m")
+        agent.set_suggestion(self.conn, row_id, "news", "s", "m")
+        agent.confirm_category(self.conn, row_id, "news")
         text = agent.stats_text(self.conn)
-        self.assertIn("classified: 1", text)
+        self.assertIn("confirmed: 1", text)
         self.assertIn("news: 1", text)
+        empty = agent.open_db(Path(self.tmp.name) / "empty.db")
+        try:
+            self.assertEqual(agent.stats_text(empty), "No messages stored yet.")
+        finally:
+            empty.close()
 
 
 if __name__ == "__main__":

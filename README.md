@@ -8,10 +8,13 @@ as one) the agent:
 
 1. stores TG message id, chat id, forward-origin metadata, raw text, URLs, and
    the photos themselves (SQLite + files on disk),
-2. classifies it against a fixed operator-defined category list and produces a
-   short summary via DigitalOcean Gradient serverless inference
-   (vision-capable model, default `anthropic-claude-haiku-4.5`),
-3. replies in the chat with the category and summary.
+2. asks DigitalOcean Gradient serverless inference (vision-capable model,
+   default `anthropic-claude-haiku-4.5`) to **suggest** a category and a short
+   summary — the LLM reuses the taxonomy built from previously confirmed
+   categories and proposes a new category only when nothing fits,
+3. replies with the suggestion and inline buttons: tap ✅ to confirm, tap an
+   alternative, or reply to the suggestion message with your own category
+   text. Only confirmed categories become part of the taxonomy.
 
 Stdlib-only Python 3 (urllib, sqlite3); long polling, so no inbound ports —
 UFW on Pilot-VPS stays SSH-only. Runs as systemd service `tg-ingest-agent`
@@ -31,8 +34,9 @@ under the non-root user `tg-ingest`.
 
 1. Create a new bot with @BotFather (`/newbot`), save the token. Do NOT reuse
    the fleet notification bot from `/etc/codex-auto-update/telegram.env`.
-2. Decide the fixed category list (e.g. `news,tools,jobs,crypto,ideas`).
-3. Have a DO Gradient serverless inference access key (`DO_MODEL_ACCESS_KEY`).
+2. Have a DO Gradient serverless inference access key (`DO_MODEL_ACCESS_KEY`).
+3. Optionally seed the taxonomy via `CATEGORIES` (e.g. `news,tools,ideas`) —
+   not required; categories also emerge as you confirm suggestions.
 
 ## Deploy (from Windows, repo root)
 
@@ -57,18 +61,24 @@ restart.
 
 ## Behavior details
 
+- **Confirmation flow**: message status goes `pending` → `suggested` (LLM
+  suggestion sent with buttons) → `confirmed` (you confirmed). Unconfirmed
+  messages keep their suggestion but never enter the taxonomy. Confirm via
+  button, or reply to the suggestion message with any category text (new
+  categories are created on the fly, matched case-insensitively).
 - **Albums** (media groups) are buffered ~3 s and stored as ONE message row
   with N image rows; the reply goes to the first album message.
 - **Duplicates**: redelivered updates are dropped via
   `UNIQUE(chat_id, tg_message_id)`; re-forwarding the same channel post is
-  detected via the forward origin, skips the LLM, and replies with the
-  original classification (`duplicate_of` set).
-- **LLM outage**: store-first, classify-second. Failed rows stay `pending`
+  detected via the forward origin, skips the LLM, and gets `status=duplicate`
+  with the original's classification copied.
+- **LLM outage**: store-first, suggest-second. Failed rows stay `pending`
   and are retried every `RETRY_INTERVAL_SECONDS` (max `LLM_MAX_ATTEMPTS`,
   then `failed`). Messages are never lost.
-- **Commands**: `/start` (help), `/stats` (counts per status/category).
-- **Bad model output**: defensive JSON parsing + one corrective retry; if the
-  category is still not in the list, `FALLBACK_CATEGORY` is used.
+- **Commands**: `/start` (help), `/stats` (counts per status/category),
+  `/categories` (the taxonomy with confirmed-message counts).
+- **Bad model output**: defensive JSON parsing + one corrective retry; if
+  still unusable, the suggestion falls back to `FALLBACK_CATEGORY`.
 
 ## Known limitations (v1)
 
