@@ -1,0 +1,22 @@
+[Unit]
+Description=Telegram ingest agent (LLM categorization)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tg-ingest
+Group=tg-ingest
+EnvironmentFile=/etc/tg-ingest-agent.env
+ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/agent.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/tg-ingest-agent
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
