@@ -22,7 +22,7 @@ import review
 import router
 import spend
 import store
-from common import Config, load_config, log  # noqa: F401 (Config re-exported for tests)
+from common import Config, ShutdownInterrupt, load_config, log  # noqa: F401
 from tg_api import TelegramError, tg_call, tg_download, tg_send_document
 from texts import T
 
@@ -172,13 +172,20 @@ class Agent:
                 log(f"getUpdates failed ({exc}), retrying in {delay}s")
                 time.sleep(delay)
                 continue
+            processed_max = None
             for update in updates or []:
+                if self.stop:
+                    break  # unprocessed updates redeliver after restart
                 try:
                     self.handle_update(update)
+                except ShutdownInterrupt:
+                    log(f"update {update.get('update_id')} left for redelivery (shutdown)")
+                    break  # do not count this update as processed
                 except Exception as exc:  # never let one bad update kill the loop
                     log(f"error handling update {update.get('update_id')}: {exc!r}")
-            if updates:
-                offset = max(u["update_id"] for u in updates) + 1
+                processed_max = update["update_id"]
+            if processed_max is not None:
+                offset = processed_max + 1
                 store.kv_set(self.conn, "offset", offset)
         self.flush_albums(time.time(), force=True)
         log("stopped")
@@ -314,6 +321,10 @@ class Agent:
                 self.cfg, self.conn, "stt", path, int(voice.get("duration") or 0)
             )
         except (TelegramError, llm.LLMError) as exc:
+            if self.stop:
+                # A deploy/shutdown killed the transcription mid-run: say
+                # nothing and let the update redeliver after restart.
+                raise ShutdownInterrupt() from exc
             log(f"voice transcription failed: {exc}")
             store.issue_add(self.conn, chat_id, "stt_failed", str(exc)[:200])
             self.reply(chat_id, T(lang, "stt_failed"))
@@ -410,6 +421,16 @@ class Agent:
             self.reply(chat_id, self.items_text(lang, params))
         elif action == "item_detail":
             self.reply(chat_id, self.item_detail_text(lang, params))
+        elif action == "item_delete":
+            row = self.resolve_item(params)
+            if row is None:
+                self.reply(chat_id, T(lang, "items_empty"))
+            else:
+                store.pending_set(self.conn, chat_id, "delete", {"row_id": row["id"]})
+                snippet = (row["summary"] or row["raw_text"] or "")[:60].replace("\n", " ")
+                self.reply(chat_id, T(lang, "delete_confirm", row_id=row["id"],
+                                      category=row["category"] or row["suggested_category"] or "?",
+                                      snippet=snippet))
         elif action == "issues_report":
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "review":
@@ -507,6 +528,18 @@ class Agent:
                 log(f"reminder snoozed as #{rid}")
             else:
                 self.reply(chat_id, T(lang, "reminder_done"))
+        elif kind == "delete":
+            if action != "confirm":  # deletion only on an explicit yes
+                store.pending_clear(self.conn, chat_id)
+                self.reply(chat_id, T(lang, "cancelled"))
+                return
+            store.pending_clear(self.conn, chat_id)
+            row_id = payload.get("row_id")
+            if store.get_message(self.conn, row_id) is not None:
+                for path in store.delete_message(self.conn, row_id):
+                    Path(path).unlink(missing_ok=True)
+                log(f"message #{row_id} deleted by operator")
+                self.reply(chat_id, T(lang, "deleted", row_id=row_id))
         elif kind == "habit":
             store.pending_clear(self.conn, chat_id)
             source = payload["source_chat_id"]
@@ -647,20 +680,22 @@ class Agent:
                 lines.append(f"   🔗 {urls[0]['url']}")
         return "\n".join(lines)
 
-    def item_detail_text(self, lang, params):
-        ru = lang == "ru"
-        row = None
+    def resolve_item(self, params):
+        """Resolve an item by explicit id, query/category, or most recent."""
         try:
             rid = int(params.get("id")) if params.get("id") is not None else None
         except (TypeError, ValueError):
             rid = None
         if rid is not None:
             row = store.get_message(self.conn, rid)
-        if row is None:
-            rows = store.list_messages(
-                self.conn, params.get("category"), params.get("query"), limit=1
-            )
-            row = rows[0] if rows else None
+            if row is not None:
+                return row
+        rows = store.list_messages(self.conn, params.get("category"), params.get("query"), limit=1)
+        return rows[0] if rows else None
+
+    def item_detail_text(self, lang, params):
+        ru = lang == "ru"
+        row = self.resolve_item(params)
         if row is None:
             return T(lang, "items_empty")
         category = row["category"] or row["suggested_category"] or "?"

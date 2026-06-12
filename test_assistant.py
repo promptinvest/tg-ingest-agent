@@ -419,6 +419,23 @@ class AgentViewTests(unittest.TestCase):
     def test_router_accepts_item_detail(self):
         ok = router.validate_route({"action": "item_detail", "params": {"id": 1}}, False)
         self.assertEqual(ok["action"], "item_detail")
+        ok = router.validate_route({"action": "item_delete", "params": {}}, False)
+        self.assertEqual(ok["action"], "item_delete")
+
+    def test_resolve_item_and_delete(self):
+        conn = self.agent.conn
+        self.assertEqual(self.agent.resolve_item({"id": self.row_id})["id"], self.row_id)
+        self.assertEqual(self.agent.resolve_item({})["id"], self.row_id)  # most recent
+        self.assertEqual(self.agent.resolve_item({"query": "рейсы"})["id"], self.row_id)
+        # delete cascades urls and clears duplicate_of references
+        dup_id = store.insert_message(conn, {
+            "chat_id": 1, "tg_message_id": 6, "received_at": "ts", "duplicate_of": self.row_id,
+        })
+        paths = store.delete_message(conn, self.row_id)
+        self.assertEqual(paths, [])
+        self.assertIsNone(store.get_message(conn, self.row_id))
+        self.assertEqual(store.message_urls(conn, self.row_id), [])
+        self.assertIsNone(store.get_message(conn, dup_id)["duplicate_of"])
 
 
 class MemoryStoreTests(unittest.TestCase):

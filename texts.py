@@ -230,6 +230,14 @@ TEXTS = {
         "ru": "Не поняла, какое событие добавить — назовите напоминание или время 🤔",
         "en": "Not sure which event to add — name a reminder or give me a time 🤔",
     },
+    "delete_confirm": {
+        "ru": "Удалить #{row_id} [{category}] «{snippet}»? Это насовсем — скажите «да», и я удалю.",
+        "en": "Delete #{row_id} [{category}] \"{snippet}\"? This is permanent — say \"yes\" and I'll remove it.",
+    },
+    "deleted": {
+        "ru": "Удалила #{row_id} — и записи, и файлы 🗑",
+        "en": "Deleted #{row_id} — records and files 🗑",
+    },
     "llm_error": {
         "ru": "Модель сейчас не отвечает 😔 Попробуйте чуть позже — я ничего не потеряла.",
         "en": "The model isn't answering right now 😔 Try again soon — nothing is lost.",

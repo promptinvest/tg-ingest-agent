@@ -380,6 +380,16 @@ def status_counts(conn):
     ).fetchall()
 
 
+def delete_message(conn, message_id):
+    """Delete a message row (urls/images cascade); returns media paths to
+    unlink. Other rows referencing it as duplicate_of keep their copy."""
+    paths = [r["local_path"] for r in message_images(conn, message_id) if r["local_path"]]
+    conn.execute("UPDATE messages SET duplicate_of = NULL WHERE duplicate_of = ?", (message_id,))
+    conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+    conn.commit()
+    return paths
+
+
 def habit_streak(conn, fwd_chat_id):
     """Length and category of the current same-category confirmation streak
     for a forward source; (None, 0) when the streak is broken or empty."""

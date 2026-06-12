@@ -54,6 +54,12 @@ def load_categories(env):
     return config_list(env.get("CATEGORIES", ""))
 
 
+class ShutdownInterrupt(Exception):
+    """Raised when an in-flight update should be left for redelivery because
+    the service is shutting down mid-processing (e.g. a deploy restart killed
+    the whisper subprocess)."""
+
+
 class Config:
     pass
 
