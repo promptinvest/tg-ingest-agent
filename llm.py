@@ -144,7 +144,47 @@ from common import build_multipart  # noqa: E402 (shared with tg_api/gcal)
 
 
 def transcribe(cfg, conn, skill, audio_path, duration_seconds):
-    """Voice -> text via the OpenAI-compatible transcriptions endpoint."""
+    """Voice -> text; local whisper.cpp or the remote transcriptions endpoint."""
+    if cfg.stt_mode == "local":
+        return _transcribe_local(cfg, conn, skill, audio_path, duration_seconds)
+    return _transcribe_remote(cfg, conn, skill, audio_path, duration_seconds)
+
+
+def _transcribe_local(cfg, conn, skill, audio_path, duration_seconds):
+    """whisper.cpp on this host: ffmpeg OGG->16k mono WAV, then whisper-cli.
+
+    Runs niced so a long note does not starve the poll loop's CPU; zero cost,
+    still logged to llm_usage for visibility.
+    """
+    import subprocess
+    import tempfile
+    wav_path = Path(tempfile.gettempdir()) / (Path(audio_path).stem + ".wav")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(audio_path), "-ar", "16000", "-ac", "1", str(wav_path)],
+            capture_output=True, check=True, timeout=120,
+        )
+        result = subprocess.run(
+            ["nice", "-n", "10", cfg.whisper_bin, "-m", cfg.whisper_model,
+             "-f", str(wav_path), "-l", "auto", "-np", "-nt"],
+            capture_output=True, check=True, timeout=cfg.stt_local_timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise LLMError("local transcription timed out") from exc
+    except FileNotFoundError as exc:
+        raise LLMError(f"local transcription tool missing: {exc}") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or b"").decode("utf-8", errors="replace")[:200]
+        raise LLMError(f"local transcription failed: {stderr}") from exc
+    finally:
+        wav_path.unlink(missing_ok=True)
+    text = result.stdout.decode("utf-8", errors="replace").strip()
+    store.usage_add(conn, skill, "stt", "whisper.cpp-local",
+                    seconds=duration_seconds, cost_usd=0.0)
+    return text
+
+
+def _transcribe_remote(cfg, conn, skill, audio_path, duration_seconds):
     _check_budget(cfg, conn)
     audio_path = Path(audio_path)
     body, boundary = build_multipart(

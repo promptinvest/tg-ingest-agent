@@ -86,6 +86,27 @@ class GatewayTests(unittest.TestCase):
         by_model = {r["k"]: r["calls"] for r in store.usage_breakdown(self.conn, "month", "model")}
         self.assertEqual(by_model["m1"], 2)
 
+    def test_local_stt_config_and_dispatch(self):
+        cfg = make_config(STT_MODE="local", WHISPER_BIN="/x/whisper-cli",
+                          WHISPER_MODEL="/x/model.bin")
+        self.assertEqual(cfg.stt_mode, "local")
+        self.assertEqual(cfg.stt_local_timeout, 600)
+        # local mode must not touch the remote endpoint nor the budget
+        with mock.patch.object(llm, "_transcribe_local", return_value="привет") as local_mock:
+            text = llm.transcribe(cfg, self.conn, "stt", "/tmp/v.oga", 5)
+        self.assertEqual(text, "привет")
+        local_mock.assert_called_once()
+        remote_cfg = make_config()
+        self.assertEqual(remote_cfg.stt_mode, "remote")
+
+    def test_local_stt_missing_tool_raises_llmerror(self):
+        cfg = make_config(STT_MODE="local", WHISPER_BIN="/nonexistent/whisper-cli")
+        import subprocess
+        with mock.patch.object(subprocess, "run", side_effect=FileNotFoundError("ffmpeg")):
+            with self.assertRaises(llm.LLMError):
+                llm._transcribe_local(cfg, self.conn, "stt", "/tmp/v.oga", 5)
+        self.assertEqual(store.usage_total(self.conn, "day"), 0)  # nothing logged on failure
+
     def test_build_multipart(self):
         body, boundary = llm.build_multipart(
             {"model": "whisper"}, "file", "voice.oga", b"AUDIO", "audio/ogg"

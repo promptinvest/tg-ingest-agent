@@ -89,9 +89,15 @@ def load_config(env=None):
     cfg.language = (env.get("BOT_LANGUAGE") or "ru").strip().lower()
     cfg.timezone_offset = int(env.get("TIMEZONE_OFFSET_HOURS") or "3")  # MSK default
     cfg.confidence_threshold = float(env.get("ROUTER_CONFIDENCE_THRESHOLD") or "0.6")
-    # Speech-to-text (DO serverless inference, OpenAI-compatible endpoint)
+    # Speech-to-text: mode 'local' = whisper.cpp on this host (free, slower);
+    # mode 'remote' = OpenAI-compatible /audio/transcriptions endpoint.
     cfg.stt_enabled = (env.get("STT_ENABLED") or "true").strip().lower() == "true"
+    cfg.stt_mode = (env.get("STT_MODE") or "remote").strip().lower()
     cfg.stt_model = (env.get("STT_MODEL") or "whisper-large-v3").strip()
+    cfg.whisper_bin = (env.get("WHISPER_BIN") or "/opt/whisper.cpp/build/bin/whisper-cli").strip()
+    cfg.whisper_model = (env.get("WHISPER_MODEL")
+                         or "/opt/whisper.cpp/models/ggml-small-q5_1.bin").strip()
+    cfg.stt_local_timeout = int(env.get("STT_LOCAL_TIMEOUT_SECONDS") or "600")
     # Spend control
     cfg.budget_daily_usd = float(env.get("BUDGET_DAILY_USD") or "1.0")
     cfg.budget_monthly_usd = float(env.get("BUDGET_MONTHLY_USD") or "15.0")

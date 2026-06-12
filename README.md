@@ -117,9 +117,11 @@ restart.
   with the original's classification copied, no LLM call.
 - **LLM outage / budget stop**: store-first. Pending rows retry every
   `RETRY_INTERVAL_SECONDS` (max `LLM_MAX_ATTEMPTS`, then `failed`).
-- **Voice**: OGG voice notes are downloaded, transcribed via the
-  OpenAI-compatible `/v1/audio/transcriptions` endpoint, quoted back to you,
-  then routed like text.
+- **Voice**: OGG voice notes are downloaded, transcribed, quoted back to
+  you, then routed like text. `STT_MODE=local` uses whisper.cpp on the host
+  (free, ~1 min per 30 s note on 1 vCPU; install once via
+  `install-whisper-pilot-remote.sh`); `STT_MODE=remote` uses an
+  OpenAI-compatible `/v1/audio/transcriptions` endpoint.
 - **Hidden command aliases** for debugging: `/start`, `/stats`, `/categories`.
 - **Bilingual categories**: dedup uses Python `casefold()` (SQLite NOCASE is
   ASCII-only and would split «Крипта»/«крипта»).
