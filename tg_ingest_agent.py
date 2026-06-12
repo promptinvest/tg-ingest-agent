@@ -408,6 +408,8 @@ class Agent:
             self.reply(chat_id, self.overview_text(lang))
         elif action == "list_items":
             self.reply(chat_id, self.items_text(lang, params))
+        elif action == "item_detail":
+            self.reply(chat_id, self.item_detail_text(lang, params))
         elif action == "issues_report":
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "review":
@@ -640,6 +642,40 @@ class Agent:
             text = (row["summary"] or row["raw_text"] or "").replace("\n", " ")[:90]
             marker = "" if row["status"] == "confirmed" else " (?)"
             lines.append(f"#{row['id']} [{row_category}{marker}] {text}")
+            urls = store.message_urls(self.conn, row["id"])
+            if urls:
+                lines.append(f"   🔗 {urls[0]['url']}")
+        return "\n".join(lines)
+
+    def item_detail_text(self, lang, params):
+        ru = lang == "ru"
+        row = None
+        try:
+            rid = int(params.get("id")) if params.get("id") is not None else None
+        except (TypeError, ValueError):
+            rid = None
+        if rid is not None:
+            row = store.get_message(self.conn, rid)
+        if row is None:
+            rows = store.list_messages(
+                self.conn, params.get("category"), params.get("query"), limit=1
+            )
+            row = rows[0] if rows else None
+        if row is None:
+            return T(lang, "items_empty")
+        category = row["category"] or row["suggested_category"] or "?"
+        lines = [f"#{row['id']} [{category}] — {row['received_at'][:16]}"]
+        if row["forward_origin_title"]:
+            lines.append(("Источник: " if ru else "Source: ") + row["forward_origin_title"])
+        if row["summary"]:
+            lines.append(row["summary"][:500])
+        urls = store.message_urls(self.conn, row["id"])
+        if urls:
+            lines.append("Ссылки:" if ru else "Links:")
+            lines.extend(r["url"] for r in urls[:10])
+        images = store.message_images(self.conn, row["id"])
+        if images:
+            lines.append(("Фото: " if ru else "Photos: ") + str(len(images)))
         return "\n".join(lines)
 
     def issues_text(self, lang, period=None):

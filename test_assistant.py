@@ -379,6 +379,48 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(ok["action"], "review")
 
 
+class AgentViewTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "a.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        conn = self.agent.conn
+        self.row_id = store.insert_message(conn, {
+            "chat_id": 1, "tg_message_id": 5, "received_at": "2026-06-12T10:00:00+00:00",
+            "raw_text": "рейсы Уфа-Красноярск", "forward_origin_title": "Vandrouki",
+        })
+        store.insert_url(conn, self.row_id, "https://vandrouki.ru/x/")
+        store.set_suggestion(conn, self.row_id, "Flight Deals", "Cheap June flights", "m")
+        store.confirm_category(conn, self.row_id, store.ensure_category(conn, "Flight Deals"))
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def test_items_listing_shows_first_url(self):
+        text = self.agent.items_text("ru", {})
+        self.assertIn("#%d [Flight Deals]" % self.row_id, text)
+        self.assertIn("🔗 https://vandrouki.ru/x/", text)
+
+    def test_item_detail_by_id_query_and_fallback(self):
+        detail = self.agent.item_detail_text("ru", {"id": self.row_id})
+        self.assertIn("https://vandrouki.ru/x/", detail)
+        self.assertIn("Источник: Vandrouki", detail)
+        self.assertIn("Cheap June flights", detail)
+        by_query = self.agent.item_detail_text("en", {"query": "рейсы"})
+        self.assertIn("Source: Vandrouki", by_query)
+        latest = self.agent.item_detail_text("ru", {})  # no params -> most recent
+        self.assertIn("#%d" % self.row_id, latest)
+        missing = self.agent.item_detail_text("ru", {"query": "nothing-matches"})
+        self.assertEqual(missing, texts.T("ru", "items_empty"))
+
+    def test_router_accepts_item_detail(self):
+        ok = router.validate_route({"action": "item_detail", "params": {"id": 1}}, False)
+        self.assertEqual(ok["action"], "item_detail")
+
+
 class MemoryStoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
