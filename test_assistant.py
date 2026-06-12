@@ -364,6 +364,21 @@ class MemoryStoreTests(unittest.TestCase):
             ok = router.validate_route({"action": action, "params": {}}, False)
             self.assertEqual(ok["action"], action)
 
+    def test_issue_tracking(self):
+        store.issue_add(self.conn, 1, "out_of_scope", "напиши эссе")
+        store.issue_add(self.conn, 1, "out_of_scope", "x" * 500)
+        store.issue_add(self.conn, 1, "stt_failed", "HTTP 404")
+        counts = {r["kind"]: r["n"] for r in store.issue_counts(self.conn, "2000-01-01")}
+        self.assertEqual(counts, {"out_of_scope": 2, "stt_failed": 1})
+        recent = store.issues_recent(self.conn, "2000-01-01", limit=2)
+        self.assertEqual(len(recent), 2)
+        self.assertEqual(recent[0]["kind"], "stt_failed")
+        self.assertLessEqual(len(recent[1]["detail"]), 300)  # detail capped
+        future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        self.assertEqual(store.issue_counts(self.conn, future), [])
+        ok = router.validate_route({"action": "issues_report", "params": {"period": "week"}}, False)
+        self.assertEqual(ok["action"], "issues_report")
+
     def test_feedback(self):
         store.feedback_add(self.conn, "ingest", "digest", "news", "крипта")
         rows = store.feedback_recent(self.conn, "ingest")

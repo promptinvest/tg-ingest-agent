@@ -24,6 +24,7 @@ ACTIONS = {
     "help",              # what can you do?
     "overview",          # what do you have now? (digest of stored data)
     "list_items",        # params: category, query, limit — browse stored messages
+    "issues_report",     # params: period in day|week|month — communication problems summary
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
     "forget",            # params: value (entry text or key to forget)
@@ -47,6 +48,7 @@ ROUTER_EXAMPLES = """Examples:
 "покажи последние сохранённые" -> {"action": "list_items", "params": {"limit": 5}, "confidence": 0.9}
 "что в категории crypto?" -> {"action": "list_items", "params": {"category": "crypto"}, "confidence": 0.9}
 "найди сохранённое про DeepSeek" -> {"action": "list_items", "params": {"query": "DeepSeek"}, "confidence": 0.9}
+"какие были проблемы на этой неделе?" / "what went wrong this week?" -> {"action": "issues_report", "params": {"period": "week"}, "confidence": 0.9}
 "что ты обо мне знаешь?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
 "всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}

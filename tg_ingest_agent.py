@@ -134,6 +134,7 @@ class Agent:
             self.flush_albums(now)
             self.fire_due_reminders()
             self.check_budget_notice()
+            self.check_weekly_issues_report()
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
                 self.retry_sweep()
@@ -298,9 +299,11 @@ class Agent:
             )
         except (TelegramError, llm.LLMError) as exc:
             log(f"voice transcription failed: {exc}")
+            store.issue_add(self.conn, chat_id, "stt_failed", str(exc)[:200])
             self.reply(chat_id, T(lang, "stt_failed"))
             return None
         if not transcript:
+            store.issue_add(self.conn, chat_id, "stt_failed", "empty transcript")
             self.reply(chat_id, T(lang, "stt_failed"))
             return None
         return transcript
@@ -313,11 +316,13 @@ class Agent:
         try:
             decision = router.route(self.cfg, self.conn, chat_id, text, pending)
         except llm.BudgetExceeded as exc:
+            store.issue_add(self.conn, chat_id, "budget_stop", text[:200])
             self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
                                   period=T(lang, f"period_{exc.period}")))
             return
         except llm.LLMError as exc:
             log(f"router failed: {exc}")
+            store.issue_add(self.conn, chat_id, "llm_error", f"router: {exc}")
             self.reply(chat_id, T(lang, "llm_error"))
             return
         action, params = decision["action"], decision["params"]
@@ -379,6 +384,8 @@ class Agent:
             self.reply(chat_id, self.overview_text(lang))
         elif action == "list_items":
             self.reply(chat_id, self.items_text(lang, params))
+        elif action == "issues_report":
+            self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "memory":
             self.reply(chat_id, self.memory_text(lang))
         elif action == "remember":
@@ -388,9 +395,11 @@ class Agent:
         elif action in ("confirm", "amend", "cancel"):
             self.resolve_pending(chat_id, action, params, pending, lang)
         elif action == "clarify":
+            store.issue_add(self.conn, chat_id, "unclear_request", text[:200])
             question = str(params.get("question") or "").strip()
             self.reply(chat_id, question[:300] if question else T(lang, "clarify"))
         else:
+            store.issue_add(self.conn, chat_id, "out_of_scope", text[:200])
             self.reply(chat_id, T(lang, "out_of_scope"))
 
     def handle_command(self, chat_id, name):
@@ -497,6 +506,7 @@ class Agent:
             )
             store.convo_add(self.conn, chat_id, "bot", f"[.ics file: {event['title']}]")
         except TelegramError as exc:
+            store.issue_add(self.conn, chat_id, "calendar_failed", str(exc)[:200])
             self.reply(chat_id, T(lang, "calendar_failed", error=str(exc)[:200]))
 
     # -- Memory skill
@@ -598,6 +608,41 @@ class Agent:
             marker = "" if row["status"] == "confirmed" else " (?)"
             lines.append(f"#{row['id']} [{row_category}{marker}] {text}")
         return "\n".join(lines)
+
+    def issues_text(self, lang, period=None):
+        period = str(period or "week").strip().lower()
+        days = {"day": 1, "week": 7, "month": 30}.get(period, 7)
+        period_key = {1: "period_day", 7: "period_week", 30: "period_month"}[days]
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        counts = store.issue_counts(self.conn, since)
+        period_label = T(lang, period_key)
+        if not counts:
+            return T(lang, "issues_empty", period=period_label)
+        lines = [T(lang, "issues_header", period=period_label)]
+        import texts as texts_module
+        for row in counts:
+            entry = texts_module.TEXTS.get(f"issue_kind_{row['kind']}")
+            label = (entry.get(lang) or entry["en"]) if entry else row["kind"]
+            lines.append(f"  {label}: {row['n']}")
+        lines.append(T(lang, "issues_examples"))
+        for row in store.issues_recent(self.conn, since):
+            detail = (row["detail"] or "").replace("\n", " ")[:80]
+            lines.append(f"  {row['ts'][:16]} [{row['kind']}] {detail}")
+        return "\n".join(lines)
+
+    def check_weekly_issues_report(self):
+        now = datetime.now(timezone.utc)
+        last = store.kv_get(self.conn, "last_issues_report")
+        if not last:
+            store.kv_set(self.conn, "last_issues_report", now.isoformat())
+            return
+        if (now - datetime.fromisoformat(last)).days < 7:
+            return
+        store.kv_set(self.conn, "last_issues_report", now.isoformat())
+        lang = self.lang()
+        report = self.issues_text(lang, "week")
+        for chat_id in self.cfg.allowed_chat_ids:
+            self.reply(chat_id, T(lang, "issues_weekly_intro") + "\n" + report)
 
     def categories_text(self, lang):
         rows = store.category_counts(self.conn)
@@ -816,6 +861,8 @@ class Agent:
                 attempts = store.bump_attempts(self.conn, row_id)
                 if attempts >= self.cfg.llm_max_attempts:
                     store.mark_failed(self.conn, row_id)
+                    store.issue_add(self.conn, row["chat_id"], "ingest_failed",
+                                    f"#{row_id}: {exc}")
                     log(f"message #{row_id} marked failed after {attempts} attempts: {exc}")
                 else:
                     log(f"suggestion failed for message #{row_id} (attempt {attempts}): {exc}")

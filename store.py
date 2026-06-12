@@ -114,6 +114,15 @@ CREATE TABLE IF NOT EXISTS conversation (
   text TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS issues (
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  day TEXT NOT NULL,
+  chat_id INTEGER,
+  kind TEXT NOT NULL,
+  detail TEXT
+);
+
 CREATE TABLE IF NOT EXISTS reminders (
   id INTEGER PRIMARY KEY,
   chat_id INTEGER NOT NULL,
@@ -133,6 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_suggestion
 CREATE INDEX IF NOT EXISTS idx_usage_day ON llm_usage(day);
 CREATE INDEX IF NOT EXISTS idx_usage_month ON llm_usage(month);
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_utc);
+CREATE INDEX IF NOT EXISTS idx_issues_ts ON issues(ts);
 CREATE INDEX IF NOT EXISTS idx_conversation_chat ON conversation(chat_id, id);
 """
 
@@ -522,6 +532,31 @@ def convo_recent(conn, chat_id, limit=10):
         (chat_id, limit),
     ).fetchall()
     return list(reversed(rows))
+
+
+# -- issues (communication problems, for weekly/on-demand summaries) ----------
+
+def issue_add(conn, chat_id, kind, detail=""):
+    ts = _now()
+    conn.execute(
+        "INSERT INTO issues (ts, day, chat_id, kind, detail) VALUES (?, ?, ?, ?, ?)",
+        (ts, ts[:10], chat_id, kind, str(detail or "")[:300]),
+    )
+    conn.commit()
+
+
+def issue_counts(conn, since_iso):
+    return conn.execute(
+        "SELECT kind, COUNT(*) AS n FROM issues WHERE ts >= ? GROUP BY kind ORDER BY n DESC",
+        (since_iso,),
+    ).fetchall()
+
+
+def issues_recent(conn, since_iso, limit=5):
+    return conn.execute(
+        "SELECT * FROM issues WHERE ts >= ? ORDER BY id DESC LIMIT ?",
+        (since_iso, limit),
+    ).fetchall()
 
 
 # -- reminders ----------------------------------------------------------------
