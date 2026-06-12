@@ -123,7 +123,7 @@ rm -rf "$APP_DIR/__pycache__"
 systemctl daemon-reload
 systemctl enable "$SERVICE.service"
 
-if grep -q 'REPLACE_ME' "$ENV_FILE"; then
+if grep -q '=REPLACE_ME' "$ENV_FILE"; then
   systemctl stop "$SERVICE.service" 2>/dev/null || true
   echo "WARNING: $ENV_FILE still contains REPLACE_ME placeholders."
   echo "Fill in the secrets, then: systemctl start $SERVICE"
