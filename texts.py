@@ -18,6 +18,19 @@ TEXTS = {
                "of what matters, add events to your calendar, track AI spend. "
                "I suggest categories myself — you just confirm."),
     },
+    "smalltalk_hello": {
+        "ru": "Привет, {name}! 😊 Чем помочь — что-то сохранить, напомнить или показать, что у нас есть?",
+        "en": "Hi {name}! 😊 How can I help — save something, set a reminder, or show what we've got?",
+    },
+    "smalltalk_thanks": {
+        "ru": "Всегда пожалуйста, {name} 💛",
+        "en": "Anytime, {name} 💛",
+    },
+    "smalltalk_how_are_you": {
+        "ru": "У меня всё отлично — присматриваю за вашим инбоксом и напоминаниями 😊 А чем помочь вам?",
+        "en": "I'm doing great — keeping an eye on your inbox and reminders 😊 What can I do for you?",
+    },
+    "smalltalk_ack": {"ru": "👌", "en": "👌"},
     "out_of_scope": {
         "ru": ("Это пока не моё, простите 🙈 Зато я отлично умею: сохранять и раскладывать "
                "сообщения, напоминания, календарь, расходы на AI и помнить ваши предпочтения."),

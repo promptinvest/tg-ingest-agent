@@ -328,6 +328,14 @@ class Agent:
     def dispatch(self, chat_id, msg, text):
         lang = self.lang()
         pending = store.pending_get(self.conn, chat_id)
+        # Greetings answered instantly without burning router tokens; with a
+        # pending action, short acks like «ок» must reach the router instead
+        # (they are confirmations there).
+        if pending is None:
+            kind = router.detect_smalltalk(text)
+            if kind:
+                self.reply(chat_id, T(lang, f"smalltalk_{kind}", name=self.owner_name()))
+                return
         try:
             decision = router.route(self.cfg, self.conn, chat_id, text, pending)
         except llm.BudgetExceeded as exc:
@@ -407,6 +415,11 @@ class Agent:
             self.do_remember(chat_id, params, lang)
         elif action == "forget":
             self.do_forget(chat_id, params, lang)
+        elif action == "smalltalk":
+            kind = str(params.get("kind") or "hello").strip().lower()
+            if kind not in router.SMALLTALK_KINDS:
+                kind = "hello"
+            self.reply(chat_id, T(lang, f"smalltalk_{kind}", name=self.owner_name()))
         elif action in ("confirm", "amend", "cancel"):
             self.resolve_pending(chat_id, action, params, pending, lang)
         elif action == "clarify":

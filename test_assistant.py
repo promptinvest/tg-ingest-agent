@@ -158,6 +158,20 @@ class RouterTests(unittest.TestCase):
         self.assertIn("pending action awaiting", prompt2)
         self.assertIn("reminder", prompt2)
 
+    def test_detect_smalltalk(self):
+        self.assertEqual(router.detect_smalltalk("Привет!"), "hello")
+        self.assertEqual(router.detect_smalltalk("  hi"), "hello")
+        self.assertEqual(router.detect_smalltalk("Спасибо"), "thanks")
+        self.assertEqual(router.detect_smalltalk("как дела?"), "how_are_you")
+        self.assertEqual(router.detect_smalltalk("ок"), "ack")
+        self.assertIsNone(router.detect_smalltalk("привет, поставь напоминание"))
+        self.assertIsNone(router.detect_smalltalk(""))
+        ok = router.validate_route({"action": "smalltalk", "params": {"kind": "hello"}}, False)
+        self.assertEqual(ok["action"], "smalltalk")
+        for kind in router.SMALLTALK_KINDS:
+            for lang in ("ru", "en"):
+                self.assertTrue(texts.T(lang, f"smalltalk_{kind}", name="X"))
+
     def test_route_happy_path_and_guards(self):
         with mock.patch.object(llm, "chat",
                                return_value='{"action": "spend", "params": {"period": "month"}, "confidence": 0.9}'):

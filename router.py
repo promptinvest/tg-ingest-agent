@@ -31,6 +31,7 @@ ACTIONS = {
     "confirm",           # pending action: yes
     "amend",             # pending action: change params (category, due_utc, snooze_minutes, done)
     "cancel",            # pending action: no
+    "smalltalk",         # params: kind in hello|thanks|how_are_you|ack — greetings etc.
     "clarify",           # params: question
     "out_of_scope",
 }
@@ -58,8 +59,32 @@ ROUTER_EXAMPLES = """Examples:
 "это скорее крипта" (pending category) -> {"action": "amend", "params": {"category": "крипта"}, "confidence": 0.9}
 "готово" (pending fired reminder) -> {"action": "amend", "params": {"done": true}, "confidence": 0.9}
 "через полчаса" (pending fired reminder) -> {"action": "amend", "params": {"snooze_minutes": 30}, "confidence": 0.9}
+"привет, как ты?" -> {"action": "smalltalk", "params": {"kind": "how_are_you"}, "confidence": 0.95}
+"спасибо большое!" -> {"action": "smalltalk", "params": {"kind": "thanks"}, "confidence": 0.95}
 "напиши эссе про Канта" -> {"action": "out_of_scope", "params": {}, "confidence": 0.95}
 """
+
+SMALLTALK_KINDS = ("hello", "thanks", "how_are_you", "ack")
+
+# Exact-match shortcuts answered without an LLM call.
+_SMALLTALK_EXACT = {
+    "hello": {"привет", "приветик", "здравствуй", "здравствуйте", "добрый день",
+              "доброе утро", "добрый вечер", "hi", "hello", "hey", "good morning",
+              "good evening", "yo", "ку", "хай"},
+    "thanks": {"спасибо", "спасибо!", "благодарю", "thanks", "thank you", "thx", "спс"},
+    "how_are_you": {"как дела", "как дела?", "как ты", "как ты?", "how are you",
+                    "how are you?"},
+    "ack": {"ок", "okay", "ok", "понятно", "ясно", "хорошо", "👍", "👌"},
+}
+
+
+def detect_smalltalk(text):
+    """Rule-based greeting detection for the common cases — no tokens spent."""
+    normalized = str(text or "").strip().casefold().rstrip("!.")
+    for kind, variants in _SMALLTALK_EXACT.items():
+        if normalized in variants:
+            return kind
+    return None
 
 
 def build_system_prompt(cfg, pending, now_utc=None):
