@@ -14,6 +14,7 @@ import common
 import gcal
 import llm
 import reminders
+import review
 import router
 import spend
 import store
@@ -159,6 +160,8 @@ class RouterTests(unittest.TestCase):
         self.assertIn("reminder", prompt2)
 
     def test_detect_smalltalk(self):
+        self.assertEqual(router.detect_smalltalk("кто ты?"), "who_are_you")
+        self.assertEqual(router.detect_smalltalk("Are you human?"), "who_are_you")
         self.assertEqual(router.detect_smalltalk("Привет!"), "hello")
         self.assertEqual(router.detect_smalltalk("  hi"), "hello")
         self.assertEqual(router.detect_smalltalk("Спасибо"), "thanks")
@@ -320,6 +323,60 @@ class CalendarTests(unittest.TestCase):
     def test_router_accepts_calendar_add(self):
         ok = router.validate_route({"action": "calendar_add", "params": {"title_query": "банк"}}, False)
         self.assertEqual(ok["action"], "calendar_add")
+
+
+class ReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "test.db")
+        self.cfg = make_config()
+        row = self.conn.execute(
+            "INSERT INTO messages (chat_id, tg_message_id, received_at, raw_text,"
+            " suggested_category, category, status) VALUES (1, 1, ?, 'x', 'news', 'крипта',"
+            " 'confirmed')",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        self.conn.commit()
+        store.ensure_category(self.conn, "крипта")
+        store.feedback_add(self.conn, "ingest", "x", "news", "крипта")
+        store.issue_add(self.conn, 1, "out_of_scope", "напиши эссе")
+        store.usage_add(self.conn, "router", "chat", "m", 100, 50, cost_usd=0.002)
+        store.reminder_add(self.conn, 1, "call",
+                           (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_normalize_period(self):
+        self.assertEqual(review.normalize_period("неделя"), "week")
+        self.assertEqual(review.normalize_period("today"), "day")
+        self.assertEqual(review.normalize_period(None), "week")
+        self.assertEqual(review.normalize_period("garbage"), "week")
+
+    def test_chat_text_bilingual(self):
+        ru = review.chat_text(self.conn, self.cfg, "ru", "week")
+        self.assertIn("Сообщений: 1", ru)
+        self.assertIn("крипта", ru)
+        self.assertIn("$0.002", ru)
+        en = review.chat_text(self.conn, self.cfg, "en", "week")
+        self.assertIn("Messages: 1", en)
+        self.assertIn("Reminders set: 1", en)
+
+    def test_markdown_sections_and_backlog(self):
+        md = review.markdown(self.conn, self.cfg, "week")
+        for section in ("# Cara performance review", "## Activity", "## Learning",
+                        "## Communication issues", "## AI spend",
+                        "## Improvement backlog (for VS Code)"):
+            self.assertIn(section, md)
+        self.assertIn('"news" → "крипта" ×1', md)
+        self.assertIn("out-of-scope request(s)", md)
+        self.assertIn("напиши эссе", md)
+
+    def test_router_accepts_review(self):
+        ok = router.validate_route(
+            {"action": "review", "params": {"period": "week", "export": True}}, False)
+        self.assertEqual(ok["action"], "review")
 
 
 class MemoryStoreTests(unittest.TestCase):

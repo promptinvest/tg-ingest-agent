@@ -18,6 +18,7 @@ import gcal
 import ingest
 import llm
 import reminders
+import review
 import router
 import spend
 import store
@@ -409,6 +410,8 @@ class Agent:
             self.reply(chat_id, self.items_text(lang, params))
         elif action == "issues_report":
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
+        elif action == "review":
+            self.do_review(chat_id, lang, params)
         elif action == "memory":
             self.reply(chat_id, self.memory_text(lang))
         elif action == "remember":
@@ -670,10 +673,31 @@ class Agent:
             return
         store.kv_set(self.conn, "last_issues_report", now.isoformat())
         lang = self.lang()
-        report = self.issues_text(lang, "week")
+        report = review.chat_text(self.conn, self.cfg, lang, "week")
         for chat_id in self.cfg.allowed_chat_ids:
-            self.reply(chat_id, T(lang, "issues_weekly_intro", name=self.owner_name())
+            self.reply(chat_id, T(lang, "review_weekly_intro", name=self.owner_name())
                        + "\n" + report)
+
+    def do_review(self, chat_id, lang, params):
+        period = review.normalize_period(params.get("period"))
+        self.reply(chat_id, review.chat_text(self.conn, self.cfg, lang, period))
+        if not params.get("export"):
+            return
+        md = review.markdown(self.conn, self.cfg, period)
+        reviews_dir = self.cfg.db_path.parent / "reviews"
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+        filename = f"cara-review-{period}-{stamp}.md"
+        (reviews_dir / filename).write_text(md, encoding="utf-8")
+        try:
+            tg_send_document(self.cfg.token, chat_id, filename, md.encode("utf-8"),
+                             caption=T(lang, "review_file_caption"),
+                             content_type="text/markdown")
+            store.convo_add(self.conn, chat_id, "bot", f"[review file: {filename}]")
+        except TelegramError as exc:
+            log(f"review export send failed: {exc}")
+            self.reply(chat_id, T(lang, "llm_error"))
+        log(f"review exported: {reviews_dir / filename}")
 
     def categories_text(self, lang):
         rows = store.category_counts(self.conn)

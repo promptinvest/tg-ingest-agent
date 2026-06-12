@@ -31,6 +31,22 @@ ingested automatically without burning router tokens.
   same-category confirmations from one source the bot offers to auto-confirm
   that source.
 
+## Persona
+
+Cara's character — warm, loyal, redheaded private aide; the operator is her
+"boss" — is specified in [prompts/cara_persona.md](prompts/cara_persona.md)
+and enforced *structurally*: all replies come from `texts.py` templates
+written in her voice, identity questions ("кто ты?", "are you human?") get a
+transparency-rule answer, and the LLM system prompts carry a one-line voice
+note for the slots it fills (summaries, clarify questions). Persona sits
+below the hard rules and cannot override them.
+
+Ask «как ты поработала за неделю?» for a performance review (activity, what
+she learned, issues, spend) — say «сделай отчёт файлом» and she sends a
+Markdown report (also saved under `/var/lib/tg-ingest-agent/reviews/`) meant
+to be fed back into VS Code to improve the solution. The same review arrives
+automatically once a week.
+
 ## Guardrails
 
 - Closed action set in the router — there is no generic "chat" action, so the

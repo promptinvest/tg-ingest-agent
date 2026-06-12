@@ -31,6 +31,14 @@ TEXTS = {
         "en": "I'm doing great — keeping an eye on your inbox and reminders 😊 What can I do for you?",
     },
     "smalltalk_ack": {"ru": "👌", "en": "👌"},
+    "smalltalk_who_are_you": {
+        "ru": ("Я Кара — ваш ассистент-персона в Telegram. Не человек, но полностью на вашей "
+               "стороне, босс 🦊 Рыжая, аккуратная, с блокнотом всего важного: сохраняю, "
+               "напоминаю, держу хаос под контролем."),
+        "en": ("I'm Cara — your assistant persona inside Telegram. Not human, but very much "
+               "on your side, boss 🦊 Redheaded, tidy, notebook full of the important stuff: "
+               "I save, remind, and keep the chaos under control."),
+    },
     "out_of_scope": {
         "ru": ("Это пока не моё, простите 🙈 Зато я отлично умею: сохранять и раскладывать "
                "сообщения, напоминания, календарь, расходы на AI и помнить ваши предпочтения."),
@@ -52,8 +60,8 @@ TEXTS = {
         "en": "(saved #{row_id}, {images} images, {urls} URLs)",
     },
     "confirmed": {
-        "ru": "Готово — «{category}» (#{row_id}) ✅",
-        "en": "Done — \"{category}\" (#{row_id}) ✅",
+        "ru": "Готово, босс — «{category}» (#{row_id}) ✅",
+        "en": "Done, boss — \"{category}\" (#{row_id}) ✅",
     },
     "already_confirmed": {
         "ru": "#{row_id} я уже записала как «{category}» 😊",
@@ -245,6 +253,14 @@ TEXTS = {
     "issue_kind_budget_stop": {"ru": "остановки по бюджету", "en": "budget stops"},
     "issue_kind_ingest_failed": {"ru": "сообщения, которые не разобрала", "en": "messages I failed to sort"},
     "issue_kind_calendar_failed": {"ru": "проблемы с календарём", "en": "calendar trouble"},
+    "review_weekly_intro": {
+        "ru": "📊 {name}, моя еженедельная сводка — как я поработала:",
+        "en": "📊 {name}, my weekly check-in — how I did:",
+    },
+    "review_file_caption": {
+        "ru": "Отчёт готов, босс — можно отдать его в VS Code 📎",
+        "en": "Report ready, boss — feed it to VS Code 📎",
+    },
 }
 
 

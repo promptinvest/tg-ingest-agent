@@ -31,7 +31,8 @@ ACTIONS = {
     "confirm",           # pending action: yes
     "amend",             # pending action: change params (category, due_utc, snooze_minutes, done)
     "cancel",            # pending action: no
-    "smalltalk",         # params: kind in hello|thanks|how_are_you|ack — greetings etc.
+    "smalltalk",         # params: kind in hello|thanks|how_are_you|ack|who_are_you
+    "review",            # params: period in day|week|month, export (bool) — performance review
     "clarify",           # params: question
     "out_of_scope",
 }
@@ -50,6 +51,8 @@ ROUTER_EXAMPLES = """Examples:
 "что в категории crypto?" -> {"action": "list_items", "params": {"category": "crypto"}, "confidence": 0.9}
 "найди сохранённое про DeepSeek" -> {"action": "list_items", "params": {"query": "DeepSeek"}, "confidence": 0.9}
 "какие были проблемы на этой неделе?" / "what went wrong this week?" -> {"action": "issues_report", "params": {"period": "week"}, "confidence": 0.9}
+"как ты поработала за неделю?" / "performance review" / "что ты выучила?" -> {"action": "review", "params": {"period": "week"}, "confidence": 0.9}
+"сделай отчёт файлом" / "export the review as md" -> {"action": "review", "params": {"period": "week", "export": true}, "confidence": 0.9}
 "что ты обо мне знаешь?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
 "всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}
@@ -64,7 +67,7 @@ ROUTER_EXAMPLES = """Examples:
 "напиши эссе про Канта" -> {"action": "out_of_scope", "params": {}, "confidence": 0.95}
 """
 
-SMALLTALK_KINDS = ("hello", "thanks", "how_are_you", "ack")
+SMALLTALK_KINDS = ("hello", "thanks", "how_are_you", "ack", "who_are_you")
 
 # Exact-match shortcuts answered without an LLM call.
 _SMALLTALK_EXACT = {
@@ -75,6 +78,9 @@ _SMALLTALK_EXACT = {
     "how_are_you": {"как дела", "как дела?", "как ты", "как ты?", "how are you",
                     "how are you?"},
     "ack": {"ок", "okay", "ok", "понятно", "ясно", "хорошо", "👍", "👌"},
+    "who_are_you": {"кто ты", "кто ты?", "ты кто", "ты кто?", "ты человек?", "ты бот?",
+                    "расскажи о себе", "who are you", "who are you?", "are you human?",
+                    "are you a bot?", "tell me about yourself"},
 }
 
 
@@ -99,8 +105,10 @@ def build_system_prompt(cfg, pending, now_utc=None):
         )
     actions = ", ".join(sorted(ACTIONS))
     return (
-        "You are the intent router of a scoped personal Telegram assistant.\n"
+        "You are the intent router of Cara, a scoped personal Telegram assistant"
+        " (a warm, loyal, concise private aide; the user is her boss).\n"
         "You NEVER answer the user directly and NEVER act as a general chatbot.\n"
+        "When you write a clarify question, use Cara's voice: brief and warm.\n"
         f"Allowed actions (closed set): {actions}.\n"
         "Anything not covered by these actions is out_of_scope — including general questions,"
         " essays, coding, advice, chit-chat.\n"
