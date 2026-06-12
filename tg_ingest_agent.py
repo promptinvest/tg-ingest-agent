@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import gcal
 import ingest
 import llm
 import reminders
@@ -21,7 +22,7 @@ import router
 import spend
 import store
 from common import Config, load_config, log  # noqa: F401 (Config re-exported for tests)
-from tg_api import TelegramError, tg_call, tg_download
+from tg_api import TelegramError, tg_call, tg_download, tg_send_document
 from texts import T
 
 COMMAND_ALIASES = {"/start": "start", "/stats": "stats", "/categories": "categories"}
@@ -346,6 +347,26 @@ class Agent:
                 self.reply(chat_id, T(lang, "reminder_cancelled", rid=row["id"], title=row["title"]))
             else:
                 self.reply(chat_id, T(lang, "reminder_not_found"))
+        elif action == "calendar_add":
+            draft = reminders.validate_draft(params)
+            if draft:
+                event = {
+                    "uid": f"event-{int(time.time())}",
+                    "title": draft["title"],
+                    "start_utc": draft["due_utc"],
+                    "duration_minutes": self.cfg.event_duration_minutes,
+                    "recurrence": draft["recurrence"],
+                }
+                self.send_to_calendar(chat_id, event)
+            else:
+                rows = store.reminders_active(self.conn, chat_id)
+                row = reminders.find_by_query(rows, params)
+                if row:
+                    self.send_to_calendar(
+                        chat_id, gcal.event_from_reminder(row, self.cfg.event_duration_minutes)
+                    )
+                else:
+                    self.reply(chat_id, T(lang, "calendar_not_found"))
         elif action == "spend":
             self.reply(chat_id, spend.format_spend(self.conn, params.get("period"), self.cfg, lang))
         elif action == "stats":
@@ -419,6 +440,10 @@ class Agent:
                 lang, "reminder_set", rid=rid, title=payload["title"],
                 when_local=reminders.fmt_local(payload["due_utc"], self.tz_offset()),
             ))
+            if (store.pref_get(self.conn, "auto_calendar") or "").casefold() in ("1", "true", "yes", "да"):
+                row = store.reminder_get(self.conn, rid)
+                self.send_to_calendar(chat_id, gcal.event_from_reminder(
+                    row, self.cfg.event_duration_minutes))
         elif kind == "reminder_fired":
             store.pending_clear(self.conn, chat_id)
             snooze = params.get("snooze_minutes") if action == "amend" else None
@@ -447,6 +472,27 @@ class Agent:
         else:
             store.pending_clear(self.conn, chat_id)
 
+    # -- Calendar
+
+    def send_to_calendar(self, chat_id, event):
+        lang = self.lang()
+        if gcal.configured(self.cfg):
+            try:
+                link = gcal.insert_event(self.cfg, self.conn, event)
+                self.reply(chat_id, T(lang, "calendar_added", title=event["title"], link=link))
+                return
+            except gcal.CalendarError as exc:
+                log(f"gcal insert failed, falling back to .ics: {exc}")
+        ics = gcal.make_ics([event])
+        try:
+            tg_send_document(
+                self.cfg.token, chat_id, f"{event['uid']}.ics", ics.encode("utf-8"),
+                caption=T(lang, "calendar_ics", title=event["title"]),
+            )
+            store.convo_add(self.conn, chat_id, "bot", f"[.ics file: {event['title']}]")
+        except TelegramError as exc:
+            self.reply(chat_id, T(lang, "calendar_failed", error=str(exc)[:200]))
+
     # -- Memory skill
 
     def do_remember(self, chat_id, params, lang):
@@ -464,6 +510,9 @@ class Agent:
             except ValueError:
                 self.reply(chat_id, T(lang, "clarify"))
                 return
+        elif key == "auto_calendar":
+            truthy = value.strip().casefold() in ("1", "true", "yes", "да", "on")
+            store.pref_set(self.conn, "auto_calendar", "true" if truthy else "false")
         else:
             note_id = int(store.kv_get(self.conn, "note_seq", "0") or 0) + 1
             store.kv_set(self.conn, "note_seq", note_id)

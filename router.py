@@ -17,6 +17,7 @@ ACTIONS = {
     "reminder_create",   # params: title, due_utc (ISO, UTC), recurrence
     "reminder_list",
     "reminder_cancel",   # params: id or title_query
+    "calendar_add",      # params: id/title_query of a reminder, OR title+due_utc directly
     "spend",             # params: period in day|week|month
     "stats",
     "categories",
@@ -36,8 +37,11 @@ ROUTER_EXAMPLES = """Examples:
 "remind me every Monday at 9 to file the report" -> {"action": "reminder_create", "params": {"title": "file the report", "due_utc": "<next Monday 09:00 local in UTC>", "recurrence": "weekly"}, "confidence": 0.95}
 "сколько потратили на AI в этом месяце?" -> {"action": "spend", "params": {"period": "month"}, "confidence": 0.95}
 "сохрани: ссылка на статью https://..." -> {"action": "ingest", "params": {}, "confidence": 0.9}
+"добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
+"поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
 "что ты обо мне знаешь?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
+"всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}
 "да" (with a pending action) -> {"action": "confirm", "params": {}, "confidence": 0.95}
 "нет, лучше в 16:00" (pending reminder) -> {"action": "amend", "params": {"due_utc": "<same day 16:00 local in UTC>"}, "confidence": 0.9}
 "это скорее крипта" (pending category) -> {"action": "amend", "params": {"category": "крипта"}, "confidence": 0.9}

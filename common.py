@@ -9,6 +9,24 @@ def log(message):
     print(f"{datetime.now(timezone.utc).isoformat()} {message}", flush=True)
 
 
+def build_multipart(fields, file_field, filename, file_bytes, content_type):
+    """RFC 2046 multipart/form-data body; returns (body, boundary)."""
+    import uuid
+    boundary = uuid.uuid4().hex
+    parts = []
+    for key, value in fields.items():
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode("utf-8")
+        )
+    parts.append(
+        (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\";"
+         f" filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n").encode("utf-8")
+    )
+    parts.append(file_bytes)
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts), boundary
+
+
 def utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -80,4 +98,9 @@ def load_config(env=None):
     cfg.pricing_json = (env.get("PRICING_JSON") or "").strip()
     # Learning
     cfg.habit_threshold = int(env.get("HABIT_THRESHOLD") or "10")
+    # Google Calendar sync (dormant until the key file + calendar id exist;
+    # .ics export works without any of this)
+    cfg.gcal_calendar_id = (env.get("GCAL_CALENDAR_ID") or "").strip()
+    cfg.gcal_key_file = (env.get("GCAL_SA_KEY_FILE") or "/etc/tg-ingest-agent/gcal-sa.json").strip()
+    cfg.event_duration_minutes = int(env.get("EVENT_DURATION_MINUTES") or "30")
     return cfg

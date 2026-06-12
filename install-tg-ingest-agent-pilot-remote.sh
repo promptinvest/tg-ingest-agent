@@ -14,7 +14,7 @@ STATE_DIR=/var/lib/tg-ingest-agent
 ENV_FILE=/etc/tg-ingest-agent.env
 UNIT_FILE=/etc/systemd/system/${SERVICE}.service
 
-MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py spend.py"
+MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py spend.py gcal.py"
 
 for required in tg_ingest_agent.py $MODULES; do
   if [ ! -f "$STAGE_DIR/$required" ]; then
@@ -69,6 +69,10 @@ DO_MODEL_ACCESS_KEY=REPLACE_ME
 # HABIT_THRESHOLD=10
 # Optional seed taxonomy; categories also emerge from confirmed suggestions.
 # CATEGORIES=news,tools,ideas
+# Google Calendar sync (optional; .ics export works without it):
+# GCAL_CALENDAR_ID=you@gmail.com
+# GCAL_SA_KEY_FILE=/etc/tg-ingest-agent/gcal-sa.json
+# EVENT_DURATION_MINUTES=30
 # CATEGORIES_FILE=/etc/tg-ingest-agent/categories.txt
 # FALLBACK_CATEGORY=uncategorized
 # DO_CHAT_MODEL=anthropic-claude-haiku-4.5

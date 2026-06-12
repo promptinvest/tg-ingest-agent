@@ -7,7 +7,6 @@ exhausted. Skills never talk to the API directly.
 """
 import json
 import re
-import uuid
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -141,21 +140,7 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None):
 
 # -- speech-to-text -----------------------------------------------------------
 
-def build_multipart(fields, file_field, filename, file_bytes, content_type):
-    """RFC 2046 multipart/form-data body; returns (body, boundary)."""
-    boundary = uuid.uuid4().hex
-    parts = []
-    for key, value in fields.items():
-        parts.append(
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode("utf-8")
-        )
-    parts.append(
-        (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\";"
-         f" filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n").encode("utf-8")
-    )
-    parts.append(file_bytes)
-    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
-    return b"".join(parts), boundary
+from common import build_multipart  # noqa: E402 (shared with tg_api/gcal)
 
 
 def transcribe(cfg, conn, skill, audio_path, duration_seconds):

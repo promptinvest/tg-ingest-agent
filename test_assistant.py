@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import common
+import gcal
 import llm
 import reminders
 import router
@@ -223,6 +224,58 @@ class SpendTests(unittest.TestCase):
         report_en = spend.format_spend(self.conn, "day", self.cfg, "en")
         self.assertIn("By model:", report_en)
         self.assertIn("m2", report_en)
+
+
+class CalendarTests(unittest.TestCase):
+    EVENT = {"uid": "reminder-5", "title": "Call; bank, now\nplease",
+             "start_utc": "2026-06-13T07:00:00+00:00", "duration_minutes": 45,
+             "recurrence": "weekly"}
+
+    def test_make_ics(self):
+        now = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc)
+        ics = gcal.make_ics([self.EVENT], now)
+        self.assertIn("BEGIN:VCALENDAR", ics)
+        self.assertIn("UID:reminder-5@tg-ingest-agent", ics)
+        self.assertIn("DTSTART:20260613T070000Z", ics)
+        self.assertIn("DTEND:20260613T074500Z", ics)
+        self.assertIn("DTSTAMP:20260612T100000Z", ics)
+        self.assertIn(r"SUMMARY:Call\; bank\, now\nplease", ics)
+        self.assertIn("RRULE:FREQ=WEEKLY", ics)
+        self.assertTrue(ics.endswith("END:VCALENDAR\r\n"))
+        one_shot = gcal.make_ics([dict(self.EVENT, recurrence="none")], now)
+        self.assertNotIn("RRULE", one_shot)
+
+    def test_event_payload_and_from_reminder(self):
+        payload = gcal.build_event_payload(self.EVENT)
+        self.assertEqual(payload["start"]["dateTime"], "2026-06-13T07:00:00+00:00")
+        self.assertEqual(payload["end"]["dateTime"], "2026-06-13T07:45:00+00:00")
+        self.assertEqual(payload["recurrence"], ["RRULE:FREQ=WEEKLY"])
+        row = {"id": 7, "title": "x", "due_utc": "2026-06-13T07:00:00+00:00",
+               "recurrence": "daily"}
+        event = gcal.event_from_reminder(row, 30)
+        self.assertEqual(event["uid"], "reminder-7")
+        self.assertEqual(event["recurrence"], "daily")
+
+    def test_jwt_unsigned(self):
+        import base64, json as jsonlib
+        unsigned = gcal.build_jwt_unsigned("sa@project.iam.gserviceaccount.com", 1_000_000)
+        header_b64, claims_b64 = unsigned.split(b".")
+        pad = b"=" * (-len(claims_b64) % 4)
+        claims = jsonlib.loads(base64.urlsafe_b64decode(claims_b64 + pad))
+        self.assertEqual(claims["iss"], "sa@project.iam.gserviceaccount.com")
+        self.assertEqual(claims["exp"] - claims["iat"], 3600)
+        self.assertEqual(claims["aud"], gcal.GOOGLE_TOKEN_URI)
+        self.assertIn("calendar.events", claims["scope"])
+
+    def test_configured(self):
+        cfg = make_config()
+        self.assertFalse(gcal.configured(cfg))  # no calendar id, no key file
+        cfg.gcal_calendar_id = "me@gmail.com"
+        self.assertFalse(gcal.configured(cfg))  # key file still missing
+
+    def test_router_accepts_calendar_add(self):
+        ok = router.validate_route({"action": "calendar_add", "params": {"title_query": "банк"}}, False)
+        self.assertEqual(ok["action"], "calendar_add")
 
 
 class MemoryStoreTests(unittest.TestCase):

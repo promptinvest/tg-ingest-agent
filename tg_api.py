@@ -53,6 +53,31 @@ def tg_call(token, method, params=None, timeout=35):
     return payload.get("result")
 
 
+def tg_send_document(token, chat_id, filename, content_bytes, caption=None,
+                     content_type="text/calendar"):
+    from common import build_multipart
+    fields = {"chat_id": str(chat_id)}
+    if caption:
+        fields["caption"] = caption[:1000]
+    body, boundary = build_multipart(fields, "document", filename, content_bytes, content_type)
+    request = Request(
+        f"https://api.telegram.org/bot{token}/sendDocument",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise TelegramError(f"sendDocument failed with HTTP {exc.code}", status=exc.code) from exc
+    except URLError as exc:
+        raise TelegramError(f"sendDocument failed: {exc.reason}") from exc
+    if not payload.get("ok"):
+        raise TelegramError(f"sendDocument returned ok=false: {payload.get('description')}")
+    return payload.get("result")
+
+
 def tg_download(token, file_path, dest):
     url = f"https://api.telegram.org/file/bot{token}/{file_path}"
     try:

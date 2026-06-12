@@ -143,6 +143,22 @@ TEXTS = {
         "en": "Categories (confirmed messages):",
     },
     "stats_empty": {"ru": "Сообщений пока нет.", "en": "No messages stored yet."},
+    "calendar_added": {
+        "ru": "Добавил в Google Calendar: {title}\n{link}",
+        "en": "Added to Google Calendar: {title}\n{link}",
+    },
+    "calendar_ics": {
+        "ru": "Календарь Google не подключён — отправляю .ics файл: откройте его, чтобы добавить «{title}» в любой календарь.",
+        "en": "Google Calendar is not connected — sending an .ics file: open it to add \"{title}\" to any calendar.",
+    },
+    "calendar_failed": {
+        "ru": "Не получилось добавить в календарь: {error}",
+        "en": "Could not add to the calendar: {error}",
+    },
+    "calendar_not_found": {
+        "ru": "Не понял, какое событие добавить — укажите напоминание или время.",
+        "en": "Not sure which event to add — name a reminder or give a time.",
+    },
     "llm_error": {
         "ru": "Не получилось обработать запрос (модель недоступна). Попробуйте позже — сообщение не потеряно.",
         "en": "Could not process the request (model unavailable). Try again later — nothing is lost.",
