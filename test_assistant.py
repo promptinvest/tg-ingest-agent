@@ -390,9 +390,12 @@ class AgentViewTests(unittest.TestCase):
         self.row_id = store.insert_message(conn, {
             "chat_id": 1, "tg_message_id": 5, "received_at": "2026-06-12T10:00:00+00:00",
             "raw_text": "рейсы Уфа-Красноярск", "forward_origin_title": "Vandrouki",
+            "forward_origin_username": "vandrouki", "forward_origin_chat_id": -1001234,
+            "forward_origin_message_id": 777, "forward_date": 1781200000,
         })
         store.insert_url(conn, self.row_id, "https://vandrouki.ru/x/")
         store.set_suggestion(conn, self.row_id, "Flight Deals", "Cheap June flights", "m")
+        store.set_facts(conn, self.row_id, ["от 9800 руб туда-обратно", "июнь 2026"])
         store.confirm_category(conn, self.row_id, store.ensure_category(conn, "Flight Deals"))
 
     def tearDown(self):
@@ -409,8 +412,14 @@ class AgentViewTests(unittest.TestCase):
         self.assertIn("https://vandrouki.ru/x/", detail)
         self.assertIn("Источник: Vandrouki", detail)
         self.assertIn("Cheap June flights", detail)
+        self.assertIn("Пост: https://t.me/vandrouki/777", detail)
+        self.assertIn("Дата поста: ", detail)
+        self.assertIn("• от 9800 руб туда-обратно", detail)
         by_query = self.agent.item_detail_text("en", {"query": "рейсы"})
         self.assertIn("Source: Vandrouki", by_query)
+        self.assertIn("Key facts:", by_query)
+        by_fact_query = self.agent.item_detail_text("ru", {"query": "9800"})
+        self.assertIn("#%d" % self.row_id, by_fact_query)  # facts are searchable
         latest = self.agent.item_detail_text("ru", {})  # no params -> most recent
         self.assertIn("#%d" % self.row_id, latest)
         missing = self.agent.item_detail_text("ru", {"query": "nothing-matches"})

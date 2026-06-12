@@ -699,11 +699,27 @@ class Agent:
         if row is None:
             return T(lang, "items_empty")
         category = row["category"] or row["suggested_category"] or "?"
-        lines = [f"#{row['id']} [{category}] — {row['received_at'][:16]}"]
+        lines = [f"#{row['id']} [{category}]"]
+        post_date = row["forward_date"] or row["tg_date"]
+        if post_date:
+            local = datetime.fromtimestamp(int(post_date), tz=timezone.utc) \
+                + timedelta(hours=self.tz_offset())
+            lines.append(("Дата поста: " if ru else "Posted: ") + local.strftime("%Y-%m-%d %H:%M"))
+        lines.append(("Сохранено: " if ru else "Saved: ") + row["received_at"][:16])
         if row["forward_origin_title"]:
             lines.append(("Источник: " if ru else "Source: ") + row["forward_origin_title"])
+        post_link = ingest.source_link(
+            row["forward_origin_username"], row["forward_origin_chat_id"],
+            row["forward_origin_message_id"],
+        )
+        if post_link:
+            lines.append(("Пост: " if ru else "Post: ") + post_link)
         if row["summary"]:
             lines.append(row["summary"][:500])
+        facts = store.message_facts(self.conn, row["id"])
+        if facts:
+            lines.append("Ключевые факты:" if ru else "Key facts:")
+            lines.extend(f"• {r['fact']}" for r in facts)
         urls = store.message_urls(self.conn, row["id"])
         if urls:
             lines.append("Ссылки:" if ru else "Links:")
@@ -895,6 +911,7 @@ class Agent:
                 "forward_origin_type": forward.get("type"),
                 "forward_origin_chat_id": forward.get("chat_id"),
                 "forward_origin_title": forward.get("title"),
+                "forward_origin_username": forward.get("username"),
                 "forward_origin_message_id": forward.get("message_id"),
                 "forward_date": forward.get("date"),
                 "received_at": datetime.now(timezone.utc).isoformat(),
@@ -974,13 +991,15 @@ class Agent:
                        if r["local_path"]]
         known = store.known_categories(self.conn)
         if not (row["raw_text"] or urls or image_paths):
-            category, alternatives, summary = self.cfg.fallback_category, [], "(no analyzable content)"
+            category, alternatives, summary, facts = (
+                self.cfg.fallback_category, [], "(no analyzable content)", []
+            )
         else:
             text_block = ingest.build_text_block(
                 row["raw_text"], row["forward_origin_type"], row["forward_origin_title"], urls
             )
             try:
-                category, alternatives, summary = ingest.suggest(
+                category, alternatives, summary, facts = ingest.suggest(
                     self.cfg, self.conn, known, text_block, image_paths
                 )
             except llm.LLMError as exc:
@@ -994,7 +1013,8 @@ class Agent:
                     log(f"suggestion failed for message #{row_id} (attempt {attempts}): {exc}")
                 return None
         store.set_suggestion(self.conn, row_id, category, summary, self.cfg.do_model)
-        log(f"suggested {category} for message #{row_id}")
+        store.set_facts(self.conn, row_id, facts)
+        log(f"suggested {category} for message #{row_id} ({len(facts)} facts)")
         return category, alternatives, summary
 
     def present_suggestion(self, row_id, chat_id, reply_to, category, alternatives, summary, counts):

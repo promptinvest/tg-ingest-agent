@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS messages (
   forward_origin_type TEXT,
   forward_origin_chat_id INTEGER,
   forward_origin_title TEXT,
+  forward_origin_username TEXT,
   forward_origin_message_id INTEGER,
   forward_date INTEGER,
   received_at TEXT NOT NULL,
@@ -114,6 +115,12 @@ CREATE TABLE IF NOT EXISTS conversation (
   text TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS facts (
+  id INTEGER PRIMARY KEY,
+  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  fact TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS issues (
   id INTEGER PRIMARY KEY,
   ts TEXT NOT NULL,
@@ -159,8 +166,17 @@ def open_db(path):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     return conn
+
+
+def _migrate(conn):
+    """Additive migrations for databases created by older versions
+    (CREATE IF NOT EXISTS does not alter existing tables)."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "forward_origin_username" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN forward_origin_username TEXT")
 
 
 # -- kv ----------------------------------------------------------------------
@@ -252,6 +268,20 @@ def insert_image(conn, message_id, tg_message_id, photo, local_path):
 
 def get_message(conn, message_id):
     return conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+
+
+def set_facts(conn, message_id, facts):
+    """Replace the key facts of a message (idempotent for retries)."""
+    conn.execute("DELETE FROM facts WHERE message_id = ?", (message_id,))
+    for fact in facts:
+        conn.execute("INSERT INTO facts (message_id, fact) VALUES (?, ?)", (message_id, fact))
+    conn.commit()
+
+
+def message_facts(conn, message_id):
+    return conn.execute(
+        "SELECT fact FROM facts WHERE message_id = ? ORDER BY id", (message_id,)
+    ).fetchall()
 
 
 def message_urls(conn, message_id):
@@ -351,12 +381,19 @@ def pending_messages(conn, max_attempts, limit=5):
 
 def list_messages(conn, category=None, query=None, limit=10):
     """Recent stored messages, optionally filtered by category (exact,
-    case-insensitive incl. Cyrillic) or a substring query. Filtering happens
-    in Python: SQL lower()/NOCASE are ASCII-only."""
+    case-insensitive incl. Cyrillic) or a substring query over text, summary,
+    key facts, category, and source. Filtering happens in Python: SQL
+    lower()/NOCASE are ASCII-only."""
     rows = conn.execute(
         "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested')"
         " ORDER BY id DESC LIMIT 200"
     ).fetchall()
+    facts_by_message = {}
+    if query:
+        for row in conn.execute(
+            "SELECT message_id, GROUP_CONCAT(fact, ' ') AS f FROM facts GROUP BY message_id"
+        ):
+            facts_by_message[row["message_id"]] = row["f"]
     result = []
     for row in rows:
         row_category = row["category"] or row["suggested_category"] or ""
@@ -365,6 +402,7 @@ def list_messages(conn, category=None, query=None, limit=10):
         if query:
             haystack = " ".join(filter(None, [
                 row["raw_text"], row["summary"], row_category, row["forward_origin_title"],
+                facts_by_message.get(row["id"]),
             ])).casefold()
             if str(query).casefold() not in haystack:
                 continue

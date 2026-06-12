@@ -167,27 +167,41 @@ class PromptTests(unittest.TestCase):
             image_parts = [c for c in content if c.get("type") == "image_url"]
             self.assertEqual(len(image_parts), 2)  # oversize skipped, cap respected
 
-    def test_suggest_with_alternatives_and_canonical_match(self):
+    def test_suggest_with_alternatives_facts_and_canonical_match(self):
         cfg = make_config()
-        reply = '{"category": "NEWS", "alternatives": ["Tools", "news", "ai"], "summary": "ok"}'
+        reply = ('{"category": "NEWS", "alternatives": ["Tools", "news", "ai"],'
+                 ' "summary": "ok", "facts": ["рейс от 9800 руб", "  ", 42,'
+                 ' "июнь 2026", "a", "b", "c"]}')
         with mock.patch.object(llm, "chat", return_value=reply):
-            category, alternatives, summary = ingest.suggest(
+            category, alternatives, summary, facts = ingest.suggest(
                 cfg, self.conn, ["news", "tools"], "t", []
             )
         self.assertEqual(category, "news")  # canonical existing spelling reused
         self.assertEqual(alternatives, ["tools", "ai"])  # deduped vs category, canonicalized
         self.assertEqual(summary, "ok")
+        # facts: blanks dropped, non-strings coerced, capped at MAX_FACTS
+        self.assertEqual(facts, ["рейс от 9800 руб", "42", "июнь 2026", "a", "b"])
 
     def test_suggest_corrective_retry_and_fallback(self):
         cfg = make_config()
-        good = '{"category": "ideas", "alternatives": [], "summary": "ok"}'
+        good = '{"category": "ideas", "alternatives": [], "summary": "ok", "facts": []}'
         with mock.patch.object(llm, "chat", side_effect=["garbage", good]):
-            self.assertEqual(ingest.suggest(cfg, self.conn, [], "t", []), ("ideas", [], "ok"))
+            self.assertEqual(ingest.suggest(cfg, self.conn, [], "t", []),
+                             ("ideas", [], "ok", []))
         with mock.patch.object(llm, "chat", side_effect=["garbage", "still garbage"]):
-            category, alternatives, summary = ingest.suggest(cfg, self.conn, [], "t", [])
+            category, alternatives, summary, facts = ingest.suggest(cfg, self.conn, [], "t", [])
             self.assertEqual(category, cfg.fallback_category)
             self.assertEqual(alternatives, [])
             self.assertEqual(summary, "still garbage")
+            self.assertEqual(facts, [])
+
+    def test_source_link(self):
+        self.assertEqual(ingest.source_link("vandrouki", -1001234, 55),
+                         "https://t.me/vandrouki/55")
+        self.assertEqual(ingest.source_link(None, -1001234567, 55),
+                         "https://t.me/c/1234567/55")
+        self.assertIsNone(ingest.source_link(None, 12345, 55))  # user forward: no link
+        self.assertIsNone(ingest.source_link("x", -100123, None))
 
 
 class KeyboardTests(unittest.TestCase):
@@ -339,6 +353,37 @@ class DbTests(unittest.TestCase):
         )
         images = store.message_images(self.conn, row_id)
         self.assertEqual(images[0]["tg_file_unique_id"], "u")
+
+    def test_migration_adds_username_column_to_old_db(self):
+        import sqlite3
+        path = Path(self.tmp.name) / "old.db"
+        raw = sqlite3.connect(str(path))
+        # The pre-username schema: every current column except
+        # forward_origin_username (index targets must exist).
+        raw.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL,"
+            " tg_message_id INTEGER NOT NULL, received_at TEXT NOT NULL,"
+            " forward_origin_chat_id INTEGER, forward_origin_message_id INTEGER,"
+            " suggestion_message_id INTEGER,"
+            " status TEXT NOT NULL DEFAULT 'pending', UNIQUE(chat_id, tg_message_id))"
+        )
+        raw.execute("INSERT INTO messages (chat_id, tg_message_id, received_at) VALUES (1, 1, 'ts')")
+        raw.commit()
+        raw.close()
+        conn = store.open_db(path)
+        try:
+            columns = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+            self.assertIn("forward_origin_username", columns)
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"], 1)
+        finally:
+            conn.close()
+
+    def test_facts_roundtrip_and_replace(self):
+        row_id = self._insert(msg_id=40, raw_text="x")
+        store.set_facts(self.conn, row_id, ["a", "b"])
+        self.assertEqual([r["fact"] for r in store.message_facts(self.conn, row_id)], ["a", "b"])
+        store.set_facts(self.conn, row_id, ["c"])  # replace, not append
+        self.assertEqual([r["fact"] for r in store.message_facts(self.conn, row_id)], ["c"])
 
     def test_habit_streak(self):
         self.assertEqual(store.habit_streak(self.conn, -7), (None, 0))
