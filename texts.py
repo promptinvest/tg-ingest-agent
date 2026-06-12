@@ -15,6 +15,44 @@ TEXTS = {
                "save a message, set a reminder, ask about AI spend. "
                "I suggest categories myself — you confirm by reply or button."),
     },
+    "capabilities": {
+        "ru": ("Что я умею:\n"
+               "• Сохранять и категоризировать сообщения — пересылайте посты, фото, ссылки; "
+               "я предложу категорию и краткое содержание, вы подтверждаете\n"
+               "• Напоминания — «напомни завтра в 10 позвонить в банк», разово или ежедневно/еженедельно\n"
+               "• Календарь — «добавь в календарь...» (пришлю .ics или запишу в Google Calendar)\n"
+               "• Расходы на AI — «сколько потратили за месяц?», с лимитами бюджета\n"
+               "• Память — «запомни: ...», «что ты обо мне знаешь?», «забудь...»\n"
+               "• Обзор данных — «что у тебя есть?», «покажи сохранённое про X», «что в категории Y?»\n"
+               "Пишите текстом или голосом, по-русски или по-английски."),
+        "en": ("What I can do:\n"
+               "• Save and categorize messages — forward posts, photos, links; "
+               "I suggest a category and summary, you confirm\n"
+               "• Reminders — \"remind me tomorrow at 10 to call the bank\", once or daily/weekly\n"
+               "• Calendar — \"add to calendar...\" (.ics file or direct Google Calendar sync)\n"
+               "• AI spend — \"how much did we spend this month?\", with budget limits\n"
+               "• Memory — \"remember: ...\", \"what do you know about me?\", \"forget...\"\n"
+               "• Data overview — \"what have you got?\", \"show saved items about X\", \"what's in category Y?\"\n"
+               "Write or speak, in Russian or English."),
+    },
+    "overview_header": {"ru": "Что у меня сейчас есть:", "en": "What I have right now:"},
+    "overview_reminders": {
+        "ru": "Активные напоминания: {n}{next_part}",
+        "en": "Active reminders: {n}{next_part}",
+    },
+    "overview_next": {"ru": " (ближайшее: {when} — {title})", "en": " (next: {when} — {title})"},
+    "overview_memory": {"ru": "Память: {n} записей", "en": "Memory: {n} entries"},
+    "overview_spend": {
+        "ru": "Расходы AI: сегодня ${day:.3f}, за месяц ${month:.3f}",
+        "en": "AI spend: today ${day:.3f}, this month ${month:.3f}",
+    },
+    "items_header": {"ru": "Последние сохранённые{filter}:", "en": "Recently saved{filter}:"},
+    "items_filter_category": {"ru": " (категория: {category})", "en": " (category: {category})"},
+    "items_filter_query": {"ru": " (по запросу: {query})", "en": " (matching: {query})"},
+    "items_empty": {
+        "ru": "Ничего не нашёл по этому запросу.",
+        "en": "Nothing found for that.",
+    },
     "out_of_scope": {
         "ru": ("Это вне моих задач. Я умею: сохранять и категоризировать сообщения, "
                "напоминания, статистика расходов на AI, память о ваших предпочтениях."),

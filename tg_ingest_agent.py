@@ -373,6 +373,12 @@ class Agent:
             self.reply(chat_id, self.stats_text(lang))
         elif action == "categories":
             self.reply(chat_id, self.categories_text(lang))
+        elif action == "help":
+            self.reply(chat_id, T(lang, "capabilities"))
+        elif action == "overview":
+            self.reply(chat_id, self.overview_text(lang))
+        elif action == "list_items":
+            self.reply(chat_id, self.items_text(lang, params))
         elif action == "memory":
             self.reply(chat_id, self.memory_text(lang))
         elif action == "remember":
@@ -551,6 +557,46 @@ class Agent:
         if category_rows:
             lines.append(T(lang, "stats_categories"))
             lines.extend(f"  {row['name']}: {row['n']}" for row in category_rows)
+        return "\n".join(lines)
+
+    def overview_text(self, lang):
+        lines = [T(lang, "overview_header"), self.stats_text(lang)]
+        active = store.reminders_active(self.conn, next(iter(self.cfg.allowed_chat_ids)))
+        next_part = ""
+        if active:
+            next_part = T(lang, "overview_next",
+                          when=reminders.fmt_local(active[0]["due_utc"], self.tz_offset()),
+                          title=active[0]["title"][:60])
+        lines.append(T(lang, "overview_reminders", n=len(active), next_part=next_part))
+        memory_rows = [r for r in store.pref_all(self.conn)
+                       if not r["key"].startswith("auto_cat_declined:")]
+        lines.append(T(lang, "overview_memory", n=len(memory_rows)))
+        lines.append(T(lang, "overview_spend",
+                       day=store.usage_total(self.conn, "day"),
+                       month=store.usage_total(self.conn, "month")))
+        return "\n".join(lines)
+
+    def items_text(self, lang, params):
+        try:
+            limit = min(int(params.get("limit") or 5), 10)
+        except (TypeError, ValueError):
+            limit = 5
+        category = params.get("category")
+        query = params.get("query")
+        rows = store.list_messages(self.conn, category, query, limit)
+        if not rows:
+            return T(lang, "items_empty")
+        filter_part = ""
+        if category:
+            filter_part = T(lang, "items_filter_category", category=category)
+        elif query:
+            filter_part = T(lang, "items_filter_query", query=query)
+        lines = [T(lang, "items_header", filter=filter_part)]
+        for row in rows:
+            row_category = row["category"] or row["suggested_category"] or "?"
+            text = (row["summary"] or row["raw_text"] or "").replace("\n", " ")[:90]
+            marker = "" if row["status"] == "confirmed" else " (?)"
+            lines.append(f"#{row['id']} [{row_category}{marker}] {text}")
         return "\n".join(lines)
 
     def categories_text(self, lang):

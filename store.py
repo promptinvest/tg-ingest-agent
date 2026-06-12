@@ -339,6 +339,31 @@ def pending_messages(conn, max_attempts, limit=5):
     ).fetchall()
 
 
+def list_messages(conn, category=None, query=None, limit=10):
+    """Recent stored messages, optionally filtered by category (exact,
+    case-insensitive incl. Cyrillic) or a substring query. Filtering happens
+    in Python: SQL lower()/NOCASE are ASCII-only."""
+    rows = conn.execute(
+        "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested')"
+        " ORDER BY id DESC LIMIT 200"
+    ).fetchall()
+    result = []
+    for row in rows:
+        row_category = row["category"] or row["suggested_category"] or ""
+        if category and row_category.casefold() != str(category).casefold():
+            continue
+        if query:
+            haystack = " ".join(filter(None, [
+                row["raw_text"], row["summary"], row_category, row["forward_origin_title"],
+            ])).casefold()
+            if str(query).casefold() not in haystack:
+                continue
+        result.append(row)
+        if len(result) >= limit:
+            break
+    return result
+
+
 def status_counts(conn):
     return conn.execute(
         "SELECT status, COUNT(*) AS n FROM messages GROUP BY status ORDER BY status"

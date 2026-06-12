@@ -337,6 +337,33 @@ class MemoryStoreTests(unittest.TestCase):
         store.reminder_update_due(self.conn, rid2, future)
         self.assertEqual(store.reminder_get(self.conn, rid2)["due_utc"], future)
 
+    def test_list_messages_filters(self):
+        def add(msg_id, text, category, status):
+            self.conn.execute(
+                "INSERT INTO messages (chat_id, tg_message_id, received_at, raw_text,"
+                " suggested_category, category, status) VALUES (1, ?, 'ts', ?, ?, ?, ?)",
+                (msg_id, text, category, category if status == "confirmed" else None, status),
+            )
+            self.conn.commit()
+        add(1, "DeepSeek released v4", "Крипта", "confirmed")
+        add(2, "новости про биткоин", "крипта", "suggested")
+        add(3, "pasta recipe", "food", "confirmed")
+        add(4, "ignored", "x", "duplicate")
+        # category filter is Cyrillic-case-insensitive
+        rows = store.list_messages(self.conn, category="КРИПТА")
+        self.assertEqual([r["tg_message_id"] for r in rows], [2, 1])
+        # substring query searches text+summary+category+source
+        rows = store.list_messages(self.conn, query="deepseek")
+        self.assertEqual([r["tg_message_id"] for r in rows], [1])
+        # duplicates excluded; newest first; limit respected
+        rows = store.list_messages(self.conn, limit=2)
+        self.assertEqual([r["tg_message_id"] for r in rows], [3, 2])
+
+    def test_router_accepts_introspection_actions(self):
+        for action in ("help", "overview", "list_items"):
+            ok = router.validate_route({"action": action, "params": {}}, False)
+            self.assertEqual(ok["action"], action)
+
     def test_feedback(self):
         store.feedback_add(self.conn, "ingest", "digest", "news", "крипта")
         rows = store.feedback_recent(self.conn, "ingest")

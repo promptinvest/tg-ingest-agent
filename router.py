@@ -21,6 +21,9 @@ ACTIONS = {
     "spend",             # params: period in day|week|month
     "stats",
     "categories",
+    "help",              # what can you do?
+    "overview",          # what do you have now? (digest of stored data)
+    "list_items",        # params: category, query, limit — browse stored messages
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
     "forget",            # params: value (entry text or key to forget)
@@ -39,6 +42,11 @@ ROUTER_EXAMPLES = """Examples:
 "сохрани: ссылка на статью https://..." -> {"action": "ingest", "params": {}, "confidence": 0.9}
 "добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
 "поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
+"что ты умеешь?" / "what can you do?" -> {"action": "help", "params": {}, "confidence": 0.95}
+"что у тебя сейчас есть?" / "what have you got so far?" -> {"action": "overview", "params": {}, "confidence": 0.9}
+"покажи последние сохранённые" -> {"action": "list_items", "params": {"limit": 5}, "confidence": 0.9}
+"что в категории crypto?" -> {"action": "list_items", "params": {"category": "crypto"}, "confidence": 0.9}
+"найди сохранённое про DeepSeek" -> {"action": "list_items", "params": {"query": "DeepSeek"}, "confidence": 0.9}
 "что ты обо мне знаешь?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
 "всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}
