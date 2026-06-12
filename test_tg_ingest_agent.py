@@ -147,6 +147,10 @@ class PromptTests(unittest.TestCase):
         with_feedback = ingest.build_llm_messages(cfg, [], "text", [], corrections)
         self.assertIn("крипта", with_feedback[0]["content"])
         self.assertIn("no categories yet", with_feedback[0]["content"])
+        # language policy: summaries stay in the source language, new
+        # categories are proposed in English (service metadata)
+        self.assertIn("STRICTLY in the language of the source", with_feedback[0]["content"])
+        self.assertIn("NEW categories in English", with_feedback[0]["content"])
 
     def test_build_llm_messages_image_cap_and_oversize(self):
         cfg = make_config(MAX_LLM_IMAGES="2")
