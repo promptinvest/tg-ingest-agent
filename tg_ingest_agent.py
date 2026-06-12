@@ -1,762 +1,41 @@
 #!/usr/bin/env python3
-"""tg-ingest-agent: Telegram message ingest + LLM categorization.
+"""tg-ingest-agent: conversational personal assistant on Telegram.
 
-Receives messages (text, photos, forwarded channel posts) from allowed chats
-via long polling, stores them in SQLite, downloads photos, and asks a
-vision-capable LLM on DigitalOcean Gradient serverless inference to suggest a
-category (reusing the taxonomy built up from previously confirmed categories)
-and a short summary. The suggestion is sent back with inline buttons; the
-operator confirms it, picks an alternative, or replies with a custom category.
-Only confirmed categories enter the taxonomy.
+One bot, one long-poll loop, skills as modules under a closed-world intent
+router. Text and voice requests (RU/EN) are routed to: inbox ingest with
+suggest-and-confirm categorization, reminders, AI-spend stats, and a small
+preference memory. All model calls go through the budget-guarded gateway in
+llm.py. No inbound ports; stdlib only.
 
-Stdlib-only. Deployed on Pilot-VPS as /opt/tg-ingest-agent/agent.py.
+Deployed on Pilot-VPS as /opt/tg-ingest-agent/agent.py.
 """
-import base64
-import json
-import os
-import re
 import signal
-import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
-
-def log(message):
-    print(f"{datetime.now(timezone.utc).isoformat()} {message}", flush=True)
-
-
-# ---------------------------------------------------------------------------
-# Configuration
-
-
-class Config:
-    pass
-
-
-def config_list(value):
-    normalized = str(value or "").replace("\n", ",").replace(";", ",").replace("|", ",")
-    return [part.strip() for part in normalized.split(",") if part.strip()]
-
-
-def parse_chat_ids(value):
-    ids = set()
-    for part in config_list(value):
-        try:
-            ids.add(int(part))
-        except ValueError:
-            raise SystemExit(f"ALLOWED_CHAT_IDS contains a non-numeric entry: {part!r}")
-    return ids
-
-
-def load_categories(env):
-    file_path = (env.get("CATEGORIES_FILE") or "").strip()
-    if file_path:
-        lines = Path(file_path).read_text(encoding="utf-8").splitlines()
-        return [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
-    return config_list(env.get("CATEGORIES", ""))
-
-
-def load_config(env=None):
-    env = os.environ if env is None else env
-    cfg = Config()
-    cfg.token = (env.get("TELEGRAM_BOT_TOKEN") or "").strip()
-    if not cfg.token:
-        raise SystemExit("TELEGRAM_BOT_TOKEN is required")
-    cfg.allowed_chat_ids = parse_chat_ids(env.get("ALLOWED_CHAT_IDS", ""))
-    if not cfg.allowed_chat_ids:
-        raise SystemExit("ALLOWED_CHAT_IDS is required")
-    cfg.do_key = (env.get("DO_MODEL_ACCESS_KEY") or "").strip()
-    if not cfg.do_key:
-        raise SystemExit("DO_MODEL_ACCESS_KEY is required")
-    # Optional seed taxonomy; the real category list grows from confirmed
-    # suggestions in the categories table.
-    cfg.seed_categories = load_categories(env)
-    cfg.fallback_category = (env.get("FALLBACK_CATEGORY") or "uncategorized").strip()
-    cfg.do_model = (env.get("DO_CHAT_MODEL") or "anthropic-claude-haiku-4.5").strip()
-    cfg.do_base_url = (env.get("DO_INFERENCE_BASE_URL") or "https://inference.do-ai.run/v1").strip()
-    cfg.db_path = Path(env.get("DB_PATH") or "/var/lib/tg-ingest-agent/ingest.db")
-    cfg.media_dir = Path(env.get("MEDIA_DIR") or "/var/lib/tg-ingest-agent/media")
-    cfg.poll_timeout = int(env.get("POLL_TIMEOUT_SECONDS") or "50")
-    cfg.album_settle = float(env.get("ALBUM_SETTLE_SECONDS") or "3")
-    cfg.max_llm_images = int(env.get("MAX_LLM_IMAGES") or "4")
-    cfg.llm_timeout = int(env.get("LLM_TIMEOUT_SECONDS") or "90")
-    cfg.llm_max_attempts = int(env.get("LLM_MAX_ATTEMPTS") or "5")
-    cfg.retry_interval = int(env.get("RETRY_INTERVAL_SECONDS") or "300")
-    return cfg
-
-
-# ---------------------------------------------------------------------------
-# SQLite storage
-#
-# messages.status lifecycle:
-#   pending   -> stored, awaiting an LLM suggestion (retried on failure)
-#   suggested -> LLM suggestion sent, awaiting operator confirmation
-#   confirmed -> operator confirmed (category is final)
-#   failed    -> LLM gave up after LLM_MAX_ATTEMPTS
-#   duplicate -> re-forward of an already stored channel post
-
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS kv (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS categories (
-  id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-  id INTEGER PRIMARY KEY,
-  chat_id INTEGER NOT NULL,
-  tg_message_id INTEGER NOT NULL,
-  media_group_id TEXT,
-  from_user_id INTEGER,
-  forward_origin_type TEXT,
-  forward_origin_chat_id INTEGER,
-  forward_origin_title TEXT,
-  forward_origin_message_id INTEGER,
-  forward_date INTEGER,
-  received_at TEXT NOT NULL,
-  tg_date INTEGER,
-  raw_text TEXT,
-  suggested_category TEXT,
-  category TEXT,
-  summary TEXT,
-  status TEXT NOT NULL DEFAULT 'pending',
-  llm_model TEXT,
-  llm_attempts INTEGER NOT NULL DEFAULT 0,
-  suggestion_message_id INTEGER,
-  duplicate_of INTEGER REFERENCES messages(id),
-  UNIQUE (chat_id, tg_message_id)
-);
-
-CREATE TABLE IF NOT EXISTS urls (
-  id INTEGER PRIMARY KEY,
-  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  url TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS images (
-  id INTEGER PRIMARY KEY,
-  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  tg_message_id INTEGER NOT NULL,
-  tg_file_id TEXT NOT NULL,
-  tg_file_unique_id TEXT NOT NULL,
-  local_path TEXT,
-  width INTEGER,
-  height INTEGER,
-  file_size INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
-CREATE INDEX IF NOT EXISTS idx_messages_fwd
-  ON messages(forward_origin_chat_id, forward_origin_message_id);
-CREATE INDEX IF NOT EXISTS idx_messages_suggestion
-  ON messages(chat_id, suggestion_message_id);
-"""
-
-
-def open_db(path):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
-    conn.commit()
-    return conn
-
-
-def kv_get(conn, key, default=None):
-    row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
-    return row["value"] if row else default
-
-
-def kv_set(conn, key, value):
-    conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, str(value)))
-    conn.commit()
-
-
-def ensure_category(conn, name):
-    """Insert the category if new (case-insensitive); return canonical name."""
-    row = conn.execute(
-        "SELECT name FROM categories WHERE name = ? COLLATE NOCASE", (name,)
-    ).fetchone()
-    if row:
-        return row["name"]
-    conn.execute(
-        "INSERT INTO categories (name, created_at) VALUES (?, ?)",
-        (name, datetime.now(timezone.utc).isoformat()),
-    )
-    conn.commit()
-    return name
-
-
-def known_categories(conn, limit=50):
-    rows = conn.execute(
-        "SELECT c.name AS name,"
-        " (SELECT COUNT(*) FROM messages m WHERE m.category = c.name AND m.status = 'confirmed') AS n"
-        " FROM categories c ORDER BY n DESC, c.name LIMIT ?",
-        (limit,),
-    ).fetchall()
-    return [r["name"] for r in rows]
-
-
-def categories_text(conn):
-    rows = conn.execute(
-        "SELECT c.name AS name,"
-        " (SELECT COUNT(*) FROM messages m WHERE m.category = c.name AND m.status = 'confirmed') AS n"
-        " FROM categories c ORDER BY n DESC, c.name",
-    ).fetchall()
-    if not rows:
-        return "No categories yet. They are created when you confirm suggestions."
-    return "Categories (confirmed messages):\n" + "\n".join(
-        f"  {r['name']}: {r['n']}" for r in rows
-    )
-
-
-def insert_message(conn, fields):
-    """Insert a message row; returns its id, or None when the (chat_id,
-    tg_message_id) pair was already stored (update redelivery)."""
-    columns = ", ".join(fields)
-    placeholders = ", ".join("?" for _ in fields)
-    cur = conn.execute(
-        f"INSERT INTO messages ({columns}) VALUES ({placeholders}) "
-        "ON CONFLICT(chat_id, tg_message_id) DO NOTHING",
-        tuple(fields.values()),
-    )
-    conn.commit()
-    return cur.lastrowid if cur.rowcount else None
-
-
-def insert_url(conn, message_id, url):
-    conn.execute("INSERT INTO urls (message_id, url) VALUES (?, ?)", (message_id, url))
-    conn.commit()
-
-
-def insert_image(conn, message_id, tg_message_id, photo, local_path):
-    conn.execute(
-        "INSERT INTO images (message_id, tg_message_id, tg_file_id, tg_file_unique_id,"
-        " local_path, width, height, file_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            message_id,
-            tg_message_id,
-            photo.get("file_id"),
-            photo.get("file_unique_id"),
-            local_path,
-            photo.get("width"),
-            photo.get("height"),
-            photo.get("file_size"),
-        ),
-    )
-    conn.commit()
-
-
-def get_message(conn, message_id):
-    return conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
-
-
-def message_urls(conn, message_id):
-    return conn.execute("SELECT * FROM urls WHERE message_id = ? ORDER BY id", (message_id,)).fetchall()
-
-
-def message_images(conn, message_id):
-    return conn.execute("SELECT * FROM images WHERE message_id = ? ORDER BY id", (message_id,)).fetchall()
-
-
-def find_forward_duplicate(conn, fwd_chat_id, fwd_message_id, exclude_id):
-    return conn.execute(
-        "SELECT * FROM messages WHERE forward_origin_chat_id = ? AND forward_origin_message_id = ?"
-        " AND id != ? AND status != 'duplicate' ORDER BY id LIMIT 1",
-        (fwd_chat_id, fwd_message_id, exclude_id),
-    ).fetchone()
-
-
-def mark_duplicate(conn, message_id, original):
-    conn.execute(
-        "UPDATE messages SET duplicate_of = ?, suggested_category = ?, category = ?,"
-        " summary = ?, llm_model = ?, status = 'duplicate' WHERE id = ?",
-        (
-            original["id"],
-            original["suggested_category"],
-            original["category"],
-            original["summary"],
-            original["llm_model"],
-            message_id,
-        ),
-    )
-    conn.commit()
-
-
-def set_suggestion(conn, message_id, suggested_category, summary, model):
-    conn.execute(
-        "UPDATE messages SET suggested_category = ?, summary = ?, llm_model = ?,"
-        " status = 'suggested' WHERE id = ?",
-        (suggested_category, summary, model, message_id),
-    )
-    conn.commit()
-
-
-def set_suggestion_message(conn, message_id, tg_suggestion_message_id):
-    conn.execute(
-        "UPDATE messages SET suggestion_message_id = ? WHERE id = ?",
-        (tg_suggestion_message_id, message_id),
-    )
-    conn.commit()
-
-
-def confirm_category(conn, message_id, category):
-    conn.execute(
-        "UPDATE messages SET category = ?, status = 'confirmed' WHERE id = ?",
-        (category, message_id),
-    )
-    conn.commit()
-
-
-def find_by_suggestion_message(conn, chat_id, suggestion_message_id):
-    if not suggestion_message_id:
-        return None
-    return conn.execute(
-        "SELECT * FROM messages WHERE chat_id = ? AND suggestion_message_id = ? LIMIT 1",
-        (chat_id, suggestion_message_id),
-    ).fetchone()
-
-
-def bump_attempts(conn, message_id):
-    conn.execute("UPDATE messages SET llm_attempts = llm_attempts + 1 WHERE id = ?", (message_id,))
-    conn.commit()
-    return conn.execute(
-        "SELECT llm_attempts FROM messages WHERE id = ?", (message_id,)
-    ).fetchone()["llm_attempts"]
-
-
-def mark_failed(conn, message_id):
-    conn.execute("UPDATE messages SET status = 'failed' WHERE id = ?", (message_id,))
-    conn.commit()
-
-
-def pending_messages(conn, max_attempts, limit=5):
-    return conn.execute(
-        "SELECT * FROM messages WHERE status = 'pending' AND llm_attempts < ?"
-        " ORDER BY id LIMIT ?",
-        (max_attempts, limit),
-    ).fetchall()
-
-
-def stats_text(conn):
-    status_rows = conn.execute(
-        "SELECT status, COUNT(*) AS n FROM messages GROUP BY status ORDER BY status"
-    ).fetchall()
-    if not status_rows:
-        return "No messages stored yet."
-    lines = ["By status:"]
-    lines.extend(f"  {row['status']}: {row['n']}" for row in status_rows)
-    category_rows = conn.execute(
-        "SELECT category AS cat, COUNT(*) AS n FROM messages"
-        " WHERE status = 'confirmed' GROUP BY cat ORDER BY n DESC"
-    ).fetchall()
-    if category_rows:
-        lines.append("Confirmed by category:")
-        lines.extend(f"  {row['cat']}: {row['n']}" for row in category_rows)
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Telegram Bot API
-
-
-class TelegramError(Exception):
-    def __init__(self, message, status=None, retry_after=None):
-        super().__init__(message)
-        self.status = status
-        self.retry_after = retry_after
-
-
-def tg_call(token, method, params=None, timeout=35):
-    url = f"https://api.telegram.org/bot{token}/{method}"
-    data = {}
-    for key, value in (params or {}).items():
-        if value is None:
-            continue
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value)
-        data[key] = value
-    request = Request(
-        url,
-        data=urlencode(data).encode("utf-8"),
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        description = ""
-        retry_after = None
-        try:
-            body = json.loads(exc.read().decode("utf-8"))
-            description = body.get("description") or ""
-            retry_after = (body.get("parameters") or {}).get("retry_after")
-        except Exception:
-            pass
-        raise TelegramError(
-            f"{method} failed with HTTP {exc.code}: {description}",
-            status=exc.code,
-            retry_after=retry_after,
-        ) from exc
-    except URLError as exc:
-        raise TelegramError(f"{method} failed: {exc.reason}") from exc
-    if not payload.get("ok"):
-        raise TelegramError(f"{method} returned ok=false: {payload.get('description')}")
-    return payload.get("result")
-
-
-def tg_download(token, file_path, dest):
-    url = f"https://api.telegram.org/file/bot{token}/{file_path}"
-    try:
-        with urlopen(Request(url), timeout=120) as response:
-            Path(dest).write_bytes(response.read())
-    except (HTTPError, URLError) as exc:
-        reason = getattr(exc, "code", None) or getattr(exc, "reason", exc)
-        raise TelegramError(f"file download failed: {reason}") from exc
-
-
-# ---------------------------------------------------------------------------
-# URL extraction (Telegram entity offsets are UTF-16 code units)
-
-
-URL_RE = re.compile(r"https?://[^\s<>()\"']+")
-
-
-def utf16_slice(text, offset, length):
-    encoded = text.encode("utf-16-le")
-    return encoded[offset * 2:(offset + length) * 2].decode("utf-16-le", errors="ignore")
-
-
-def extract_urls(text, entities):
-    text = text or ""
-    urls = []
-    for entity in entities or []:
-        etype = entity.get("type")
-        if etype == "url":
-            urls.append(utf16_slice(text, entity.get("offset", 0), entity.get("length", 0)))
-        elif etype == "text_link" and entity.get("url"):
-            urls.append(entity["url"])
-    for match in URL_RE.findall(text):
-        urls.append(match.rstrip(".,;"))
-    seen = set()
-    result = []
-    for url in urls:
-        url = url.strip()
-        if url and url not in seen:
-            seen.add(url)
-            result.append(url)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# LLM suggestion (DigitalOcean Gradient serverless inference)
-
-
-class LLMError(Exception):
-    pass
-
-
-_BEARER_PATTERN = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+")
-
-
-def _redacted_http_error(exc, access_key):
-    try:
-        body = exc.read().decode("utf-8")
-    except Exception:
-        body = ""
-    if access_key:
-        body = body.replace(access_key, "<redacted>")
-    body = _BEARER_PATTERN.sub(r"\1<redacted>", body)
-    suffix = f": {body[:500]}" if body else "."
-    return f"inference request failed with HTTP {exc.code}{suffix}"
-
-
-def do_chat(cfg, messages):
-    base = cfg.do_base_url.rstrip("/")
-    if not base.endswith("/v1"):
-        base += "/v1"
-    payload = {
-        "model": cfg.do_model,
-        "messages": messages,
-        "max_tokens": 300,
-        "temperature": 0,
-        "stream": False,
-    }
-    request = Request(
-        f"{base}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {cfg.do_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=cfg.llm_timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        raise LLMError(_redacted_http_error(exc, cfg.do_key)) from exc
-    except URLError as exc:
-        raise LLMError(f"inference request failed: {exc.reason}") from exc
-    except json.JSONDecodeError as exc:
-        raise LLMError("inference response was not valid JSON") from exc
-    choices = data.get("choices") or []
-    if not choices:
-        raise LLMError("inference response had no choices")
-    return str((choices[0].get("message") or {}).get("content") or "")
-
-
-def parse_llm_json(text):
-    if not text:
-        return None
-    candidates = [text.strip()]
-    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
-    if fence:
-        candidates.append(fence.group(1).strip())
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start:end + 1])
-    for candidate in candidates:
-        try:
-            value = json.loads(candidate)
-        except Exception:
-            continue
-        if isinstance(value, dict):
-            return value
-    return None
-
-
-MAX_CATEGORY_CHARS = 40
-
-
-def normalize_category(value):
-    """Collapse whitespace, cap length; None when nothing usable remains."""
-    value = re.sub(r"\s+", " ", str(value or "")).strip()
-    return value[:MAX_CATEGORY_CHARS].strip() or None
-
-
-def match_category(value, categories):
-    """Return the canonical (existing) spelling of value, or None."""
-    value = str(value or "").strip()
-    for category in categories:
-        if value.casefold() == category.casefold():
-            return category
-    return None
-
-
-def build_text_block(raw_text, forward_type, forward_title, urls):
-    lines = []
-    if forward_title:
-        lines.append(f"Forwarded from {forward_type or 'unknown'}: {forward_title}")
-    lines.append("Message text:")
-    lines.append(raw_text or "(no text)")
-    if urls:
-        lines.append("URLs:")
-        lines.extend(f"- {url}" for url in urls)
-    return "\n".join(lines)
-
-
-MAX_LLM_IMAGE_BYTES = 5 * 1024 * 1024
-
-
-def build_llm_messages(cfg, known, text_block, image_paths):
-    if known:
-        taxonomy = (
-            "Categories used so far: " + ", ".join(known) + "\n"
-            "Prefer one of these when it fits; propose a new short category only when none fits."
-        )
-    else:
-        taxonomy = "There are no categories yet; propose a short (1-3 word) category."
-    system = (
-        "You categorize messages forwarded into a personal Telegram inbox.\n"
-        f"{taxonomy}\n"
-        "Reply with ONLY a JSON object: "
-        '{"category": "<best category>", '
-        '"alternatives": ["<up to 2 other plausible categories>"], '
-        '"summary": "<short summary of the message, at most 2 sentences>"}'
-    )
-    content = [{"type": "text", "text": text_block}]
-    used = 0
-    for path in image_paths:
-        if used >= cfg.max_llm_images:
-            break
-        try:
-            data = Path(path).read_bytes()
-        except OSError:
-            continue
-        if len(data) > MAX_LLM_IMAGE_BYTES:
-            continue
-        encoded = base64.b64encode(data).decode("ascii")
-        content.append(
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
-        )
-        used += 1
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": content},
-    ]
-
-
-def suggest(cfg, known, text_block, image_paths):
-    """Ask the LLM for a category suggestion.
-
-    Returns (category, alternatives, summary); never raises on bad model
-    output (falls back to cfg.fallback_category), only on transport errors.
-    """
-    messages = build_llm_messages(cfg, known, text_block, image_paths)
-    reply = do_chat(cfg, messages)
-    parsed = parse_llm_json(reply)
-    category = normalize_category((parsed or {}).get("category"))
-    if parsed is None or category is None:
-        messages.append({"role": "assistant", "content": reply})
-        messages.append({
-            "role": "user",
-            "content": (
-                'Reply with ONLY the JSON object '
-                '{"category": ..., "alternatives": [...], "summary": ...}.'
-            ),
-        })
-        reply = do_chat(cfg, messages)
-        parsed = parse_llm_json(reply)
-        category = normalize_category((parsed or {}).get("category"))
-    if parsed is None or category is None:
-        summary = (reply or "").strip()[:500] or "(unparseable model reply)"
-        return cfg.fallback_category, [], summary
-    category = match_category(category, known) or category
-    alternatives = []
-    raw_alternatives = parsed.get("alternatives")
-    if isinstance(raw_alternatives, list):
-        for alt in raw_alternatives[:5]:
-            alt = normalize_category(alt)
-            if not alt:
-                continue
-            alt = match_category(alt, known) or alt
-            taken = [category.casefold()] + [a.casefold() for a in alternatives]
-            if alt.casefold() not in taken:
-                alternatives.append(alt)
-    summary = str(parsed.get("summary") or "").strip() or "(no summary)"
-    return category, alternatives[:3], summary
-
-
-# ---------------------------------------------------------------------------
-# Confirmation keyboard (callback_data is capped at 64 bytes by Telegram)
-
-
-CALLBACK_BYTE_LIMIT = 64
-
-
-def build_suggestion_keyboard(row_id, category, alternatives):
-    keyboard = [[{"text": f"✅ {category}", "callback_data": f"s|{row_id}"}]]
-    alt_row = []
-    for alt in alternatives:
-        if alt.casefold() == category.casefold():
-            continue
-        data = f"a|{row_id}|{alt}"
-        if len(data.encode("utf-8")) > CALLBACK_BYTE_LIMIT:
-            continue
-        alt_row.append({"text": alt, "callback_data": data})
-    if alt_row:
-        keyboard.append(alt_row[:3])
-    return keyboard
-
-
-def parse_callback_data(data):
-    """Parse 's|<row_id>' or 'a|<row_id>|<category>'; None when malformed."""
-    parts = str(data or "").split("|", 2)
-    if len(parts) < 2:
-        return None
-    try:
-        row_id = int(parts[1])
-    except ValueError:
-        return None
-    if parts[0] == "s" and len(parts) == 2:
-        return ("suggested", row_id, None)
-    if parts[0] == "a" and len(parts) == 3 and parts[2].strip():
-        return ("named", row_id, parts[2].strip())
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Message parsing helpers
-
-
-def parse_forward_origin(origin):
-    if not origin:
-        return {}
-    otype = origin.get("type")
-    info = {"type": otype, "date": origin.get("date")}
-    if otype == "channel":
-        chat = origin.get("chat") or {}
-        info["chat_id"] = chat.get("id")
-        info["title"] = chat.get("title") or chat.get("username")
-        info["message_id"] = origin.get("message_id")
-    elif otype == "user":
-        user = origin.get("sender_user") or {}
-        name = " ".join(filter(None, [user.get("first_name"), user.get("last_name")]))
-        info["chat_id"] = user.get("id")
-        info["title"] = name or user.get("username")
-    elif otype == "hidden_user":
-        info["title"] = origin.get("sender_user_name")
-    elif otype == "chat":
-        chat = origin.get("sender_chat") or {}
-        info["chat_id"] = chat.get("id")
-        info["title"] = chat.get("title")
-    return info
-
-
-def first_text(parts):
-    for part in parts:
-        text = (part.get("text") or "").strip()
-        if text:
-            return text
-    for part in parts:
-        caption = (part.get("caption") or "").strip()
-        if caption:
-            return caption
-    return None
-
-
-def collect_urls(parts):
-    urls = []
-    seen = set()
-    for part in parts:
-        for url in extract_urls(part.get("text"), part.get("entities")) + extract_urls(
-            part.get("caption"), part.get("caption_entities")
-        ):
-            if url not in seen:
-                seen.add(url)
-                urls.append(url)
-    return urls
-
-
-# ---------------------------------------------------------------------------
-# Agent
+import ingest
+import llm
+import reminders
+import router
+import spend
+import store
+from common import Config, load_config, log  # noqa: F401 (Config re-exported for tests)
+from tg_api import TelegramError, tg_call, tg_download
+from texts import T
+
+COMMAND_ALIASES = {"/start": "start", "/stats": "stats", "/categories": "categories"}
 
 
 class Agent:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.conn = open_db(cfg.db_path)
+        self.conn = store.open_db(cfg.db_path)
         cfg.media_dir.mkdir(parents=True, exist_ok=True)
         for name in cfg.seed_categories:
-            normalized = normalize_category(name)
+            normalized = llm.normalize_category(name)
             if normalized:
-                ensure_category(self.conn, normalized)
+                store.ensure_category(self.conn, normalized)
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0
@@ -765,9 +44,22 @@ class Agent:
         log(f"received signal {signum}, shutting down")
         self.stop = True
 
+    # -- preferences-backed settings
+
+    def lang(self):
+        return store.pref_get(self.conn, "language", self.cfg.language)
+
+    def tz_offset(self):
+        try:
+            return int(store.pref_get(self.conn, "timezone_offset", self.cfg.timezone_offset))
+        except (TypeError, ValueError):
+            return self.cfg.timezone_offset
+
     # -- Telegram helpers
 
-    def reply(self, chat_id, text, reply_to=None, reply_markup=None):
+    def reply(self, chat_id, text, reply_to=None, reply_markup=None, record=True):
+        if record:
+            store.convo_add(self.conn, chat_id, "bot", text)
         try:
             return tg_call(
                 self.cfg.token,
@@ -805,20 +97,19 @@ class Agent:
                 {
                     "chat_id": chat_id,
                     "message_id": message_id,
-                    "text": f"Category: {row['category']} ✅\nSummary: {summary}\n(#{row['id']})",
+                    "text": f"{row['category']} ✅\n{summary}\n(#{row['id']})",
                 },
             )
         except TelegramError as exc:
             log(f"editMessageText failed: {exc}")
 
-    def download_photo(self, photo):
-        unique_id = photo.get("file_unique_id")
+    def download_file(self, file_id, unique_id, default_ext):
         existing = list(self.cfg.media_dir.glob(f"{unique_id}.*"))
         if existing:
             return str(existing[0])
-        info = tg_call(self.cfg.token, "getFile", {"file_id": photo.get("file_id")})
+        info = tg_call(self.cfg.token, "getFile", {"file_id": file_id})
         file_path = info.get("file_path") or ""
-        ext = Path(file_path).suffix or ".jpg"
+        ext = Path(file_path).suffix or default_ext
         dest = self.cfg.media_dir / f"{unique_id}{ext}"
         tg_download(self.cfg.token, file_path, dest)
         return str(dest)
@@ -830,16 +121,18 @@ class Agent:
             tg_call(self.cfg.token, "deleteWebhook", {"drop_pending_updates": False})
         except TelegramError as exc:
             log(f"deleteWebhook failed (continuing): {exc}")
-        offset = int(kv_get(self.conn, "offset", "0") or 0)
+        offset = int(store.kv_get(self.conn, "offset", "0") or 0)
         errors = 0
         log(
             f"polling started (model={self.cfg.do_model}, "
-            f"known_categories={len(known_categories(self.conn))}, "
+            f"known_categories={len(store.known_categories(self.conn))}, "
             f"allowed_chats={len(self.cfg.allowed_chat_ids)}, offset={offset})"
         )
         while not self.stop:
             now = time.time()
             self.flush_albums(now)
+            self.fire_due_reminders()
+            self.check_budget_notice()
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
                 self.retry_sweep()
@@ -877,9 +170,58 @@ class Agent:
                     log(f"error handling update {update.get('update_id')}: {exc!r}")
             if updates:
                 offset = max(u["update_id"] for u in updates) + 1
-                kv_set(self.conn, "offset", offset)
+                store.kv_set(self.conn, "offset", offset)
         self.flush_albums(time.time(), force=True)
         log("stopped")
+
+    # -- Scheduler ticks
+
+    def fire_due_reminders(self):
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for row in store.reminders_due(self.conn, now_iso):
+            lang = self.lang()
+            self.reply(row["chat_id"], T(lang, "reminder_fired", title=row["title"]))
+            store.pending_set(
+                self.conn, row["chat_id"], "reminder_fired",
+                {"reminder_id": row["id"], "title": row["title"]}, ttl_seconds=1800,
+            )
+            following = reminders.next_due(row["due_utc"], row["recurrence"])
+            if following:
+                store.reminder_update_due(self.conn, row["id"], following)
+            else:
+                # stays visible to snooze via the pending action; closed as done
+                store.reminder_close(self.conn, row["id"], "done")
+            log(f"reminder #{row['id']} fired")
+
+    def check_budget_notice(self):
+        state, period, spent, limit = llm.budget_state(self.cfg, self.conn)
+        if state == "ok":
+            return
+        period_value = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d" if period == "day" else "%Y-%m"
+        )
+        flag = f"budget_notice:{state}:{period}:{period_value}"
+        if store.kv_get(self.conn, flag):
+            return
+        store.kv_set(self.conn, flag, "1")
+        lang = self.lang()
+        key = "budget_warn" if state == "warn" else "budget_stop"
+        text = T(lang, key, spent=spent, limit=limit, period=T(lang, f"period_{period}"))
+        for chat_id in self.cfg.allowed_chat_ids:
+            self.reply(chat_id, text)
+
+    def retry_sweep(self):
+        rows = store.pending_messages(self.conn, self.cfg.llm_max_attempts)
+        for row in rows:
+            if self.stop:
+                return
+            suggestion = self.suggest_row(row)
+            if suggestion:
+                category, alternatives, summary = suggestion
+                self.present_suggestion(
+                    row["id"], row["chat_id"], row["tg_message_id"],
+                    category, alternatives, summary, "",
+                )
 
     # -- Update handling
 
@@ -896,37 +238,281 @@ class Agent:
             from_id = (msg.get("from") or {}).get("id")
             log(f"ignored message from chat_id={chat_id} user_id={from_id}")
             return
+
+        voice = msg.get("voice") or msg.get("audio")
+        if voice:
+            transcript = self.transcribe_voice(chat_id, voice)
+            if transcript is None:
+                return
+            msg = dict(msg)
+            msg["text"] = transcript
+            self.reply(chat_id, T(self.lang(), "voice_quote", transcript=transcript[:300]),
+                       record=False)
+
         text = (msg.get("text") or "").strip()
-        if text in ("/start", "/stats", "/categories") and not msg.get("forward_origin"):
-            self.handle_command(chat_id, text)
+        is_content = bool(
+            msg.get("forward_origin") or msg.get("photo") or msg.get("document")
+            or msg.get("media_group_id")
+        )
+        if text:
+            store.convo_add(self.conn, chat_id, "user", text)
+
+        if is_content:
+            group_id = msg.get("media_group_id")
+            if group_id:
+                buffer = self.albums.setdefault(str(group_id), {"parts": []})
+                buffer["parts"].append(msg)
+                buffer["deadline"] = time.time() + self.cfg.album_settle
+                return
+            self.finalize([msg])
             return
+
+        if not text:
+            return
+        if text in COMMAND_ALIASES:
+            self.handle_command(chat_id, COMMAND_ALIASES[text])
+            return
+
+        # Correction by replying to a suggestion message still works.
         reply_to_msg = msg.get("reply_to_message")
-        if reply_to_msg and text and not msg.get("forward_origin"):
-            row = find_by_suggestion_message(self.conn, chat_id, reply_to_msg.get("message_id"))
+        if reply_to_msg:
+            row = store.find_by_suggestion_message(
+                self.conn, chat_id, reply_to_msg.get("message_id")
+            )
             if row:
                 self.handle_correction(row, chat_id, text, msg.get("message_id"))
                 return
-        group_id = msg.get("media_group_id")
-        if group_id:
-            buffer = self.albums.setdefault(str(group_id), {"parts": []})
-            buffer["parts"].append(msg)
-            buffer["deadline"] = time.time() + self.cfg.album_settle
-            return
-        self.finalize([msg])
 
-    def handle_command(self, chat_id, text):
-        if text == "/start":
-            self.reply(
-                chat_id,
-                "tg-ingest-agent: send or forward messages (text, links, photos). I store "
-                "them, suggest a category and summary, and you confirm with the buttons or "
-                "by replying with your own category. /stats shows counts, /categories the "
-                "taxonomy.",
+        self.dispatch(chat_id, msg, text)
+
+    def transcribe_voice(self, chat_id, voice):
+        lang = self.lang()
+        if not self.cfg.stt_enabled:
+            self.reply(chat_id, T(lang, "stt_failed"))
+            return None
+        try:
+            path = self.download_file(voice.get("file_id"), voice.get("file_unique_id"), ".oga")
+            transcript = llm.transcribe(
+                self.cfg, self.conn, "stt", path, int(voice.get("duration") or 0)
             )
-        elif text == "/stats":
-            self.reply(chat_id, stats_text(self.conn))
+        except (TelegramError, llm.LLMError) as exc:
+            log(f"voice transcription failed: {exc}")
+            self.reply(chat_id, T(lang, "stt_failed"))
+            return None
+        if not transcript:
+            self.reply(chat_id, T(lang, "stt_failed"))
+            return None
+        return transcript
+
+    # -- Router dispatch
+
+    def dispatch(self, chat_id, msg, text):
+        lang = self.lang()
+        pending = store.pending_get(self.conn, chat_id)
+        try:
+            decision = router.route(self.cfg, self.conn, chat_id, text, pending)
+        except llm.BudgetExceeded as exc:
+            self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
+                                  period=T(lang, f"period_{exc.period}")))
+            return
+        except llm.LLMError as exc:
+            log(f"router failed: {exc}")
+            self.reply(chat_id, T(lang, "llm_error"))
+            return
+        action, params = decision["action"], decision["params"]
+        log(f"routed chat={chat_id} action={action} confidence={decision['confidence']:.2f}")
+
+        if action == "ingest":
+            self.finalize([msg])
+        elif action == "reminder_create":
+            draft = reminders.validate_draft(params)
+            if not draft:
+                self.reply(chat_id, T(lang, "clarify"))
+                return
+            store.pending_set(self.conn, chat_id, "reminder", draft)
+            self.reply(chat_id, T(
+                lang, "reminder_draft", title=draft["title"],
+                when_local=reminders.fmt_local(draft["due_utc"], self.tz_offset()),
+                recurrence=T(lang, "recurrence_" + draft["recurrence"]),
+            ))
+        elif action == "reminder_list":
+            rows = store.reminders_active(self.conn, chat_id)
+            self.reply(chat_id, reminders.format_list(rows, self.tz_offset(), lang))
+        elif action == "reminder_cancel":
+            rows = store.reminders_active(self.conn, chat_id)
+            row = reminders.find_by_query(rows, params)
+            if row:
+                store.reminder_close(self.conn, row["id"], "cancelled")
+                self.reply(chat_id, T(lang, "reminder_cancelled", rid=row["id"], title=row["title"]))
+            else:
+                self.reply(chat_id, T(lang, "reminder_not_found"))
+        elif action == "spend":
+            self.reply(chat_id, spend.format_spend(self.conn, params.get("period"), self.cfg, lang))
+        elif action == "stats":
+            self.reply(chat_id, self.stats_text(lang))
+        elif action == "categories":
+            self.reply(chat_id, self.categories_text(lang))
+        elif action == "memory":
+            self.reply(chat_id, self.memory_text(lang))
+        elif action == "remember":
+            self.do_remember(chat_id, params, lang)
+        elif action == "forget":
+            self.do_forget(chat_id, params, lang)
+        elif action in ("confirm", "amend", "cancel"):
+            self.resolve_pending(chat_id, action, params, pending, lang)
+        elif action == "clarify":
+            question = str(params.get("question") or "").strip()
+            self.reply(chat_id, question[:300] if question else T(lang, "clarify"))
         else:
-            self.reply(chat_id, categories_text(self.conn))
+            self.reply(chat_id, T(lang, "out_of_scope"))
+
+    def handle_command(self, chat_id, name):
+        lang = self.lang()
+        if name == "start":
+            self.reply(chat_id, T(lang, "start"))
+        elif name == "stats":
+            self.reply(chat_id, self.stats_text(lang))
+        else:
+            self.reply(chat_id, self.categories_text(lang))
+
+    # -- Pending-action resolution (conversational confirmation)
+
+    def resolve_pending(self, chat_id, action, params, pending, lang):
+        if not pending:
+            self.reply(chat_id, T(lang, "nothing_pending"))
+            return
+        kind, payload = pending["kind"], pending["payload"]
+        if action == "cancel":
+            store.pending_clear(self.conn, chat_id)
+            self.reply(chat_id, T(lang, "cancelled"))
+            return
+        if kind == "category":
+            row = store.get_message(self.conn, payload.get("row_id"))
+            if not row:
+                store.pending_clear(self.conn, chat_id)
+                return
+            category = (llm.normalize_category(params.get("category"))
+                        if action == "amend" else None)
+            category = category or row["suggested_category"] or self.cfg.fallback_category
+            store.pending_clear(self.conn, chat_id)
+            self.apply_category_confirm(chat_id, row, category, reply_to=None)
+        elif kind == "reminder":
+            if action == "amend":
+                merged = dict(payload)
+                merged.update({k: v for k, v in params.items() if v is not None})
+                draft = reminders.validate_draft(merged)
+                if not draft:
+                    self.reply(chat_id, T(lang, "clarify"))
+                    return
+                store.pending_set(self.conn, chat_id, "reminder", draft)
+                self.reply(chat_id, T(
+                    lang, "reminder_draft", title=draft["title"],
+                    when_local=reminders.fmt_local(draft["due_utc"], self.tz_offset()),
+                    recurrence=T(lang, "recurrence_" + draft["recurrence"]),
+                ))
+                return
+            rid = store.reminder_add(
+                self.conn, chat_id, payload["title"], payload["due_utc"], payload["recurrence"]
+            )
+            store.pending_clear(self.conn, chat_id)
+            self.reply(chat_id, T(
+                lang, "reminder_set", rid=rid, title=payload["title"],
+                when_local=reminders.fmt_local(payload["due_utc"], self.tz_offset()),
+            ))
+        elif kind == "reminder_fired":
+            store.pending_clear(self.conn, chat_id)
+            snooze = params.get("snooze_minutes") if action == "amend" else None
+            if snooze:
+                try:
+                    minutes = max(1, int(snooze))
+                except (TypeError, ValueError):
+                    minutes = 30
+                due = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+                rid = store.reminder_add(self.conn, chat_id, payload["title"], due)
+                self.reply(chat_id, T(lang, "reminder_snoozed",
+                                      when_local=reminders.fmt_local(due, self.tz_offset())))
+                log(f"reminder snoozed as #{rid}")
+            else:
+                self.reply(chat_id, T(lang, "reminder_done"))
+        elif kind == "habit":
+            store.pending_clear(self.conn, chat_id)
+            source = payload["source_chat_id"]
+            if action == "confirm":
+                store.pref_set(self.conn, f"auto_cat:{source}", payload["category"])
+                self.reply(chat_id, T(lang, "habit_enabled",
+                                      source=payload.get("source_title") or source,
+                                      category=payload["category"]))
+            else:
+                store.pref_set(self.conn, f"auto_cat_declined:{source}", "1")
+        else:
+            store.pending_clear(self.conn, chat_id)
+
+    # -- Memory skill
+
+    def do_remember(self, chat_id, params, lang):
+        value = str(params.get("value") or "").strip()
+        if not value:
+            self.reply(chat_id, T(lang, "clarify"))
+            return
+        key = str(params.get("key") or "").strip().lower()
+        if key == "language":
+            normalized = value.strip().lower()
+            store.pref_set(self.conn, "language", "ru" if normalized.startswith("ru") else "en")
+        elif key == "timezone_offset":
+            try:
+                store.pref_set(self.conn, "timezone_offset", int(value))
+            except ValueError:
+                self.reply(chat_id, T(lang, "clarify"))
+                return
+        else:
+            note_id = int(store.kv_get(self.conn, "note_seq", "0") or 0) + 1
+            store.kv_set(self.conn, "note_seq", note_id)
+            store.pref_set(self.conn, f"note:{note_id}", value)
+        self.reply(chat_id, T(self.lang(), "remember_saved", value=value))
+
+    def do_forget(self, chat_id, params, lang):
+        query = str(params.get("value") or params.get("key") or "").strip().casefold()
+        if not query:
+            self.reply(chat_id, T(lang, "clarify"))
+            return
+        for row in store.pref_all(self.conn):
+            if query == row["key"].casefold() or query in row["value"].casefold():
+                store.pref_delete(self.conn, row["key"])
+                self.reply(chat_id, T(lang, "forgotten", value=row["value"]))
+                return
+        self.reply(chat_id, T(lang, "forget_not_found"))
+
+    def memory_text(self, lang):
+        rows = [r for r in store.pref_all(self.conn) if not r["key"].startswith("auto_cat_declined:")]
+        if not rows:
+            return T(lang, "memory_empty")
+        lines = [T(lang, "memory_header")]
+        lines.extend(f"  {row['key']}: {row['value']}" for row in rows)
+        return "\n".join(lines)
+
+    # -- Stats / categories
+
+    def stats_text(self, lang):
+        status_rows = store.status_counts(self.conn)
+        if not status_rows:
+            return T(lang, "stats_empty")
+        lines = [T(lang, "stats_status")]
+        lines.extend(f"  {row['status']}: {row['n']}" for row in status_rows)
+        category_rows = [r for r in store.category_counts(self.conn) if r["n"]]
+        if category_rows:
+            lines.append(T(lang, "stats_categories"))
+            lines.extend(f"  {row['name']}: {row['n']}" for row in category_rows)
+        return "\n".join(lines)
+
+    def categories_text(self, lang):
+        rows = store.category_counts(self.conn)
+        if not rows:
+            return T(lang, "no_categories")
+        lines = [T(lang, "categories_header")]
+        lines.extend(f"  {row['name']}: {row['n']}" for row in rows)
+        return "\n".join(lines)
+
+    # -- Buttons (fallback confirmation path)
 
     def handle_callback(self, callback):
         callback_id = callback.get("id")
@@ -936,39 +522,83 @@ class Agent:
         if chat_id not in self.cfg.allowed_chat_ids and from_id not in self.cfg.allowed_chat_ids:
             self.answer_callback(callback_id, "Not allowed.")
             return
-        parsed = parse_callback_data(callback.get("data"))
+        parsed = ingest.parse_callback_data(callback.get("data"))
         if not parsed:
             self.answer_callback(callback_id, "Unknown action.")
             return
         kind, row_id, name = parsed
-        row = get_message(self.conn, row_id)
+        row = store.get_message(self.conn, row_id)
         if not row:
             self.answer_callback(callback_id, "Unknown message.")
             return
         if row["status"] == "confirmed":
-            self.answer_callback(callback_id, f"Already confirmed: {row['category']}")
+            self.answer_callback(callback_id, f"OK: {row['category']}")
             return
         category = name if kind == "named" else (row["suggested_category"] or self.cfg.fallback_category)
-        canonical = ensure_category(self.conn, category)
-        confirm_category(self.conn, row_id, canonical)
-        log(f"message #{row_id} confirmed as {canonical} (via button)")
-        self.answer_callback(callback_id, f"Saved: {canonical}")
-        self.edit_suggestion_message(
-            chat_id, msg.get("message_id") or row["suggestion_message_id"], get_message(self.conn, row_id)
+        pending = store.pending_get(self.conn, chat_id)
+        if pending and pending["kind"] == "category" and pending["payload"].get("row_id") == row_id:
+            store.pending_clear(self.conn, chat_id)
+        self.answer_callback(callback_id, category)
+        self.apply_category_confirm(
+            chat_id, row, category, reply_to=None,
+            edit_message_id=msg.get("message_id") or row["suggestion_message_id"],
+            quiet=True,
         )
 
     def handle_correction(self, row, chat_id, text, reply_to):
+        lang = self.lang()
         if row["status"] == "confirmed":
-            self.reply(chat_id, f"#{row['id']} is already confirmed as {row['category']}.", reply_to)
+            self.reply(chat_id, T(lang, "already_confirmed", row_id=row["id"], category=row["category"]))
             return
-        category = normalize_category(text)
+        category = llm.normalize_category(text)
         if not category:
             return
-        canonical = ensure_category(self.conn, category)
-        confirm_category(self.conn, row["id"], canonical)
-        log(f"message #{row['id']} confirmed as {canonical} (via reply)")
-        self.reply(chat_id, f"Saved: {canonical} (#{row['id']})", reply_to)
-        self.edit_suggestion_message(chat_id, row["suggestion_message_id"], get_message(self.conn, row["id"]))
+        pending = store.pending_get(self.conn, chat_id)
+        if pending and pending["kind"] == "category" and pending["payload"].get("row_id") == row["id"]:
+            store.pending_clear(self.conn, chat_id)
+        self.apply_category_confirm(chat_id, row, category, reply_to=reply_to)
+
+    # -- Ingest flow
+
+    def apply_category_confirm(self, chat_id, row, category, reply_to,
+                               edit_message_id=None, quiet=False):
+        lang = self.lang()
+        canonical = store.ensure_category(self.conn, category)
+        store.confirm_category(self.conn, row["id"], canonical)
+        if row["suggested_category"] and canonical.casefold() != row["suggested_category"].casefold():
+            store.feedback_add(
+                self.conn, "ingest", (row["raw_text"] or "")[:100],
+                row["suggested_category"], canonical,
+            )
+        log(f"message #{row['id']} confirmed as {canonical}")
+        updated = store.get_message(self.conn, row["id"])
+        self.edit_suggestion_message(
+            chat_id, edit_message_id or row["suggestion_message_id"], updated
+        )
+        if not quiet:
+            self.reply(chat_id, T(lang, "confirmed", category=canonical, row_id=row["id"]), reply_to)
+        self.maybe_propose_habit(chat_id, updated, lang)
+
+    def maybe_propose_habit(self, chat_id, row, lang):
+        source = row["forward_origin_chat_id"]
+        if source is None:
+            return
+        if store.pref_get(self.conn, f"auto_cat:{source}"):
+            return
+        if store.pref_get(self.conn, f"auto_cat_declined:{source}"):
+            return
+        if store.pending_get(self.conn, chat_id):
+            return
+        category, streak = store.habit_streak(self.conn, source)
+        if category and streak >= self.cfg.habit_threshold:
+            store.pending_set(self.conn, chat_id, "habit", {
+                "source_chat_id": source,
+                "source_title": row["forward_origin_title"],
+                "category": category,
+            })
+            self.reply(chat_id, T(lang, "habit_proposal", n=streak,
+                                  source=row["forward_origin_title"] or source,
+                                  category=category))
 
     def flush_albums(self, now, force=False):
         for group_id in list(self.albums):
@@ -982,13 +612,14 @@ class Agent:
                     log(f"error finalizing album {group_id}: {exc!r}")
 
     def finalize(self, parts):
+        lang = self.lang()
         first = parts[0]
         chat_id = first["chat"]["id"]
         reply_to = first.get("message_id")
-        raw_text = first_text(parts)
-        urls = collect_urls(parts)
-        forward = parse_forward_origin(first.get("forward_origin"))
-        row_id = insert_message(
+        raw_text = ingest.first_text(parts)
+        urls = ingest.collect_urls(parts)
+        forward = ingest.parse_forward_origin(first.get("forward_origin"))
+        row_id = store.insert_message(
             self.conn,
             {
                 "chat_id": chat_id,
@@ -1009,18 +640,20 @@ class Agent:
             log(f"skipping redelivered message chat_id={chat_id} message_id={first.get('message_id')}")
             return
         for url in urls:
-            insert_url(self.conn, row_id, url)
+            store.insert_url(self.conn, row_id, url)
         image_count = 0
         for part in parts:
             photo_sizes = part.get("photo") or []
             if photo_sizes:
                 largest = photo_sizes[-1]  # Telegram orders PhotoSize ascending
                 try:
-                    local_path = self.download_photo(largest)
+                    local_path = self.download_file(
+                        largest.get("file_id"), largest.get("file_unique_id"), ".jpg"
+                    )
                 except TelegramError as exc:
                     log(f"photo download failed for message #{row_id}: {exc}")
                     local_path = None
-                insert_image(self.conn, row_id, part.get("message_id"), largest, local_path)
+                store.insert_image(self.conn, row_id, part.get("message_id"), largest, local_path)
                 image_count += 1
                 continue
             document = part.get("document") or {}
@@ -1028,93 +661,86 @@ class Agent:
                 # v1 limitation: uncompressed image documents are stored as
                 # metadata only and not sent to the LLM.
                 log(f"image document stored metadata-only for message #{row_id}")
-                insert_image(self.conn, row_id, part.get("message_id"), document, None)
+                store.insert_image(self.conn, row_id, part.get("message_id"), document, None)
         log(
             f"stored message #{row_id} (chat={chat_id}, images={image_count}, urls={len(urls)}, "
             f"forward={forward.get('title') or '-'})"
         )
         if forward.get("chat_id") is not None and forward.get("message_id") is not None:
-            original = find_forward_duplicate(
+            original = store.find_forward_duplicate(
                 self.conn, forward["chat_id"], forward["message_id"], row_id
             )
             if original:
-                mark_duplicate(self.conn, row_id, original)
+                store.mark_duplicate(self.conn, row_id, original)
                 log(f"message #{row_id} is a duplicate of #{original['id']}, skipping LLM")
                 if original["status"] == "confirmed":
-                    detail = f"category: {original['category']}"
+                    detail = T(lang, "dup_confirmed", category=original["category"])
                 elif original["suggested_category"]:
-                    detail = f"suggested {original['suggested_category']}, awaiting confirmation"
+                    detail = T(lang, "dup_suggested", category=original["suggested_category"])
                 else:
-                    detail = "classification still pending"
-                self.reply(chat_id, f"Duplicate of #{original['id']} ({detail}).", reply_to)
+                    detail = T(lang, "dup_pending")
+                self.reply(chat_id, T(lang, "duplicate", original_id=original["id"], detail=detail),
+                           reply_to)
                 return
-        suggestion = self.suggest_row(get_message(self.conn, row_id))
-        if suggestion:
-            category, alternatives, summary = suggestion
-            self.send_suggestion(
-                row_id, chat_id, reply_to, category, alternatives, summary,
-                f"(saved #{row_id}, {image_count} images, {len(urls)} URLs)",
-            )
-        else:
-            self.reply(
-                chat_id,
-                f"Stored #{row_id}. Could not get a suggestion, will retry.",
-                reply_to,
-            )
-
-    # -- Suggestion flow
+        row = store.get_message(self.conn, row_id)
+        suggestion = self.suggest_row(row)
+        if not suggestion:
+            self.reply(chat_id, T(lang, "stored_retry", row_id=row_id), reply_to)
+            return
+        category, alternatives, summary = suggestion
+        # Learned habit: auto-confirm posts from sources you always file the same way.
+        auto_category = (store.pref_get(self.conn, f"auto_cat:{forward['chat_id']}")
+                         if forward.get("chat_id") is not None else None)
+        if auto_category:
+            store.confirm_category(self.conn, row_id, store.ensure_category(self.conn, auto_category))
+            self.reply(chat_id, T(lang, "auto_confirmed", category=auto_category,
+                                  row_id=row_id, summary=summary[:300]), reply_to)
+            return
+        counts = T(lang, "counts", row_id=row_id, images=image_count, urls=len(urls))
+        self.present_suggestion(row_id, chat_id, reply_to, category, alternatives, summary, counts)
 
     def suggest_row(self, row):
         """Get an LLM suggestion for a stored row; returns (category,
         alternatives, summary) or None when the LLM call failed."""
         row_id = row["id"]
-        urls = [r["url"] for r in message_urls(self.conn, row_id)]
-        image_paths = [r["local_path"] for r in message_images(self.conn, row_id) if r["local_path"]]
-        known = known_categories(self.conn)
+        urls = [r["url"] for r in store.message_urls(self.conn, row_id)]
+        image_paths = [r["local_path"] for r in store.message_images(self.conn, row_id)
+                       if r["local_path"]]
+        known = store.known_categories(self.conn)
         if not (row["raw_text"] or urls or image_paths):
             category, alternatives, summary = self.cfg.fallback_category, [], "(no analyzable content)"
         else:
-            text_block = build_text_block(
+            text_block = ingest.build_text_block(
                 row["raw_text"], row["forward_origin_type"], row["forward_origin_title"], urls
             )
             try:
-                category, alternatives, summary = suggest(self.cfg, known, text_block, image_paths)
-            except LLMError as exc:
-                attempts = bump_attempts(self.conn, row_id)
+                category, alternatives, summary = ingest.suggest(
+                    self.cfg, self.conn, known, text_block, image_paths
+                )
+            except llm.LLMError as exc:
+                attempts = store.bump_attempts(self.conn, row_id)
                 if attempts >= self.cfg.llm_max_attempts:
-                    mark_failed(self.conn, row_id)
+                    store.mark_failed(self.conn, row_id)
                     log(f"message #{row_id} marked failed after {attempts} attempts: {exc}")
                 else:
                     log(f"suggestion failed for message #{row_id} (attempt {attempts}): {exc}")
                 return None
-        set_suggestion(self.conn, row_id, category, summary, self.cfg.do_model)
+        store.set_suggestion(self.conn, row_id, category, summary, self.cfg.do_model)
         log(f"suggested {category} for message #{row_id}")
         return category, alternatives, summary
 
-    def send_suggestion(self, row_id, chat_id, reply_to, category, alternatives, summary, counts_line):
-        keyboard = build_suggestion_keyboard(row_id, category, alternatives)
+    def present_suggestion(self, row_id, chat_id, reply_to, category, alternatives, summary, counts):
+        lang = self.lang()
+        keyboard = ingest.build_suggestion_keyboard(row_id, category, alternatives)
         result = self.reply(
             chat_id,
-            f"Suggested category: {category}\nSummary: {summary[:500]}\n{counts_line}\n"
-            "Tap a button to confirm, or reply to this message with a different category.",
+            T(lang, "suggestion", category=category, summary=summary[:500], counts=counts),
             reply_to,
             reply_markup={"inline_keyboard": keyboard},
         )
         if result and result.get("message_id"):
-            set_suggestion_message(self.conn, row_id, result["message_id"])
-
-    def retry_sweep(self):
-        rows = pending_messages(self.conn, self.cfg.llm_max_attempts)
-        for row in rows:
-            if self.stop:
-                return
-            suggestion = self.suggest_row(row)
-            if suggestion:
-                category, alternatives, summary = suggestion
-                self.send_suggestion(
-                    row["id"], row["chat_id"], row["tg_message_id"],
-                    category, alternatives, summary, f"(saved #{row['id']}, retried)",
-                )
+            store.set_suggestion_message(self.conn, row_id, result["message_id"])
+        store.pending_set(self.conn, chat_id, "category", {"row_id": row_id})
 
 
 def main():

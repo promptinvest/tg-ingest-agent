@@ -14,18 +14,25 @@ STATE_DIR=/var/lib/tg-ingest-agent
 ENV_FILE=/etc/tg-ingest-agent.env
 UNIT_FILE=/etc/systemd/system/${SERVICE}.service
 
-if [ ! -f "$STAGE_DIR/tg_ingest_agent.py" ]; then
-  echo "Missing $STAGE_DIR/tg_ingest_agent.py (stage it first)." >&2
-  exit 1
-fi
+MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py spend.py"
+
+for required in tg_ingest_agent.py $MODULES; do
+  if [ ! -f "$STAGE_DIR/$required" ]; then
+    echo "Missing $STAGE_DIR/$required (stage it first)." >&2
+    exit 1
+  fi
+done
 
 BACKUP_DIR="/root/codex-hardening-backups/$(date -u +%Y%m%dT%H%M%SZ)-tg-ingest-agent"
 mkdir -p "$BACKUP_DIR"
-for existing in "$ENV_FILE" "$UNIT_FILE" "$APP_DIR/agent.py"; do
+for existing in "$ENV_FILE" "$UNIT_FILE"; do
   if [ -f "$existing" ]; then
     cp -a "$existing" "$BACKUP_DIR/"
   fi
 done
+if [ -d "$APP_DIR" ]; then
+  cp -a "$APP_DIR" "$BACKUP_DIR/opt-app"
+fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -37,6 +44,10 @@ id "$APP_USER" >/dev/null 2>&1 || \
 install -d -m 0755 "$APP_DIR"
 install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$STATE_DIR" "$STATE_DIR/media"
 install -m 0755 "$STAGE_DIR/tg_ingest_agent.py" "$APP_DIR/agent.py"
+for module in $MODULES; do
+  install -m 0644 "$STAGE_DIR/$module" "$APP_DIR/$module"
+done
+rm -rf "$APP_DIR/__pycache__"
 
 if [ ! -f "$ENV_FILE" ]; then
   cat >"$ENV_FILE" <<'ENV'
@@ -47,12 +58,22 @@ TELEGRAM_BOT_TOKEN=REPLACE_ME
 ALLOWED_CHAT_IDS=REPLACE_ME
 DO_MODEL_ACCESS_KEY=REPLACE_ME
 # Optional overrides (defaults shown):
+# BOT_LANGUAGE=ru
+# TIMEZONE_OFFSET_HOURS=3
+# BUDGET_DAILY_USD=1.0
+# BUDGET_MONTHLY_USD=15.0
+# STT_ENABLED=true
+# STT_MODEL=whisper-large-v3
+# ROUTER_MODEL=anthropic-claude-haiku-4.5
+# ROUTER_CONFIDENCE_THRESHOLD=0.6
+# HABIT_THRESHOLD=10
 # Optional seed taxonomy; categories also emerge from confirmed suggestions.
 # CATEGORIES=news,tools,ideas
 # CATEGORIES_FILE=/etc/tg-ingest-agent/categories.txt
 # FALLBACK_CATEGORY=uncategorized
 # DO_CHAT_MODEL=anthropic-claude-haiku-4.5
 # DO_INFERENCE_BASE_URL=https://inference.do-ai.run/v1
+# PRICING_JSON={"model-id": [in_usd_per_1m, out_usd_per_1m]}
 # DB_PATH=/var/lib/tg-ingest-agent/ingest.db
 # MEDIA_DIR=/var/lib/tg-ingest-agent/media
 # POLL_TIMEOUT_SECONDS=50
@@ -82,6 +103,7 @@ ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/agent.py
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -92,7 +114,8 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 UNIT
 
-python3 -m py_compile "$APP_DIR/agent.py"
+python3 -m py_compile "$APP_DIR/agent.py" $(for m in $MODULES; do echo "$APP_DIR/$m"; done)
+rm -rf "$APP_DIR/__pycache__"
 systemctl daemon-reload
 systemctl enable "$SERVICE.service"
 

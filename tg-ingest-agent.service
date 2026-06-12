@@ -12,6 +12,7 @@ ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/agent.py
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
