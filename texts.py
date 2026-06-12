@@ -1,226 +1,237 @@
 #!/usr/bin/env python3
-"""Bilingual (ru/en) user-facing templates.
+"""Bilingual (ru/en) user-facing templates — Cara's voice.
 
 All fixed bot replies come from here — the LLM never free-writes to the user
 (its output only fills validated slots like summaries). This is a guardrail:
-a scoped router can be sweet-talked, a template cannot.
+a scoped router can be sweet-talked, a template cannot. The tone is warm and
+personal (Cara talks to her owner), but the structure stays templated.
 """
 
 TEXTS = {
     "start": {
-        "ru": ("Я ваш ассистент-инбокс. Пересылайте посты или пишите/наговаривайте запросы: "
-               "сохранить сообщение, поставить напоминание, спросить про расходы на AI. "
-               "Категории я предлагаю сам — вы подтверждаете ответом или кнопкой."),
-        "en": ("I am your inbox assistant. Forward posts or send text/voice requests: "
-               "save a message, set a reminder, ask about AI spend. "
-               "I suggest categories myself — you confirm by reply or button."),
+        "ru": ("Привет, {name}! Я Кара — ваш личный ассистент 🤗\n"
+               "Пересылайте мне посты, пишите или наговаривайте: сохраню и разложу по полочкам, "
+               "напомню о важном, добавлю в календарь, посчитаю расходы на AI. "
+               "Категории предлагаю сама — вы только подтверждаете."),
+        "en": ("Hi {name}! I'm Cara — your personal assistant 🤗\n"
+               "Forward me posts, write or speak: I'll save and organize things, remind you "
+               "of what matters, add events to your calendar, track AI spend. "
+               "I suggest categories myself — you just confirm."),
     },
+    "out_of_scope": {
+        "ru": ("Это пока не моё, простите 🙈 Зато я отлично умею: сохранять и раскладывать "
+               "сообщения, напоминания, календарь, расходы на AI и помнить ваши предпочтения."),
+        "en": ("That one's not mine, sorry 🙈 What I'm good at: saving and organizing "
+               "messages, reminders, calendar, AI spend, and remembering your preferences."),
+    },
+    "clarify": {
+        "ru": "Я не совсем поняла 🤔 Это сохранить, поставить напоминание или показать статистику?",
+        "en": "I didn't quite get that 🤔 Save this, set a reminder, or show stats?",
+    },
+    "suggestion": {
+        "ru": ("Я бы отнесла это к «{category}» 💡\nКоротко: {summary}\n{counts}\n"
+               "Согласны? Ответьте или нажмите кнопку — либо назовите свою категорию."),
+        "en": ("I'd file this under \"{category}\" 💡\nIn short: {summary}\n{counts}\n"
+               "Sound right? Reply or tap a button — or name your own category."),
+    },
+    "counts": {
+        "ru": "(сохранила #{row_id}, фото: {images}, ссылок: {urls})",
+        "en": "(saved #{row_id}, {images} images, {urls} URLs)",
+    },
+    "confirmed": {
+        "ru": "Готово — «{category}» (#{row_id}) ✅",
+        "en": "Done — \"{category}\" (#{row_id}) ✅",
+    },
+    "already_confirmed": {
+        "ru": "#{row_id} я уже записала как «{category}» 😊",
+        "en": "#{row_id} is already filed as \"{category}\" 😊",
+    },
+    "duplicate": {
+        "ru": "Это у нас уже есть — #{original_id} ({detail}).",
+        "en": "We already have this one — #{original_id} ({detail}).",
+    },
+    "dup_confirmed": {"ru": "категория: {category}", "en": "category: {category}"},
+    "dup_suggested": {
+        "ru": "я предложила «{category}», ждёт вашего слова",
+        "en": "I suggested \"{category}\", awaiting your word",
+    },
+    "dup_pending": {"ru": "ещё разбираюсь", "en": "still working on it"},
+    "stored_retry": {
+        "ru": "Сохранила #{row_id}, но модель не ответила — попробую ещё раз чуть позже 🙏",
+        "en": "Saved #{row_id}, but the model didn't answer — I'll retry a bit later 🙏",
+    },
+    "stt_failed": {
+        "ru": "Не расслышала голосовое 😔 Напишите текстом, пожалуйста.",
+        "en": "I couldn't make out the voice note 😔 Please send it as text.",
+    },
+    "voice_quote": {
+        "ru": "🎤 Услышала: «{transcript}»",
+        "en": "🎤 I heard: \"{transcript}\"",
+    },
+    "reminder_draft": {
+        "ru": "⏰ Напомнить: {title}\nКогда: {when_local} (ваше время)\nПовтор: {recurrence}\nСтавлю?",
+        "en": "⏰ Remind you: {title}\nWhen: {when_local} (your time)\nRepeat: {recurrence}\nShall I?",
+    },
+    "reminder_set": {
+        "ru": "Поставила! #{rid}: {title} — {when_local} 👌",
+        "en": "Set! #{rid}: {title} — {when_local} 👌",
+    },
+    "reminder_fired": {
+        "ru": "⏰ {name}, напоминаю: {title}\nОтветьте «готово» — или «через 30 минут», если отложить.",
+        "en": "⏰ {name}, reminder: {title}\nReply \"done\" — or \"in 30 minutes\" to snooze.",
+    },
+    "reminder_done": {"ru": "Отлично, закрыла ✅", "en": "Great, closed ✅"},
+    "reminder_snoozed": {
+        "ru": "Хорошо, напомню снова в {when_local} 😉",
+        "en": "Okay, I'll nudge you again at {when_local} 😉",
+    },
+    "reminder_list_empty": {
+        "ru": "Активных напоминаний нет — всё спокойно 🌿",
+        "en": "No active reminders — all clear 🌿",
+    },
+    "reminder_list_header": {"ru": "Ваши напоминания:", "en": "Your reminders:"},
+    "reminder_cancelled": {
+        "ru": "Отменила #{rid}: {title}.",
+        "en": "Cancelled #{rid}: {title}.",
+    },
+    "reminder_not_found": {
+        "ru": "Хм, не нашла такого напоминания 🤔",
+        "en": "Hmm, I couldn't find that reminder 🤔",
+    },
+    "recurrence_none": {"ru": "разово", "en": "once"},
+    "recurrence_daily": {"ru": "ежедневно", "en": "daily"},
+    "recurrence_weekly": {"ru": "еженедельно", "en": "weekly"},
+    "cancelled": {"ru": "Хорошо, отменила.", "en": "Okay, cancelled."},
+    "nothing_pending": {
+        "ru": "Сейчас ничего не ждёт подтверждения 😊",
+        "en": "Nothing's waiting for your confirmation right now 😊",
+    },
+    "budget_warn": {
+        "ru": "⚠️ {period} мы потратили на AI уже 80% бюджета (${spent:.2f} из ${limit:.2f}). Я слежу!",
+        "en": "⚠️ We've used 80% of the AI budget {period} (${spent:.2f} of ${limit:.2f}). Keeping an eye on it!",
+    },
+    "budget_stop": {
+        "ru": ("⛔ Бюджет AI на {period} закончился (${spent:.2f} из ${limit:.2f}). "
+               "Не волнуйтесь — я всё сохраняю и обработаю, как только бюджет обновится."),
+        "en": ("⛔ The AI budget for {period} is used up (${spent:.2f} of ${limit:.2f}). "
+               "No worries — I keep saving everything and will catch up once it resets."),
+    },
+    "period_day": {"ru": "сегодня", "en": "today"},
+    "period_week": {"ru": "неделю", "en": "this week"},
+    "period_month": {"ru": "месяц", "en": "month"},
+    "memory_empty": {
+        "ru": "Я пока только знакомлюсь с вами — запомнить ничего не успела 😊",
+        "en": "I'm still getting to know you — nothing remembered yet 😊",
+    },
+    "memory_header": {"ru": "Вот что я о вас помню:", "en": "Here's what I remember about you:"},
+    "remember_saved": {"ru": "Запомнила: {value} 📝", "en": "Got it, remembered: {value} 📝"},
+    "forgotten": {"ru": "Забыла: {value} 🙈", "en": "Forgotten: {value} 🙈"},
+    "forget_not_found": {
+        "ru": "Не нашла такой записи у себя в памяти.",
+        "en": "I couldn't find that in my memory.",
+    },
+    "habit_proposal": {
+        "ru": ("Я заметила: последние {n} постов из «{source}» вы относите к «{category}». "
+               "Давайте я буду подтверждать их сама?"),
+        "en": ("I noticed the last {n} posts from \"{source}\" all went to \"{category}\". "
+               "Want me to confirm those on my own?"),
+    },
+    "habit_enabled": {
+        "ru": "Договорились! Посты из «{source}» теперь сами идут в «{category}» 🤝",
+        "en": "Deal! Posts from \"{source}\" now file themselves under \"{category}\" 🤝",
+    },
+    "auto_confirmed": {
+        "ru": "Сама записала в «{category}» (#{row_id}). Коротко: {summary}",
+        "en": "Filed under \"{category}\" on my own (#{row_id}). In short: {summary}",
+    },
+    "no_categories": {
+        "ru": "Категорий пока нет — они появятся, когда вы подтвердите первые предложения 🌱",
+        "en": "No categories yet — they'll grow as you confirm my first suggestions 🌱",
+    },
+    "categories_header": {
+        "ru": "Наши категории (подтверждённых сообщений):",
+        "en": "Our categories (confirmed messages):",
+    },
+    "stats_empty": {"ru": "Пока ничего не сохраняли.", "en": "Nothing saved yet."},
     "capabilities": {
-        "ru": ("Что я умею:\n"
-               "• Сохранять и категоризировать сообщения — пересылайте посты, фото, ссылки; "
-               "я предложу категорию и краткое содержание, вы подтверждаете\n"
-               "• Напоминания — «напомни завтра в 10 позвонить в банк», разово или ежедневно/еженедельно\n"
+        "ru": ("Вот чем я могу помочь 💛\n"
+               "• Сохранять и раскладывать сообщения — пересылайте посты, фото, ссылки; "
+               "предложу категорию и краткое содержание, вы подтверждаете\n"
+               "• Напоминания — «напомни завтра в 10 позвонить в банк», разово или регулярно\n"
                "• Календарь — «добавь в календарь...» (пришлю .ics или запишу в Google Calendar)\n"
-               "• Расходы на AI — «сколько потратили за месяц?», с лимитами бюджета\n"
+               "• Расходы на AI — «сколько потратили за месяц?», слежу за бюджетом\n"
                "• Память — «запомни: ...», «что ты обо мне знаешь?», «забудь...»\n"
-               "• Обзор данных — «что у тебя есть?», «покажи сохранённое про X», «что в категории Y?»\n"
-               "Пишите текстом или голосом, по-русски или по-английски."),
-        "en": ("What I can do:\n"
-               "• Save and categorize messages — forward posts, photos, links; "
+               "• Обзор — «что у тебя есть?», «покажи сохранённое про X», «что в категории Y?»\n"
+               "Пишите или говорите голосом — по-русски или по-английски."),
+        "en": ("Here's how I can help 💛\n"
+               "• Save and organize messages — forward posts, photos, links; "
                "I suggest a category and summary, you confirm\n"
-               "• Reminders — \"remind me tomorrow at 10 to call the bank\", once or daily/weekly\n"
-               "• Calendar — \"add to calendar...\" (.ics file or direct Google Calendar sync)\n"
-               "• AI spend — \"how much did we spend this month?\", with budget limits\n"
+               "• Reminders — \"remind me tomorrow at 10 to call the bank\", once or recurring\n"
+               "• Calendar — \"add to calendar...\" (.ics file or direct Google Calendar)\n"
+               "• AI spend — \"how much did we spend this month?\", I watch the budget\n"
                "• Memory — \"remember: ...\", \"what do you know about me?\", \"forget...\"\n"
-               "• Data overview — \"what have you got?\", \"show saved items about X\", \"what's in category Y?\"\n"
-               "Write or speak, in Russian or English."),
+               "• Overview — \"what have you got?\", \"show saved items about X\", \"what's in Y?\"\n"
+               "Write or speak — Russian or English."),
     },
-    "overview_header": {"ru": "Что у меня сейчас есть:", "en": "What I have right now:"},
+    "overview_header": {"ru": "Вот что у меня сейчас есть:", "en": "Here's what I have right now:"},
     "overview_reminders": {
         "ru": "Активные напоминания: {n}{next_part}",
         "en": "Active reminders: {n}{next_part}",
     },
     "overview_next": {"ru": " (ближайшее: {when} — {title})", "en": " (next: {when} — {title})"},
-    "overview_memory": {"ru": "Память: {n} записей", "en": "Memory: {n} entries"},
+    "overview_memory": {"ru": "В памяти: {n} записей", "en": "In memory: {n} entries"},
     "overview_spend": {
         "ru": "Расходы AI: сегодня ${day:.3f}, за месяц ${month:.3f}",
         "en": "AI spend: today ${day:.3f}, this month ${month:.3f}",
     },
-    "items_header": {"ru": "Последние сохранённые{filter}:", "en": "Recently saved{filter}:"},
+    "items_header": {"ru": "Последнее сохранённое{filter}:", "en": "Recently saved{filter}:"},
     "items_filter_category": {"ru": " (категория: {category})", "en": " (category: {category})"},
     "items_filter_query": {"ru": " (по запросу: {query})", "en": " (matching: {query})"},
     "items_empty": {
-        "ru": "Ничего не нашёл по этому запросу.",
-        "en": "Nothing found for that.",
+        "ru": "По этому запросу ничего не нашла 🤷‍♀️",
+        "en": "I found nothing for that 🤷‍♀️",
     },
-    "out_of_scope": {
-        "ru": ("Это вне моих задач. Я умею: сохранять и категоризировать сообщения, "
-               "напоминания, статистика расходов на AI, память о ваших предпочтениях."),
-        "en": ("That is outside my scope. I can: save and categorize messages, "
-               "reminders, AI spend stats, remember your preferences."),
-    },
-    "clarify": {
-        "ru": "Уточните, что сделать: сохранить это, поставить напоминание или показать статистику?",
-        "en": "Please clarify: save this, set a reminder, or show stats?",
-    },
-    "suggestion": {
-        "ru": ("Предлагаю категорию: {category}\nКратко: {summary}\n{counts}\n"
-               "Подтвердите ответом (или кнопкой), либо назовите свою категорию."),
-        "en": ("Suggested category: {category}\nSummary: {summary}\n{counts}\n"
-               "Confirm by reply (or button), or name your own category."),
-    },
-    "counts": {
-        "ru": "(сохранено #{row_id}, фото: {images}, ссылок: {urls})",
-        "en": "(saved #{row_id}, {images} images, {urls} URLs)",
-    },
-    "confirmed": {
-        "ru": "Сохранил: {category} (#{row_id})",
-        "en": "Saved: {category} (#{row_id})",
-    },
-    "already_confirmed": {
-        "ru": "#{row_id} уже подтверждено: {category}.",
-        "en": "#{row_id} is already confirmed as {category}.",
-    },
-    "duplicate": {
-        "ru": "Дубликат #{original_id} ({detail}).",
-        "en": "Duplicate of #{original_id} ({detail}).",
-    },
-    "dup_confirmed": {"ru": "категория: {category}", "en": "category: {category}"},
-    "dup_suggested": {
-        "ru": "предложено {category}, ждёт подтверждения",
-        "en": "suggested {category}, awaiting confirmation",
-    },
-    "dup_pending": {"ru": "ещё обрабатывается", "en": "classification still pending"},
-    "stored_retry": {
-        "ru": "Сохранил #{row_id}. Не получил ответ от модели — попробую ещё раз позже.",
-        "en": "Stored #{row_id}. Could not get a suggestion, will retry.",
-    },
-    "stt_failed": {
-        "ru": "Не смог распознать голосовое. Отправьте текстом, пожалуйста.",
-        "en": "Could not transcribe the voice message. Please send it as text.",
-    },
-    "voice_quote": {
-        "ru": "🎤 Услышал: «{transcript}»",
-        "en": "🎤 Heard: \"{transcript}\"",
-    },
-    "reminder_draft": {
-        "ru": "⏰ Напоминание: {title}\nКогда: {when_local} (ваше время)\nПовтор: {recurrence}\nПодтвердить?",
-        "en": "⏰ Reminder: {title}\nWhen: {when_local} (your time)\nRepeat: {recurrence}\nConfirm?",
-    },
-    "reminder_set": {
-        "ru": "Поставил напоминание #{rid}: {title} — {when_local}.",
-        "en": "Reminder #{rid} set: {title} — {when_local}.",
-    },
-    "reminder_fired": {
-        "ru": "⏰ Напоминание: {title}\nОтветьте «готово» или «через 30 минут», чтобы отложить.",
-        "en": "⏰ Reminder: {title}\nReply \"done\" or \"in 30 minutes\" to snooze.",
-    },
-    "reminder_done": {"ru": "Готово, напоминание закрыто.", "en": "Done, reminder closed."},
-    "reminder_snoozed": {
-        "ru": "Отложил до {when_local}.",
-        "en": "Snoozed until {when_local}.",
-    },
-    "reminder_list_empty": {"ru": "Активных напоминаний нет.", "en": "No active reminders."},
-    "reminder_list_header": {"ru": "Активные напоминания:", "en": "Active reminders:"},
-    "reminder_cancelled": {
-        "ru": "Отменил напоминание #{rid}: {title}.",
-        "en": "Cancelled reminder #{rid}: {title}.",
-    },
-    "reminder_not_found": {
-        "ru": "Не нашёл такое напоминание.",
-        "en": "Could not find that reminder.",
-    },
-    "recurrence_none": {"ru": "нет", "en": "none"},
-    "recurrence_daily": {"ru": "ежедневно", "en": "daily"},
-    "recurrence_weekly": {"ru": "еженедельно", "en": "weekly"},
-    "cancelled": {"ru": "Отменил.", "en": "Cancelled."},
-    "nothing_pending": {
-        "ru": "Сейчас нечего подтверждать.",
-        "en": "There is nothing awaiting confirmation.",
-    },
-    "budget_warn": {
-        "ru": "⚠️ Расходы на AI достигли 80% бюджета ({spent:.2f}$ из {limit:.2f}$ за {period}).",
-        "en": "⚠️ AI spend reached 80% of budget (${spent:.2f} of ${limit:.2f} for {period}).",
-    },
-    "budget_stop": {
-        "ru": ("⛔ Бюджет AI исчерпан ({spent:.2f}$ из {limit:.2f}$ за {period}). "
-               "Сообщения сохраняются и будут обработаны после сброса бюджета."),
-        "en": ("⛔ AI budget exhausted (${spent:.2f} of ${limit:.2f} for {period}). "
-               "Messages are stored and will be processed after the budget resets."),
-    },
-    "period_day": {"ru": "сегодня", "en": "today"},
-    "period_week": {"ru": "неделю", "en": "this week"},
-    "period_month": {"ru": "месяц", "en": "month"},
-    "issues_header": {"ru": "Проблемы за {period}:", "en": "Issues for {period}:"},
-    "issues_empty": {
-        "ru": "Проблем за {period} не зафиксировано 🎉",
-        "en": "No issues recorded for {period} 🎉",
-    },
-    "issues_examples": {"ru": "Последние примеры:", "en": "Recent examples:"},
-    "issues_weekly_intro": {
-        "ru": "📋 Еженедельная сводка проблем:",
-        "en": "📋 Weekly issues summary:",
-    },
-    "issue_kind_out_of_scope": {"ru": "запросы вне моих задач", "en": "out-of-scope requests"},
-    "issue_kind_unclear_request": {"ru": "непонятные запросы", "en": "unclear requests"},
-    "issue_kind_stt_failed": {"ru": "нераспознанные голосовые", "en": "failed voice transcriptions"},
-    "issue_kind_llm_error": {"ru": "ошибки модели", "en": "model errors"},
-    "issue_kind_budget_stop": {"ru": "остановки по бюджету", "en": "budget stops"},
-    "issue_kind_ingest_failed": {"ru": "неудачные классификации", "en": "failed classifications"},
-    "issue_kind_calendar_failed": {"ru": "ошибки календаря", "en": "calendar errors"},
-    "memory_empty": {
-        "ru": "Пока ничего о вас не запомнил.",
-        "en": "I have not remembered anything about you yet.",
-    },
-    "memory_header": {"ru": "Что я помню:", "en": "What I remember:"},
-    "remember_saved": {"ru": "Запомнил: {value}", "en": "Remembered: {value}"},
-    "forgotten": {"ru": "Забыл: {value}", "en": "Forgot: {value}"},
-    "forget_not_found": {"ru": "Не нашёл такую запись.", "en": "Could not find that entry."},
-    "habit_proposal": {
-        "ru": ("Последние {n} постов из «{source}» вы подтверждали как «{category}». "
-               "Подтверждать их автоматически?"),
-        "en": ("The last {n} posts from \"{source}\" were all confirmed as \"{category}\". "
-               "Auto-confirm them from now on?"),
-    },
-    "habit_enabled": {
-        "ru": "Хорошо, посты из «{source}» теперь автоматически идут в «{category}».",
-        "en": "OK, posts from \"{source}\" now auto-confirm as \"{category}\".",
-    },
-    "auto_confirmed": {
-        "ru": "Авто: {category} (#{row_id}). Кратко: {summary}",
-        "en": "Auto: {category} (#{row_id}). Summary: {summary}",
-    },
-    "no_categories": {
-        "ru": "Категорий пока нет — они появятся после ваших подтверждений.",
-        "en": "No categories yet. They are created when you confirm suggestions.",
-    },
-    "categories_header": {
-        "ru": "Категории (подтверждённых сообщений):",
-        "en": "Categories (confirmed messages):",
-    },
-    "stats_empty": {"ru": "Сообщений пока нет.", "en": "No messages stored yet."},
     "calendar_added": {
-        "ru": "Добавил в Google Calendar: {title}\n{link}",
-        "en": "Added to Google Calendar: {title}\n{link}",
+        "ru": "Записала в Google Calendar: {title} 📅\n{link}",
+        "en": "Added to Google Calendar: {title} 📅\n{link}",
     },
     "calendar_ics": {
-        "ru": "Календарь Google не подключён — отправляю .ics файл: откройте его, чтобы добавить «{title}» в любой календарь.",
-        "en": "Google Calendar is not connected — sending an .ics file: open it to add \"{title}\" to any calendar.",
+        "ru": ("Google Calendar пока не подключён — вот файл .ics: откройте его, "
+               "и «{title}» появится в вашем календаре 📅"),
+        "en": ("Google Calendar isn't connected yet — here's an .ics file: open it "
+               "and \"{title}\" lands in your calendar 📅"),
     },
     "calendar_failed": {
-        "ru": "Не получилось добавить в календарь: {error}",
-        "en": "Could not add to the calendar: {error}",
+        "ru": "Не получилось с календарём: {error}",
+        "en": "Calendar trouble: {error}",
     },
     "calendar_not_found": {
-        "ru": "Не понял, какое событие добавить — укажите напоминание или время.",
-        "en": "Not sure which event to add — name a reminder or give a time.",
+        "ru": "Не поняла, какое событие добавить — назовите напоминание или время 🤔",
+        "en": "Not sure which event to add — name a reminder or give me a time 🤔",
     },
     "llm_error": {
-        "ru": "Не получилось обработать запрос (модель недоступна). Попробуйте позже — сообщение не потеряно.",
-        "en": "Could not process the request (model unavailable). Try again later — nothing is lost.",
+        "ru": "Модель сейчас не отвечает 😔 Попробуйте чуть позже — я ничего не потеряла.",
+        "en": "The model isn't answering right now 😔 Try again soon — nothing is lost.",
     },
     "stats_status": {"ru": "По статусам:", "en": "By status:"},
     "stats_categories": {"ru": "Подтверждено по категориям:", "en": "Confirmed by category:"},
+    "issues_header": {"ru": "Что не получилось за {period}:", "en": "What went wrong over {period}:"},
+    "issues_empty": {
+        "ru": "За {period} всё прошло гладко — ни одной проблемы 🎉",
+        "en": "Everything went smoothly {period} — not a single issue 🎉",
+    },
+    "issues_examples": {"ru": "Свежие примеры:", "en": "Recent examples:"},
+    "issues_weekly_intro": {
+        "ru": "📋 {name}, моя еженедельная сводка проблем:",
+        "en": "📋 {name}, my weekly issues summary:",
+    },
+    "issue_kind_out_of_scope": {"ru": "просьбы вне моих умений", "en": "requests beyond my skills"},
+    "issue_kind_unclear_request": {"ru": "запросы, которые я не поняла", "en": "requests I didn't get"},
+    "issue_kind_stt_failed": {"ru": "нерасслышанные голосовые", "en": "voice notes I couldn't hear"},
+    "issue_kind_llm_error": {"ru": "сбои модели", "en": "model hiccups"},
+    "issue_kind_budget_stop": {"ru": "остановки по бюджету", "en": "budget stops"},
+    "issue_kind_ingest_failed": {"ru": "сообщения, которые не разобрала", "en": "messages I failed to sort"},
+    "issue_kind_calendar_failed": {"ru": "проблемы с календарём", "en": "calendar trouble"},
 }
 
 

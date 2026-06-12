@@ -56,6 +56,12 @@ class Agent:
         except (TypeError, ValueError):
             return self.cfg.timezone_offset
 
+    def owner_name(self):
+        name = store.pref_get(self.conn, "owner_name", "").strip()
+        if name:
+            return name
+        return "друг" if self.lang() == "ru" else "friend"
+
     # -- Telegram helpers
 
     def reply(self, chat_id, text, reply_to=None, reply_markup=None, record=True):
@@ -182,7 +188,8 @@ class Agent:
         now_iso = datetime.now(timezone.utc).isoformat()
         for row in store.reminders_due(self.conn, now_iso):
             lang = self.lang()
-            self.reply(row["chat_id"], T(lang, "reminder_fired", title=row["title"]))
+            self.reply(row["chat_id"], T(lang, "reminder_fired",
+                                         name=self.owner_name(), title=row["title"]))
             store.pending_set(
                 self.conn, row["chat_id"], "reminder_fired",
                 {"reminder_id": row["id"], "title": row["title"]}, ttl_seconds=1800,
@@ -240,6 +247,14 @@ class Agent:
             from_id = (msg.get("from") or {}).get("id")
             log(f"ignored message from chat_id={chat_id} user_id={from_id}")
             return
+
+        # Cara learns her owner's name from the Telegram profile on first
+        # contact; "запомни: меня зовут ..." overrides it anytime.
+        if not store.pref_get(self.conn, "owner_name"):
+            first_name = ((msg.get("from") or {}).get("first_name") or "").strip()
+            if first_name:
+                store.pref_set(self.conn, "owner_name", first_name)
+                log(f"owner name captured: {first_name}")
 
         voice = msg.get("voice") or msg.get("audio")
         if voice:
@@ -405,7 +420,7 @@ class Agent:
     def handle_command(self, chat_id, name):
         lang = self.lang()
         if name == "start":
-            self.reply(chat_id, T(lang, "start"))
+            self.reply(chat_id, T(lang, "start", name=self.owner_name()))
         elif name == "stats":
             self.reply(chat_id, self.stats_text(lang))
         else:
@@ -529,6 +544,8 @@ class Agent:
         elif key == "auto_calendar":
             truthy = value.strip().casefold() in ("1", "true", "yes", "да", "on")
             store.pref_set(self.conn, "auto_calendar", "true" if truthy else "false")
+        elif key == "owner_name":
+            store.pref_set(self.conn, "owner_name", value.strip()[:60])
         else:
             note_id = int(store.kv_get(self.conn, "note_seq", "0") or 0) + 1
             store.kv_set(self.conn, "note_seq", note_id)
@@ -642,7 +659,8 @@ class Agent:
         lang = self.lang()
         report = self.issues_text(lang, "week")
         for chat_id in self.cfg.allowed_chat_ids:
-            self.reply(chat_id, T(lang, "issues_weekly_intro") + "\n" + report)
+            self.reply(chat_id, T(lang, "issues_weekly_intro", name=self.owner_name())
+                       + "\n" + report)
 
     def categories_text(self, lang):
         rows = store.category_counts(self.conn)

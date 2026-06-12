@@ -42,6 +42,15 @@ class TextsTests(unittest.TestCase):
         # unknown language falls back to English
         self.assertEqual(texts.T("de", "cancelled"), texts.T("en", "cancelled"))
 
+    def test_personalized_templates_take_name(self):
+        for key, kwargs in (
+            ("start", {"name": "Олег"}),
+            ("reminder_fired", {"name": "Олег", "title": "позвонить"}),
+            ("issues_weekly_intro", {"name": "Олег"}),
+        ):
+            for lang in ("ru", "en"):
+                self.assertIn("Олег", texts.T(lang, key, **kwargs))
+
 
 class GatewayTests(unittest.TestCase):
     def setUp(self):

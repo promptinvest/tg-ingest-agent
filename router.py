@@ -52,6 +52,7 @@ ROUTER_EXAMPLES = """Examples:
 "что ты обо мне знаешь?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
 "всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}
+"меня зовут Олег" / "call me Oleg" -> {"action": "remember", "params": {"key": "owner_name", "value": "Олег"}, "confidence": 0.9}
 "да" (with a pending action) -> {"action": "confirm", "params": {}, "confidence": 0.95}
 "нет, лучше в 16:00" (pending reminder) -> {"action": "amend", "params": {"due_utc": "<same day 16:00 local in UTC>"}, "confidence": 0.9}
 "это скорее крипта" (pending category) -> {"action": "amend", "params": {"category": "крипта"}, "confidence": 0.9}
