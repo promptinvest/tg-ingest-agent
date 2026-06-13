@@ -49,6 +49,16 @@ budget-guarded gateway in `llm.py`.
   in stdlib); dormant until SPACES_* configured.
 - `store.py` — SQLite schema + helpers; additive migrations via `_migrate`.
   Housekeeping (in agent.housekeep): voice/orphan media + old reviews auto-purged.
+- Personality/platform layer: `skill_manifest.py` (per-action policy; gates
+  proactive + generates the capabilities answer), `trace.py` (one trace per
+  inbound update; trace_id stamps llm_usage/issues via `common.current_trace`),
+  `llm.chat_profile` (named model profiles + failover + cooldowns),
+  `events.py`/`jobs.py`/`runtime.py` (durable job runner — drained on the sweep
+  tick; first user is the daily memory curator), `self_model.py`/`boss_model.py`/
+  `persona.py` (grounded self + confirmed/inferred boss profile + prompt hint),
+  `memory_curator.py` (proposes candidates, confirm-before-store; reply-only,
+  pulled via memory_review), `relationship.py` (evidence-based working history).
+  Proactive heartbeat intentionally NOT enabled (Cara is reply-only).
 - `tg_api.py` · `texts.py` (bilingual ru/en templates, Cara's voice) ·
   `common.py` (config).
 - Persona: `prompts/cara_persona.md` (enforced structurally — templates carry
