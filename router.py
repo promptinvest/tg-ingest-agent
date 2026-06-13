@@ -30,6 +30,7 @@ ACTIONS = {
     "discard",           # decline adding the just-suggested item (deletes it)
     "vps_stats",         # read-only host resource usage report
     "purge",             # params: scope in all|category|stats|reminders, category — BULK delete (typed confirm)
+    "fetch",             # params: url — read & ingest a remote page (the operator asked to read a link)
     "issues_report",     # params: period in day|week|month — communication problems summary
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
@@ -49,6 +50,8 @@ ROUTER_EXAMPLES = """Examples:
 "remind me every Monday at 9 to file the report" -> {"action": "reminder_create", "params": {"title": "file the report", "due_utc": "<next Monday 09:00 local in UTC>", "recurrence": "weekly"}, "confidence": 0.95}
 "сколько потратили на AI в этом месяце?" -> {"action": "spend", "params": {"period": "month"}, "confidence": 0.95}
 "сохрани: ссылка на статью https://..." -> {"action": "ingest", "params": {}, "confidence": 0.9}
+"прочитай и разбери https://example.com/article" / "read this link: https://..." -> {"action": "fetch", "params": {"url": "https://example.com/article"}, "confidence": 0.9}
+"что в этой статье https://example.com/x" / "summarize https://..." -> {"action": "fetch", "params": {"url": "https://example.com/x"}, "confidence": 0.9}
 "добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
 "поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
 "что ты умеешь?" / "what can you do?" -> {"action": "help", "params": {}, "confidence": 0.95}

@@ -112,6 +112,10 @@ def load_config(env=None):
     cfg.habit_threshold = int(env.get("HABIT_THRESHOLD") or "10")
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
+    # Remote fetch (read a URL the operator sends; SSRF-guarded)
+    cfg.fetch_enabled = (env.get("FETCH_ENABLED") or "true").strip().lower() == "true"
+    cfg.fetch_timeout = int(env.get("FETCH_TIMEOUT_SECONDS") or "20")
+    cfg.fetch_max_bytes = int(env.get("FETCH_MAX_BYTES") or str(2 * 1024 * 1024))
     # Google Calendar sync (dormant until the key file + calendar id exist;
     # .ics export works without any of this)
     cfg.gcal_calendar_id = (env.get("GCAL_CALENDAR_ID") or "").strip()

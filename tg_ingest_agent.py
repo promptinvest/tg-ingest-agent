@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import fetch
 import gcal
 import ingest
 import llm
@@ -490,6 +491,8 @@ class Agent:
                 sysinfo.collect(str(self.cfg.db_path.parent)), lang, self.media_bytes()))
         elif action == "purge":
             self.do_purge(chat_id, lang, params)
+        elif action == "fetch":
+            self.do_fetch(chat_id, lang, params)
         elif action == "issues_report":
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "review":
@@ -825,6 +828,51 @@ class Agent:
             Path(path).unlink(missing_ok=True)
         log(f"PURGE scope={payload['scope']} category={payload.get('category')} by operator")
         self.reply(chat_id, T(lang, "purge_done", impact=self._purge_impact_text(lang, info)))
+
+    def do_fetch(self, chat_id, lang, params):
+        if not self.cfg.fetch_enabled:
+            self.reply(chat_id, T(lang, "fetch_disabled"))
+            return
+        url = str(params.get("url") or "").strip()
+        if not url:
+            self.reply(chat_id, T(lang, "fetch_no_url"))
+            return
+        self.reply(chat_id, T(lang, "fetch_reading"), record=False)
+        try:
+            final_url, title, text = fetch.fetch(
+                url, timeout=self.cfg.fetch_timeout, max_bytes=self.cfg.fetch_max_bytes)
+        except fetch.FetchError as exc:
+            log(f"fetch failed for {url}: {exc}")
+            store.issue_add(self.conn, chat_id, "fetch_failed", f"{url}: {exc}")
+            key = exc.reason if exc.reason in ("fetch_blocked", "fetch_private") else "fetch_failed"
+            self.reply(chat_id, T(lang, key, error=str(exc)) if key == "fetch_failed"
+                       else T(lang, key))
+            return
+        self.ingest_fetched(chat_id, lang, final_url, title, text)
+
+    def ingest_fetched(self, chat_id, lang, url, title, text):
+        """Store fetched remote content as an inbox item and suggest a
+        category — same suggest-and-confirm flow as a forwarded post."""
+        from urllib.parse import urlparse
+        source = title or urlparse(url).hostname or "web"
+        row_id = store.insert_message(self.conn, {
+            "chat_id": chat_id,
+            "tg_message_id": -int(datetime.now(timezone.utc).timestamp()),  # synthetic, unique
+            "forward_origin_type": "web",
+            "forward_origin_title": source[:200],
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": text,
+        })
+        if row_id is None:
+            return
+        store.insert_url(self.conn, row_id, url)
+        suggestion = self.suggest_row(store.get_message(self.conn, row_id))
+        if not suggestion:
+            self.reply(chat_id, T(lang, "stored_retry", row_id=row_id))
+            return
+        category, alternatives, summary = suggestion
+        counts = T(lang, "counts", row_id=row_id, images=0, urls=1)
+        self.present_suggestion(row_id, chat_id, None, category, alternatives, summary, counts)
 
     def media_bytes(self):
         total = 0

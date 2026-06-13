@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import common
+import fetch
 import gcal
 import llm
 import reminders
@@ -590,6 +591,84 @@ class PurgeFlowTests(unittest.TestCase):
             self.agent.do_purge(1, "ru", {"scope": "all"})
         self.assertIn("Удалять нечего", reply.call_args[0][1])
         self.assertIsNone(store.pending_get(self.agent.conn, 1))
+
+
+class FetchTests(unittest.TestCase):
+    def test_validate_url_scheme_and_creds(self):
+        with self.assertRaises(fetch.FetchError):
+            fetch.validate_url("ftp://example.com/x")
+        with self.assertRaises(fetch.FetchError):
+            fetch.validate_url("file:///etc/passwd")
+        with self.assertRaises(fetch.FetchError):
+            fetch.validate_url("https://user:pass@example.com/")
+
+    def test_validate_url_blocks_private_and_metadata(self):
+        for bad in ("http://127.0.0.1/", "http://localhost/", "http://169.254.169.254/latest/",
+                    "http://10.0.0.5/", "http://192.168.1.1/", "http://[::1]/"):
+            with self.assertRaises(fetch.FetchError) as ctx:
+                fetch.validate_url(bad)
+            self.assertIn(ctx.exception.reason, ("fetch_private", "fetch_blocked", "fetch_failed"))
+
+    def test_ip_blocked(self):
+        self.assertTrue(fetch._ip_blocked("127.0.0.1"))
+        self.assertTrue(fetch._ip_blocked("169.254.169.254"))
+        self.assertTrue(fetch._ip_blocked("10.1.2.3"))
+        self.assertTrue(fetch._ip_blocked("::1"))
+        self.assertTrue(fetch._ip_blocked("not-an-ip"))
+        self.assertFalse(fetch._ip_blocked("8.8.8.8"))
+        self.assertFalse(fetch._ip_blocked("1.1.1.1"))
+
+    def test_normalize_tme(self):
+        self.assertEqual(fetch.normalize_tme("https://t.me/vandrouki/777"),
+                         "https://t.me/s/vandrouki/777")
+        # already-web-view, private, and joinchat links are left alone
+        self.assertEqual(fetch.normalize_tme("https://t.me/s/vandrouki/777"),
+                         "https://t.me/s/vandrouki/777")
+        self.assertEqual(fetch.normalize_tme("https://t.me/c/123/45"),
+                         "https://t.me/c/123/45")
+        self.assertEqual(fetch.normalize_tme("https://example.com/a"),
+                         "https://example.com/a")
+
+    def test_extract_text_strips_scripts_and_gets_title(self):
+        html = ("<html><head><title>Cheap Flights</title><style>x{}</style></head>"
+                "<body><script>evil()</script><h1>Ufa</h1><p>от 9800 руб</p></body></html>")
+        title, text = fetch.extract_text(html)
+        self.assertEqual(title, "Cheap Flights")
+        self.assertIn("Ufa", text)
+        self.assertIn("9800", text)
+        self.assertNotIn("evil", text)
+        self.assertNotIn("x{}", text)
+
+    def test_router_accepts_fetch(self):
+        ok = router.validate_route(
+            {"action": "fetch", "params": {"url": "https://x.example/a"}}, False)
+        self.assertEqual(ok["action"], "fetch")
+
+    def test_do_fetch_ingests_page_as_item(self):
+        import tg_ingest_agent
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_config(DB_PATH=str(Path(tmp) / "f.db"), MEDIA_DIR=str(Path(tmp) / "m"))
+            agent = tg_ingest_agent.Agent(cfg)
+            try:
+                reply = '{"category": "News", "alternatives": [], "summary": "s", "facts": ["f"]}'
+                with mock.patch.object(tg_ingest_agent.fetch, "fetch",
+                                       return_value=("https://x.example/a", "Title", "article body")), \
+                        mock.patch.object(llm, "chat", return_value=reply), \
+                        mock.patch.object(agent, "reply", return_value={"message_id": 1}):
+                    agent.do_fetch(1, "ru", {"url": "https://x.example/a"})
+                rows = store.list_messages(agent.conn, query="article")
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["forward_origin_title"], "Title")
+                self.assertEqual([r["url"] for r in store.message_urls(agent.conn, rows[0]["id"])],
+                                 ["https://x.example/a"])
+                # blocked url -> friendly reply, nothing stored
+                with mock.patch.object(tg_ingest_agent.fetch, "fetch",
+                                       side_effect=fetch.FetchError("nope", "fetch_private")), \
+                        mock.patch.object(agent, "reply") as r2:
+                    agent.do_fetch(1, "ru", {"url": "http://10.0.0.1/"})
+                    self.assertIn("приватн", r2.call_args[0][1])
+            finally:
+                agent.conn.close()
 
 
 class SysinfoTests(unittest.TestCase):

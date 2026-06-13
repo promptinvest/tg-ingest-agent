@@ -216,6 +216,30 @@ TEXTS = {
         "ru": "У #{row_id} нет сохранённых фото.",
         "en": "#{row_id} has no stored photos.",
     },
+    "fetch_reading": {
+        "ru": "Читаю ссылку, секунду… 📖",
+        "en": "Reading the link, one moment… 📖",
+    },
+    "fetch_failed": {
+        "ru": "Не получилось прочитать ссылку: {error}",
+        "en": "Couldn't read the link: {error}",
+    },
+    "fetch_blocked": {
+        "ru": "Такую ссылку я открыть не могу (поддерживаю только http/https-страницы).",
+        "en": "I can't open that link (I support http/https web pages only).",
+    },
+    "fetch_private": {
+        "ru": "Эта ссылка ведёт в приватную/внутреннюю сеть — из соображений безопасности не открываю.",
+        "en": "That link points to a private/internal address — I won't open it, for safety.",
+    },
+    "fetch_disabled": {
+        "ru": "Чтение ссылок сейчас отключено.",
+        "en": "Link reading is currently disabled.",
+    },
+    "fetch_no_url": {
+        "ru": "Пришлите ссылку, которую нужно прочитать 🙂",
+        "en": "Send me the link you'd like me to read 🙂",
+    },
     "discarded": {
         "ru": "Не сохраняю, босс — выбросила 🗑",
         "en": "Not saving it, boss — discarded 🗑",
