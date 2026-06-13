@@ -36,10 +36,16 @@ budget-guarded gateway in `llm.py`.
   Installed as `/opt/tg-ingest-agent/agent.py`.
 - `router.py` — closed action set (NO generic chat action), JSON-only output,
   untrusted-content delimiters, confidence gate, rule-based smalltalk shortcut.
-- `ingest.py` · `reminders.py` · `spend.py` · `review.py` · `gcal.py` — skills.
+- Skills: `ingest.py`, `reminders.py`, `spend.py`, `review.py`, `gcal.py`,
+  `fetch.py` (read a URL on request — SSRF-guarded), `sysinfo.py` (read-only
+  VPS stats from /proc). Plus router actions for show_media, discard, purge
+  (typed-confirmation bulk delete, never touches llm_usage).
 - `llm.py` — DO Gradient gateway (chat + local/remote Whisper STT), pricing,
   budgets, JSON parsing helpers.
+- `storage.py` — binary backend: local default, optional DO Spaces (S3 SigV4
+  in stdlib); dormant until SPACES_* configured.
 - `store.py` — SQLite schema + helpers; additive migrations via `_migrate`.
+  Housekeeping (in agent.housekeep): voice/orphan media + old reviews auto-purged.
 - `tg_api.py` · `texts.py` (bilingual ru/en templates, Cara's voice) ·
   `common.py` (config).
 - Persona: `prompts/cara_persona.md` (enforced structurally — templates carry
