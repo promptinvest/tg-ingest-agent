@@ -116,6 +116,16 @@ def load_config(env=None):
     cfg.fetch_enabled = (env.get("FETCH_ENABLED") or "true").strip().lower() == "true"
     cfg.fetch_timeout = int(env.get("FETCH_TIMEOUT_SECONDS") or "20")
     cfg.fetch_max_bytes = int(env.get("FETCH_MAX_BYTES") or str(2 * 1024 * 1024))
+    # Binary storage backend: 'local' (default) or 'spaces' (DO Spaces, S3).
+    # Built now, dormant until a Space + keys are configured.
+    cfg.storage_backend = (env.get("STORAGE_BACKEND") or "local").strip().lower()
+    cfg.spaces_region = (env.get("SPACES_REGION") or "fra1").strip()
+    cfg.spaces_bucket = (env.get("SPACES_BUCKET") or "").strip()
+    cfg.spaces_endpoint = (env.get("SPACES_ENDPOINT")
+                           or f"https://{cfg.spaces_region}.digitaloceanspaces.com").strip()
+    cfg.spaces_key = (env.get("SPACES_KEY") or "").strip()
+    cfg.spaces_secret = (env.get("SPACES_SECRET") or "").strip()
+    cfg.spaces_prefix = (env.get("SPACES_PREFIX") or "media").strip()
     # Google Calendar sync (dormant until the key file + calendar id exist;
     # .ics export works without any of this)
     cfg.gcal_calendar_id = (env.get("GCAL_CALENDAR_ID") or "").strip()

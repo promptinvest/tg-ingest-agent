@@ -18,6 +18,7 @@ import reminders
 import review
 import router
 import spend
+import storage
 import store
 import sysinfo
 import texts
@@ -669,6 +670,96 @@ class FetchTests(unittest.TestCase):
                     self.assertIn("приватн", r2.call_args[0][1])
             finally:
                 agent.conn.close()
+
+
+class StorageTests(unittest.TestCase):
+    # AWS-documented SigV4 example (GET examplebucket/test.txt, us-east-1/s3,
+    # 20130524T000000Z). If our signing matches this published vector, the
+    # crypto is correct. https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html
+    SECRET = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    ACCESS = "AKIAIOSFODNN7EXAMPLE"
+
+    def test_signing_key_vector(self):
+        # AWS-documented signing-key derivation intermediate (iam example).
+        key = storage.signing_key("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+                                   "20120215", "us-east-1", "iam")
+        self.assertEqual(
+            key.hex(),
+            "f4780e2d9f65fa895f9c67b32ce1baf0b0d8a43505a000a1a9e090d414db404d")
+
+    def test_canonical_request_matches_aws_vector(self):
+        # AWS publishes the canonical-request hash for the GET example.
+        empty_hash = storage._sha256_hex(b"")
+        self.assertEqual(empty_hash,
+                         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        headers = {"host": "examplebucket.s3.amazonaws.com", "range": "bytes=0-9",
+                   "x-amz-content-sha256": empty_hash, "x-amz-date": "20130524T000000Z"}
+        signed = "host;range;x-amz-content-sha256;x-amz-date"
+        creq = storage.canonical_request("GET", "/test.txt", "", headers, signed, empty_hash)
+        self.assertEqual(storage._sha256_hex(creq.encode()),
+                         "7344ae5b7ee6c3e7e6b0fe0640412a37625d1fbfff95c48bbb2dc43964946972")
+
+    def test_authorization_header_wellformed_and_consistent(self):
+        import hashlib
+        import hmac as _hmac
+        auth, headers, sig = storage.authorization_header(
+            "PUT", "/bucket/media/u.jpg", "fra1.digitaloceanspaces.com", b"IMG",
+            self.ACCESS, self.SECRET, "fra1", "s3", "20260613T000000Z",
+            extra_headers={"content-type": "image/jpeg"})
+        self.assertIn(f"Credential={self.ACCESS}/20260613/fra1/s3/aws4_request", auth)
+        self.assertIn("SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date", auth)
+        self.assertIn(f"Signature={sig}", auth)
+        self.assertEqual(headers["x-amz-content-sha256"], storage._sha256_hex(b"IMG"))
+        # signature is reproducible from the verified primitives
+        scope = "20260613/fra1/s3/aws4_request"
+        creq = storage.canonical_request(
+            "PUT", "/bucket/media/u.jpg", "",
+            {**headers, "content-type": "image/jpeg"},
+            "content-type;host;x-amz-content-sha256;x-amz-date", headers["x-amz-content-sha256"])
+        sts = "\n".join(["AWS4-HMAC-SHA256", "20260613T000000Z", scope,
+                         storage._sha256_hex(creq.encode())])
+        expect = _hmac.new(storage.signing_key(self.SECRET, "20260613", "fra1", "s3"),
+                           sts.encode(), hashlib.sha256).hexdigest()
+        self.assertEqual(sig, expect)
+
+    def test_backend_selection_and_key(self):
+        local = make_config()
+        self.assertEqual(storage.backend(local), "local")  # default
+        # spaces requested but no creds -> stays local (dormant, safe)
+        half = make_config(STORAGE_BACKEND="spaces")
+        self.assertEqual(storage.backend(half), "local")
+        full = make_config(STORAGE_BACKEND="spaces", SPACES_BUCKET="b",
+                           SPACES_KEY="k", SPACES_SECRET="s")
+        self.assertEqual(storage.backend(full), "spaces")
+        self.assertEqual(storage.object_key(full, "u.jpg"), "media/u.jpg")
+
+    def test_offload_noop_on_local(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_db(Path(tmp) / "s.db")
+            try:
+                self.assertEqual(storage.offload(make_config(), conn, 1), 0)
+            finally:
+                conn.close()
+
+
+class StoreMigrationTests(unittest.TestCase):
+    def test_object_key_column_added_to_old_images(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "old.db"
+            raw = sqlite3.connect(str(path))
+            raw.execute(
+                "CREATE TABLE images (id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL,"
+                " tg_message_id INTEGER NOT NULL, tg_file_id TEXT NOT NULL,"
+                " tg_file_unique_id TEXT NOT NULL, local_path TEXT)")
+            raw.commit()
+            raw.close()
+            conn = store.open_db(path)
+            try:
+                cols = {r["name"] for r in conn.execute("PRAGMA table_info(images)")}
+                self.assertIn("object_key", cols)
+            finally:
+                conn.close()
 
 
 class SysinfoTests(unittest.TestCase):

@@ -14,7 +14,7 @@ STATE_DIR=/var/lib/tg-ingest-agent
 ENV_FILE=/etc/tg-ingest-agent.env
 UNIT_FILE=/etc/systemd/system/${SERVICE}.service
 
-MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py spend.py gcal.py review.py sysinfo.py fetch.py"
+MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py spend.py gcal.py review.py sysinfo.py fetch.py storage.py"
 
 for required in tg_ingest_agent.py $MODULES; do
   if [ ! -f "$STAGE_DIR/$required" ]; then

@@ -22,6 +22,7 @@ import reminders
 import review
 import router
 import spend
+import storage
 import store
 import sysinfo
 from common import Config, ShutdownInterrupt, load_config, log  # noqa: F401
@@ -1149,6 +1150,8 @@ class Agent:
                 # metadata only and not sent to the LLM.
                 log(f"image document stored metadata-only for message #{row_id}")
                 store.insert_image(self.conn, row_id, part.get("message_id"), document, None)
+        if image_count:
+            storage.offload(self.cfg, self.conn, row_id)  # durable copy (dormant on local backend)
         log(
             f"stored message #{row_id} (chat={chat_id}, images={image_count}, urls={len(urls)}, "
             f"forward={forward.get('title') or '-'})"

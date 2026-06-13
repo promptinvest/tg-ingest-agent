@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS images (
   tg_file_id TEXT NOT NULL,
   tg_file_unique_id TEXT NOT NULL,
   local_path TEXT,
+  object_key TEXT,
   width INTEGER,
   height INTEGER,
   file_size INTEGER
@@ -177,6 +178,9 @@ def _migrate(conn):
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
     if "forward_origin_username" not in columns:
         conn.execute("ALTER TABLE messages ADD COLUMN forward_origin_username TEXT")
+    image_columns = {row["name"] for row in conn.execute("PRAGMA table_info(images)")}
+    if "object_key" not in image_columns:
+        conn.execute("ALTER TABLE images ADD COLUMN object_key TEXT")
 
 
 # -- kv ----------------------------------------------------------------------
@@ -290,6 +294,11 @@ def message_urls(conn, message_id):
 
 def message_images(conn, message_id):
     return conn.execute("SELECT * FROM images WHERE message_id = ? ORDER BY id", (message_id,)).fetchall()
+
+
+def set_image_object_key(conn, image_id, object_key):
+    conn.execute("UPDATE images SET object_key = ? WHERE id = ?", (object_key, image_id))
+    conn.commit()
 
 
 def find_forward_duplicate(conn, fwd_chat_id, fwd_message_id, exclude_id):
