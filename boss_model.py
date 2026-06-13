@@ -17,12 +17,27 @@ KINDS = ("identity", "language", "tone", "workflow", "quality_bar", "project",
 _SENSITIVE_HINTS = re.compile(
     r"(здоров|болезн|диагноз|аллерг|лекарств|финанс|деньг|зарплат|кредит|пароль|"
     r"карт|адрес|телефон|паспорт|религ|политик|"
+    r"счёт|реквизит|"
     r"health|illness|medical|allerg|diagnos|finance|salary|credit|password|"
-    r"address|phone|passport|religion|politics|legal)", re.I)
+    r"address|phone|passport|religion|politics|legal|iban|\bbank\b|account)", re.I)
+
+# Sensitivity is a safety boundary, so it must not depend on a keyword denylist
+# alone (those fail open). The item's KIND gives a deterministic floor that the
+# regex can only raise, never lower.
+SENS_ORDER = {"normal": 0, "private": 1, "sensitive": 2, "secret": 3}
+KIND_FLOOR = {"personal_fact": "sensitive", "identity": "private"}
 
 
 def classify_sensitivity(text):
     return "sensitive" if _SENSITIVE_HINTS.search(text or "") else "normal"
+
+
+def effective_sensitivity(kind, text):
+    """Max of the keyword guess and the kind's floor — so a personal_fact is
+    never stored as 'normal' even if no keyword matched."""
+    guess = classify_sensitivity(text)
+    floor = KIND_FLOOR.get(kind, "normal")
+    return guess if SENS_ORDER[guess] >= SENS_ORDER[floor] else floor
 
 
 def remember_explicit(conn, value, kind="workflow"):
@@ -31,7 +46,7 @@ def remember_explicit(conn, value, kind="workflow"):
     if not value:
         return None
     return store.boss_add(conn, kind, value, status="confirmed", confidence=1.0,
-                          sensitivity=classify_sensitivity(value), source_table="explicit")
+                          sensitivity=effective_sensitivity(kind, value), source_table="explicit")
 
 
 def forget(conn, query):

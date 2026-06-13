@@ -854,6 +854,34 @@ class SelfBossPersonaTests(unittest.TestCase):
         self.assertEqual(boss_model.classify_sensitivity("peanut allergy"), "sensitive")
         self.assertEqual(boss_model.classify_sensitivity("аллергия на орехи"), "sensitive")
         self.assertEqual(boss_model.classify_sensitivity("мой адрес: ..."), "sensitive")
+
+    def test_kind_floor_overrides_keyword_miss(self):
+        # the bug class: a personal_fact with no keyword match must NOT be normal
+        self.assertEqual(boss_model.effective_sensitivity("personal_fact", "loves jazz"), "sensitive")
+        self.assertEqual(boss_model.effective_sensitivity("identity", "Owen from Ufa"), "private")
+        # regex can still RAISE above the floor
+        self.assertEqual(boss_model.effective_sensitivity("identity", "passport 12 34"), "sensitive")
+        # plain workflow stays normal
+        self.assertEqual(boss_model.effective_sensitivity("workflow", "likes md specs"), "normal")
+        # stored item reflects the floor
+        sid = boss_model.remember_explicit(self.conn, "loves jazz", "personal_fact")
+        self.assertEqual(store.boss_get(self.conn, sid)["sensitivity"], "sensitive")
+
+    def test_sensitive_corpus_never_normal(self):
+        corpus = ["peanut allergy", "аллергия на орехи", "my IBAN is DE...", "salary 200k",
+                  "домашний адрес", "паспорт 4509", "diagnosis: ...", "credit card 4111"]
+        for text in corpus:
+            self.assertNotEqual(boss_model.effective_sensitivity("workflow", text), "normal",
+                                f"leaked: {text}")
+
+    def test_persona_hint_excludes_nonnormal_invariant(self):
+        boss_model.remember_explicit(self.conn, "prefers short answers", "tone")  # normal
+        boss_model.remember_explicit(self.conn, "loves jazz", "personal_fact")    # floored sensitive
+        boss_model.remember_explicit(self.conn, "peanut allergy", "personal_fact")
+        hint = persona.boss_preference_hint(self.conn)
+        self.assertIn("prefers short answers", hint)
+        for leaked in ("jazz", "peanut"):
+            self.assertNotIn(leaked, hint)  # invariant: only normal in prompt personalization
         sid = boss_model.remember_explicit(self.conn, "health: peanut allergy", "personal_fact")
         self.assertEqual(store.boss_get(self.conn, sid)["sensitivity"], "sensitive")
 
@@ -903,18 +931,27 @@ class ExportTests(unittest.TestCase):
         fn2, md2 = review.export_document(self.conn, self.cfg, "candidates", "en")
         self.assertIn("likes brevity", md2)
 
-    def test_export_profile_redacts_sensitive_and_secret(self):
+    def test_export_profile_redacts_by_default_and_full(self):
         store.boss_add(self.conn, "workflow", "uses VS Code", status="confirmed",
                        sensitivity="normal")
         store.boss_add(self.conn, "personal_fact", "peanut allergy", status="confirmed",
                        sensitivity="sensitive")
+        store.boss_add(self.conn, "identity", "lives in Ufa", status="confirmed",
+                       sensitivity="private")
         store.boss_add(self.conn, "identity", "api token abc", status="confirmed",
                        sensitivity="secret")
         fn, md = review.export_document(self.conn, self.cfg, "profile", "en")
-        self.assertIn("uses VS Code", md)
-        self.assertIn("(sensitive — withheld)", md)
-        self.assertNotIn("peanut allergy", md)  # value withheld
-        self.assertNotIn("api token abc", md)   # secret omitted entirely
+        self.assertIn("uses VS Code", md)            # normal: shown
+        self.assertIn("(sensitive — withheld", md)
+        self.assertIn("(private — withheld", md)     # default-deny: private withheld too
+        self.assertNotIn("peanut allergy", md)
+        self.assertNotIn("lives in Ufa", md)
+        self.assertNotIn("api token abc", md)        # secret omitted entirely
+        # full export reveals private+sensitive (still never secret)
+        _, full = review.export_document(self.conn, self.cfg, "profile", "en", full=True)
+        self.assertIn("peanut allergy", full)
+        self.assertIn("lives in Ufa", full)
+        self.assertNotIn("api token abc", full)
 
     def test_export_default_is_review(self):
         fn, md = review.export_document(self.conn, self.cfg, "garbage", "en")

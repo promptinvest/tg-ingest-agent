@@ -78,8 +78,9 @@ def confirm_candidate(conn, candidate_id, accept):
     if cand is None or cand["status"] != "pending":
         return None, None
     if accept:
+        sensitivity = boss_model.effective_sensitivity(cand["kind"], cand["proposed_text"])
         store.boss_add(conn, cand["kind"], cand["proposed_text"], status="confirmed",
-                       confidence=1.0, sensitivity=cand["sensitivity"],
+                       confidence=1.0, sensitivity=sensitivity,
                        source_table="memory_candidate", source_id=candidate_id)
         store.candidate_set_status(conn, candidate_id, "confirmed")
         store.rel_add(conn, "memory_confirmed", f"confirmed: {cand['proposed_text']}",

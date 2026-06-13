@@ -220,9 +220,10 @@ def markdown(conn, cfg, period="week"):
 EXPORT_KINDS = ("review", "self", "profile", "history", "candidates")
 
 
-def export_document(conn, cfg, what, lang="en", period="week"):
+def export_document(conn, cfg, what, lang="en", period="week", full=False):
     """Build a Markdown export. Returns (filename, text). Boss-profile export
-    applies redaction (sensitive -> label only; secret -> omitted)."""
+    is default-deny: only 'normal' values appear; private/sensitive are
+    withheld (label only) unless full=True; secret is never exported."""
     what = str(what or "review").strip().lower()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
     if what == "self":
@@ -234,11 +235,11 @@ def export_document(conn, cfg, what, lang="en", period="week"):
     if what == "profile":
         body = ["# BOSS_PROFILE", "", "## Confirmed"]
         body += [ln for r in store.boss_items(conn, "confirmed", limit=100)
-                 if (ln := _redacted_profile_line(r))]
+                 if (ln := _redacted_profile_line(r, full))]
         body += ["", "## Inferred (unconfirmed)"]
         body += [ln for r in store.boss_items(conn, "inferred",
                                               sensitivities=("normal", "private"), limit=100)
-                 if (ln := _redacted_profile_line(r))]
+                 if (ln := _redacted_profile_line(r, full))]
         return f"boss-profile-{stamp}.md", "\n".join(body) + "\n"
     if what == "history":
         import relationship
@@ -255,9 +256,10 @@ def export_document(conn, cfg, what, lang="en", period="week"):
     return f"cara-review-{normalize_period(period)}-{stamp}.md", markdown(conn, cfg, period)
 
 
-def _redacted_profile_line(row):
-    if row["sensitivity"] == "secret":
+def _redacted_profile_line(row, full=False):
+    s = row["sensitivity"]
+    if s == "secret":
         return None  # never exported
-    if row["sensitivity"] == "sensitive":
-        return f"- #{row['id']} [{row['kind']}] _(sensitive — withheld)_"
+    if s in ("sensitive", "private") and not full:
+        return f"- #{row['id']} [{row['kind']}] _({s} — withheld; ask for a full export)_"
     return f"- #{row['id']} [{row['kind']}] {row['value']}"
