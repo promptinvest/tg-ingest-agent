@@ -18,11 +18,13 @@ import llm
 import reminders
 import review
 import router
+import skill_manifest
 import spend
 import storage
 import store
 import sysinfo
 import texts
+import trace as tracing
 
 
 def make_config(**overrides):
@@ -671,6 +673,91 @@ class FetchTests(unittest.TestCase):
                     self.assertIn("приватн", r2.call_args[0][1])
             finally:
                 agent.conn.close()
+
+
+class SkillManifestTests(unittest.TestCase):
+    def test_every_router_action_has_a_policy(self):
+        for action in router.ACTIONS:
+            self.assertTrue(skill_manifest.known(action), f"no manifest policy for {action}")
+
+    def test_policy_defaults_and_gating(self):
+        purge = skill_manifest.get_policy("purge")
+        self.assertEqual(purge["risk"], "destructive")
+        self.assertEqual(purge["requires_confirmation"], "typed_phrase")
+        self.assertFalse(purge["allowed_proactive"])
+        with self.assertRaises(skill_manifest.SkillPolicyError):
+            skill_manifest.assert_proactive_allowed("purge")
+        skill_manifest.assert_proactive_allowed("review")  # allowed, no raise
+        with self.assertRaises(skill_manifest.SkillPolicyError):
+            skill_manifest.get_policy("nonexistent_action")
+
+    def test_capability_titles_from_manifest(self):
+        titles_ru = skill_manifest.capability_titles("ru")
+        titles_en = skill_manifest.capability_titles("en")
+        self.assertIn("Напоминания", titles_ru)
+        self.assertIn("Knowledge-base Q&A", titles_en)
+        # meta glue (confirm/cancel/router) is not surfaced as a capability
+        self.assertNotIn("", titles_en)
+
+
+class TraceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "t.db")
+
+    def tearDown(self):
+        import common
+        common.set_current_trace(None)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_trace_lifecycle_and_current(self):
+        import common
+        tid = tracing.start(self.conn, "inbound", chat_id=7)
+        self.assertTrue(tid.startswith("tr_"))
+        self.assertEqual(common.current_trace(), tid)
+        tracing.event(self.conn, tid, tracing.ROUTER_COMPLETED, "action=spend", skill="spend")
+        tracing.finish(self.conn, tid, "ok", "done")
+        self.assertIsNone(common.current_trace())  # cleared on finish
+        row = store.trace_get(self.conn, tid)
+        self.assertEqual(row["status"], "ok")
+        self.assertEqual(row["chat_id"], 7)
+        events = store.trace_events(self.conn, tid)
+        self.assertEqual(events[0]["stage"], tracing.ROUTER_COMPLETED)
+
+    def test_usage_and_issue_stamped_with_current_trace(self):
+        tid = tracing.start(self.conn, "inbound", chat_id=1)
+        store.usage_add(self.conn, "router", "chat", "m", 1, 1, cost_usd=0.001)
+        store.issue_add(self.conn, 1, "out_of_scope", "x")
+        tracing.finish(self.conn, tid, "ok")
+        usage = self.conn.execute("SELECT trace_id FROM llm_usage").fetchone()
+        issue = self.conn.execute("SELECT trace_id FROM issues").fetchone()
+        self.assertEqual(usage["trace_id"], tid)
+        self.assertEqual(issue["trace_id"], tid)
+        # after finish, no current trace -> new rows are unstamped (None)
+        store.issue_add(self.conn, 1, "llm_error", "y")
+        self.assertIsNone(self.conn.execute(
+            "SELECT trace_id FROM issues ORDER BY id DESC LIMIT 1").fetchone()["trace_id"])
+
+    def test_trace_id_columns_migrated_on_old_db(self):
+        import sqlite3
+        path = Path(self.tmp.name) / "old.db"
+        raw = sqlite3.connect(str(path))
+        raw.execute("CREATE TABLE llm_usage (id INTEGER PRIMARY KEY, ts TEXT NOT NULL,"
+                    " day TEXT NOT NULL, month TEXT NOT NULL, skill TEXT NOT NULL,"
+                    " kind TEXT NOT NULL, model TEXT NOT NULL, tokens_in INTEGER,"
+                    " tokens_out INTEGER, seconds REAL, cost_usd REAL)")
+        raw.execute("CREATE TABLE issues (id INTEGER PRIMARY KEY, ts TEXT NOT NULL,"
+                    " day TEXT NOT NULL, chat_id INTEGER, kind TEXT NOT NULL, detail TEXT)")
+        raw.commit()
+        raw.close()
+        conn = store.open_db(path)
+        try:
+            for tbl in ("llm_usage", "issues"):
+                cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({tbl})")}
+                self.assertIn("trace_id", cols)
+        finally:
+            conn.close()
 
 
 class KnowledgeTests(unittest.TestCase):

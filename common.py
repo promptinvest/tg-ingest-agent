@@ -31,6 +31,21 @@ def utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+# Current trace id for the in-flight unit of work (single-threaded poll loop,
+# so a module global is safe). store.usage_add/issue_add default to this so
+# every model call and issue is trace-linked without threading an arg through
+# every call site. Lives here (no store/trace deps) to avoid import cycles.
+_CURRENT_TRACE = {"id": None}
+
+
+def set_current_trace(trace_id):
+    _CURRENT_TRACE["id"] = trace_id
+
+
+def current_trace():
+    return _CURRENT_TRACE["id"]
+
+
 def config_list(value):
     normalized = str(value or "").replace("\n", ",").replace(";", ",").replace("|", ",")
     return [part.strip() for part in normalized.split(",") if part.strip()]

@@ -22,11 +22,13 @@ import llm
 import reminders
 import review
 import router
+import skill_manifest
 import spend
 import storage
 import store
 import sysinfo
-from common import Config, ShutdownInterrupt, load_config, log  # noqa: F401
+import trace
+from common import Config, ShutdownInterrupt, current_trace, load_config, log  # noqa: F401
 from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
                     tg_send_photo)
 from texts import T
@@ -50,6 +52,11 @@ class Agent:
     def request_stop(self, signum, _frame):
         log(f"received signal {signum}, shutting down")
         self.stop = True
+
+    @staticmethod
+    def _update_chat_id(update):
+        msg = update.get("message") or (update.get("callback_query") or {}).get("message") or {}
+        return (msg.get("chat") or {}).get("id")
 
     # -- preferences-backed settings
 
@@ -182,13 +189,18 @@ class Agent:
             for update in updates or []:
                 if self.stop:
                     break  # unprocessed updates redeliver after restart
+                tid = trace.start(self.conn, "inbound", self._update_chat_id(update))
                 try:
                     self.handle_update(update)
+                    trace.finish(self.conn, tid, "ok")
                 except ShutdownInterrupt:
                     log(f"update {update.get('update_id')} left for redelivery (shutdown)")
+                    trace.finish(self.conn, tid, "suppressed", "shutdown mid-update")
                     break  # do not count this update as processed
                 except Exception as exc:  # never let one bad update kill the loop
                     log(f"error handling update {update.get('update_id')}: {exc!r}")
+                    trace.event(self.conn, tid, trace.ISSUE_LOGGED, repr(exc), level="error")
+                    trace.finish(self.conn, tid, "failed", repr(exc)[:200])
                 processed_max = update["update_id"]
             if processed_max is not None:
                 offset = processed_max + 1
@@ -415,6 +427,8 @@ class Agent:
             return
         action, params = decision["action"], decision["params"]
         log(f"routed chat={chat_id} action={action} confidence={decision['confidence']:.2f}")
+        trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED, f"action={action}",
+                    skill=action, data={"confidence": decision["confidence"]})
 
         if action == "ingest":
             self.finalize([msg])
@@ -467,7 +481,8 @@ class Agent:
         elif action == "categories":
             self.reply(chat_id, self.categories_text(lang))
         elif action == "help":
-            self.reply(chat_id, T(lang, "capabilities"))
+            self.reply(chat_id, T(lang, "capabilities") + "\n— "
+                       + " · ".join(skill_manifest.capability_titles(lang)))
         elif action == "overview":
             self.reply(chat_id, self.overview_text(lang))
         elif action == "list_items":

@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
   tokens_in INTEGER NOT NULL DEFAULT 0,
   tokens_out INTEGER NOT NULL DEFAULT 0,
   seconds REAL,
-  cost_usd REAL NOT NULL DEFAULT 0
+  cost_usd REAL NOT NULL DEFAULT 0,
+  trace_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -136,7 +137,8 @@ CREATE TABLE IF NOT EXISTS issues (
   day TEXT NOT NULL,
   chat_id INTEGER,
   kind TEXT NOT NULL,
-  detail TEXT
+  detail TEXT,
+  trace_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reminders (
@@ -160,11 +162,91 @@ CREATE INDEX IF NOT EXISTS idx_usage_month ON llm_usage(month);
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_utc);
 CREATE INDEX IF NOT EXISTS idx_issues_ts ON issues(ts);
 CREATE INDEX IF NOT EXISTS idx_conversation_chat ON conversation(chat_id, id);
+
+CREATE TABLE IF NOT EXISTS traces (
+  trace_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  chat_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'running',
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  summary TEXT
+);
+
+CREATE TABLE IF NOT EXISTS trace_events (
+  id INTEGER PRIMARY KEY,
+  trace_id TEXT NOT NULL REFERENCES traces(trace_id) ON DELETE CASCADE,
+  ts TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  level TEXT NOT NULL DEFAULT 'info',
+  skill TEXT,
+  message TEXT NOT NULL,
+  data TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_trace_events_trace ON trace_events(trace_id, id);
+CREATE INDEX IF NOT EXISTS idx_traces_recent ON traces(started_at, status);
 """
 
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _trace_id():
+    """Current in-flight trace id (set by trace.py), or None. Imported lazily
+    to avoid a common<->store import-order surprise."""
+    try:
+        from common import current_trace
+        return current_trace()
+    except Exception:
+        return None
+
+
+# -- traces ------------------------------------------------------------------
+
+def trace_start(conn, trace_id, kind, chat_id=None):
+    conn.execute(
+        "INSERT OR REPLACE INTO traces (trace_id, kind, chat_id, status, started_at)"
+        " VALUES (?, ?, ?, 'running', ?)",
+        (trace_id, kind, chat_id, _now()),
+    )
+    conn.commit()
+
+
+def trace_event(conn, trace_id, stage, message, level="info", skill=None, data=None):
+    conn.execute(
+        "INSERT INTO trace_events (trace_id, ts, stage, level, skill, message, data)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (trace_id, _now(), stage, level, skill, str(message)[:500],
+         json.dumps(data, ensure_ascii=False) if data is not None else None),
+    )
+    conn.commit()
+
+
+def trace_finish(conn, trace_id, status, summary=None):
+    conn.execute(
+        "UPDATE traces SET status = ?, finished_at = ?, summary = ? WHERE trace_id = ?",
+        (status, _now(), summary, trace_id),
+    )
+    conn.commit()
+
+
+def trace_get(conn, trace_id):
+    return conn.execute("SELECT * FROM traces WHERE trace_id = ?", (trace_id,)).fetchone()
+
+
+def trace_events(conn, trace_id):
+    return conn.execute(
+        "SELECT * FROM trace_events WHERE trace_id = ? ORDER BY id", (trace_id,)
+    ).fetchall()
+
+
+def latest_trace(conn, chat_id, kind="inbound"):
+    return conn.execute(
+        "SELECT * FROM traces WHERE chat_id = ? AND kind = ? ORDER BY started_at DESC LIMIT 1",
+        (chat_id, kind),
+    ).fetchone()
 
 
 def open_db(path):
@@ -189,6 +271,12 @@ def _migrate(conn):
     image_columns = {row["name"] for row in conn.execute("PRAGMA table_info(images)")}
     if "object_key" not in image_columns:
         conn.execute("ALTER TABLE images ADD COLUMN object_key TEXT")
+    usage_columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_usage)")}
+    if "trace_id" not in usage_columns:
+        conn.execute("ALTER TABLE llm_usage ADD COLUMN trace_id TEXT")
+    issue_columns = {row["name"] for row in conn.execute("PRAGMA table_info(issues)")}
+    if "trace_id" not in issue_columns:
+        conn.execute("ALTER TABLE issues ADD COLUMN trace_id TEXT")
 
 
 # -- kv ----------------------------------------------------------------------
@@ -563,8 +651,9 @@ def usage_add(conn, skill, kind, model, tokens_in=0, tokens_out=0, seconds=None,
     ts = _now()
     conn.execute(
         "INSERT INTO llm_usage (ts, day, month, skill, kind, model, tokens_in, tokens_out,"
-        " seconds, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (ts, ts[:10], ts[:7], skill, kind, model, tokens_in, tokens_out, seconds, cost_usd),
+        " seconds, cost_usd, trace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (ts, ts[:10], ts[:7], skill, kind, model, tokens_in, tokens_out, seconds, cost_usd,
+         _trace_id()),
     )
     conn.commit()
 
@@ -696,8 +785,8 @@ def convo_recent(conn, chat_id, limit=10):
 def issue_add(conn, chat_id, kind, detail=""):
     ts = _now()
     conn.execute(
-        "INSERT INTO issues (ts, day, chat_id, kind, detail) VALUES (?, ?, ?, ?, ?)",
-        (ts, ts[:10], chat_id, kind, str(detail or "")[:300]),
+        "INSERT INTO issues (ts, day, chat_id, kind, detail, trace_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (ts, ts[:10], chat_id, kind, str(detail or "")[:300], _trace_id()),
     )
     conn.commit()
 
