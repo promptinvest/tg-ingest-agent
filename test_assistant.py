@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common
 import fetch
 import gcal
+import knowledge
 import llm
 import reminders
 import review
@@ -672,6 +673,86 @@ class FetchTests(unittest.TestCase):
                 agent.conn.close()
 
 
+class KnowledgeTests(unittest.TestCase):
+    def test_chunk_text(self):
+        self.assertEqual(knowledge.chunk_text(""), [])
+        self.assertEqual(knowledge.chunk_text("  \n  "), [])
+        # short text -> one chunk
+        self.assertEqual(knowledge.chunk_text("Рейс 14 июня в 10:05"), ["Рейс 14 июня в 10:05"])
+        # paragraphs split when over the budget
+        doc = "\n\n".join([f"Section {i} " + "x" * 300 for i in range(4)])
+        chunks = knowledge.chunk_text(doc, max_chars=400)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(c) <= 800 for c in chunks))
+
+    def test_cosine(self):
+        self.assertAlmostEqual(knowledge.cosine([1, 0], [1, 0]), 1.0)
+        self.assertAlmostEqual(knowledge.cosine([1, 0], [0, 1]), 0.0)
+        self.assertEqual(knowledge.cosine([], [1]), -1.0)
+        self.assertEqual(knowledge.cosine([0, 0], [1, 1]), -1.0)
+
+    def test_rank_chunks_orders_and_budgets(self):
+        import json as _json
+        rows = [
+            {"message_id": 1, "text": "flight info", "embedding": _json.dumps([1.0, 0.0]),
+             "category": "Plan", "suggested_category": None, "title": "Trip"},
+            {"message_id": 2, "text": "weather", "embedding": _json.dumps([0.0, 1.0]),
+             "category": "Misc", "suggested_category": None, "title": None},
+            {"message_id": 3, "text": "bad", "embedding": "not-json",
+             "category": None, "suggested_category": "x", "title": None},
+        ]
+        ranked = knowledge.rank_chunks([1.0, 0.05], rows, top_k=6, context_chars=6000)
+        self.assertEqual(ranked[0]["message_id"], 1)  # most similar first
+        self.assertTrue(all(r["message_id"] != 3 for r in ranked))  # bad embedding skipped
+        # context budget caps how many chunks are included
+        tight = knowledge.rank_chunks([1.0, 1.0], rows, top_k=6, context_chars=5)
+        self.assertEqual(len(tight), 1)
+
+    def test_build_ask_messages_grounding(self):
+        msgs = knowledge.build_ask_messages(
+            "когда рейс?",
+            [{"message_id": 7, "text": "Рейс 14 июня 10:05", "category": "Plan", "title": "Trip"}])
+        sys = msgs[0]["content"]
+        self.assertIn("ONLY", sys)
+        self.assertIn("did", sys.lower()) if "didn't find" in sys.lower() else None
+        self.assertIn("Рейс 14 июня 10:05", sys)
+        self.assertIn("#7", sys)
+        self.assertEqual(msgs[1]["content"], "когда рейс?")
+        # no context -> still grounded, explicit no-match marker
+        empty = knowledge.build_ask_messages("q", [])
+        self.assertIn("no stored notes matched", empty[0]["content"])
+
+    def test_salient_terms(self):
+        terms = knowledge.salient_terms("когда мой рейс из Уфы?")
+        self.assertIn("рейс", terms)
+        self.assertNotIn("когда", terms)  # stopword
+
+    def test_embed_logs_usage_and_aligns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_db(Path(tmp) / "e.db")
+            cfg = make_config()
+            fake = {"data": [{"index": 1, "embedding": [0.1, 0.2]},
+                             {"index": 0, "embedding": [0.3, 0.4]}],
+                    "usage": {"prompt_tokens": 8}}
+
+            class FakeResp:
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def read(self): import json as j; return j.dumps(fake).encode()
+
+            try:
+                with mock.patch.object(llm, "urlopen", return_value=FakeResp()):
+                    vecs = llm.embed(cfg, conn, "ask", ["a", "b"])
+                self.assertEqual(vecs, [[0.3, 0.4], [0.1, 0.2]])  # reordered by index
+                self.assertGreater(store.usage_total(conn, "day"), 0)  # embeddings billed
+            finally:
+                conn.close()
+
+    def test_router_accepts_ask(self):
+        ok = router.validate_route({"action": "ask", "params": {"question": "q"}}, False)
+        self.assertEqual(ok["action"], "ask")
+
+
 class StorageTests(unittest.TestCase):
     # AWS-documented SigV4 example (GET examplebucket/test.txt, us-east-1/s3,
     # 20130524T000000Z). If our signing matches this published vector, the
@@ -740,6 +821,65 @@ class StorageTests(unittest.TestCase):
                 self.assertEqual(storage.offload(make_config(), conn, 1), 0)
             finally:
                 conn.close()
+
+
+class AskFlowTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tg = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "k.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def test_index_message_chunks_and_embeds(self):
+        row_id = store.insert_message(self.agent.conn, {
+            "chat_id": 1, "tg_message_id": 1, "received_at": "ts",
+            "raw_text": "Рейс 14 июня 10:05 Уфа."})
+        with mock.patch.object(llm, "embed", return_value=[[0.1, 0.2]]) as emb:
+            self.agent.index_message(row_id, "Рейс 14 июня 10:05 Уфа.")
+        emb.assert_called_once()
+        self.assertEqual(len(store.all_embedded_chunks(self.agent.conn)), 1)
+
+    def test_do_ask_grounded_answer(self):
+        row_id = store.insert_message(self.agent.conn, {
+            "chat_id": 1, "tg_message_id": 1, "received_at": "ts", "raw_text": "Рейс 14 июня 10:05"})
+        store.set_chunks(self.agent.conn, row_id, [("Рейс 14 июня 10:05", [1.0, 0.0])])
+        captured = {}
+
+        def fake_chat(cfg, conn, skill, messages, **kw):
+            captured["context"] = messages[0]["content"]
+            return "Твой рейс 14 июня в 10:05 (#%d)" % row_id
+        with mock.patch.object(llm, "embed", return_value=[[1.0, 0.0]]), \
+                mock.patch.object(llm, "chat", side_effect=fake_chat), \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_ask(1, "ru", {"question": "когда рейс?"}, "когда рейс?")
+        self.assertIn("Рейс 14 июня 10:05", captured["context"])  # grounded in stored note
+        self.assertIn("14 июня", reply.call_args[0][1])
+
+    def test_do_ask_no_match_records_issue(self):
+        with mock.patch.object(llm, "embed", return_value=[[1.0, 0.0]]), \
+                mock.patch.object(llm, "chat", return_value="Не нашла в твоих заметках."), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.do_ask(1, "ru", {"question": "когда рейс?"}, "когда рейс?")
+        self.assertEqual({r["kind"] for r in store.issues_recent(self.agent.conn, "2000-01-01")},
+                         {"ask_no_context"})
+
+    def test_text_document_ingested_as_full_text(self):
+        # a sent .md document -> downloaded, decoded, stored as full raw_text
+        with mock.patch.object(self.agent, "download_file") as dl:
+            doc_path = Path(self.tmp.name) / "plan.md"
+            doc_path.write_text("# Trip\nРейс 14 июня 10:05\nОтель: Hilton", encoding="utf-8")
+            dl.return_value = str(doc_path)
+            text, name = self.agent.read_text_document([{
+                "document": {"file_id": "f", "file_unique_id": "u", "file_name": "plan.md",
+                             "mime_type": "text/markdown"}}])
+        self.assertIn("Рейс 14 июня 10:05", text)
+        self.assertEqual(name, "plan.md")
 
 
 class StoreMigrationTests(unittest.TestCase):

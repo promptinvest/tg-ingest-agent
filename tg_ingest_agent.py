@@ -17,6 +17,7 @@ from pathlib import Path
 import fetch
 import gcal
 import ingest
+import knowledge
 import llm
 import reminders
 import review
@@ -494,6 +495,8 @@ class Agent:
             self.do_purge(chat_id, lang, params)
         elif action == "fetch":
             self.do_fetch(chat_id, lang, params)
+        elif action == "ask":
+            self.do_ask(chat_id, lang, params, text)
         elif action == "issues_report":
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "review":
@@ -875,6 +878,62 @@ class Agent:
         counts = T(lang, "counts", row_id=row_id, images=0, urls=1)
         self.present_suggestion(row_id, chat_id, None, category, alternatives, summary, counts)
 
+    def do_ask(self, chat_id, lang, params, text):
+        question = str(params.get("question") or "").strip() or text.strip()
+        if not question:
+            self.reply(chat_id, T(lang, "clarify"))
+            return
+        try:
+            qvec = llm.embed(self.cfg, self.conn, "ask", [question])[0]
+            rows = store.all_embedded_chunks(self.conn)
+            context = knowledge.rank_chunks(qvec, rows, self.cfg.ask_top_k,
+                                            self.cfg.ask_context_chars)
+            if not context:  # nothing indexed/matched -> keyword fallback
+                context = self._keyword_context(question)
+            answer = llm.chat(self.cfg, self.conn, "ask",
+                              knowledge.build_ask_messages(question, context), max_tokens=500)
+        except llm.BudgetExceeded as exc:
+            store.issue_add(self.conn, chat_id, "budget_stop", question[:200])
+            self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
+                                  period=T(lang, f"period_{exc.period}")))
+            return
+        except llm.LLMError as exc:
+            log(f"ask failed: {exc}")
+            store.issue_add(self.conn, chat_id, "llm_error", f"ask: {exc}")
+            self.reply(chat_id, T(lang, "llm_error"))
+            return
+        if not context:
+            store.issue_add(self.conn, chat_id, "ask_no_context", question[:200])
+        self.reply(chat_id, answer.strip()[:4000])
+
+    def _keyword_context(self, question):
+        items = []
+        for term in knowledge.salient_terms(question):
+            for row in store.list_messages(self.conn, query=term, limit=3):
+                if not any(c["message_id"] == row["id"] for c in items):
+                    items.append({"message_id": row["id"],
+                                  "text": (row["raw_text"] or row["summary"] or "")[:1500],
+                                  "category": row["category"] or row["suggested_category"] or "?",
+                                  "title": row["forward_origin_title"]})
+            if len(items) >= self.cfg.ask_top_k:
+                break
+        return items[:self.cfg.ask_top_k]
+
+    def index_message(self, row_id, text):
+        """Chunk + embed a message's text for semantic recall. Best-effort:
+        on LLM/budget failure the item is simply not searchable yet (keyword
+        fallback still covers it)."""
+        pieces = knowledge.chunk_text(text, self.cfg.chunk_chars)
+        if not pieces:
+            return
+        try:
+            vectors = llm.embed(self.cfg, self.conn, "ask", pieces)
+        except llm.LLMError as exc:
+            log(f"indexing skipped for #{row_id}: {exc}")
+            return
+        store.set_chunks(self.conn, row_id, list(zip(pieces, vectors)))
+        log(f"indexed #{row_id} ({len(pieces)} chunk(s))")
+
     def media_bytes(self):
         total = 0
         try:
@@ -1098,14 +1157,41 @@ class Agent:
                 except Exception as exc:
                     log(f"error finalizing album {group_id}: {exc!r}")
 
+    TEXT_DOC_EXTS = (".md", ".markdown", ".txt", ".text")
+    MAX_DOC_CHARS = 100_000
+
+    def read_text_document(self, parts):
+        """Download & decode a text/markdown document part (a sent plan).
+        Returns (text, filename) or (None, None)."""
+        for part in parts:
+            doc = part.get("document") or {}
+            fname = doc.get("file_name") or ""
+            mime = str(doc.get("mime_type") or "")
+            is_text = (mime.startswith("text/") or mime in ("application/markdown",)
+                       or fname.lower().endswith(self.TEXT_DOC_EXTS))
+            if not (doc.get("file_id") and is_text):
+                continue
+            try:
+                path = self.download_file(doc["file_id"], doc["file_unique_id"],
+                                          Path(fname).suffix or ".txt")
+                text = Path(path).read_text(encoding="utf-8", errors="replace")[:self.MAX_DOC_CHARS]
+                Path(path).unlink(missing_ok=True)  # transient artifact
+                if text.strip():
+                    return text, fname
+            except (TelegramError, OSError) as exc:
+                log(f"text document read failed: {exc}")
+        return None, None
+
     def finalize(self, parts):
         lang = self.lang()
         first = parts[0]
         chat_id = first["chat"]["id"]
         reply_to = first.get("message_id")
-        raw_text = ingest.first_text(parts)
+        doc_text, doc_name = self.read_text_document(parts)
+        raw_text = doc_text or ingest.first_text(parts)
         urls = ingest.collect_urls(parts)
         forward = ingest.parse_forward_origin(first.get("forward_origin"))
+        title = forward.get("title") or (doc_name if doc_text else None)
         row_id = store.insert_message(
             self.conn,
             {
@@ -1113,9 +1199,9 @@ class Agent:
                 "tg_message_id": first.get("message_id"),
                 "media_group_id": first.get("media_group_id"),
                 "from_user_id": (first.get("from") or {}).get("id"),
-                "forward_origin_type": forward.get("type"),
+                "forward_origin_type": forward.get("type") or ("document" if doc_text else None),
                 "forward_origin_chat_id": forward.get("chat_id"),
-                "forward_origin_title": forward.get("title"),
+                "forward_origin_title": title,
                 "forward_origin_username": forward.get("username"),
                 "forward_origin_message_id": forward.get("message_id"),
                 "forward_date": forward.get("date"),
@@ -1221,6 +1307,12 @@ class Agent:
                 return None
         store.set_suggestion(self.conn, row_id, category, summary, self.cfg.do_model)
         store.set_facts(self.conn, row_id, facts)
+        # Index for semantic recall: full text for documents, else summary+facts.
+        index_text = row["raw_text"] or summary
+        if facts:
+            index_text = (index_text or "") + "\n" + "\n".join(facts)
+        if index_text:
+            self.index_message(row_id, index_text)
         log(f"suggested {category} for message #{row_id} ({len(facts)} facts)")
         return category, alternatives, summary
 

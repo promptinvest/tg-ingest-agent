@@ -38,6 +38,7 @@ DEFAULT_PRICING = {
 }
 DEFAULT_CHAT_PRICE = (3.0, 15.0)  # unknown models priced conservatively
 STT_PRICE_PER_MINUTE = 0.006
+EMBED_PRICE_PER_1M = 0.02  # BGE-M3-class embedding, USD per 1M tokens
 
 
 def pricing_table(cfg):
@@ -136,6 +137,43 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None):
         cost_usd=chat_cost(model, tokens_in, tokens_out, pricing_table(cfg)),
     )
     return str((choices[0].get("message") or {}).get("content") or "")
+
+
+def embed(cfg, conn, skill, texts):
+    """Budget-guarded embeddings (BGE-M3); logs usage; returns list of
+    float vectors aligned with `texts`."""
+    if not texts:
+        return []
+    _check_budget(cfg, conn)
+    payload = {"model": cfg.embedding_model, "input": list(texts)}
+    request = Request(
+        f"{_base_url(cfg)}/embeddings",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {cfg.do_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=cfg.llm_timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise LLMError(_redacted_http_error(exc, cfg.do_key)) from exc
+    except URLError as exc:
+        raise LLMError(f"embeddings request failed: {exc.reason}") from exc
+    except json.JSONDecodeError as exc:
+        raise LLMError("embeddings response was not valid JSON") from exc
+    rows = sorted(data.get("data") or [], key=lambda r: r.get("index", 0))
+    vectors = [[float(x) for x in r.get("embedding") or []] for r in rows]
+    if len(vectors) != len(texts):
+        raise LLMError("embeddings response count mismatch")
+    tokens = int((data.get("usage") or {}).get("prompt_tokens")
+                 or sum(len(t) for t in texts) // 4)
+    store.usage_add(conn, skill, "embed", cfg.embedding_model, tokens, 0,
+                    cost_usd=tokens / 1_000_000 * EMBED_PRICE_PER_1M)
+    return vectors
 
 
 # -- speech-to-text -----------------------------------------------------------

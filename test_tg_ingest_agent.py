@@ -385,6 +385,26 @@ class DbTests(unittest.TestCase):
         store.set_facts(self.conn, row_id, ["c"])  # replace, not append
         self.assertEqual([r["fact"] for r in store.message_facts(self.conn, row_id)], ["c"])
 
+    def test_chunks_roundtrip_and_cascade(self):
+        row_id = self._insert(msg_id=50, raw_text="plan")
+        store.set_chunks(self.conn, row_id, [("flight 14 june", [0.1, 0.2]), ("hotel", None)])
+        embedded = store.all_embedded_chunks(self.conn)
+        self.assertEqual(len(embedded), 1)  # only the chunk with an embedding
+        self.assertEqual(embedded[0]["text"], "flight 14 june")
+        self.assertEqual(embedded[0]["message_id"], row_id)
+        # re-indexing replaces, not appends
+        store.set_chunks(self.conn, row_id, [("new", [0.3, 0.4])])
+        self.assertEqual(len(store.all_embedded_chunks(self.conn)), 1)
+        # deleting the message cascades its chunks
+        store.delete_message(self.conn, row_id)
+        self.assertEqual(store.all_embedded_chunks(self.conn), [])
+
+    def test_purge_all_clears_chunks(self):
+        row_id = self._insert(msg_id=51, raw_text="x")
+        store.set_chunks(self.conn, row_id, [("c", [1.0])])
+        store.purge_execute(self.conn, "all")
+        self.assertEqual(store.all_embedded_chunks(self.conn), [])
+
     def test_habit_streak(self):
         self.assertEqual(store.habit_streak(self.conn, -7), (None, 0))
         for i, category in enumerate(["news", "news", "crypto", "crypto", "crypto"]):

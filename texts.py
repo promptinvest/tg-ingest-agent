@@ -321,6 +321,8 @@ TEXTS = {
     "issue_kind_budget_stop": {"ru": "остановки по бюджету", "en": "budget stops"},
     "issue_kind_ingest_failed": {"ru": "сообщения, которые не разобрала", "en": "messages I failed to sort"},
     "issue_kind_calendar_failed": {"ru": "проблемы с календарём", "en": "calendar trouble"},
+    "issue_kind_fetch_failed": {"ru": "ссылки, которые не открылись", "en": "links I couldn't open"},
+    "issue_kind_ask_no_context": {"ru": "вопросы без ответа в заметках", "en": "questions with no note match"},
     "review_weekly_intro": {
         "ru": "📊 {name}, моя еженедельная сводка — как я поработала:",
         "en": "📊 {name}, my weekly check-in — how I did:",

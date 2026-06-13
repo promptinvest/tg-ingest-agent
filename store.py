@@ -122,6 +122,14 @@ CREATE TABLE IF NOT EXISTS facts (
   fact TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS chunks (
+  id INTEGER PRIMARY KEY,
+  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  embedding TEXT
+);
+
 CREATE TABLE IF NOT EXISTS issues (
   id INTEGER PRIMARY KEY,
   ts TEXT NOT NULL,
@@ -299,6 +307,32 @@ def message_images(conn, message_id):
 def set_image_object_key(conn, image_id, object_key):
     conn.execute("UPDATE images SET object_key = ? WHERE id = ?", (object_key, image_id))
     conn.commit()
+
+
+def set_chunks(conn, message_id, chunks):
+    """Replace a message's embedding chunks (idempotent for re-indexing).
+    chunks: list of (text, embedding_list_or_None)."""
+    import json as _json
+    conn.execute("DELETE FROM chunks WHERE message_id = ?", (message_id,))
+    for i, (text, embedding) in enumerate(chunks):
+        conn.execute(
+            "INSERT INTO chunks (message_id, chunk_index, text, embedding) VALUES (?, ?, ?, ?)",
+            (message_id, i, text, _json.dumps(embedding) if embedding is not None else None),
+        )
+    conn.commit()
+
+
+def all_embedded_chunks(conn):
+    """Every chunk that has an embedding, with its message's category/title
+    for grounding. Returns rows: message_id, text, embedding(JSON), category,
+    suggested_category, forward_origin_title."""
+    return conn.execute(
+        "SELECT c.message_id AS message_id, c.text AS text, c.embedding AS embedding,"
+        " m.category AS category, m.suggested_category AS suggested_category,"
+        " m.forward_origin_title AS title"
+        " FROM chunks c JOIN messages m ON m.id = c.message_id"
+        " WHERE c.embedding IS NOT NULL"
+    ).fetchall()
 
 
 def find_forward_duplicate(conn, fwd_chat_id, fwd_message_id, exclude_id):
@@ -483,7 +517,7 @@ def purge_execute(conn, scope, category=None):
     if scope == "all":
         paths = [r["local_path"] for r in
                  conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
-        for table in ("facts", "urls", "images", "messages", "categories", "issues",
+        for table in ("facts", "chunks", "urls", "images", "messages", "categories", "issues",
                       "feedback", "conversation"):
             conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM reminders WHERE status='active'")

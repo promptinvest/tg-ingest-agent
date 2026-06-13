@@ -82,6 +82,7 @@ def load_config(env=None):
     cfg.fallback_category = (env.get("FALLBACK_CATEGORY") or "uncategorized").strip()
     cfg.do_model = (env.get("DO_CHAT_MODEL") or "anthropic-claude-haiku-4.5").strip()
     cfg.router_model = (env.get("ROUTER_MODEL") or cfg.do_model).strip()
+    cfg.embedding_model = (env.get("DO_EMBEDDING_MODEL") or "BGE-M3").strip()
     cfg.do_base_url = (env.get("DO_INFERENCE_BASE_URL") or "https://inference.do-ai.run/v1").strip()
     cfg.db_path = Path(env.get("DB_PATH") or "/var/lib/tg-ingest-agent/ingest.db")
     cfg.media_dir = Path(env.get("MEDIA_DIR") or "/var/lib/tg-ingest-agent/media")
@@ -112,6 +113,10 @@ def load_config(env=None):
     cfg.habit_threshold = int(env.get("HABIT_THRESHOLD") or "10")
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
+    # Knowledge Q&A (ask): semantic retrieval over the KB
+    cfg.ask_top_k = int(env.get("ASK_TOP_K") or "6")
+    cfg.ask_context_chars = int(env.get("ASK_CONTEXT_CHARS") or "6000")
+    cfg.chunk_chars = int(env.get("CHUNK_CHARS") or "800")
     # Remote fetch (read a URL the operator sends; SSRF-guarded)
     cfg.fetch_enabled = (env.get("FETCH_ENABLED") or "true").strip().lower() == "true"
     cfg.fetch_timeout = int(env.get("FETCH_TIMEOUT_SECONDS") or "20")
