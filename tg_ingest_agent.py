@@ -22,8 +22,10 @@ import review
 import router
 import spend
 import store
+import sysinfo
 from common import Config, ShutdownInterrupt, load_config, log  # noqa: F401
-from tg_api import TelegramError, tg_call, tg_download, tg_send_document
+from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
+                    tg_send_photo)
 from texts import T
 
 COMMAND_ALIASES = {"/start": "start", "/stats": "stats", "/categories": "categories"}
@@ -145,6 +147,7 @@ class Agent:
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
                 self.retry_sweep()
+                self.housekeep()
             poll_timeout = 2 if self.albums else self.cfg.poll_timeout
             try:
                 updates = tg_call(
@@ -315,6 +318,7 @@ class Agent:
         if not self.cfg.stt_enabled:
             self.reply(chat_id, T(lang, "stt_failed"))
             return None
+        path = None
         try:
             path = self.download_file(voice.get("file_id"), voice.get("file_unique_id"), ".oga")
             transcript = llm.transcribe(
@@ -323,17 +327,58 @@ class Agent:
         except (TelegramError, llm.LLMError) as exc:
             if self.stop:
                 # A deploy/shutdown killed the transcription mid-run: say
-                # nothing and let the update redeliver after restart.
+                # nothing and let the update redeliver after restart (keep
+                # the audio file for the retry).
                 raise ShutdownInterrupt() from exc
             log(f"voice transcription failed: {exc}")
             store.issue_add(self.conn, chat_id, "stt_failed", str(exc)[:200])
             self.reply(chat_id, T(lang, "stt_failed"))
             return None
+        finally:
+            # The voice note is a transient artifact — we keep only the
+            # transcript. Delete it once processing is done (not on shutdown).
+            if path and not self.stop:
+                Path(path).unlink(missing_ok=True)
         if not transcript:
             store.issue_add(self.conn, chat_id, "stt_failed", "empty transcript")
             self.reply(chat_id, T(lang, "stt_failed"))
             return None
         return transcript
+
+    def housekeep(self):
+        """Purge interim artifacts: media files with no DB reference (voice
+        notes, orphans from deleted messages) and old review exports. Photos
+        referenced by a stored message are content and kept. A grace window
+        avoids racing in-flight downloads."""
+        import time as _time
+        referenced = set()
+        for row in self.conn.execute(
+            "SELECT local_path FROM images WHERE local_path IS NOT NULL"
+        ):
+            referenced.add(str(Path(row["local_path"])))
+        grace = _time.time() - 3600  # 1h
+        removed = 0
+        try:
+            for path in self.cfg.media_dir.glob("*"):
+                if not path.is_file():
+                    continue
+                if str(path) in referenced:
+                    continue
+                if path.stat().st_mtime > grace:
+                    continue  # too fresh — may be in flight
+                path.unlink(missing_ok=True)
+                removed += 1
+        except OSError as exc:
+            log(f"housekeep media error: {exc}")
+        # Keep only the newest review exports.
+        reviews_dir = self.cfg.db_path.parent / "reviews"
+        if reviews_dir.is_dir():
+            files = sorted(reviews_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for stale in files[self.cfg.review_keep:]:
+                stale.unlink(missing_ok=True)
+                removed += 1
+        if removed:
+            log(f"housekeep removed {removed} interim artifact(s)")
 
     # -- Router dispatch
 
@@ -431,6 +476,13 @@ class Agent:
                 self.reply(chat_id, T(lang, "delete_confirm", row_id=row["id"],
                                       category=row["category"] or row["suggested_category"] or "?",
                                       snippet=snippet))
+        elif action == "show_media":
+            self.do_show_media(chat_id, lang, params)
+        elif action == "discard":
+            self.do_discard(chat_id, lang, pending)
+        elif action == "vps_stats":
+            self.reply(chat_id, sysinfo.format_report(
+                sysinfo.collect(str(self.cfg.db_path.parent)), lang, self.media_bytes()))
         elif action == "issues_report":
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "review":
@@ -679,6 +731,52 @@ class Agent:
             if urls:
                 lines.append(f"   🔗 {urls[0]['url']}")
         return "\n".join(lines)
+
+    def do_show_media(self, chat_id, lang, params):
+        row = self.resolve_item(params)
+        if row is None:
+            self.reply(chat_id, T(lang, "items_empty"))
+            return
+        images = store.message_images(self.conn, row["id"])
+        sent = 0
+        for img in images:
+            caption = f"#{row['id']}" if sent == 0 else None
+            try:
+                if img["tg_file_id"]:
+                    tg_send_photo(self.cfg.token, chat_id, img["tg_file_id"], caption=caption)
+                    sent += 1
+                elif img["local_path"] and Path(img["local_path"]).exists():
+                    tg_send_photo(self.cfg.token, chat_id,
+                                  (Path(img["local_path"]).name, Path(img["local_path"]).read_bytes()),
+                                  caption=caption, by_file_id=False)
+                    sent += 1
+            except TelegramError as exc:
+                log(f"sendPhoto failed for #{row['id']}: {exc}")
+        if sent == 0:
+            self.reply(chat_id, T(lang, "no_media", row_id=row["id"]))
+
+    def do_discard(self, chat_id, lang, pending):
+        """Decline adding the just-suggested item: delete the fresh row."""
+        if not pending or pending["kind"] != "category":
+            self.reply(chat_id, T(lang, "nothing_to_discard"))
+            return
+        row_id = pending["payload"].get("row_id")
+        store.pending_clear(self.conn, chat_id)
+        if store.get_message(self.conn, row_id) is not None:
+            for path in store.delete_message(self.conn, row_id):
+                Path(path).unlink(missing_ok=True)
+            log(f"message #{row_id} discarded (declined) by operator")
+        self.reply(chat_id, T(lang, "discarded"))
+
+    def media_bytes(self):
+        total = 0
+        try:
+            for path in self.cfg.media_dir.glob("*"):
+                if path.is_file():
+                    total += path.stat().st_size
+        except OSError:
+            pass
+        return total
 
     def resolve_item(self, params):
         """Resolve an item by explicit id, query/category, or most recent."""

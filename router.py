@@ -26,6 +26,9 @@ ACTIONS = {
     "list_items",        # params: category, query, limit — browse stored messages
     "item_detail",       # params: id OR query/category — one item in full (links, source)
     "item_delete",       # params: id OR query — delete a stored item (asks confirmation)
+    "show_media",        # params: id OR query — re-send the stored photo(s)
+    "discard",           # decline adding the just-suggested item (deletes it)
+    "vps_stats",         # read-only host resource usage report
     "issues_report",     # params: period in day|week|month — communication problems summary
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
@@ -57,6 +60,9 @@ ROUTER_EXAMPLES = """Examples:
 "ссылку из поста про рейсы" -> {"action": "item_detail", "params": {"query": "рейсы"}, "confidence": 0.9}
 "удали это сообщение" / "delete it" -> {"action": "item_delete", "params": {}, "confidence": 0.9}
 "удали #2" / "удали пост про рейсы" -> {"action": "item_delete", "params": {"id": 2}, "confidence": 0.9}
+"покажи фото" / "show the photo" / "покажи картинку из #2" -> {"action": "show_media", "params": {"id": 2}, "confidence": 0.9}
+"не сохраняй это" / "не надо сохранять" / "discard" / "don't save this" -> {"action": "discard", "params": {}, "confidence": 0.9}
+"загрузка сервера" / "сколько ресурсов занято" / "vps status" / "how's the server?" -> {"action": "vps_stats", "params": {}, "confidence": 0.9}
 "какие были проблемы на этой неделе?" / "what went wrong this week?" -> {"action": "issues_report", "params": {"period": "week"}, "confidence": 0.9}
 "как ты поработала за неделю?" / "performance review" / "что ты выучила?" -> {"action": "review", "params": {"period": "week"}, "confidence": 0.9}
 "сделай отчёт файлом" / "export the review as md" -> {"action": "review", "params": {"period": "week", "export": true}, "confidence": 0.9}

@@ -110,6 +110,8 @@ def load_config(env=None):
     cfg.pricing_json = (env.get("PRICING_JSON") or "").strip()
     # Learning
     cfg.habit_threshold = int(env.get("HABIT_THRESHOLD") or "10")
+    # Housekeeping: how many review .md exports to keep on disk
+    cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
     # Google Calendar sync (dormant until the key file + calendar id exist;
     # .ics export works without any of this)
     cfg.gcal_calendar_id = (env.get("GCAL_CALENDAR_ID") or "").strip()

@@ -212,6 +212,18 @@ TEXTS = {
         "ru": "По этому запросу ничего не нашла 🤷‍♀️",
         "en": "I found nothing for that 🤷‍♀️",
     },
+    "no_media": {
+        "ru": "У #{row_id} нет сохранённых фото.",
+        "en": "#{row_id} has no stored photos.",
+    },
+    "discarded": {
+        "ru": "Не сохраняю, босс — выбросила 🗑",
+        "en": "Not saving it, boss — discarded 🗑",
+    },
+    "nothing_to_discard": {
+        "ru": "Сейчас нечего отклонять — ничего нового не предлагаю 😊",
+        "en": "Nothing to decline right now — no fresh suggestion pending 😊",
+    },
     "calendar_added": {
         "ru": "Записала в Google Calendar: {title} 📅\n{link}",
         "en": "Added to Google Calendar: {title} 📅\n{link}",
