@@ -78,6 +78,38 @@ def tg_send_document(token, chat_id, filename, content_bytes, caption=None,
     return payload.get("result")
 
 
+def tg_send_photo(token, chat_id, photo, caption=None, by_file_id=True):
+    """Send a photo. by_file_id=True re-sends a stored file_id (no upload,
+    free); otherwise `photo` is (filename, bytes) uploaded via multipart."""
+    if by_file_id:
+        params = {"chat_id": chat_id, "photo": photo}
+        if caption:
+            params["caption"] = caption[:1000]
+        return tg_call(token, "sendPhoto", params)
+    from common import build_multipart
+    filename, content_bytes = photo
+    fields = {"chat_id": str(chat_id)}
+    if caption:
+        fields["caption"] = caption[:1000]
+    body, boundary = build_multipart(fields, "photo", filename, content_bytes, "image/jpeg")
+    request = Request(
+        f"https://api.telegram.org/bot{token}/sendPhoto",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise TelegramError(f"sendPhoto failed with HTTP {exc.code}", status=exc.code) from exc
+    except URLError as exc:
+        raise TelegramError(f"sendPhoto failed: {exc.reason}") from exc
+    if not payload.get("ok"):
+        raise TelegramError(f"sendPhoto returned ok=false: {payload.get('description')}")
+    return payload.get("result")
+
+
 def tg_download(token, file_path, dest):
     url = f"https://api.telegram.org/file/bot{token}/{file_path}"
     try:

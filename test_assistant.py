@@ -18,6 +18,7 @@ import review
 import router
 import spend
 import store
+import sysinfo
 import texts
 
 
@@ -445,6 +446,98 @@ class AgentViewTests(unittest.TestCase):
         self.assertIsNone(store.get_message(conn, self.row_id))
         self.assertEqual(store.message_urls(conn, self.row_id), [])
         self.assertIsNone(store.get_message(conn, dup_id)["duplicate_of"])
+
+    def test_show_media_uses_file_id(self):
+        import tg_ingest_agent
+        conn = self.agent.conn
+        store.insert_image(conn, self.row_id, 5,
+                           {"file_id": "FILEID123", "file_unique_id": "u1"}, None)
+        with mock.patch.object(tg_ingest_agent, "tg_send_photo") as send:
+            self.agent.do_show_media(1, "ru", {"id": self.row_id})
+        send.assert_called_once()
+        self.assertEqual(send.call_args[0][2], "FILEID123")  # re-sent by file_id, no upload
+        # no photos -> friendly reply, no send
+        with mock.patch.object(tg_ingest_agent, "tg_send_photo") as send2, \
+                mock.patch.object(self.agent, "reply") as reply:
+            other = store.insert_message(conn, {"chat_id": 1, "tg_message_id": 9,
+                                                "received_at": "ts", "raw_text": "no pics"})
+            self.agent.do_show_media(1, "ru", {"id": other})
+            send2.assert_not_called()
+            self.assertIn("нет сохранённых фото", reply.call_args[0][1])
+
+    def test_discard_deletes_pending_fresh_item(self):
+        conn = self.agent.conn
+        fresh = store.insert_message(conn, {"chat_id": 1, "tg_message_id": 7,
+                                            "received_at": "ts", "raw_text": "throwaway"})
+        store.set_suggestion(conn, fresh, "Spam", "junk", "m")
+        store.pending_set(conn, 1, "category", {"row_id": fresh})
+        with mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_discard(1, "ru", store.pending_get(conn, 1))
+        self.assertIsNone(store.get_message(conn, fresh))  # gone
+        self.assertIsNone(store.pending_get(conn, 1))
+        self.assertIn("выбросила", reply.call_args[0][1])
+        # nothing pending -> nothing destroyed
+        with mock.patch.object(self.agent, "reply") as reply2:
+            self.agent.do_discard(1, "ru", None)
+            self.assertIn("нечего отклонять", reply2.call_args[0][1])
+
+    def test_housekeep_purges_unreferenced_media_after_grace(self):
+        import os
+        import time as _t
+        media = self.agent.cfg.media_dir
+        media.mkdir(parents=True, exist_ok=True)
+        # a referenced photo (kept), an orphan voice note (purged), a fresh orphan (kept)
+        kept = media / "kept.jpg"; kept.write_bytes(b"img")
+        store.insert_image(self.agent.conn, self.row_id, 5,
+                           {"file_id": "f", "file_unique_id": "kept"}, str(kept))
+        orphan = media / "voice.oga"; orphan.write_bytes(b"audio")
+        fresh = media / "fresh.oga"; fresh.write_bytes(b"audio")
+        old = _t.time() - 7200
+        os.utime(orphan, (old, old))
+        self.agent.housekeep()
+        self.assertTrue(kept.exists())       # referenced content stays
+        self.assertFalse(orphan.exists())    # old unreferenced artifact purged
+        self.assertTrue(fresh.exists())      # within grace window, kept
+
+
+class SysinfoTests(unittest.TestCase):
+    def test_parse_meminfo(self):
+        text = "MemTotal:        2014240 kB\nMemFree: 100000 kB\nMemAvailable:  1500000 kB\n"
+        total, avail = sysinfo.parse_meminfo(text)
+        self.assertEqual(total, 2014240 * 1024)
+        self.assertEqual(avail, 1500000 * 1024)
+        # falls back to MemFree when MemAvailable absent
+        _, avail2 = sysinfo.parse_meminfo("MemTotal: 100 kB\nMemFree: 40 kB\n")
+        self.assertEqual(avail2, 40 * 1024)
+
+    def test_parse_loadavg_uptime_rss(self):
+        self.assertEqual(sysinfo.parse_loadavg("0.15 0.10 0.05 1/200 1234"), (0.15, 0.10, 0.05))
+        self.assertEqual(sysinfo.parse_loadavg("bad"), (0.0, 0.0, 0.0))
+        self.assertEqual(sysinfo.parse_uptime("12345.67 9999.0"), 12345.67)
+        self.assertEqual(sysinfo.parse_status_rss("VmRSS:\t   20328 kB\n"), 20328 * 1024)
+        self.assertEqual(sysinfo.parse_status_rss("no rss here"), 0)
+
+    def test_formatters(self):
+        self.assertEqual(sysinfo.fmt_bytes(0), "0B")
+        self.assertEqual(sysinfo.fmt_bytes(1536), "1.5KB")
+        self.assertEqual(sysinfo.fmt_bytes(2 * 1024**3), "2.0GB")
+        self.assertEqual(sysinfo.fmt_duration(90), "1m")
+        self.assertEqual(sysinfo.fmt_duration(3700), "1h 1m")
+        self.assertEqual(sysinfo.fmt_duration(90000), "1d 1h")
+
+    def test_collect_and_report(self):
+        data = sysinfo.collect("/")  # live read; must not raise
+        self.assertGreaterEqual(data["cpus"], 1)
+        self.assertGreater(data["disk_total"], 0)
+        report = sysinfo.format_report(data, "ru", media_bytes=5 * 1024 * 1024)
+        self.assertIn("CPU", report)
+        self.assertIn("медиа", report)
+        self.assertIn("vCPU", sysinfo.format_report(data, "en"))
+
+    def test_router_accepts_new_actions(self):
+        for action in ("show_media", "discard", "vps_stats"):
+            ok = router.validate_route({"action": action, "params": {}}, False)
+            self.assertEqual(ok["action"], action)
 
 
 class MemoryStoreTests(unittest.TestCase):
