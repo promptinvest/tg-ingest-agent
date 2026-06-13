@@ -140,6 +140,31 @@ TEXTS = {
     "period_day": {"ru": "сегодня", "en": "today"},
     "period_week": {"ru": "неделю", "en": "this week"},
     "period_month": {"ru": "месяц", "en": "month"},
+    "boss_profile_header": {
+        "ru": "Босс, вот что я о вас знаю — отдельно по уверенности.",
+        "en": "Boss, here's what I know about you — split by confidence.",
+    },
+    "boss_confirmed": {"ru": "Подтверждено:", "en": "Confirmed:"},
+    "boss_inferred": {"ru": "Похоже, но ещё не подтверждено:", "en": "Inferred, not confirmed yet:"},
+    "boss_edit_hint": {
+        "ru": "Можно сказать: «забудь #id», «подтверди #id» или «запомни про меня …».",
+        "en": "You can say: \"forget #id\", \"confirm #id\", or \"remember about me …\".",
+    },
+    "boss_remembered": {"ru": "Запомнила про вас: {value} 📝", "en": "Remembered about you: {value} 📝"},
+    "boss_forgotten": {"ru": "Забыла: {value} 🙈", "en": "Forgotten: {value} 🙈"},
+    "boss_confirmed_ok": {"ru": "Подтвердила: {value} ✅", "en": "Confirmed: {value} ✅"},
+    "boss_not_found": {"ru": "Не нашла такой записи о вас.", "en": "I couldn't find that about you."},
+    "style_warmer": {"ru": "Хорошо, босс, буду теплее 🤗", "en": "Okay boss, I'll be warmer 🤗"},
+    "style_concise": {"ru": "Поняла — короче и по делу 👌", "en": "Got it — shorter and to the point 👌"},
+    "style_neutral": {"ru": "Хорошо, нейтральный тон.", "en": "Okay, neutral tone."},
+    "trace_explain": {
+        "ru": "Я обработала это как «{action}» (уверенность {confidence}).\nТрейс: {trace_id}",
+        "en": "I handled that as \"{action}\" (confidence {confidence}).\nTrace: {trace_id}",
+    },
+    "trace_none": {
+        "ru": "Пока нечего показать — не вижу недавнего трейса.",
+        "en": "Nothing to show yet — no recent trace.",
+    },
     "memory_empty": {
         "ru": "Я пока только знакомлюсь с вами — запомнить ничего не успела 😊",
         "en": "I'm still getting to know you — nothing remembered yet 😊",

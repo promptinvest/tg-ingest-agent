@@ -36,6 +36,11 @@ ACTIONS = {
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
     "forget",            # params: value (entry text or key to forget)
+    "self_query",        # who are you / what can you do / your limits / how do you work
+    "boss_query",        # what do you know about me
+    "boss_memory_update", # params: op (remember|forget|confirm), value/id, kind
+    "style_update",      # params: tone (warmer|neutral|concise) / intensity
+    "trace_query",       # why did you do that / show last trace
     "confirm",           # pending action: yes
     "amend",             # pending action: change params (category, due_utc, snooze_minutes, done)
     "cancel",            # pending action: no
@@ -78,7 +83,15 @@ ROUTER_EXAMPLES = """Examples:
 "когда мой рейс?" / "when is my flight?" -> {"action": "ask", "params": {"question": "когда мой рейс?"}, "confidence": 0.9}
 "что у нас по плану на сегодня?" / "what's the plan for today?" -> {"action": "ask", "params": {"question": "что у нас по плану на сегодня?"}, "confidence": 0.9}
 "во сколько выезд в аэропорт?" -> {"action": "ask", "params": {"question": "во сколько выезд в аэропорт?"}, "confidence": 0.85}
-"что ты обо мне знаешь?" -> {"action": "memory", "params": {}, "confidence": 0.9}
+"кто ты?" / "who are you?" / "что ты умеешь и как устроена?" / "какие у тебя ограничения?" -> {"action": "self_query", "params": {}, "confidence": 0.9}
+"что ты обо мне знаешь?" / "what do you know about me?" -> {"action": "boss_query", "params": {}, "confidence": 0.92}
+"запомни про меня: я не люблю длинные ответы" / "remember about me: I prefer short answers" -> {"action": "boss_memory_update", "params": {"op": "remember", "value": "предпочитает короткие ответы", "kind": "tone"}, "confidence": 0.9}
+"забудь #3" / "forget what you know about my tone" -> {"action": "boss_memory_update", "params": {"op": "forget", "value": "#3"}, "confidence": 0.9}
+"подтверди #2" / "confirm #2" -> {"action": "boss_memory_update", "params": {"op": "confirm", "value": "#2"}, "confidence": 0.9}
+"говори со мной теплее" / "talk to me warmer" -> {"action": "style_update", "params": {"tone": "warmer"}, "confidence": 0.9}
+"будь покороче и суше" / "be more concise" -> {"action": "style_update", "params": {"tone": "concise"}, "confidence": 0.9}
+"почему ты так решила?" / "why did you do that?" / "покажи последний трейс" -> {"action": "trace_query", "params": {}, "confidence": 0.85}
+"что ты помнишь из настроек?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
 "всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}
 "меня зовут Олег" / "call me Oleg" / "поменяй owner_name на Owen" -> {"action": "remember", "params": {"key": "owner_name", "value": "Олег"}, "confidence": 0.9}

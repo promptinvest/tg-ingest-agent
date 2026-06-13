@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import boss_model
 import events
 import fetch
 import gcal
@@ -21,10 +22,12 @@ import ingest
 import jobs  # noqa: F401 (job helpers used by registered handlers)
 import knowledge
 import llm
+import persona
 import reminders
 import review
 import router
 import runtime
+import self_model
 import skill_manifest
 import spend
 import storage
@@ -48,6 +51,7 @@ class Agent:
             normalized = llm.normalize_category(name)
             if normalized:
                 store.ensure_category(self.conn, normalized)
+        self_model.seed(self.conn)  # Cara's deterministic self-knowledge
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0
@@ -525,6 +529,16 @@ class Agent:
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "review":
             self.do_review(chat_id, lang, params)
+        elif action == "self_query":
+            self.reply(chat_id, self_model.answer_self_query(self.conn, lang, self.cfg))
+        elif action == "boss_query":
+            self.reply(chat_id, boss_model.render_profile(self.conn, lang))
+        elif action == "boss_memory_update":
+            self.do_boss_memory(chat_id, lang, params)
+        elif action == "style_update":
+            self.do_style_update(chat_id, lang, params)
+        elif action == "trace_query":
+            self.reply(chat_id, self.trace_explain_text(lang, chat_id))
         elif action == "memory":
             self.reply(chat_id, self.memory_text(lang))
         elif action == "remember":
@@ -666,6 +680,55 @@ class Agent:
             self.reply(chat_id, T(lang, "calendar_failed", error=str(exc)[:200]))
 
     # -- Memory skill
+
+    def do_boss_memory(self, chat_id, lang, params):
+        op = str(params.get("op") or "remember").strip().lower()
+        value = params.get("value") or ""
+        if op == "forget":
+            removed = boss_model.forget(self.conn, value)
+            self.reply(chat_id, T(lang, "boss_forgotten", value=removed) if removed
+                       else T(lang, "boss_not_found"))
+        elif op == "confirm":
+            confirmed = boss_model.confirm(self.conn, value)
+            self.reply(chat_id, T(lang, "boss_confirmed_ok", value=confirmed) if confirmed
+                       else T(lang, "boss_not_found"))
+        else:  # remember (explicit -> confirmed profile item)
+            kind = str(params.get("kind") or "workflow").strip()
+            if kind not in boss_model.KINDS:
+                kind = "workflow"
+            item_id = boss_model.remember_explicit(self.conn, value, kind)
+            if item_id is None:
+                self.reply(chat_id, T(lang, "clarify"))
+            else:
+                self.reply(chat_id, T(lang, "boss_remembered", value=value))
+
+    def do_style_update(self, chat_id, lang, params):
+        tone = str(params.get("tone") or "").strip().lower()
+        if tone in ("warm", "warmer"):
+            store.pref_set(self.conn, "tone", "warm")
+            self.reply(chat_id, T(lang, "style_warmer"))
+        elif tone in ("concise", "short", "neutral_concise"):
+            store.pref_set(self.conn, "tone", "concise")
+            self.reply(chat_id, T(lang, "style_concise"))
+        else:
+            store.pref_set(self.conn, "tone", "neutral")
+            self.reply(chat_id, T(lang, "style_neutral"))
+
+    def trace_explain_text(self, lang, chat_id):
+        row = store.latest_trace(self.conn, chat_id, "inbound")
+        if not row:
+            return T(lang, "trace_none")
+        action, confidence = "?", "?"
+        for ev in store.trace_events(self.conn, row["trace_id"]):
+            if ev["stage"] == trace.ROUTER_COMPLETED:
+                action = (ev["skill"] or "?")
+                try:
+                    import json as _json
+                    confidence = round(float((_json.loads(ev["data"]) or {}).get("confidence", 0)), 2)
+                except Exception:
+                    pass
+        return T(lang, "trace_explain", action=action, confidence=confidence,
+                 trace_id=row["trace_id"])
 
     def do_remember(self, chat_id, params, lang):
         value = str(params.get("value") or "").strip()
@@ -914,8 +977,9 @@ class Agent:
                                             self.cfg.ask_context_chars)
             if not context:  # nothing indexed/matched -> keyword fallback
                 context = self._keyword_context(question)
+            hint = persona.boss_preference_hint(self.conn)
             answer = llm.chat_profile(self.cfg, self.conn, "ask",
-                                      knowledge.build_ask_messages(question, context),
+                                      knowledge.build_ask_messages(question, context, hint),
                                       profile="ask_grounded")
         except llm.BudgetExceeded as exc:
             store.issue_add(self.conn, chat_id, "budget_stop", question[:200])

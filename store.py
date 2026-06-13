@@ -238,6 +238,35 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_events_due ON events(status, available_at, priority);
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(status, available_at, priority);
 CREATE INDEX IF NOT EXISTS idx_jobs_skill_status ON jobs(skill, status);
+
+CREATE TABLE IF NOT EXISTS self_facts (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'core',
+  source TEXT NOT NULL DEFAULT 'seed',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS boss_profile_items (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  confidence REAL NOT NULL DEFAULT 0.5,
+  sensitivity TEXT NOT NULL DEFAULT 'normal',
+  source_table TEXT,
+  source_id INTEGER,
+  evidence TEXT,
+  recurrence_count INTEGER NOT NULL DEFAULT 1,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_boss_status_kind ON boss_profile_items(status, kind);
 """
 
 
@@ -299,6 +328,85 @@ def latest_trace(conn, chat_id, kind="inbound"):
         "SELECT * FROM traces WHERE chat_id = ? AND kind = ? ORDER BY started_at DESC LIMIT 1",
         (chat_id, kind),
     ).fetchone()
+
+
+# -- self facts (Cara's self-knowledge) --------------------------------------
+
+def self_fact_set(conn, key, value, scope="core", source="seed"):
+    now = _now()
+    conn.execute(
+        "INSERT INTO self_facts (key, value, scope, source, status, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, 'active', ?, ?)"
+        " ON CONFLICT(key) DO UPDATE SET value=excluded.value, scope=excluded.scope,"
+        " updated_at=excluded.updated_at, status='active'",
+        (key, value, scope, source, now, now),
+    )
+    conn.commit()
+
+
+def self_facts(conn, scope=None):
+    if scope:
+        return conn.execute(
+            "SELECT * FROM self_facts WHERE status='active' AND scope=? ORDER BY key", (scope,)
+        ).fetchall()
+    return conn.execute("SELECT * FROM self_facts WHERE status='active' ORDER BY key").fetchall()
+
+
+# -- boss profile model ------------------------------------------------------
+
+def boss_add(conn, kind, value, *, status="pending", confidence=0.5, sensitivity="normal",
+             source_table=None, source_id=None, evidence=None):
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO boss_profile_items (kind, value, status, confidence, sensitivity,"
+        " source_table, source_id, evidence, recurrence_count, first_seen_at, last_seen_at,"
+        " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+        (kind, value, status, confidence, sensitivity, source_table, source_id, evidence,
+         now, now, now, now),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def boss_items(conn, status, sensitivities=None, limit=30):
+    if sensitivities:
+        marks = ",".join("?" for _ in sensitivities)
+        return conn.execute(
+            f"SELECT * FROM boss_profile_items WHERE status=? AND sensitivity IN ({marks})"
+            " ORDER BY confidence DESC, last_seen_at DESC LIMIT ?",
+            (status, *sensitivities, limit),
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM boss_profile_items WHERE status=? ORDER BY confidence DESC,"
+        " last_seen_at DESC LIMIT ?",
+        (status, limit),
+    ).fetchall()
+
+
+def boss_get(conn, item_id):
+    return conn.execute("SELECT * FROM boss_profile_items WHERE id=?", (item_id,)).fetchone()
+
+
+def boss_set_status(conn, item_id, status):
+    cur = conn.execute(
+        "UPDATE boss_profile_items SET status=?, updated_at=? WHERE id=?",
+        (status, _now(), item_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def boss_find(conn, query):
+    """Find a confirmed/inferred item by substring (Cyrillic-safe, Python-side)."""
+    q = str(query or "").casefold()
+    if not q:
+        return None
+    for row in conn.execute(
+        "SELECT * FROM boss_profile_items WHERE status IN ('confirmed','inferred') ORDER BY id DESC"
+    ):
+        if q in (row["value"] or "").casefold():
+            return row
+    return None
 
 
 # -- model cooldowns (failover) ----------------------------------------------

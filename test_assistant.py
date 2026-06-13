@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import boss_model
 import common
 import events
 import fetch
@@ -17,7 +18,9 @@ import gcal
 import jobs
 import knowledge
 import llm
+import persona
 import runtime
+import self_model
 import reminders
 import review
 import router
@@ -807,6 +810,61 @@ class TraceTests(unittest.TestCase):
                 self.assertIn("trace_id", cols)
         finally:
             conn.close()
+
+
+class SelfBossPersonaTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "p.db")
+        self.cfg = make_config()
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_self_model_seed_and_answer(self):
+        self_model.seed(self.conn)
+        self_model.seed(self.conn)  # idempotent
+        facts = {r["key"]: r["value"] for r in store.self_facts(self.conn)}
+        self.assertEqual(facts["name"], "Cara")
+        for lang in ("ru", "en"):
+            ans = self_model.answer_self_query(self.conn, lang, self.cfg)
+            self.assertIn("Cara", ans)
+            self.assertIn("Google", ans)  # dormant capability surfaced from cfg
+
+    def test_boss_remember_render_forget_confirm(self):
+        boss_model.remember_explicit(self.conn, "  prefers short answers ", "tone")
+        item = store.boss_items(self.conn, "confirmed")[0]
+        self.assertEqual(item["value"], "prefers short answers")
+        self.assertEqual(item["status"], "confirmed")
+        rendered = boss_model.render_profile(self.conn, "en")
+        self.assertIn("prefers short answers", rendered)
+        self.assertIn(f"#{item['id']}", rendered)
+        # forget by id
+        self.assertEqual(boss_model.forget(self.conn, f"#{item['id']}"), "prefers short answers")
+        self.assertEqual(store.boss_items(self.conn, "confirmed"), [])
+        self.assertIsNone(boss_model.forget(self.conn, "#999"))
+
+    def test_boss_sensitivity_classification(self):
+        self.assertEqual(boss_model.classify_sensitivity("мой пароль 1234"), "sensitive")
+        self.assertEqual(boss_model.classify_sensitivity("likes markdown specs"), "normal")
+        sid = boss_model.remember_explicit(self.conn, "health: peanut allergy", "personal_fact")
+        self.assertEqual(store.boss_get(self.conn, sid)["sensitivity"], "sensitive")
+
+    def test_persona_hint_only_includes_confirmed_normal(self):
+        self.assertEqual(persona.boss_preference_hint(self.conn), "")  # nothing yet
+        boss_model.remember_explicit(self.conn, "prefers short answers", "tone")
+        boss_model.remember_explicit(self.conn, "salary is confidential", "personal_fact")  # sensitive
+        hint = persona.boss_preference_hint(self.conn)
+        self.assertIn("prefers short answers", hint)
+        self.assertNotIn("salary", hint)  # sensitive excluded from prompt personalization
+
+    def test_router_accepts_personality_actions(self):
+        for action in ("self_query", "boss_query", "boss_memory_update", "style_update",
+                       "trace_query"):
+            ok = router.validate_route({"action": action, "params": {}}, False)
+            self.assertEqual(ok["action"], action)
+            self.assertTrue(skill_manifest.known(action))
 
 
 class EventJobTests(unittest.TestCase):
