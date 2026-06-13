@@ -197,6 +197,47 @@ CREATE TABLE IF NOT EXISTS model_cooldowns (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cooldowns_active ON model_cooldowns(profile, model, until_at);
+
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY,
+  trace_id TEXT,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  priority INTEGER NOT NULL DEFAULT 100,
+  available_at TEXT NOT NULL,
+  claimed_at TEXT,
+  finished_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  chat_id INTEGER,
+  payload TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY,
+  trace_id TEXT,
+  event_id INTEGER,
+  skill TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  priority INTEGER NOT NULL DEFAULT 100,
+  available_at TEXT NOT NULL,
+  claimed_at TEXT,
+  finished_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 2,
+  chat_id INTEGER,
+  payload TEXT,
+  result TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_due ON events(status, available_at, priority);
+CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(status, available_at, priority);
+CREATE INDEX IF NOT EXISTS idx_jobs_skill_status ON jobs(skill, status);
 """
 
 

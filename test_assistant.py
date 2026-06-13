@@ -11,10 +11,13 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import common
+import events
 import fetch
 import gcal
+import jobs
 import knowledge
 import llm
+import runtime
 import reminders
 import review
 import router
@@ -804,6 +807,78 @@ class TraceTests(unittest.TestCase):
                 self.assertIn("trace_id", cols)
         finally:
             conn.close()
+
+
+class EventJobTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "ej.db")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_event_claim_once_and_complete(self):
+        events.add_event(self.conn, "proactive_tick")
+        first = events.claim_next(self.conn)
+        self.assertIsNotNone(first)
+        self.assertIsNone(events.claim_next(self.conn))  # not claimed twice
+        events.complete(self.conn, first["id"])
+        self.assertEqual(store.trace_get(self.conn, "x"), None)  # unrelated, sanity
+
+    def test_event_future_not_claimed(self):
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        events.add_event(self.conn, "weekly_digest_due", available_at=future)
+        self.assertIsNone(events.claim_next(self.conn))
+
+    def test_event_retry_then_terminal(self):
+        events.add_event(self.conn, "retry_failed_job", max_attempts=2)
+        c1 = events.claim_next(self.conn)
+        events.fail(self.conn, c1["id"])  # attempts=1 < 2 -> back to pending
+        c2 = events.claim_next(self.conn)
+        self.assertEqual(c2["id"], c1["id"])
+        events.fail(self.conn, c2["id"])  # attempts=2 == max -> terminal failed
+        self.assertIsNone(events.claim_next(self.conn))
+        row = self.conn.execute("SELECT status FROM events WHERE id = ?", (c1["id"],)).fetchone()
+        self.assertEqual(row["status"], "failed")
+
+    def test_job_claim_complete_and_payload(self):
+        jid = jobs.add_job(self.conn, "memory_curator", "run_memory_curator",
+                           payload={"day": "2026-06-13"})
+        self.assertTrue(jobs.has_pending(self.conn, "memory_curator", "run_memory_curator"))
+        job = jobs.claim_next(self.conn)
+        self.assertEqual(jobs.payload_of(job), {"day": "2026-06-13"})
+        jobs.complete(self.conn, job["id"], {"candidates": 3})
+        self.assertFalse(jobs.has_pending(self.conn, "memory_curator", "run_memory_curator"))
+
+    def test_runtime_drain_runs_handler_and_failover(self):
+        ran = {}
+
+        def good(ctx, conn, payload, job):
+            ran["ok"] = payload.get("x")
+            return {"done": True}
+
+        def boom(ctx, conn, payload, job):
+            raise RuntimeError("nope")
+        runtime.register("t", "good", good)
+        runtime.register("t", "boom", boom)
+        try:
+            jobs.add_job(self.conn, "t", "good", payload={"x": 5}, max_attempts=1)
+            jobs.add_job(self.conn, "t", "boom", max_attempts=1)
+            processed = runtime.drain(self.conn, ctx=None)
+            self.assertEqual(processed, 2)
+            self.assertEqual(ran["ok"], 5)
+            # boom failed terminally -> job 'failed' + an issue logged
+            statuses = {r["action"]: r["status"] for r in
+                        self.conn.execute("SELECT action, status FROM jobs")}
+            self.assertEqual(statuses["good"], "done")
+            self.assertEqual(statuses["boom"], "failed")
+            self.assertEqual(store.issue_counts(self.conn, "2000-01-01")[0]["kind"], "job_failed")
+            # unknown job -> failed, no crash
+            jobs.add_job(self.conn, "t", "unregistered", max_attempts=1)
+            runtime.drain(self.conn, ctx=None)
+        finally:
+            runtime._HANDLERS.clear()
 
 
 class KnowledgeTests(unittest.TestCase):

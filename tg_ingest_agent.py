@@ -14,14 +14,17 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import events
 import fetch
 import gcal
 import ingest
+import jobs  # noqa: F401 (job helpers used by registered handlers)
 import knowledge
 import llm
 import reminders
 import review
 import router
+import runtime
 import skill_manifest
 import spend
 import storage
@@ -157,6 +160,7 @@ class Agent:
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
                 self.retry_sweep()
+                runtime.drain(self.conn, self)  # inert until a handler is registered
                 self.housekeep()
             poll_timeout = 2 if self.albums else self.cfg.poll_timeout
             try:
@@ -189,10 +193,13 @@ class Agent:
             for update in updates or []:
                 if self.stop:
                     break  # unprocessed updates redeliver after restart
-                tid = trace.start(self.conn, "inbound", self._update_chat_id(update))
+                chat_id = self._update_chat_id(update)
+                tid = trace.start(self.conn, "inbound", chat_id)
                 try:
                     self.handle_update(update)
                     trace.finish(self.conn, tid, "ok")
+                    events.record_done(self.conn, "telegram_message_received",
+                                       chat_id=chat_id, trace_id=tid)
                 except ShutdownInterrupt:
                     log(f"update {update.get('update_id')} left for redelivery (shutdown)")
                     trace.finish(self.conn, tid, "suppressed", "shutdown mid-update")
@@ -201,6 +208,8 @@ class Agent:
                     log(f"error handling update {update.get('update_id')}: {exc!r}")
                     trace.event(self.conn, tid, trace.ISSUE_LOGGED, repr(exc), level="error")
                     trace.finish(self.conn, tid, "failed", repr(exc)[:200])
+                    events.record_done(self.conn, "telegram_message_received", chat_id=chat_id,
+                                       trace_id=tid, status="failed", error=repr(exc)[:200])
                 processed_max = update["update_id"]
             if processed_max is not None:
                 offset = processed_max + 1
