@@ -43,6 +43,7 @@ ACTIONS = {
     "trace_query",       # why did you do that / show last trace
     "memory_review",     # show pending memory candidates for confirmation
     "working_history",   # how have you helped me / what have you learned about helping me
+    "export",            # params: what in review|self|profile|history|candidates — md export
     "confirm",           # pending action: yes
     "amend",             # pending action: change params (category, due_utc, snooze_minutes, done)
     "cancel",            # pending action: no
@@ -95,6 +96,8 @@ ROUTER_EXAMPLES = """Examples:
 "почему ты так решила?" / "why did you do that?" / "покажи последний трейс" -> {"action": "trace_query", "params": {}, "confidence": 0.85}
 "покажи, что хочешь запомнить" / "what do you want to remember?" / "обзор памяти" -> {"action": "memory_review", "params": {}, "confidence": 0.9}
 "как давно ты мне помогаешь?" / "how have you helped me?" / "что ты сделала для меня?" -> {"action": "working_history", "params": {}, "confidence": 0.9}
+"выгрузи профиль файлом" / "export what you know about me" -> {"action": "export", "params": {"what": "profile"}, "confidence": 0.9}
+"экспортируй себя / историю / кандидатов в md" / "export your self profile" -> {"action": "export", "params": {"what": "self"}, "confidence": 0.85}
 "что ты помнишь из настроек?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
 "всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}

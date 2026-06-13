@@ -869,6 +869,60 @@ class SelfBossPersonaTests(unittest.TestCase):
             self.assertTrue(skill_manifest.known(action))
 
 
+class ExportTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "e.db")
+        self.cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "e.db"))
+        self_model.seed(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_review_markdown_has_new_sections(self):
+        store.usage_add(self.conn, "ask", "chat", "m", 1, 1, cost_usd=0.001)
+        store.boss_add(self.conn, "tone", "prefers short answers", status="confirmed")
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        md = review.markdown(self.conn, self.cfg, "week")
+        for section in ("## What I learned about you", "## Pending memory candidates",
+                        "## System health"):
+            self.assertIn(section, md)
+        self.assertIn("prefers short answers", md)
+        self.assertIn("auto-file X", md)
+
+    def test_export_self_and_candidates(self):
+        fn, md = review.export_document(self.conn, self.cfg, "self", "en")
+        self.assertTrue(fn.startswith("cara-self-"))
+        self.assertIn("Cara", md)
+        store.candidate_add(self.conn, "tone", "likes brevity", confidence=0.9)
+        fn2, md2 = review.export_document(self.conn, self.cfg, "candidates", "en")
+        self.assertIn("likes brevity", md2)
+
+    def test_export_profile_redacts_sensitive_and_secret(self):
+        store.boss_add(self.conn, "workflow", "uses VS Code", status="confirmed",
+                       sensitivity="normal")
+        store.boss_add(self.conn, "personal_fact", "peanut allergy", status="confirmed",
+                       sensitivity="sensitive")
+        store.boss_add(self.conn, "identity", "api token abc", status="confirmed",
+                       sensitivity="secret")
+        fn, md = review.export_document(self.conn, self.cfg, "profile", "en")
+        self.assertIn("uses VS Code", md)
+        self.assertIn("(sensitive — withheld)", md)
+        self.assertNotIn("peanut allergy", md)  # value withheld
+        self.assertNotIn("api token abc", md)   # secret omitted entirely
+
+    def test_export_default_is_review(self):
+        fn, md = review.export_document(self.conn, self.cfg, "garbage", "en")
+        self.assertIn("cara-review-", fn)
+        self.assertIn("# Cara performance review", md)
+
+    def test_router_accepts_export(self):
+        self.assertEqual(router.validate_route(
+            {"action": "export", "params": {"what": "profile"}}, False)["action"], "export")
+        self.assertTrue(skill_manifest.known("export"))
+
+
 class MemoryCuratorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

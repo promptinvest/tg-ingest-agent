@@ -56,6 +56,12 @@ def collect(conn, period):
         "SELECT skill, COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost"
         " FROM llm_usage WHERE ts >= ? GROUP BY skill ORDER BY cost DESC", (since,),
     ).fetchall()
+    data["ask_count"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM llm_usage WHERE skill='ask' AND kind='chat' AND ts >= ?",
+        (since,),
+    ).fetchone()["n"]
+    data["confirmed_about_you"] = store.boss_items(conn, "confirmed")
+    data["pending_candidates"] = store.candidates_pending(conn, limit=20)
     return data
 
 
@@ -76,6 +82,9 @@ def chat_text(conn, cfg, lang, period="week"):
                   else f"📥 Messages: {total} ({by_status})"))
     lines.append((f"⏰ Напоминаний поставлено: {data['reminders_set']}" if ru
                   else f"⏰ Reminders set: {data['reminders_set']}"))
+    if data["ask_count"]:
+        lines.append((f"❓ Ответила по базе: {data['ask_count']}" if ru
+                      else f"❓ Answered from your KB: {data['ask_count']}"))
     learned = []
     if data["new_categories"]:
         learned.append(("новые категории: " if ru else "new categories: ")
@@ -100,6 +109,10 @@ def chat_text(conn, cfg, lang, period="week"):
     calls = sum(r["calls"] for r in data["spend_by_skill"])
     lines.append((f"💸 Расходы AI: ${spend:.3f} ({calls} вызовов)" if ru
                   else f"💸 AI spend: ${spend:.3f} ({calls} calls)"))
+    if data["pending_candidates"]:
+        n = len(data["pending_candidates"])
+        lines.append((f"📋 Хочу уточнить ({n}) — скажите «обзор памяти»" if ru
+                      else f"📋 I'd like to confirm {n} — say \"memory review\""))
     lines.append(("Скажите «сделай отчёт файлом» — пришлю .md для VS Code." if ru
                   else "Say \"export the review as md\" and I'll send a .md for VS Code."))
     return "\n".join(lines)
@@ -173,4 +186,78 @@ def markdown(conn, cfg, period="week"):
         backlog.append("- repeated category corrections above may deserve prompt few-shots"
                        " or seed categories")
     lines.extend(backlog or ["- nothing actionable this period 🎉"])
+    lines.append("")
+    lines.append("## What I learned about you")
+    lines.append(f"- questions answered from your KB: {data['ask_count']}")
+    if data["confirmed_about_you"]:
+        for r in data["confirmed_about_you"]:
+            lines.append(f"  - [{r['kind']}] {r['value']}")
+    else:
+        lines.append("  - nothing confirmed yet")
+    lines.append("")
+    lines.append("## Pending memory candidates (awaiting your confirmation)")
+    if data["pending_candidates"]:
+        for c in data["pending_candidates"]:
+            lines.append(f"- #{c['id']} [{c['kind']}] {c['proposed_text']}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("## System health")
+    try:
+        import sysinfo
+        snap = sysinfo.collect(str(cfg.db_path.parent))
+        lines.append(f"- load {snap['load'][0]:.2f} · "
+                     f"mem {sysinfo.fmt_bytes(snap['mem_used'])}/{sysinfo.fmt_bytes(snap['mem_total'])} · "
+                     f"disk {sysinfo.fmt_bytes(snap['disk_used'])}/{sysinfo.fmt_bytes(snap['disk_total'])} · "
+                     f"agent {sysinfo.fmt_bytes(snap['agent_rss'])}")
+    except Exception as exc:  # never let a stats read break the report
+        lines.append(f"- (unavailable: {exc})")
     return "\n".join(lines) + "\n"
+
+
+# -- additional exports (spec §30.2) -----------------------------------------
+
+EXPORT_KINDS = ("review", "self", "profile", "history", "candidates")
+
+
+def export_document(conn, cfg, what, lang="en", period="week"):
+    """Build a Markdown export. Returns (filename, text). Boss-profile export
+    applies redaction (sensitive -> label only; secret -> omitted)."""
+    what = str(what or "review").strip().lower()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    if what == "self":
+        import self_model
+        rows = store.self_facts(conn)
+        body = ["# CARA_SELF", ""] + [f"- **{r['key']}**: {r['value']}" for r in rows]
+        body += ["", "## Capabilities", self_model.answer_self_query(conn, "en", cfg)]
+        return f"cara-self-{stamp}.md", "\n".join(body) + "\n"
+    if what == "profile":
+        body = ["# BOSS_PROFILE", "", "## Confirmed"]
+        body += [ln for r in store.boss_items(conn, "confirmed", limit=100)
+                 if (ln := _redacted_profile_line(r))]
+        body += ["", "## Inferred (unconfirmed)"]
+        body += [ln for r in store.boss_items(conn, "inferred",
+                                              sensitivities=("normal", "private"), limit=100)
+                 if (ln := _redacted_profile_line(r))]
+        return f"boss-profile-{stamp}.md", "\n".join(body) + "\n"
+    if what == "history":
+        import relationship
+        text = relationship.render_working_history(conn, "en", days=90)
+        return f"working-history-{stamp}.md", "# WORKING_HISTORY\n\n" + text + "\n"
+    if what == "candidates":
+        body = ["# MEMORY_CANDIDATES", ""]
+        for c in store.candidates_pending(conn, limit=100):
+            body.append(f"- #{c['id']} [{c['kind']}] {c['proposed_text']}  _(reason: {c['reason']})_")
+        if len(body) == 2:
+            body.append("- none pending")
+        return f"memory-candidates-{stamp}.md", "\n".join(body) + "\n"
+    # default: the full weekly review
+    return f"cara-review-{normalize_period(period)}-{stamp}.md", markdown(conn, cfg, period)
+
+
+def _redacted_profile_line(row):
+    if row["sensitivity"] == "secret":
+        return None  # never exported
+    if row["sensitivity"] == "sensitive":
+        return f"- #{row['id']} [{row['kind']}] _(sensitive — withheld)_"
+    return f"- #{row['id']} [{row['kind']}] {row['value']}"

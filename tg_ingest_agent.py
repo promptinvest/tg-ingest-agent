@@ -550,6 +550,8 @@ class Agent:
             self.show_memory_review(chat_id, lang)
         elif action == "working_history":
             self.reply(chat_id, relationship.render_working_history(self.conn, lang))
+        elif action == "export":
+            self.do_export(chat_id, lang, params)
         elif action == "memory":
             self.reply(chat_id, self.memory_text(lang))
         elif action == "remember":
@@ -727,6 +729,22 @@ class Agent:
         else:
             store.pref_set(self.conn, "tone", "neutral")
             self.reply(chat_id, T(lang, "style_neutral"))
+
+    def do_export(self, chat_id, lang, params):
+        what = str(params.get("what") or "review").strip().lower()
+        if what not in review.EXPORT_KINDS:
+            what = "review"
+        filename, md = review.export_document(self.conn, self.cfg, what, lang,
+                                              params.get("period") or "week")
+        exports_dir = self.cfg.db_path.parent / "exports"
+        exports_dir.mkdir(parents=True, exist_ok=True)
+        (exports_dir / filename).write_text(md, encoding="utf-8")
+        try:
+            tg_send_document(self.cfg.token, chat_id, filename, md.encode("utf-8"),
+                             caption=T(lang, "review_file_caption"), content_type="text/markdown")
+        except TelegramError as exc:
+            log(f"export send failed: {exc}")
+            self.reply(chat_id, T(lang, "llm_error"))
 
     def show_memory_review(self, chat_id, lang):
         pending = store.candidates_pending(self.conn)

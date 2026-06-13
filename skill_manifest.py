@@ -78,6 +78,7 @@ SKILLS = {
     "working_history": {"risk": "read_only", "persona_context": True,
                         "title": {"en": "Working history", "ru": "История работы"}},
     "trace_query": {"risk": "read_only", "title": {"en": "Why did you do that", "ru": "Почему так"}},
+    "export": {"risk": "read_only", "title": {"en": "Export to Markdown", "ru": "Экспорт в Markdown"}},
     "memory_review": {"risk": "read_only_suggestion", "persona_context": True,
                       "title": {"en": "Memory review", "ru": "Обзор памяти"}},
     "memory_curator": {"risk": "read_only_suggestion", "uses_llm": True, "writes_state": True,
