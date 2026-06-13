@@ -165,6 +165,31 @@ TEXTS = {
         "ru": "Пока нечего показать — не вижу недавнего трейса.",
         "en": "Nothing to show yet — no recent trace.",
     },
+    "memory_review_header": {
+        "ru": "Босс, вот что я заметила и могла бы запомнить:",
+        "en": "Boss, here's what I noticed and could remember:",
+    },
+    "memory_review_empty": {
+        "ru": "Пока нечего предложить — ничего нового не накопилось 🌿",
+        "en": "Nothing to propose yet — nothing new has built up 🌿",
+    },
+    "memory_review_hint": {
+        "ru": "Нажмите кнопку под каждым пунктом — «Запомнить» или «Пропустить».",
+        "en": "Tap a button under each item — \"Remember\" or \"Skip\".",
+    },
+    "memory_candidate_kept": {"ru": "Запомнила ✅", "en": "Remembered ✅"},
+    "memory_candidate_skipped": {"ru": "Пропустила.", "en": "Skipped."},
+    "mc_remember": {"ru": "✅ Запомнить", "en": "✅ Remember"},
+    "mc_skip": {"ru": "✖️ Пропустить", "en": "✖️ Skip"},
+    "working_history_header": {
+        "ru": "Босс, вот как я вам помогала за {days} дн.:",
+        "en": "Boss, here's how I've helped you over {days} days:",
+    },
+    "working_history_moments": {"ru": "Заметные моменты:", "en": "Notable moments:"},
+    "working_history_empty": {
+        "ru": "Мы только начали работать вместе — пока истории мало 😊",
+        "en": "We've only just started working together — not much history yet 😊",
+    },
     "memory_empty": {
         "ru": "Я пока только знакомлюсь с вами — запомнить ничего не успела 😊",
         "en": "I'm still getting to know you — nothing remembered yet 😊",

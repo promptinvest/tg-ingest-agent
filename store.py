@@ -267,6 +267,34 @@ CREATE TABLE IF NOT EXISTS boss_profile_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_boss_status_kind ON boss_profile_items(status, kind);
+
+CREATE TABLE IF NOT EXISTS memory_candidates (
+  id INTEGER PRIMARY KEY,
+  target TEXT NOT NULL DEFAULT 'boss_profile',
+  kind TEXT NOT NULL,
+  proposed_text TEXT NOT NULL,
+  reason TEXT,
+  sensitivity TEXT NOT NULL DEFAULT 'normal',
+  confidence REAL NOT NULL DEFAULT 0.5,
+  source_table TEXT,
+  source_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL,
+  decided_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS relationship_events (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  importance INTEGER NOT NULL DEFAULT 1,
+  source_table TEXT,
+  source_id INTEGER,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidates_status ON memory_candidates(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_rel_recent ON relationship_events(created_at, importance);
 """
 
 
@@ -407,6 +435,74 @@ def boss_find(conn, query):
         if q in (row["value"] or "").casefold():
             return row
     return None
+
+
+# -- memory candidates (curator) ---------------------------------------------
+
+def candidate_exists(conn, text):
+    """True if a same-text candidate is already pending/confirmed/rejected
+    (Cyrillic-safe), so the curator doesn't re-propose it."""
+    t = str(text or "").casefold()
+    for row in conn.execute(
+        "SELECT proposed_text FROM memory_candidates WHERE status IN"
+        " ('pending','confirmed','rejected')"
+    ):
+        if t == (row["proposed_text"] or "").casefold():
+            return True
+    return False
+
+
+def candidate_add(conn, kind, text, *, reason=None, sensitivity="normal", confidence=0.6,
+                  target="boss_profile", source_table=None, source_id=None):
+    if candidate_exists(conn, text):
+        return None
+    cur = conn.execute(
+        "INSERT INTO memory_candidates (target, kind, proposed_text, reason, sensitivity,"
+        " confidence, source_table, source_id, status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+        (target, kind, text, reason, sensitivity, confidence, source_table, source_id, _now()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def candidates_pending(conn, limit=8):
+    return conn.execute(
+        "SELECT * FROM memory_candidates WHERE status='pending'"
+        " ORDER BY confidence DESC, id LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def candidate_get(conn, candidate_id):
+    return conn.execute("SELECT * FROM memory_candidates WHERE id=?", (candidate_id,)).fetchone()
+
+
+def candidate_set_status(conn, candidate_id, status):
+    conn.execute(
+        "UPDATE memory_candidates SET status=?, decided_at=? WHERE id=?",
+        (status, _now(), candidate_id),
+    )
+    conn.commit()
+
+
+# -- relationship events -----------------------------------------------------
+
+def rel_add(conn, kind, summary, importance=1, source_table=None, source_id=None):
+    conn.execute(
+        "INSERT INTO relationship_events (kind, summary, importance, source_table, source_id,"
+        " created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (kind, str(summary)[:300], importance, source_table, source_id, _now()),
+    )
+    conn.commit()
+
+
+def rel_recent(conn, since_iso, limit=8):
+    return conn.execute(
+        "SELECT * FROM relationship_events WHERE created_at >= ?"
+        " ORDER BY importance DESC, id DESC LIMIT ?",
+        (since_iso, limit),
+    ).fetchall()
 
 
 # -- model cooldowns (failover) ----------------------------------------------

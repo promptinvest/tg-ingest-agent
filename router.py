@@ -41,6 +41,8 @@ ACTIONS = {
     "boss_memory_update", # params: op (remember|forget|confirm), value/id, kind
     "style_update",      # params: tone (warmer|neutral|concise) / intensity
     "trace_query",       # why did you do that / show last trace
+    "memory_review",     # show pending memory candidates for confirmation
+    "working_history",   # how have you helped me / what have you learned about helping me
     "confirm",           # pending action: yes
     "amend",             # pending action: change params (category, due_utc, snooze_minutes, done)
     "cancel",            # pending action: no
@@ -91,6 +93,8 @@ ROUTER_EXAMPLES = """Examples:
 "говори со мной теплее" / "talk to me warmer" -> {"action": "style_update", "params": {"tone": "warmer"}, "confidence": 0.9}
 "будь покороче и суше" / "be more concise" -> {"action": "style_update", "params": {"tone": "concise"}, "confidence": 0.9}
 "почему ты так решила?" / "why did you do that?" / "покажи последний трейс" -> {"action": "trace_query", "params": {}, "confidence": 0.85}
+"покажи, что хочешь запомнить" / "what do you want to remember?" / "обзор памяти" -> {"action": "memory_review", "params": {}, "confidence": 0.9}
+"как давно ты мне помогаешь?" / "how have you helped me?" / "что ты сделала для меня?" -> {"action": "working_history", "params": {}, "confidence": 0.9}
 "что ты помнишь из настроек?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
 "всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}

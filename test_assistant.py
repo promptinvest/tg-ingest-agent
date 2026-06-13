@@ -18,7 +18,9 @@ import gcal
 import jobs
 import knowledge
 import llm
+import memory_curator
 import persona
+import relationship
 import runtime
 import self_model
 import reminders
@@ -864,6 +866,74 @@ class SelfBossPersonaTests(unittest.TestCase):
                        "trace_query"):
             ok = router.validate_route({"action": action, "params": {}}, False)
             self.assertEqual(ok["action"], action)
+            self.assertTrue(skill_manifest.known(action))
+
+
+class MemoryCuratorTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "c.db")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_run_daily_proposes_from_repeated_corrections(self):
+        # one-off correction -> no candidate; repeated -> candidate
+        store.feedback_add(self.conn, "ingest", "d", "news", "Crypto")
+        self.assertEqual(memory_curator.run_daily(self.conn), 0)
+        store.feedback_add(self.conn, "ingest", "d", "tools", "Crypto")
+        created = memory_curator.run_daily(self.conn)
+        self.assertEqual(created, 1)
+        cands = store.candidates_pending(self.conn)
+        self.assertEqual(len(cands), 1)
+        self.assertIn("Crypto", cands[0]["proposed_text"])
+        # idempotent: re-running doesn't duplicate
+        self.assertEqual(memory_curator.run_daily(self.conn), 0)
+
+    def test_run_daily_proposes_from_habit_pref(self):
+        store.pref_set(self.conn, "auto_cat:-100123", "Flight Deals")
+        memory_curator.run_daily(self.conn)
+        texts_ = [c["proposed_text"] for c in store.candidates_pending(self.conn)]
+        self.assertTrue(any("Flight Deals" in t for t in texts_))
+
+    def test_confirm_candidate_promotes_to_boss_item(self):
+        cid = store.candidate_add(self.conn, "tone", "prefers short answers", confidence=0.9)
+        value, accepted = memory_curator.confirm_candidate(self.conn, cid, True)
+        self.assertEqual((value, accepted), ("prefers short answers", True))
+        self.assertEqual(store.boss_items(self.conn, "confirmed")[0]["value"], "prefers short answers")
+        self.assertEqual(store.candidate_get(self.conn, cid)["status"], "confirmed")
+        # a relationship event was logged
+        self.assertTrue(store.rel_recent(self.conn, "2000-01-01"))
+        # re-confirming a decided candidate is a no-op
+        self.assertEqual(memory_curator.confirm_candidate(self.conn, cid, True), (None, None))
+
+    def test_reject_candidate(self):
+        cid = store.candidate_add(self.conn, "tone", "x", confidence=0.9)
+        value, accepted = memory_curator.confirm_candidate(self.conn, cid, False)
+        self.assertEqual(accepted, False)
+        self.assertEqual(store.candidate_get(self.conn, cid)["status"], "rejected")
+        self.assertEqual(store.boss_items(self.conn, "confirmed"), [])
+
+    def test_score_gate(self):
+        self.assertGreaterEqual(memory_curator.score("tone", "normal", 0.9, "short"), 2)
+        self.assertLess(memory_curator.score("personal_fact", "sensitive", 0.9, "health"), 2)
+
+    def test_working_history_evidence_based(self):
+        self.assertEqual(relationship.render_working_history(self.conn, "ru"),
+                         texts.T("ru", "working_history_empty"))
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
+                                               "received_at": store._now(), "raw_text": "x"})
+        store.confirm_category(self.conn, mid, store.ensure_category(self.conn, "News"))
+        relationship.log_event(self.conn, "category_confirmed", "filed a message as «News»", 1)
+        hist = relationship.render_working_history(self.conn, "en")
+        self.assertIn("Saved & filed: 1", hist)
+        self.assertIn("News", hist)
+
+    def test_router_accepts_phase_c_actions(self):
+        for action in ("memory_review", "working_history"):
+            self.assertEqual(router.validate_route({"action": action, "params": {}}, False)["action"],
+                             action)
             self.assertTrue(skill_manifest.known(action))
 
 

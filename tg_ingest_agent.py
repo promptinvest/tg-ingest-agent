@@ -22,8 +22,10 @@ import ingest
 import jobs  # noqa: F401 (job helpers used by registered handlers)
 import knowledge
 import llm
+import memory_curator
 import persona
 import reminders
+import relationship
 import review
 import router
 import runtime
@@ -52,6 +54,10 @@ class Agent:
             if normalized:
                 store.ensure_category(self.conn, normalized)
         self_model.seed(self.conn)  # Cara's deterministic self-knowledge
+        # The memory curator runs as a background job (no proactive nudge):
+        # it builds candidates the boss pulls via memory_review.
+        runtime.register("memory_curator", "run_memory_curator",
+                         lambda ctx, conn, payload, job: {"created": memory_curator.run_daily(conn)})
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0
@@ -161,10 +167,11 @@ class Agent:
             self.fire_due_reminders()
             self.check_budget_notice()
             self.check_weekly_issues_report()
+            self.check_daily_curator()
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
                 self.retry_sweep()
-                runtime.drain(self.conn, self)  # inert until a handler is registered
+                runtime.drain(self.conn, self)  # runs due jobs (e.g. memory curator)
                 self.housekeep()
             poll_timeout = 2 if self.albums else self.cfg.poll_timeout
             try:
@@ -539,6 +546,10 @@ class Agent:
             self.do_style_update(chat_id, lang, params)
         elif action == "trace_query":
             self.reply(chat_id, self.trace_explain_text(lang, chat_id))
+        elif action == "memory_review":
+            self.show_memory_review(chat_id, lang)
+        elif action == "working_history":
+            self.reply(chat_id, relationship.render_working_history(self.conn, lang))
         elif action == "memory":
             self.reply(chat_id, self.memory_text(lang))
         elif action == "remember":
@@ -608,6 +619,9 @@ class Agent:
             rid = store.reminder_add(
                 self.conn, chat_id, payload["title"], payload["due_utc"], payload["recurrence"]
             )
+            relationship.log_event(self.conn, "reminder_set",
+                                   f"set a reminder: {payload['title']}", importance=1,
+                                   source_table="reminders", source_id=rid)
             store.pending_clear(self.conn, chat_id)
             self.reply(chat_id, T(
                 lang, "reminder_set", rid=rid, title=payload["title"],
@@ -713,6 +727,19 @@ class Agent:
         else:
             store.pref_set(self.conn, "tone", "neutral")
             self.reply(chat_id, T(lang, "style_neutral"))
+
+    def show_memory_review(self, chat_id, lang):
+        pending = store.candidates_pending(self.conn)
+        if not pending:
+            self.reply(chat_id, T(lang, "memory_review_empty"))
+            return
+        self.reply(chat_id, T(lang, "memory_review_header"))
+        for c in pending:
+            keyboard = {"inline_keyboard": [[
+                {"text": T(lang, "mc_remember"), "callback_data": f"mc|{c['id']}|y"},
+                {"text": T(lang, "mc_skip"), "callback_data": f"mc|{c['id']}|n"},
+            ]]}
+            self.reply(chat_id, f"#{c['id']} {c['proposed_text']}", reply_markup=keyboard)
 
     def trace_explain_text(self, lang, chat_id):
         row = store.latest_trace(self.conn, chat_id, "inbound")
@@ -1103,6 +1130,18 @@ class Agent:
             lines.append(f"  {row['ts'][:16]} [{row['kind']}] {detail}")
         return "\n".join(lines)
 
+    def check_daily_curator(self):
+        """Enqueue the memory-curator job once per UTC day (runs via the job
+        runner on the next sweep). No proactive message — the boss pulls the
+        results with memory_review."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if store.kv_get(self.conn, "curator_day") == today:
+            return
+        store.kv_set(self.conn, "curator_day", today)
+        if not jobs.has_pending(self.conn, "memory_curator", "run_memory_curator"):
+            jobs.add_job(self.conn, "memory_curator", "run_memory_curator",
+                         trace_id=current_trace())
+
     def check_weekly_issues_report(self):
         now = datetime.now(timezone.utc)
         last = store.kv_get(self.conn, "last_issues_report")
@@ -1149,6 +1188,28 @@ class Agent:
 
     # -- Buttons (fallback confirmation path)
 
+    def handle_memory_callback(self, callback_id, chat_id, msg, data):
+        lang = self.lang()
+        parts = data.split("|")
+        try:
+            cand_id, accept = int(parts[1]), parts[2] == "y"
+        except (IndexError, ValueError):
+            self.answer_callback(callback_id, "?")
+            return
+        value, accepted = memory_curator.confirm_candidate(self.conn, cand_id, accept)
+        if value is None:
+            self.answer_callback(callback_id, "—")
+            return
+        key = "memory_candidate_kept" if accepted else "memory_candidate_skipped"
+        self.answer_callback(callback_id, T(lang, key))
+        if msg.get("message_id"):
+            try:
+                tg_call(self.cfg.token, "editMessageText", {
+                    "chat_id": chat_id, "message_id": msg["message_id"],
+                    "text": f"{value}\n— {T(lang, key)}"})
+            except TelegramError as exc:
+                log(f"editMessageText (mc) failed: {exc}")
+
     def handle_callback(self, callback):
         callback_id = callback.get("id")
         msg = callback.get("message") or {}
@@ -1156,6 +1217,10 @@ class Agent:
         from_id = (callback.get("from") or {}).get("id")
         if chat_id not in self.cfg.allowed_chat_ids and from_id not in self.cfg.allowed_chat_ids:
             self.answer_callback(callback_id, "Not allowed.")
+            return
+        data = callback.get("data") or ""
+        if data.startswith("mc|"):
+            self.handle_memory_callback(callback_id, chat_id, msg, data)
             return
         parsed = ingest.parse_callback_data(callback.get("data"))
         if not parsed:
@@ -1206,6 +1271,9 @@ class Agent:
                 row["suggested_category"], canonical,
             )
         log(f"message #{row['id']} confirmed as {canonical}")
+        relationship.log_event(self.conn, "category_confirmed",
+                               f"filed a message as «{canonical}»", importance=1,
+                               source_table="messages", source_id=row["id"])
         updated = store.get_message(self.conn, row["id"])
         self.edit_suggestion_message(
             chat_id, edit_message_id or row["suggestion_message_id"], updated
