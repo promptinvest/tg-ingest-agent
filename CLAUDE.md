@@ -38,8 +38,11 @@ budget-guarded gateway in `llm.py`.
   untrusted-content delimiters, confidence gate, rule-based smalltalk shortcut.
 - Skills: `ingest.py`, `reminders.py`, `spend.py`, `review.py`, `gcal.py`,
   `fetch.py` (read a URL on request — SSRF-guarded), `sysinfo.py` (read-only
-  VPS stats from /proc). Plus router actions for show_media, discard, purge
-  (typed-confirmation bulk delete, never touches llm_usage).
+  VPS stats from /proc), `knowledge.py` (ask: semantic KB Q&A over BGE-M3
+  embeddings — the ONE action that returns grounded free-form answers, KB-only,
+  refuses if absent; send .md/.txt docs to add to the KB). Plus router actions
+  for show_media, discard, purge (typed-confirmation bulk delete, never touches
+  llm_usage).
 - `llm.py` — DO Gradient gateway (chat + local/remote Whisper STT), pricing,
   budgets, JSON parsing helpers.
 - `storage.py` — binary backend: local default, optional DO Spaces (S3 SigV4
