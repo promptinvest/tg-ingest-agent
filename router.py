@@ -190,7 +190,7 @@ def route(cfg, conn, chat_id, text, pending):
         {"role": "system", "content": system},
         {"role": "user", "content": user_content},
     ]
-    reply = llm.chat(cfg, conn, "router", messages, max_tokens=200, model=cfg.router_model)
+    reply = llm.chat_profile(cfg, conn, "router", messages, profile="router_fast")
     validated = validate_route(llm.parse_llm_json(reply), pending is not None)
     if validated is None:
         return {"action": "clarify", "params": {}, "confidence": 0.0}

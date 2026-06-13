@@ -209,7 +209,7 @@ def suggest(cfg, conn, known, text_block, image_paths):
     """
     corrections = store.feedback_recent(conn, "ingest", limit=5)
     messages = build_llm_messages(cfg, known, text_block, image_paths, corrections)
-    reply = llm.chat(cfg, conn, "ingest", messages, max_tokens=600)
+    reply = llm.chat_profile(cfg, conn, "ingest", messages, profile="ingest_balanced")
     parsed = llm.parse_llm_json(reply)
     category = llm.normalize_category((parsed or {}).get("category"))
     if parsed is None or category is None:
@@ -221,7 +221,7 @@ def suggest(cfg, conn, known, text_block, image_paths):
                 '{"category": ..., "alternatives": [...], "summary": ..., "facts": [...]}.'
             ),
         })
-        reply = llm.chat(cfg, conn, "ingest", messages, max_tokens=600)
+        reply = llm.chat_profile(cfg, conn, "ingest", messages, profile="ingest_balanced")
         parsed = llm.parse_llm_json(reply)
         category = llm.normalize_category((parsed or {}).get("category"))
     if parsed is None or category is None:

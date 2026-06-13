@@ -123,6 +123,52 @@ class GatewayTests(unittest.TestCase):
                 llm._transcribe_local(cfg, self.conn, "stt", "/tmp/v.oga", 5)
         self.assertEqual(store.usage_total(self.conn, "day"), 0)  # nothing logged on failure
 
+    def test_profiles_and_override(self):
+        cfg = make_config()
+        profs = llm.profiles(cfg)
+        self.assertEqual(profs["router_fast"]["primary"], cfg.router_model)
+        self.assertTrue(profs["router_fast"]["json_required"])
+        cfg2 = make_config(LLM_PROFILES_JSON='{"router_fast": {"max_tokens": 99}}')
+        self.assertEqual(llm.profiles(cfg2)["router_fast"]["max_tokens"], 99)
+
+    def test_chat_profile_failover_and_cooldown(self):
+        cfg = make_config()
+        calls = []
+
+        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None):
+            calls.append(model)
+            if model == cfg.router_model:
+                raise llm.LLMError("primary down")
+            return '{"action": "spend", "params": {}, "confidence": 0.9}'
+        with mock.patch.object(llm, "chat", side_effect=fake_chat):
+            out = llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
+        self.assertIn("spend", out)
+        self.assertEqual(calls, [cfg.router_model, "openai-gpt-4o"])  # primary then fallback
+        self.assertTrue(store.cooldown_active(self.conn, "router_fast", cfg.router_model))
+        # next call skips the cooled-down primary
+        calls.clear()
+        with mock.patch.object(llm, "chat", side_effect=fake_chat):
+            llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
+        self.assertEqual(calls, ["openai-gpt-4o"])
+
+    def test_chat_profile_budget_never_falls_back(self):
+        cfg = make_config(BUDGET_DAILY_USD="0.01")
+        store.usage_add(self.conn, "x", "chat", "m", 1, 1, cost_usd=0.02)  # over budget
+        with mock.patch.object(llm, "chat",
+                               side_effect=llm.BudgetExceeded("day", 0.02, 0.01)):
+            with self.assertRaises(llm.BudgetExceeded):
+                llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
+
+    def test_chat_profile_json_required_tries_fallback(self):
+        cfg = make_config()
+        outs = iter(["not json at all", '{"ok": true}'])
+
+        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None):
+            return next(outs)
+        with mock.patch.object(llm, "chat", side_effect=fake_chat):
+            out = llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
+        self.assertEqual(out, '{"ok": true}')  # fell through to JSON-clean fallback
+
     def test_build_multipart(self):
         body, boundary = llm.build_multipart(
             {"model": "whisper"}, "file", "voice.oga", b"AUDIO", "audio/ogg"

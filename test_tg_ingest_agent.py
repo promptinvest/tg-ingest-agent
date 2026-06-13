@@ -172,7 +172,7 @@ class PromptTests(unittest.TestCase):
         reply = ('{"category": "NEWS", "alternatives": ["Tools", "news", "ai"],'
                  ' "summary": "ok", "facts": ["рейс от 9800 руб", "  ", 42,'
                  ' "июнь 2026", "a", "b", "c"]}')
-        with mock.patch.object(llm, "chat", return_value=reply):
+        with mock.patch.object(llm, "chat_profile", return_value=reply):
             category, alternatives, summary, facts = ingest.suggest(
                 cfg, self.conn, ["news", "tools"], "t", []
             )
@@ -185,10 +185,10 @@ class PromptTests(unittest.TestCase):
     def test_suggest_corrective_retry_and_fallback(self):
         cfg = make_config()
         good = '{"category": "ideas", "alternatives": [], "summary": "ok", "facts": []}'
-        with mock.patch.object(llm, "chat", side_effect=["garbage", good]):
+        with mock.patch.object(llm, "chat_profile", side_effect=["garbage", good]):
             self.assertEqual(ingest.suggest(cfg, self.conn, [], "t", []),
                              ("ideas", [], "ok", []))
-        with mock.patch.object(llm, "chat", side_effect=["garbage", "still garbage"]):
+        with mock.patch.object(llm, "chat_profile", side_effect=["garbage", "still garbage"]):
             category, alternatives, summary, facts = ingest.suggest(cfg, self.conn, [], "t", [])
             self.assertEqual(category, cfg.fallback_category)
             self.assertEqual(alternatives, [])

@@ -186,6 +186,17 @@ CREATE TABLE IF NOT EXISTS trace_events (
 
 CREATE INDEX IF NOT EXISTS idx_trace_events_trace ON trace_events(trace_id, id);
 CREATE INDEX IF NOT EXISTS idx_traces_recent ON traces(started_at, status);
+
+CREATE TABLE IF NOT EXISTS model_cooldowns (
+  id INTEGER PRIMARY KEY,
+  profile TEXT NOT NULL,
+  model TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  until_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cooldowns_active ON model_cooldowns(profile, model, until_at);
 """
 
 
@@ -247,6 +258,28 @@ def latest_trace(conn, chat_id, kind="inbound"):
         "SELECT * FROM traces WHERE chat_id = ? AND kind = ? ORDER BY started_at DESC LIMIT 1",
         (chat_id, kind),
     ).fetchone()
+
+
+# -- model cooldowns (failover) ----------------------------------------------
+
+def cooldown_set(conn, profile, model, seconds, reason):
+    from datetime import timedelta
+    until = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+    conn.execute(
+        "INSERT INTO model_cooldowns (profile, model, reason, until_at, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (profile, model, str(reason)[:200], until, _now()),
+    )
+    conn.commit()
+
+
+def cooldown_active(conn, profile, model):
+    row = conn.execute(
+        "SELECT 1 FROM model_cooldowns WHERE profile = ? AND model = ? AND until_at > ?"
+        " LIMIT 1",
+        (profile, model, _now()),
+    ).fetchone()
+    return row is not None
 
 
 def open_db(path):

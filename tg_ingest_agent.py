@@ -905,8 +905,9 @@ class Agent:
                                             self.cfg.ask_context_chars)
             if not context:  # nothing indexed/matched -> keyword fallback
                 context = self._keyword_context(question)
-            answer = llm.chat(self.cfg, self.conn, "ask",
-                              knowledge.build_ask_messages(question, context), max_tokens=500)
+            answer = llm.chat_profile(self.cfg, self.conn, "ask",
+                                      knowledge.build_ask_messages(question, context),
+                                      profile="ask_grounded")
         except llm.BudgetExceeded as exc:
             store.issue_add(self.conn, chat_id, "budget_stop", question[:200])
             self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,

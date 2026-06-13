@@ -126,6 +126,9 @@ def load_config(env=None):
     cfg.pricing_json = (env.get("PRICING_JSON") or "").strip()
     # Learning
     cfg.habit_threshold = int(env.get("HABIT_THRESHOLD") or "10")
+    # Model profiles / failover (llm.chat_profile)
+    cfg.llm_profiles_json = (env.get("LLM_PROFILES_JSON") or "").strip()
+    cfg.llm_fallback_cooldown = int(env.get("LLM_FALLBACK_COOLDOWN_SECONDS") or "300")
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
     # Knowledge Q&A (ask): semantic retrieval over the KB

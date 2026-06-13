@@ -139,6 +139,73 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None):
     return str((choices[0].get("message") or {}).get("content") or "")
 
 
+def default_profiles(cfg):
+    """Named profiles → model + fallbacks. Primary defaults to the configured
+    chat model; fallback is a different-family model so a provider hiccup on
+    one route can still be served. Override wholesale via LLM_PROFILES_JSON."""
+    primary = cfg.do_model
+    router = cfg.router_model
+    fb = ["openai-gpt-4o"]  # confirmed in DO catalog; different family
+    return {
+        "router_fast": {"primary": router, "fallbacks": fb, "max_tokens": 200, "json_required": True},
+        "ingest_balanced": {"primary": primary, "fallbacks": fb, "max_tokens": 600, "json_required": True},
+        "ask_grounded": {"primary": primary, "fallbacks": [], "max_tokens": 500, "json_required": False},
+        "memory_curator": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
+        "review_balanced": {"primary": primary, "fallbacks": [], "max_tokens": 900, "json_required": False},
+    }
+
+
+def profiles(cfg):
+    table = default_profiles(cfg)
+    if cfg.llm_profiles_json:
+        try:
+            for name, prof in json.loads(cfg.llm_profiles_json).items():
+                table.setdefault(name, {}).update(prof)
+        except Exception as exc:
+            log(f"LLM_PROFILES_JSON ignored (invalid): {exc!r}")
+    return table
+
+
+def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_required=None):
+    """Budget-guarded chat with model failover and cooldowns. Tries the
+    profile's primary then fallbacks, skipping models on active cooldown.
+    Budget is authoritative — BudgetExceeded never triggers a fallback."""
+    from common import current_trace
+    prof = profiles(cfg).get(profile) or {
+        "primary": cfg.do_model, "fallbacks": [], "max_tokens": 300, "json_required": False}
+    mt = max_tokens or prof.get("max_tokens", 300)
+    jr = prof.get("json_required", False) if json_required is None else json_required
+    models = [prof["primary"]] + list(prof.get("fallbacks") or [])
+    active = [m for m in models if not store.cooldown_active(conn, profile, m)]
+    if not active:
+        active = models  # everything is cooling down — try anyway rather than fail outright
+    last_exc = None
+    last_content = None
+    for model in active:
+        try:
+            content = chat(cfg, conn, skill, messages, max_tokens=mt, model=model)
+        except BudgetExceeded:
+            raise  # budget hard-stop sits above failover
+        except LLMError as exc:
+            last_exc = exc
+            store.cooldown_set(conn, profile, model, cfg.llm_fallback_cooldown, str(exc)[:200])
+            if current_trace():
+                store.trace_event(conn, current_trace(), "llm.fallback",
+                                  f"{profile}:{model} failed: {exc}", level="warn", skill=skill)
+            log(f"profile {profile} model {model} failed ({exc}); trying next")
+            continue
+        if jr and parse_llm_json(content) is None:
+            last_content = content
+            if current_trace():
+                store.trace_event(conn, current_trace(), "llm.fallback",
+                                  f"{profile}:{model} returned non-JSON", level="warn", skill=skill)
+            continue  # try a fallback model for a clean JSON object
+        return content
+    if last_content is not None:
+        return last_content  # let the caller's defensive parsing handle it
+    raise last_exc or LLMError(f"profile {profile}: all models failed")
+
+
 def embed(cfg, conn, skill, texts):
     """Budget-guarded embeddings (BGE-M3); logs usage; returns list of
     float vectors aligned with `texts`."""
