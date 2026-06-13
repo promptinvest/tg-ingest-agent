@@ -15,8 +15,10 @@ KINDS = ("identity", "language", "tone", "workflow", "quality_bar", "project",
          "relationship_note")
 
 _SENSITIVE_HINTS = re.compile(
-    r"(здоров|болезн|диагноз|финанс|деньг|зарплат|кредит|пароль|карт|адрес|"
-    r"health|finance|salary|password|credit|address|medical|legal)", re.I)
+    r"(здоров|болезн|диагноз|аллерг|лекарств|финанс|деньг|зарплат|кредит|пароль|"
+    r"карт|адрес|телефон|паспорт|религ|политик|"
+    r"health|illness|medical|allerg|diagnos|finance|salary|credit|password|"
+    r"address|phone|passport|religion|politics|legal)", re.I)
 
 
 def classify_sensitivity(text):

@@ -850,6 +850,10 @@ class SelfBossPersonaTests(unittest.TestCase):
     def test_boss_sensitivity_classification(self):
         self.assertEqual(boss_model.classify_sensitivity("мой пароль 1234"), "sensitive")
         self.assertEqual(boss_model.classify_sensitivity("likes markdown specs"), "normal")
+        # health terms must be flagged (regression: "peanut allergy" leaked)
+        self.assertEqual(boss_model.classify_sensitivity("peanut allergy"), "sensitive")
+        self.assertEqual(boss_model.classify_sensitivity("аллергия на орехи"), "sensitive")
+        self.assertEqual(boss_model.classify_sensitivity("мой адрес: ..."), "sensitive")
         sid = boss_model.remember_explicit(self.conn, "health: peanut allergy", "personal_fact")
         self.assertEqual(store.boss_get(self.conn, sid)["sensitivity"], "sensitive")
 
