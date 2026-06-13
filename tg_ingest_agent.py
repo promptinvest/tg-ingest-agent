@@ -670,6 +670,13 @@ class Agent:
                                       category=payload["category"]))
             else:
                 store.pref_set(self.conn, f"auto_cat_declined:{source}", "1")
+        elif kind == "boss_sensitive":
+            store.pending_clear(self.conn, chat_id)
+            if action == "confirm":
+                boss_model.remember_explicit(self.conn, payload["value"], payload["kind"])
+                self.reply(chat_id, T(lang, "boss_remembered", value=payload["value"]))
+            # cancel handled by the generic branch above; an unrelated message
+            # leaves the flagged item unsaved, which is the safe default.
         else:
             store.pending_clear(self.conn, chat_id)
 
@@ -712,11 +719,19 @@ class Agent:
             kind = str(params.get("kind") or "workflow").strip()
             if kind not in boss_model.KINDS:
                 kind = "workflow"
-            item_id = boss_model.remember_explicit(self.conn, value, kind)
-            if item_id is None:
+            value = str(value).strip()
+            if not value:
                 self.reply(chat_id, T(lang, "clarify"))
-            else:
+                return
+            sensitivity = boss_model.effective_sensitivity(kind, value)
+            if sensitivity == "normal":
+                boss_model.remember_explicit(self.conn, value, kind)
                 self.reply(chat_id, T(lang, "boss_remembered", value=value))
+            else:
+                # Personal/flagged -> confirm with the boss before storing.
+                store.pending_set(self.conn, chat_id, "boss_sensitive",
+                                  {"value": value, "kind": kind, "sensitivity": sensitivity})
+                self.reply(chat_id, T(lang, "boss_sensitive_confirm", s=sensitivity))
 
     def do_style_update(self, chat_id, lang, params):
         tone = str(params.get("tone") or "").strip().lower()

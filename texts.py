@@ -151,6 +151,12 @@ TEXTS = {
         "en": "You can say: \"forget #id\", \"confirm #id\", or \"remember about me …\".",
     },
     "boss_remembered": {"ru": "Запомнила про вас: {value} 📝", "en": "Remembered about you: {value} 📝"},
+    "boss_sensitive_confirm": {
+        "ru": ("Это похоже на личное ({s}). Сохранить в профиль? "
+               "Я буду держать это закрытым и не выгружать без отдельной просьбы. (да/нет)"),
+        "en": ("This looks personal ({s}). Save it to your profile? "
+               "I'll keep it private and won't export it without an explicit request. (yes/no)"),
+    },
     "boss_forgotten": {"ru": "Забыла: {value} 🙈", "en": "Forgotten: {value} 🙈"},
     "boss_confirmed_ok": {"ru": "Подтвердила: {value} ✅", "en": "Confirmed: {value} ✅"},
     "boss_not_found": {"ru": "Не нашла такой записи о вас.", "en": "I couldn't find that about you."},

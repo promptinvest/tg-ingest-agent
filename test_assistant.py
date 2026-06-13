@@ -893,6 +893,44 @@ class SelfBossPersonaTests(unittest.TestCase):
         self.assertIn("prefers short answers", hint)
         self.assertNotIn("salary", hint)  # sensitive excluded from prompt personalization
 
+    def test_confirm_when_personal_flow(self):
+        import tg_ingest_agent
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_config(DB_PATH=str(Path(tmp) / "cp.db"), MEDIA_DIR=str(Path(tmp) / "m"))
+            agent = tg_ingest_agent.Agent(cfg)
+            try:
+                # normal preference stores immediately, no pending
+                with mock.patch.object(agent, "reply"):
+                    agent.do_boss_memory(1, "ru", {"op": "remember",
+                                                   "value": "prefers short answers", "kind": "tone"})
+                self.assertEqual(len(store.boss_items(agent.conn, "confirmed")), 1)
+                self.assertIsNone(store.pending_get(agent.conn, 1))
+                # a personal_fact is NOT stored yet — it asks first
+                with mock.patch.object(agent, "reply") as r:
+                    agent.do_boss_memory(1, "ru", {"op": "remember",
+                                                   "value": "loves jazz", "kind": "personal_fact"})
+                self.assertIn("личное", r.call_args[0][1])
+                self.assertEqual(store.pending_get(agent.conn, 1)["kind"], "boss_sensitive")
+                self.assertEqual(len(store.boss_items(agent.conn, "confirmed")), 1)  # not stored yet
+                # confirm -> stored as sensitive
+                with mock.patch.object(agent, "reply"):
+                    agent.resolve_pending(1, "confirm", {},
+                                          store.pending_get(agent.conn, 1), "ru")
+                items = store.boss_items(agent.conn, "confirmed")
+                jazz = [i for i in items if i["value"] == "loves jazz"][0]
+                self.assertEqual(jazz["sensitivity"], "sensitive")
+                self.assertIsNone(store.pending_get(agent.conn, 1))
+                # decline path leaves it unsaved
+                with mock.patch.object(agent, "reply"):
+                    agent.do_boss_memory(1, "ru", {"op": "remember",
+                                                   "value": "home address X", "kind": "personal_fact"})
+                    agent.resolve_pending(1, "cancel", {},
+                                          store.pending_get(agent.conn, 1), "ru")
+                self.assertEqual([i for i in store.boss_items(agent.conn, "confirmed")
+                                  if i["value"] == "home address X"], [])
+            finally:
+                agent.conn.close()
+
     def test_router_accepts_personality_actions(self):
         for action in ("self_query", "boss_query", "boss_memory_update", "style_update",
                        "trace_query"):

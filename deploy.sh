@@ -27,6 +27,12 @@ SSH_OPTS=(-i "$KEY" -p "$PORT" -o IdentitiesOnly=yes -o ConnectTimeout=25
 # Files to ship: all python modules, installer, env example.
 FILES=(*.py install-tg-ingest-agent-pilot-remote.sh tg-ingest-agent.env.example)
 
+# Stamp what's being deployed relative to git, for traceability (the workflow
+# deploys-then-commits, so a dirty tree here is normal — informational only).
+SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
+DIRTY=""; [ -n "$(git status --porcelain 2>/dev/null)" ] && DIRTY=" +local-changes"
+echo "deploying from ${SHA}${DIRTY}"
+
 remote_script="
 set -e
 mkdir -p '$STAGE'
