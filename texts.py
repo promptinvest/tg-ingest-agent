@@ -224,6 +224,30 @@ TEXTS = {
         "ru": "Сейчас нечего отклонять — ничего нового не предлагаю 😊",
         "en": "Nothing to decline right now — no fresh suggestion pending 😊",
     },
+    "purge_preview": {
+        "ru": ("⚠️ Это удалит безвозвратно:\n{impact}\n"
+               "Сохраню: ваши настройки и историю расходов AI.\n"
+               "Если уверены — пришлите ровно эту фразу:\n«{phrase}»"),
+        "en": ("⚠️ This will permanently delete:\n{impact}\n"
+               "I'll keep: your preferences and the AI-spend history.\n"
+               "If you're sure, send exactly this phrase:\n\"{phrase}\""),
+    },
+    "purge_nothing": {
+        "ru": "Удалять нечего — здесь уже пусто 🌿",
+        "en": "Nothing to purge — already empty 🌿",
+    },
+    "purge_done": {
+        "ru": "Готово, босс. Удалила:\n{impact}",
+        "en": "Done, boss. Deleted:\n{impact}",
+    },
+    "purge_cancelled": {
+        "ru": "Не та фраза — ничего не трогаю. Всё на месте 👌",
+        "en": "Phrase didn't match — I touched nothing. All safe 👌",
+    },
+    "purge_phrase_all": {"ru": "удалить всё безвозвратно", "en": "delete everything permanently"},
+    "purge_phrase_category": {"ru": "удалить категорию {category}", "en": "delete category {category}"},
+    "purge_phrase_stats": {"ru": "сбросить всю статистику", "en": "reset all stats"},
+    "purge_phrase_reminders": {"ru": "удалить все напоминания", "en": "delete all reminders"},
     "calendar_added": {
         "ru": "Записала в Google Calendar: {title} 📅\n{link}",
         "en": "Added to Google Calendar: {title} 📅\n{link}",

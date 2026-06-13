@@ -29,6 +29,7 @@ ACTIONS = {
     "show_media",        # params: id OR query — re-send the stored photo(s)
     "discard",           # decline adding the just-suggested item (deletes it)
     "vps_stats",         # read-only host resource usage report
+    "purge",             # params: scope in all|category|stats|reminders, category — BULK delete (typed confirm)
     "issues_report",     # params: period in day|week|month — communication problems summary
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
@@ -63,6 +64,10 @@ ROUTER_EXAMPLES = """Examples:
 "покажи фото" / "show the photo" / "покажи картинку из #2" -> {"action": "show_media", "params": {"id": 2}, "confidence": 0.9}
 "не сохраняй это" / "не надо сохранять" / "discard" / "don't save this" -> {"action": "discard", "params": {}, "confidence": 0.9}
 "загрузка сервера" / "сколько ресурсов занято" / "vps status" / "how's the server?" -> {"action": "vps_stats", "params": {}, "confidence": 0.9}
+"удали всё что у тебя есть" / "wipe everything" -> {"action": "purge", "params": {"scope": "all"}, "confidence": 0.9}
+"удали все сохранённое в категории crypto" / "purge category news" -> {"action": "purge", "params": {"scope": "category", "category": "crypto"}, "confidence": 0.9}
+"сбрось статистику и категории" / "reset all stats and categories" -> {"action": "purge", "params": {"scope": "stats"}, "confidence": 0.9}
+"очисти все напоминания" / "clear all reminders" -> {"action": "purge", "params": {"scope": "reminders"}, "confidence": 0.9}
 "какие были проблемы на этой неделе?" / "what went wrong this week?" -> {"action": "issues_report", "params": {"period": "week"}, "confidence": 0.9}
 "как ты поработала за неделю?" / "performance review" / "что ты выучила?" -> {"action": "review", "params": {"period": "week"}, "confidence": 0.9}
 "сделай отчёт файлом" / "export the review as md" -> {"action": "review", "params": {"period": "week", "export": true}, "confidence": 0.9}

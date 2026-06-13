@@ -428,6 +428,72 @@ def delete_message(conn, message_id):
     return paths
 
 
+PURGE_SCOPES = ("all", "category", "stats", "reminders")
+
+
+def _messages_in_category(conn, category):
+    """Message ids whose (confirmed or suggested) category matches, Cyrillic
+    case-insensitively (SQL lower/NOCASE is ASCII-only)."""
+    target = str(category or "").casefold()
+    ids = []
+    for row in conn.execute("SELECT id, category, suggested_category FROM messages"):
+        name = (row["category"] or row["suggested_category"] or "").casefold()
+        if name == target:
+            ids.append(row["id"])
+    return ids
+
+
+def purge_preview(conn, scope, category=None):
+    """Count what a purge would remove, without deleting. llm_usage (spend
+    history) and preferences (identity/config) are NEVER purged."""
+    def count(sql, args=()):
+        return conn.execute(sql, args).fetchone()[0]
+    info = {"scope": scope}
+    if scope == "all":
+        info["messages"] = count("SELECT COUNT(*) FROM messages")
+        info["reminders"] = count("SELECT COUNT(*) FROM reminders WHERE status='active'")
+        info["categories"] = count("SELECT COUNT(*) FROM categories")
+        info["issues"] = count("SELECT COUNT(*) FROM issues")
+    elif scope == "category":
+        info["messages"] = len(_messages_in_category(conn, category))
+        info["category"] = category
+    elif scope == "stats":
+        info["categories"] = count("SELECT COUNT(*) FROM categories")
+        info["issues"] = count("SELECT COUNT(*) FROM issues")
+        info["feedback"] = count("SELECT COUNT(*) FROM feedback")
+    elif scope == "reminders":
+        info["reminders"] = count("SELECT COUNT(*) FROM reminders WHERE status='active'")
+    return info
+
+
+def purge_execute(conn, scope, category=None):
+    """Run the purge. Returns (summary_dict, media_paths_to_unlink).
+    Preserves llm_usage and preferences in every scope."""
+    info = purge_preview(conn, scope, category)
+    paths = []
+    if scope == "all":
+        paths = [r["local_path"] for r in
+                 conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
+        for table in ("facts", "urls", "images", "messages", "categories", "issues",
+                      "feedback", "conversation"):
+            conn.execute(f"DELETE FROM {table}")
+        conn.execute("DELETE FROM reminders WHERE status='active'")
+        conn.execute("DELETE FROM pending_actions")
+    elif scope == "category":
+        ids = _messages_in_category(conn, category)
+        for mid in ids:
+            paths.extend(delete_message(conn, mid))
+        if category:
+            conn.execute("DELETE FROM categories WHERE norm_key = ?", (str(category).casefold(),))
+    elif scope == "stats":
+        for table in ("categories", "issues", "feedback", "conversation"):
+            conn.execute(f"DELETE FROM {table}")
+    elif scope == "reminders":
+        conn.execute("DELETE FROM reminders WHERE status='active'")
+    conn.commit()
+    return info, [p for p in paths if p]
+
+
 def habit_streak(conn, fwd_chat_id):
     """Length and category of the current same-category confirmation streak
     for a forward source; (None, 0) when the streak is broken or empty."""

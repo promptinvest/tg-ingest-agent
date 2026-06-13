@@ -385,6 +385,11 @@ class Agent:
     def dispatch(self, chat_id, msg, text):
         lang = self.lang()
         pending = store.pending_get(self.conn, chat_id)
+        # A pending purge is confirmed ONLY by typing the exact phrase —
+        # handled deterministically (no LLM), so a stray "да" can't wipe data.
+        if pending and pending["kind"] == "purge":
+            self.resolve_purge(chat_id, lang, pending, text)
+            return
         # Greetings answered instantly without burning router tokens; with a
         # pending action, short acks like «ок» must reach the router instead
         # (they are confirmations there).
@@ -483,6 +488,8 @@ class Agent:
         elif action == "vps_stats":
             self.reply(chat_id, sysinfo.format_report(
                 sysinfo.collect(str(self.cfg.db_path.parent)), lang, self.media_bytes()))
+        elif action == "purge":
+            self.do_purge(chat_id, lang, params)
         elif action == "issues_report":
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "review":
@@ -767,6 +774,57 @@ class Agent:
                 Path(path).unlink(missing_ok=True)
             log(f"message #{row_id} discarded (declined) by operator")
         self.reply(chat_id, T(lang, "discarded"))
+
+    def _purge_impact_text(self, lang, info):
+        ru = lang == "ru"
+        labels = {
+            "messages": ("сообщений" if ru else "messages"),
+            "reminders": ("напоминаний" if ru else "reminders"),
+            "categories": ("категорий" if ru else "categories"),
+            "issues": ("записей о проблемах" if ru else "issue records"),
+            "feedback": ("поправок" if ru else "corrections"),
+        }
+        parts = []
+        for key, label in labels.items():
+            n = info.get(key)
+            if n:
+                parts.append(f"  • {n} {label}")
+        if info.get("scope") == "category" and "messages" in info:
+            cat = info.get("category") or "?"
+            parts = [f"  • {info['messages']} " + ("сообщений в категории «" if ru else
+                     "messages in category \"") + f"{cat}»"]
+        return "\n".join(parts)
+
+    def do_purge(self, chat_id, lang, params):
+        scope = str(params.get("scope") or "").strip().lower()
+        if scope not in store.PURGE_SCOPES:
+            self.reply(chat_id, T(lang, "clarify"))
+            return
+        category = params.get("category")
+        info = store.purge_preview(self.conn, scope, category)
+        if not any(info.get(k) for k in ("messages", "reminders", "categories", "issues", "feedback")):
+            self.reply(chat_id, T(lang, "purge_nothing"))
+            return
+        if scope == "category":
+            phrase = T(lang, "purge_phrase_category", category=category or "?")
+        else:
+            phrase = T(lang, f"purge_phrase_{scope}")
+        store.pending_set(self.conn, chat_id, "purge",
+                          {"scope": scope, "category": category, "phrase": phrase}, ttl_seconds=300)
+        self.reply(chat_id, T(lang, "purge_preview",
+                              impact=self._purge_impact_text(lang, info), phrase=phrase))
+
+    def resolve_purge(self, chat_id, lang, pending, text):
+        payload = pending["payload"]
+        store.pending_clear(self.conn, chat_id)
+        if text.strip().casefold() != str(payload.get("phrase") or "").strip().casefold():
+            self.reply(chat_id, T(lang, "purge_cancelled"))
+            return
+        info, paths = store.purge_execute(self.conn, payload["scope"], payload.get("category"))
+        for path in paths:
+            Path(path).unlink(missing_ok=True)
+        log(f"PURGE scope={payload['scope']} category={payload.get('category')} by operator")
+        self.reply(chat_id, T(lang, "purge_done", impact=self._purge_impact_text(lang, info)))
 
     def media_bytes(self):
         total = 0

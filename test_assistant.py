@@ -500,6 +500,98 @@ class AgentViewTests(unittest.TestCase):
         self.assertTrue(fresh.exists())      # within grace window, kept
 
 
+class PurgeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "p.db")
+        for i in range(3):
+            mid = store.insert_message(self.conn, {
+                "chat_id": 1, "tg_message_id": 10 + i, "received_at": "ts", "raw_text": "x"})
+            cat = "Крипта" if i < 2 else "News"
+            store.set_suggestion(self.conn, mid, cat, "s", "m")
+            store.confirm_category(self.conn, mid, store.ensure_category(self.conn, cat))
+        store.issue_add(self.conn, 1, "out_of_scope", "x")
+        store.feedback_add(self.conn, "ingest", "d", "a", "b")
+        store.usage_add(self.conn, "ingest", "chat", "m", 10, 5, cost_usd=0.01)
+        store.reminder_add(self.conn, 1, "r", "2099-01-01T00:00:00+00:00")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_preview_counts(self):
+        self.assertEqual(store.purge_preview(self.conn, "all")["messages"], 3)
+        cat = store.purge_preview(self.conn, "category", "крипта")  # Cyrillic case-insensitive
+        self.assertEqual(cat["messages"], 2)
+        self.assertEqual(store.purge_preview(self.conn, "stats")["feedback"], 1)
+
+    def test_category_purge_keeps_others_and_usage(self):
+        info, paths = store.purge_execute(self.conn, "category", "КРИПТА")
+        self.assertEqual(info["messages"], 2)
+        self.assertEqual(store.purge_preview(self.conn, "all")["messages"], 1)  # News kept
+        self.assertEqual(store.usage_total(self.conn, "month"), 0.01)  # usage untouched
+        self.assertIsNone(self.conn.execute(
+            "SELECT 1 FROM categories WHERE norm_key='крипта'").fetchone())
+
+    def test_all_purge_preserves_usage_and_prefs(self):
+        store.pref_set(self.conn, "owner_name", "Owen")
+        store.purge_execute(self.conn, "all")
+        self.assertEqual(store.purge_preview(self.conn, "all")["messages"], 0)
+        self.assertEqual(store.status_counts(self.conn), [])
+        self.assertEqual(store.usage_total(self.conn, "month"), 0.01)  # spend history kept
+        self.assertEqual(store.pref_get(self.conn, "owner_name"), "Owen")  # identity kept
+
+    def test_stats_scope_keeps_messages(self):
+        store.purge_execute(self.conn, "stats")
+        self.assertEqual(store.purge_preview(self.conn, "all")["messages"], 3)  # messages kept
+        self.assertEqual(store.issue_counts(self.conn, "2000-01-01"), [])
+        self.assertEqual(store.known_categories(self.conn), [])
+
+    def test_router_accepts_purge(self):
+        ok = router.validate_route({"action": "purge", "params": {"scope": "all"}}, False)
+        self.assertEqual(ok["action"], "purge")
+
+
+class PurgeFlowTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "f.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        mid = store.insert_message(self.agent.conn, {
+            "chat_id": 1, "tg_message_id": 1, "received_at": "ts", "raw_text": "x"})
+        store.set_suggestion(self.agent.conn, mid, "News", "s", "m")
+        store.confirm_category(self.agent.conn, mid, store.ensure_category(self.agent.conn, "News"))
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def test_typed_confirmation_required(self):
+        with mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_purge(1, "ru", {"scope": "all"})
+        self.assertEqual(store.pending_get(self.agent.conn, 1)["kind"], "purge")
+        phrase = store.pending_get(self.agent.conn, 1)["payload"]["phrase"]
+        # wrong phrase (a stray "да") must NOT delete anything
+        with mock.patch.object(self.agent, "reply") as reply:
+            self.agent.resolve_purge(1, "ru", store.pending_get(self.agent.conn, 1), "да")
+        self.assertIn("ничего не трогаю", reply.call_args[0][1])
+        self.assertEqual(store.purge_preview(self.agent.conn, "all")["messages"], 1)  # intact
+        # exact phrase deletes
+        self.agent.do_purge(1, "ru", {"scope": "all"})
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_purge(1, "ru", store.pending_get(self.agent.conn, 1), phrase)
+        self.assertEqual(store.purge_preview(self.agent.conn, "all")["messages"], 0)
+
+    def test_purge_nothing_when_empty(self):
+        store.purge_execute(self.agent.conn, "all")
+        with mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_purge(1, "ru", {"scope": "all"})
+        self.assertIn("Удалять нечего", reply.call_args[0][1])
+        self.assertIsNone(store.pending_get(self.agent.conn, 1))
+
+
 class SysinfoTests(unittest.TestCase):
     def test_parse_meminfo(self):
         text = "MemTotal:        2014240 kB\nMemFree: 100000 kB\nMemAvailable:  1500000 kB\n"
