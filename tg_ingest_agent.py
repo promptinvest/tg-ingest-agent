@@ -553,6 +553,10 @@ class Agent:
             self.do_review(chat_id, lang, params)
         elif action == "self_query":
             self.reply(chat_id, self_model.answer_self_query(self.conn, lang, self.cfg))
+        elif action == "persona":
+            topic = str(params.get("topic") or "character").strip().lower()
+            key = "persona_relationship" if topic == "relationship" else "persona_character"
+            self.reply(chat_id, T(lang, key, name=self.owner_name()))
         elif action == "boss_query":
             self.reply(chat_id, boss_model.render_profile(self.conn, lang))
         elif action == "boss_memory_update":

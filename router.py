@@ -36,7 +36,8 @@ ACTIONS = {
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
     "forget",            # params: value (entry text or key to forget)
-    "self_query",        # who are you / what can you do / your limits / how do you work
+    "self_query",        # what can you do / your limits / how are you built (technical)
+    "persona",           # params: topic in character|relationship — who you are / how you relate
     "boss_query",        # what do you know about me
     "boss_memory_update", # params: op (remember|forget|confirm), value/id, kind
     "style_update",      # params: tone (warmer|neutral|concise) / intensity
@@ -83,13 +84,16 @@ ROUTER_EXAMPLES = """Examples:
 "удали все сохранённое в категории crypto" / "purge category news" -> {"action": "purge", "params": {"scope": "category", "category": "crypto"}, "confidence": 0.9}
 "сбрось статистику и категории" / "reset all stats and categories" -> {"action": "purge", "params": {"scope": "stats"}, "confidence": 0.9}
 "очисти все напоминания" / "clear all reminders" -> {"action": "purge", "params": {"scope": "reminders"}, "confidence": 0.9}
+"очисти журнал проблем" / "clear the issues log" / "удали статистику проблем" -> {"action": "purge", "params": {"scope": "issues"}, "confidence": 0.9}
 "какие были проблемы на этой неделе?" / "what went wrong this week?" -> {"action": "issues_report", "params": {"period": "week"}, "confidence": 0.9}
 "как ты поработала за неделю?" / "performance review" / "что ты выучила?" -> {"action": "review", "params": {"period": "week"}, "confidence": 0.9}
 "сделай отчёт файлом" / "export the review as md" -> {"action": "review", "params": {"period": "week", "export": true}, "confidence": 0.9}
 "когда мой рейс?" / "when is my flight?" -> {"action": "ask", "params": {"question": "когда мой рейс?"}, "confidence": 0.9}
 "что у нас по плану на сегодня?" / "what's the plan for today?" -> {"action": "ask", "params": {"question": "что у нас по плану на сегодня?"}, "confidence": 0.9}
 "во сколько выезд в аэропорт?" -> {"action": "ask", "params": {"question": "во сколько выезд в аэропорт?"}, "confidence": 0.85}
-"кто ты?" / "who are you?" / "что ты умеешь и как устроена?" / "какие у тебя ограничения?" -> {"action": "self_query", "params": {}, "confidence": 0.9}
+"что ты умеешь?" / "как ты устроена?" / "какие у тебя ограничения?" / "what can you do?" -> {"action": "self_query", "params": {}, "confidence": 0.9}
+"расскажи о себе" / "про свою личность" / "какая ты?" / "опиши себя" / "tell me about yourself" / "what are you like?" -> {"action": "persona", "params": {"topic": "character"}, "confidence": 0.9}
+"как ты ко мне относишься?" / "what do you think of me?" / "how do you feel about me?" -> {"action": "persona", "params": {"topic": "relationship"}, "confidence": 0.9}
 "что ты обо мне знаешь?" / "what do you know about me?" -> {"action": "boss_query", "params": {}, "confidence": 0.92}
 "запомни про меня: я не люблю длинные ответы" / "remember about me: I prefer short answers" -> {"action": "boss_memory_update", "params": {"op": "remember", "value": "предпочитает короткие ответы", "kind": "tone"}, "confidence": 0.9}
 "забудь #3" / "forget what you know about my tone" -> {"action": "boss_memory_update", "params": {"op": "forget", "value": "#3"}, "confidence": 0.9}

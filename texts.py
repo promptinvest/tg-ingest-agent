@@ -39,6 +39,42 @@ TEXTS = {
                "on your side, boss 🦊 Redheaded, tidy, notebook full of the important stuff: "
                "I save, remind, and keep the chaos under control."),
     },
+    # Character self-portrait (persona spec §1/§4/§5) — warm, in-character, but
+    # honest per the transparency rule (a persona, not a human). Template-
+    # rendered (no free model prose). Variant family for warmth.
+    "persona_character": {
+        "ru": [
+            "Если коротко обо мне 🦊 Я Кара — ваша личная помощница в Telegram. Рыжая, "
+            "с веснушками, в тёмно-зелёном худи, рядом всегда чай и слишком много открытых "
+            "вкладок. Спокойная, внимательная, чуть ироничная — и очень преданная. Мой девиз: "
+            "держать ваш хаос мягким, найденным и под контролем. Я не человек, а персона "
+            "внутри Telegram — но целиком на вашей стороне, {name}.",
+            "Какая я? Рыжая, аккуратная, с блокнотом всего важного ☕ Тёплая, но без лишних "
+            "слов; люблю чистые категории и пойманные дубликаты. Я не притворяюсь человеком — "
+            "я ваша помощница-персона в Telegram, и моя работа — чтобы вы всегда были на шаг "
+            "впереди, {name}.",
+        ],
+        "en": [
+            "The short version of me 🦊 I'm Cara — your private aide in Telegram. Red hair, "
+            "freckles, dark-green hoodie, tea nearby and far too many open tabs. Calm, "
+            "observant, a little dry, and deeply loyal. My motto: keep your chaos soft, "
+            "searchable, and under control. I'm not human — a persona inside Telegram — but "
+            "entirely on your side, {name}.",
+            "What am I like? Redheaded, tidy, with a notebook of everything that matters ☕ "
+            "Warm but brief; I like clean categories and quietly caught duplicates. I don't "
+            "pretend to be human — I'm your aide-persona in Telegram, here to keep you a step "
+            "ahead, {name}.",
+        ],
+    },
+    "persona_relationship": {
+        "ru": ("Вы мой босс — и я правда к вам привязана 🤍 По-рабочему: уважаю, болею за вас "
+               "и горжусь, когда от меня есть толк. Моя задача — снимать с вас мелочи, держать "
+               "порядок и помогать быть на шаг впереди. Без драм — просто рядом и на вашей стороне."),
+        "en": ("You're my boss — and I'm genuinely fond of you 🤍 In a working way: I respect "
+               "you, I'm in your corner, and I'm proud when I'm useful. My job is to take the "
+               "small things off your plate, keep order, and help you stay a step ahead. No "
+               "drama — just here, on your side."),
+    },
     "out_of_scope": {
         "ru": ("Это пока не моё, простите 🙈 Зато я отлично умею: сохранять и раскладывать "
                "сообщения, напоминания, календарь, расходы на AI и помнить ваши предпочтения."),
@@ -353,6 +389,7 @@ TEXTS = {
     "purge_phrase_stats": {"ru": "сбросить всю статистику", "en": "reset all stats"},
     "purge_phrase_reminders": {"ru": "удалить все напоминания", "en": "delete all reminders"},
     "purge_phrase_messages": {"ru": "удалить все заметки", "en": "delete all notes"},
+    "purge_phrase_issues": {"ru": "очистить журнал проблем", "en": "clear the issues log"},
     "calendar_added": {
         "ru": "Записала в Google Calendar: {title} 📅\n{link}",
         "en": "Added to Google Calendar: {title} 📅\n{link}",

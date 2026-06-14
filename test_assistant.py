@@ -636,6 +636,13 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(len(store.reminders_active(self.conn, 1)), 1)          # reminders kept
         self.assertEqual(store.usage_total(self.conn, "month"), 0.01)          # spend kept
 
+    def test_issues_scope_clears_only_issues(self):
+        info, _ = store.purge_execute(self.conn, "issues")
+        self.assertEqual(info["issues"], 1)
+        self.assertEqual(store.issue_counts(self.conn, "2000-01-01"), [])      # issues gone
+        self.assertEqual(store.purge_preview(self.conn, "all")["messages"], 3)  # notes kept
+        self.assertGreater(len(store.known_categories(self.conn)), 0)          # categories kept
+
 
 class MultiDeleteTests(unittest.TestCase):
     def setUp(self):
@@ -967,6 +974,28 @@ class PersonaPatchTests(unittest.TestCase):
         self.assertEqual(boss_model.get_address(self.conn, "ru", allow_name=False), "босс")
         store.pref_set(self.conn, "preferred_address_en", "chief")
         self.assertEqual(boss_model.get_address(self.conn, "en", allow_name=False), "chief")
+
+    # Personality: character + relationship answers (the screenshot complaint)
+    def test_persona_character_is_in_character_but_honest(self):
+        for lang in ("ru", "en"):
+            ch = texts.T(lang, "persona_character", name=("босс" if lang == "ru" else "boss"))
+            self.assertTrue("рыж" in ch.lower() or "red" in ch.lower())   # character shows
+            self.assertIn("персон" if lang == "ru" else "persona", ch.lower())  # transparency
+            self.assertNotIn("SQLite", ch)  # NOT a tech dump
+            self.assertNotIn("Pilot-VPS", ch)
+
+    def test_persona_relationship_warm_within_bounds(self):
+        for lang in ("ru", "en"):
+            low = texts.T(lang, "persona_relationship").lower()
+            self.assertTrue("сторон" in low or "side" in low)  # warm/loyal
+            for banned in ("влюбл", "romantic", "секс", "in love"):
+                self.assertNotIn(banned, low)  # §3 boundaries
+
+    def test_router_and_manifest_have_persona(self):
+        for topic in ("character", "relationship"):
+            self.assertEqual(router.validate_route(
+                {"action": "persona", "params": {"topic": topic}}, False)["action"], "persona")
+        self.assertTrue(skill_manifest.known("persona"))
 
 
 class SelfBossPersonaTests(unittest.TestCase):
