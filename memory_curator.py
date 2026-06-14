@@ -99,10 +99,13 @@ _EXTRACT_SYSTEM = (
 )
 
 
-def curate_conversation(conn, cfg, chat_id, limit=12):
-    """One small LLM pass over recent free chat. Returns counts. Dedup (UNIQUE
-    life text, boss substring match, candidate text) makes overlapping windows
-    safe to re-run."""
+def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
+    """One small LLM pass over recent free chat. Returns counts plus the lists of
+    newly-`learned` corrections and `unresolved` ones (a correction raised again
+    despite being learned → likely needs a code fix). Dedup (UNIQUE life text,
+    boss substring match, candidate text) makes overlapping windows safe to re-run.
+    `correction_mode` (set when the boss just corrected her) enables the
+    recurrence → needs-code escalation."""
     import llm  # lazy: keeps the deterministic curator import-light
     turns = [r for r in store.convo_recent(conn, chat_id, limit=limit)
              if (r["text"] or "").strip()]
@@ -155,8 +158,10 @@ def curate_conversation(conn, cfg, chat_id, limit=12):
             boss_added += 1  # sensitive -> propose, never auto-store
 
     # Behavioral corrections: store as standing guidance Cara honors next turn,
-    # AND log each new one as an issue so recurring mistakes surface in review.
+    # log each new one as an issue, and escalate ones that recur despite being
+    # learned (they likely need a code change, not more "trying").
     corrections_added = 0
+    learned, unresolved = [], []
     for item in (parsed.get("corrections") or [])[:5]:
         if not isinstance(item, dict):
             continue
@@ -164,7 +169,15 @@ def curate_conversation(conn, cfg, chat_id, limit=12):
         kind = str(item.get("kind") or "workflow").strip().lower()
         if kind not in GUIDANCE_KINDS:
             kind = "workflow"
-        if not text or store.boss_find(conn, text):
+        if not text:
+            continue
+        if store.boss_find(conn, text):
+            # already learned, yet he's correcting it again -> auto-apply isn't
+            # enough; flag for a code fix. Only when he actively corrected this
+            # turn (not on background re-processing of an old window).
+            if correction_mode:
+                store.issue_add(conn, chat_id, "correction_unresolved", text)
+                unresolved.append(text)
             continue
         store.issue_add(conn, chat_id, "correction", text)
         sens = boss_model.effective_sensitivity(kind, text)
@@ -174,8 +187,10 @@ def curate_conversation(conn, cfg, chat_id, limit=12):
         else:
             store.candidate_add(conn, kind, text, reason="correction",
                                 sensitivity=sens, confidence=0.8, source_table="correction")
+        learned.append(text)
         corrections_added += 1
-    return {"life": life_added, "boss": boss_added, "corrections": corrections_added}
+    return {"life": life_added, "boss": boss_added, "corrections": corrections_added,
+            "learned": learned, "unresolved": unresolved}
 
 
 def render_review(conn, lang, limit=8):

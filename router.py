@@ -90,6 +90,7 @@ ROUTER_EXAMPLES = """Examples:
 "какие были проблемы на этой неделе?" / "what went wrong this week?" -> {"action": "issues_report", "params": {"period": "week"}, "confidence": 0.9}
 "как ты поработала за неделю?" / "проведи ревью" / "что ты выучила?" -> {"action": "review", "params": {"period": "week"}, "confidence": 0.9}
 "когда у нас следующий performance review?" / "когда по плану ревью?" / "when is our next performance review?" -> {"action": "review", "params": {"schedule": true}, "confidence": 0.92}
+"какие корректировки ты запомнила?" / "что ты исправила по моим замечаниям?" / "что нельзя пофиксить?" / "what corrections have you learned?" -> {"action": "review", "params": {"focus": "corrections"}, "confidence": 0.9}
 "сделай отчёт файлом" / "export the review as md" -> {"action": "review", "params": {"period": "week", "export": true}, "confidence": 0.9}
 "когда мой рейс?" / "when is my flight?" -> {"action": "ask", "params": {"question": "когда мой рейс?"}, "confidence": 0.9}
 "что у нас по плану на сегодня?" / "what's the plan for today?" -> {"action": "ask", "params": {"question": "что у нас по плану на сегодня?"}, "confidence": 0.9}

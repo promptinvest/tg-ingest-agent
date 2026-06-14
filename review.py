@@ -122,7 +122,42 @@ def collect(conn, period):
         " GROUP BY status ORDER BY status", (since,),
     ).fetchall()
     data["rel_events"] = store.rel_recent(conn, since, limit=8)
+    # corrections Cara has learned (standing guidance from his feedback) and ones
+    # that recur despite being learned (flagged as needing a code fix)
+    data["corrections_learned"] = [
+        r["value"] for status in ("inferred", "confirmed")
+        for r in store.boss_items(conn, status, limit=50)
+        if r["source_table"] == "correction"]
+    data["corrections_unresolved"] = conn.execute(
+        "SELECT detail, COUNT(*) AS n FROM issues WHERE kind = 'correction_unresolved'"
+        " GROUP BY detail ORDER BY n DESC LIMIT 10",
+    ).fetchall()
     return data
+
+
+def corrections_report(conn, lang):
+    """What Cara has corrected herself on, and what still needs a code fix."""
+    ru = lang == "ru"
+    learned = [
+        r["value"] for status in ("inferred", "confirmed")
+        for r in store.boss_items(conn, status, limit=50)
+        if r["source_table"] == "correction"]
+    unresolved = conn.execute(
+        "SELECT detail, COUNT(*) AS n FROM issues WHERE kind = 'correction_unresolved'"
+        " GROUP BY detail ORDER BY n DESC LIMIT 10",
+    ).fetchall()
+    lines = ["📝 " + ("Корректировки по твоим замечаниям:" if ru
+                      else "Corrections I've learned from you:")]
+    if learned:
+        lines.append("✅ " + ("применяю:" if ru else "applying now:"))
+        lines.extend(f"  • {v}" for v in learned)
+    else:
+        lines.append("  — " + ("пока ничего" if ru else "nothing yet"))
+    if unresolved:
+        lines.append("🔧 " + ("повторяется — нужна правка кода (передала инженерам):" if ru
+                              else "recurring — needs a code fix (flagged for engineering):"))
+        lines.extend(f"  • {r['detail']} ×{r['n']}" for r in unresolved)
+    return "\n".join(lines)
 
 
 def _issue_label(kind, lang):
@@ -176,6 +211,13 @@ def chat_text(conn, cfg, lang, period="week"):
     if data["fallback_count"]:
         lines.append((f"🔁 Запасная модель выручала: {data['fallback_count']}" if ru
                       else f"🔁 Backup model used: {data['fallback_count']}×"))
+    if data["corrections_learned"] or data["corrections_unresolved"]:
+        c = (f"📝 Корректировки: применяю {len(data['corrections_learned'])}" if ru
+             else f"📝 Corrections: applying {len(data['corrections_learned'])}")
+        if data["corrections_unresolved"]:
+            c += (f", нужен код-фикс {len(data['corrections_unresolved'])}" if ru
+                  else f", need a code fix {len(data['corrections_unresolved'])}")
+        lines.append(c)
     if data["pending_candidates"]:
         n = len(data["pending_candidates"])
         lines.append((f"📋 Хочу уточнить ({n}) — скажите «обзор памяти»" if ru
@@ -274,6 +316,16 @@ def markdown(conn, cfg, period="week"):
             lines.append(f"- #{c['id']} [{c['kind']}] {c['proposed_text']}")
     else:
         lines.append("- none")
+    lines.append("")
+    lines.append("## Corrections (auto-applied; recurring ones need a code fix)")
+    if data["corrections_learned"]:
+        lines.append("- applying now:")
+        lines.extend(f"  - {v}" for v in data["corrections_learned"])
+    else:
+        lines.append("- applying now: none")
+    if data["corrections_unresolved"]:
+        lines.append("- **recurring → needs a code fix:**")
+        lines.extend(f"  - {r['detail']} ×{r['n']}" for r in data["corrections_unresolved"])
     lines.append("")
     lines.append("## Working history (recent grounded moments)")
     if data["rel_events"]:

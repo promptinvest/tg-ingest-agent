@@ -49,6 +49,11 @@ for module in $MODULES; do
 done
 rm -rf "$APP_DIR/__pycache__"
 
+# Build stamp: a content hash of the installed code, so the agent announces a
+# new build to the boss only when the code actually changed (not every reboot).
+( cd "$APP_DIR" && cat agent.py $MODULES | sha1sum | cut -c1-12 ) > "$APP_DIR/VERSION"
+chmod 0644 "$APP_DIR/VERSION"
+
 if [ ! -f "$ENV_FILE" ]; then
   cat >"$ENV_FILE" <<'ENV'
 # tg-ingest-agent configuration. Required values are marked REPLACE_ME.

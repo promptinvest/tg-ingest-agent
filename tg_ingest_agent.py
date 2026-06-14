@@ -183,6 +183,25 @@ class Agent:
         tg_download(self.cfg.token, file_path, dest)
         return str(dest)
 
+    def build_version(self):
+        """Content hash the installer wrote to VERSION (empty in dev/test)."""
+        try:
+            return (Path(__file__).resolve().parent / "VERSION").read_text(
+                encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def announce_deploy_if_changed(self):
+        """Tell the boss when a NEW build is running. The installer writes a
+        content hash to VERSION on each install, so this fires on a real code
+        change but stays quiet across reboots (same files → same hash)."""
+        version = self.build_version()
+        if not version or store.kv_get(self.conn, "deployed_version") == version:
+            return
+        store.kv_set(self.conn, "deployed_version", version)
+        for chat_id in self.cfg.allowed_chat_ids:
+            self.reply(chat_id, T(self.lang(), "deploy_notice"))
+
     # -- Main loop
 
     def run(self):
@@ -190,6 +209,7 @@ class Agent:
             tg_call(self.cfg.token, "deleteWebhook", {"drop_pending_updates": False})
         except TelegramError as exc:
             log(f"deleteWebhook failed (continuing): {exc}")
+        self.announce_deploy_if_changed()
         offset = int(store.kv_get(self.conn, "offset", "0") or 0)
         errors = 0
         log(
@@ -813,7 +833,8 @@ class Agent:
             return
         self.reply(chat_id, reply)
         # Learn immediately when he's correcting me; otherwise on the usual cadence.
-        self.maybe_curate_conversation(chat_id, force=self.looks_like_correction(text))
+        self.maybe_curate_conversation(chat_id, lang=lang,
+                                       force=self.looks_like_correction(text))
 
     # How many conversational turns between background memory passes (cost vs.
     # freshness): her life and what she learns about you fill in every few turns.
@@ -832,11 +853,14 @@ class Agent:
         t = (text or "").casefold()
         return any(h in t for h in self._CORRECTION_HINTS)
 
-    def maybe_curate_conversation(self, chat_id, force=False):
+    def maybe_curate_conversation(self, chat_id, lang=None, force=False):
         """Extract durable memory from recent chat: grows Cara's life, learns
         benign boss facts (sensitive -> confirm-first), and captures behavioral
         CORRECTIONS as standing guidance + an issue. Throttled to every few turns,
-        but `force` runs it now (used the moment he corrects her). After-reply."""
+        but `force` runs it now (used the moment he corrects her). After-reply.
+
+        When a correction is learned she TELLS him; when a learned correction
+        recurs she tells him it needs a code fix."""
         key = f"converse_since_curate:{chat_id}"
         if not force:
             n = int(store.kv_get(self.conn, key, "0") or 0) + 1
@@ -845,13 +869,23 @@ class Agent:
                 return
         store.kv_set(self.conn, key, 0)
         try:
-            result = memory_curator.curate_conversation(self.conn, self.cfg, chat_id)
+            result = memory_curator.curate_conversation(self.conn, self.cfg, chat_id,
+                                                        correction_mode=force)
         except Exception as exc:  # never let learning break a conversation
             log(f"conversation curation failed: {exc}")
             return
-        if result.get("life") or result.get("boss") or result.get("corrections"):
+        learned = result.get("learned") or []
+        unresolved = result.get("unresolved") or []
+        lang = lang or self.lang()
+        if learned:
+            self.reply(chat_id, T(lang, "correction_learned", items="; ".join(learned)[:300]))
+        if unresolved:
+            self.reply(chat_id, T(lang, "correction_needs_code",
+                                  items="; ".join(unresolved)[:300]))
+        if result.get("life") or result.get("boss") or result.get("corrections") or unresolved:
             log(f"conversation curated chat={chat_id}: +{result.get('life', 0)} life, "
-                f"+{result.get('boss', 0)} boss, +{result.get('corrections', 0)} corrections")
+                f"+{result.get('boss', 0)} boss, +{result.get('corrections', 0)} corrections, "
+                f"{len(unresolved)} unresolved")
 
     # -- Memory skill
 
@@ -1464,6 +1498,9 @@ class Agent:
                        + "\n" + report)
 
     def do_review(self, chat_id, lang, params):
+        if str(params.get("focus") or "").strip().lower() == "corrections":
+            self.reply(chat_id, review.corrections_report(self.conn, lang))
+            return
         if params.get("schedule") or str(params.get("when") or "").strip().lower() in (
             "when", "schedule", "next"
         ):

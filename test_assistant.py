@@ -1326,6 +1326,34 @@ class ConversationLearningTests(unittest.TestCase):
         n = self.conn.execute("SELECT COUNT(*) AS n FROM issues WHERE kind='correction'").fetchone()["n"]
         self.assertEqual(n, 1)  # already-known correction not re-logged
 
+    def test_recurring_correction_escalates_to_needs_code(self):
+        rule = "Отвечай на том языке, на котором он пишет."
+        payload = ('{"cara_life": [], "boss_facts": [],'
+                   ' "corrections": [{"kind": "workflow", "text": "' + rule + '"}]}')
+        with mock.patch.object(llm, "chat_profile", return_value=payload):
+            first = self.memory_curator.curate_conversation(
+                self.conn, self.cfg, 1, correction_mode=True)
+            # he corrects the SAME thing again -> it's not self-fixable
+            again = self.memory_curator.curate_conversation(
+                self.conn, self.cfg, 1, correction_mode=True)
+        self.assertEqual(first["learned"], [rule])
+        self.assertEqual(first["unresolved"], [])
+        self.assertEqual(again["learned"], [])
+        self.assertEqual(again["unresolved"], [rule])     # escalated
+        n = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM issues WHERE kind='correction_unresolved'").fetchone()["n"]
+        self.assertEqual(n, 1)
+
+    def test_corrections_report_lists_both(self):
+        import review
+        store.boss_add(self.conn, "workflow", "Отвечай на его языке.", status="inferred",
+                       source_table="correction")
+        store.issue_add(self.conn, 1, "correction_unresolved", "Не переключай язык.")
+        report = review.corrections_report(self.conn, "ru")
+        self.assertIn("Отвечай на его языке.", report)        # auto-applied
+        self.assertIn("Не переключай язык.", report)          # needs a code fix
+        self.assertIn("код", report.lower())
+
 
 class ProactiveTests(unittest.TestCase):
     def setUp(self):
@@ -1412,6 +1440,18 @@ class MaintenanceJobTests(unittest.TestCase):
             "SELECT COUNT(*) AS n FROM jobs WHERE skill='maintenance' AND status='pending'"
         ).fetchone()["n"]
         self.assertEqual(n, 3)  # one per action, not six
+
+    def test_deploy_notice_fires_only_on_version_change(self):
+        with mock.patch.object(self.agent, "reply") as reply:
+            with mock.patch.object(self.agent, "build_version", return_value="v1"):
+                self.agent.announce_deploy_if_changed()      # new build -> announce
+                self.agent.announce_deploy_if_changed()      # same build -> quiet (reboot)
+            with mock.patch.object(self.agent, "build_version", return_value="v2"):
+                self.agent.announce_deploy_if_changed()      # changed -> announce again
+            with mock.patch.object(self.agent, "build_version", return_value=""):
+                self.agent.announce_deploy_if_changed()      # no VERSION (dev) -> quiet
+        self.assertEqual(reply.call_count, 2)
+        self.assertIn("обновлен", reply.call_args[0][1].lower())  # the ru deploy notice
 
     def test_drain_runs_maintenance_and_expires_pending(self):
         import runtime

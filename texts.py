@@ -484,6 +484,20 @@ TEXTS = {
         "ru": "Просрочено напоминаний: {n}. Перенести их или отметить выполненными?",
         "en": "{n} reminder(s) are overdue. Reschedule them, or mark them done?",
     },
+    # Correction handling (auto-applied, but she tells him).
+    "correction_learned": {
+        "ru": "Поняла, босс — буду так делать. Запомнила: {items} ✍️",
+        "en": "Got it, boss — I'll do that from now on. Noted: {items} ✍️",
+    },
+    "correction_needs_code": {
+        "ru": "Я это уже отмечала, но всё равно повторяется — сама не починю, нужна правка кода. Записала, чтобы поправили: {items} 🔧",
+        "en": "I'd already noted this and it keeps happening — I can't fix it myself, it needs a code change. I've flagged it: {items} 🔧",
+    },
+    # Sent once after a new build is installed on the VPS.
+    "deploy_notice": {
+        "ru": "Босс, свежие обновления установлены — я снова на связи ✨",
+        "en": "Boss, the new updates are installed — I'm back online ✨",
+    },
 }
 
 
