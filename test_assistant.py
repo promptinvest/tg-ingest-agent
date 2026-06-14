@@ -1242,6 +1242,15 @@ class LanguageDetectionTests(unittest.TestCase):
         self.assertIsNone(common.detect_lang("123 :) 🙂"))  # uncertain -> caller falls back
         self.assertEqual(common.detect_lang("ok да"), "ru")  # tie -> Russian
 
+    def test_english_terms_dont_flip_a_russian_message(self):
+        # the screenshot bug: a long English term outweighed the Russian by letters
+        self.assertEqual(common.detect_lang("Когда у нас performance review?"), "ru")
+        self.assertEqual(common.detect_lang("посмотри DeepSeek"), "ru")
+        self.assertEqual(common.detect_lang("во сколько мой flight?"), "ru")
+        # a genuinely English message with one Russian word stays English
+        self.assertEqual(common.detect_lang("remind Олег tomorrow morning"), "en")
+        self.assertEqual(common.detect_lang("what's the plan for today?"), "en")
+
 
 class ConversationLearningTests(unittest.TestCase):
     """The memory pass that grows Cara's life and learns about the boss from

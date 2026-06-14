@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Shared config and logging for tg-ingest-agent."""
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,15 +33,20 @@ def utcnow_iso():
 
 
 def detect_lang(text):
-    """Reply-language from the message: 'ru' if Cyrillic-dominant, 'en' if
-    Latin-dominant, None when there are no letters (caller falls back to the
-    stored preference, which defaults to Russian)."""
-    t = str(text or "")
-    cyr = sum(1 for c in t if "Ѐ" <= c <= "ӿ")
-    lat = sum(1 for c in t if ("a" <= c <= "z") or ("A" <= c <= "Z"))
-    if cyr == 0 and lat == 0:
+    """Reply-language from the message, by WORD not letter count: a long borrowed
+    English term inside a Russian sentence ("когда у нас performance review?")
+    must stay Russian, so we don't let one long Latin run outvote the Russian
+    words around it. Ties and 'no letters' fall to Russian (the uncertain
+    fallback) — None means the caller uses the stored preference (also ru)."""
+    cyr_words = lat_words = 0
+    for token in re.findall(r"[A-Za-zЀ-ӿ]+", str(text or "")):
+        if any("Ѐ" <= c <= "ӿ" for c in token):
+            cyr_words += 1
+        else:
+            lat_words += 1
+    if cyr_words == 0 and lat_words == 0:
         return None
-    return "ru" if cyr >= lat else "en"
+    return "ru" if cyr_words >= lat_words else "en"
 
 
 # Current trace id for the in-flight unit of work (single-threaded poll loop,
