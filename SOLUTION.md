@@ -2,11 +2,12 @@
 
 **Cara** (`@cara_assist_bot`) is a personal conversational AI assistant living
 in Telegram, self-hosted on a 1 vCPU / 2 GB DigitalOcean droplet (Pilot-VPS).
-All model inference runs on DigitalOcean Gradient serverless inference. The
-operator ("boss") talks to her in free-form **Russian or English — text or
-voice — with no slash commands**; a closed-world router assigns each request to
-a specialized skill, and anything that changes state is confirmed
-conversationally before it becomes final.
+All model inference runs on DigitalOcean Gradient serverless inference. Her
+owner ("boss") talks to her in free-form **Russian or English — text or voice,
+no slash commands**. She **converses warmly like a person**, and for anything
+operational a closed-world router assigns the request to a specialized skill;
+anything that changes state is confirmed conversationally before it becomes
+final. She replies only to her owner, in whichever language he wrote in.
 
 Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 
@@ -17,82 +18,109 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 1. **One bot, one process, skills as modules.** Telegram allows a single
    `getUpdates` poller per token, and a 1-vCPU box does not need a fleet of
    daemons. The orchestrator is an intent router inside one systemd service;
-   each skill is a Python module behind it. A skill graduates to its own
-   process only when it earns it.
+   each skill is a Python module behind it. Background work (curation, retries,
+   cleanup) runs as durable jobs in the same process.
 2. **Store first, think second.** Every inbound message is persisted to SQLite
    before any model call. LLM outages, budget stops, and restarts never lose
    data — pending work is retried on a sweep.
-3. **Suggest, then confirm.** The model proposes (a category, a parsed
-   reminder, a learned habit, a bulk delete); nothing enters the taxonomy, the
-   schedule, the calendar, or memory without operator confirmation — by natural
-   reply («да», «нет, лучше крипта», «через полчаса») or an inline button.
-4. **Scoped, not chatty.** The router has a closed action set with **no generic
-   "chat" action**, so Cara cannot drift into open-ended GPT conversation. The
-   LLM emits JSON into validated slots and all user-facing text comes from
-   bilingual templates — with **one deliberate, fenced exception**: the `ask`
-   skill (§4) returns a grounded free-form answer from the operator's own notes.
-5. **Every token is metered.** All chat / STT / embedding calls pass through one
-   budget-guarded gateway that prices and logs them; daily and monthly budgets
-   warn at 80 % and hard-stop at 100 %.
-6. **Zero inbound surface.** Long polling only: the host firewall stays
-   SSH-only, no webhooks, no reverse proxy, no Docker, no pip dependencies.
-7. **Analyze → argue → build.** New capabilities are assessed against the
-   architecture first; the agent-or-not question is asked per feature; genuine
-   options or guardrail changes are surfaced for sign-off before coding.
-   (Operator working agreement, `CLAUDE.md`.)
+3. **Suggest, then confirm.** The model proposes (a category, a parsed reminder,
+   a learned fact, a bulk delete); nothing enters the taxonomy, the schedule, the
+   calendar, or durable memory without confirmation — by natural reply («да»,
+   «нет, лучше крипта», «через полчаса») or an inline button.
+4. **Conversational, but safe by construction.** Cara talks like a real person —
+   warm, free-form, with her own life (§5). What stays locked down no matter how
+   human she sounds: every state change is confirmed; a **permission manifest**
+   gates what each skill may do; forwarded/quoted content is untrusted; budgets
+   hard-stop; and she truthfully never claims a real task was done when it
+   wasn't. Conversation and grounded Q&A are LLM-generated; **transactional and
+   system messages stay deterministic templates.**
+5. **Owner-only.** Cara answers exactly one person: a message is acted on only
+   when **both** the chat and the sender's account are on the allowlist. A
+   stranger sharing a chat can't reach her, and the owner's account isn't acted
+   on in any other chat (e.g. a group the bot is added to).
+6. **Speak his language.** Each reply matches the language of the incoming
+   message (Cyrillic → Russian, Latin → English), falling back to the stored
+   preference (default Russian) only when a message has no letters to judge by.
+7. **Every token is metered.** All chat / STT / embedding calls pass through one
+   budget-guarded gateway that prices and logs them, with model profiles and
+   failover; daily and monthly budgets warn at 80 % and hard-stop at 100 %.
+8. **Zero inbound surface.** Long polling only: the host firewall stays SSH-only,
+   no webhooks, no reverse proxy, no Docker, no pip dependencies.
+9. **Auditable.** Every inbound update and scheduler tick runs under a trace id
+   that stamps its model calls and issues; failures, fallbacks, and proactive
+   decisions are all logged.
+10. **Analyze → argue → build.** New capabilities are assessed against the
+    architecture first; the agent-or-not question is asked per feature; genuine
+    options or guardrail changes are surfaced for sign-off before coding.
+    (Operator working agreement, `CLAUDE.md`.)
 
 ---
 
 ## 2. Architecture
 
 ```
- Telegram (text · voice · forwarded posts · photos · .md/.txt documents)
-        │  long polling, no inbound ports
+ Telegram (text · voice · forwarded posts · photos · documents)
+        │  long polling, no inbound ports · owner-only (chat AND sender)
         ▼
- ┌─ agent.py ── poll loop · album buffering · pending actions · scheduler ──────┐
- │                                                                              │
- │  voice ──► STT (local whisper.cpp) ──► text ─┐                               │
- │  forwarded / photo / document ───────────────┼──► ingest skill (no router)   │
- │  free text / transcribed voice ──► router.py (closed-world LLM intent)       │
- │                     │  (14 turns of context; resolves references)            │
- │   ┌─────────┬───────┼────────┬─────────┬─────────┬──────────┬─────────┐      │
- │   ▼         ▼       ▼        ▼         ▼         ▼          ▼         ▼      │
- │ ingest  reminders  spend   review   memory     ask      fetch    sysinfo    │
- │ +facts  +calendar  +budget +export  +habits  (KB Q&A)  (URL)   (vps stats)  │
- │   │         (gcal)                            knowledge.py  fetch.py         │
- │   └──────── show_media · discard · item_delete · purge · issues · stats ─────┘
- │                          │                                                   │
- │                  llm.py — budget-guarded gateway                             │
- │              (chat · embeddings(BGE-M3) · STT; prices + logs every call)      │
- │                          │                                                   │
- │           store.py — SQLite (WAL)        storage.py — binaries               │
- │                                          (local default / DO Spaces)         │
- └──────────────────────────────────────────────────────────────────────────────┘
+ ┌─ agent.py ─ poll loop · album buffering · pending actions · scheduler · jobs ──┐
+ │                                                                                │
+ │  voice ─► STT (local whisper-server) ─► text ─┐                                │
+ │  forwarded / photo / document ────────────────┼─► ingest skill (no router)     │
+ │  free text / transcribed voice ─► router.py (closed-world LLM intent)          │
+ │                     │  (recent-turn context; per-message language)             │
+ │   ┌──────────┬──────┴───┬─────────┬─────────┬─────────┬─────────┬─────────┐    │
+ │   ▼          ▼          ▼         ▼         ▼         ▼         ▼         ▼    │
+ │ converse  ingest    reminders   spend    review    ask      fetch    sysinfo  │
+ │ (warm     +facts    +calendar   +budget  +schedule (KB Q&A) (URL)   (vps stat)│
+ │  chat)    +files    (gcal)                +export                             │
+ │   │   self · persona · boss profile · memory review · working history · trace  │
+ │   └─── show_media · discard · item_delete · purge · issues · stats · export ───┘
+ │                          │                                                     │
+ │  skill_manifest.py — permission gate (risk · confirmation · proactive)         │
+ │  trace.py — one trace per update/tick   runtime.py — durable job drain         │
+ │                          │                                                     │
+ │                  llm.py — budget-guarded gateway (profiles + failover)         │
+ │              (chat · embeddings BGE-M3 · STT; prices + logs every call)         │
+ │                          │                                                     │
+ │           store.py — SQLite (WAL)        storage.py — binaries                 │
+ │                                          (local default / DO Spaces)           │
+ └────────────────────────────────────────────────────────────────────────────────┘
                             │
               DigitalOcean Gradient serverless inference
-        (chat: anthropic-claude-haiku-4.5 · embeddings: BGE-M3)
+   (chat: anthropic-claude-haiku-4.5 · fallback openai-gpt-4o · embeddings: BGE-M3)
 ```
 
 ### Module map
 
 | Module | Responsibility |
 |---|---|
-| `tg_ingest_agent.py` | entry point: poll loop, dispatch, pending-action resolution, scheduler ticks, housekeeping (installed as `agent.py`) |
+| `tg_ingest_agent.py` | entry point: poll loop, dispatch, pending-action resolution, scheduler ticks, maintenance jobs (installed as `agent.py`) |
 | `router.py` | closed-world intent router (LLM, JSON-only, confidence gate, context recall) |
+| `converse.py` | **free-form warm conversation as Cara** — persona, her evolving life, boss facts, language matching |
 | `ingest.py` | message parsing, URL extraction (UTF-16-safe), category + facts + summary suggestion |
 | `knowledge.py` | document chunking, cosine retrieval, grounded-answer prompt (the `ask` skill) |
 | `reminders.py` | reminder drafts, recurrence, local-time rendering |
 | `gcal.py` | Google Calendar (service-account JWT) + .ics export |
 | `spend.py` | AI-usage aggregation and reports |
-| `review.py` | performance review (chat + Markdown export) |
+| `review.py` | performance review (chat + Markdown exports), weekly schedule, trace summary |
+| `self_model.py` | Cara's deterministic self-knowledge (capabilities/limits, never invented) |
+| `boss_model.py` | structured boss profile (confirmed vs inferred, sensitivity floors, address resolution) |
+| `memory_curator.py` | proposes memory candidates from evidence + learns from conversation |
+| `relationship.py` | grounded working history (real events, never fabricated) |
+| `persona.py` | prompt-layer ordering (persona sits below all rule layers) |
+| `proactive.py` | suggestion-only heartbeat (nudges, throttle, quiet hours) |
+| `skill_manifest.py` | permission registry: per-skill risk, confirmation mode, proactive eligibility |
+| `trace.py` | structured tracing (one trace per update/tick; stages) |
+| `events.py` / `jobs.py` / `runtime.py` | durable event/job tables + handler registry + drain |
+| `action_truth.py` | guard so "done/saved/scheduled" wording can't precede the DB write |
 | `sysinfo.py` | read-only host stats from `/proc` + statvfs (no root, no shell) |
 | `fetch.py` | remote URL reader with SSRF guard |
 | `storage.py` | binary backend: local default; DO Spaces (S3 SigV4 in stdlib), dormant |
-| `llm.py` | DO Gradient gateway: chat, embeddings, local/remote Whisper STT, pricing, budgets |
+| `llm.py` | DO Gradient gateway: chat profiles + failover + cooldowns, embeddings, STT, pricing, budgets |
 | `store.py` | SQLite schema + helpers; additive migrations |
 | `tg_api.py` | Telegram Bot API client (send message/photo/document, getFile) |
-| `texts.py` | bilingual (ru/en) reply templates — Cara's voice |
-| `common.py` | config loading, shared helpers |
+| `texts.py` | bilingual (ru/en) reply templates with tone/intensity variants — Cara's transactional voice |
+| `common.py` | config loading, language detection, shared helpers |
 
 ---
 
@@ -100,117 +128,207 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 
 | Capability | What it does | Confirmation |
 |---|---|---|
-| **Ingest** | Stores forwarded posts and notes (text, URLs, photos; an album = one message) with forward origin, **t.me source link**, and post date. A vision-capable LLM suggests a category from the operator-confirmed taxonomy (matched by meaning across RU/EN), a summary, and up to 5 **key facts** — all strictly in the source language. Re-forwarded posts are deduplicated. | Category confirmed by reply or button; corrections logged as feedback. |
-| **Documents** | Send a `.md`/`.txt` file (e.g. a trip plan) → full text stored and indexed; flows through the same categorization. | As ingest. |
-| **Ask (KB Q&A)** | "когда мой рейс?", "что у нас по плану на сегодня?" → semantic retrieval (BGE-M3) over stored notes, then a **grounded free-form answer** in the question's language, citing `(#id)`; refuses if the answer isn't in the KB. | — (read-only) |
+| **Conversation** | Greetings, smalltalk, anything personal/emotional or not a concrete task → a warm, free-form reply in Cara's own voice (`converse`), in the boss's language. Reads recent context; never changes state. | — (read-only) |
+| **Ingest** | Stores forwarded posts and notes (text, URLs, photos; an album = one message) with forward origin, **t.me source link**, and post date. A vision-capable LLM suggests a category from the confirmed taxonomy (matched by meaning across RU/EN), a summary, and up to 5 **key facts** in the source language. Re-forwarded posts are deduplicated. | Category confirmed by reply or button; corrections logged as feedback. |
+| **Files** | Forwarded documents (PDF, doc, sheet…) are stored by Telegram `file_id`; a file-only message uses the filename as searchable text. "покажи детали"/"покажи файл" re-sends the actual file. | — |
+| **Ask (KB Q&A)** | "когда мой рейс?", "что у нас по плану?" → semantic retrieval (BGE-M3) over stored notes, then a **grounded** answer in the question's language citing `(#id)`; refuses if it isn't in the notes. | — (read-only) |
 | **Reminders** | NL time parsing (RU/EN), one-shot / daily / weekly, fired from the poll loop (~1 min precision), snooze by natural reply; survives restart & nightly reboot. | Draft echoed before scheduling. |
 | **Calendar** | "добавь в календарь…" → .ics file (no setup) or direct Google Calendar via a service account; `auto_calendar` syncs every confirmed reminder. | Uses confirmed reminders / explicit times. |
-| **Spend** | "сколько потратили за месяц?" → totals + breakdown by skill & model + budget status. Budgets enforced in the gateway. | — |
-| **Memory & learning** | "запомни: …", "что ты обо мне знаешь?", "забудь…". Owner name auto-captured. Category corrections feed back into prompts; after N consistent confirmations from a source, Cara offers to auto-confirm it. | Consent-first; auditable & deletable. |
-| **Introspection** | "что ты умеешь?" (capabilities), "что у тебя есть?" (KB digest), "покажи сохранённое про X / в категории Y" (browse). | — |
-| **Show media** | "покажи фото из #2" → re-sends stored photos by Telegram `file_id` (no re-upload, free). | — |
+| **Spend** | "сколько потратили за месяц?" → totals + breakdown by skill & model + budget status. | — |
+| **Self & persona** | "что ты умеешь?" → capabilities generated from the manifest (dormant features named as dormant); "расскажи о себе / какая ты?" → in-character. | — |
+| **Boss profile & memory** | "запомни: …", "что ты обо мне знаешь?", "забудь…", "как меня зовут?". Confirmed vs inferred kept separate; sensitive facts gated. | Consent-first; auditable & deletable. |
+| **Memory review** | Cara proposes durable-memory **candidates** from evidence; "обзор памяти" lists them with confirm/skip buttons. | Durable memory only after a yes. |
+| **Working history** | "как ты мне помогала?" → a grounded summary of real confirmed actions (saves, reminders, corrections, reviews, exports). | — |
+| **Review** | "как ты поработала за неделю?" → digest; "когда следующий performance review?" → next scheduled date; weekly review runs on a fixed schedule. Markdown exports for VS Code. | — |
+| **Show media** | "покажи фото/файл из #2" → re-sends stored photos and documents by `file_id` (no re-upload). | — |
 | **Fetch** | "прочитай https://…" → fetches a public page (or public t.me web view), extracts text, ingests it. SSRF-guarded. | As ingest. |
 | **VPS stats** | "как сервер?" → CPU load, memory, disk, uptime, Cara's own footprint. | — |
-| **Discard / delete / purge** | Decline a fresh suggestion (`discard`); delete a stored item (`item_delete`); **bulk purge** by scope (all / category / stats / reminders) with a **typed confirmation phrase**. | Discard immediate; delete & purge confirmed (purge requires the exact phrase). |
-| **Issues & review** | Every failure (out-of-scope, unclear, STT, model error, budget stop, fetch, no-KB-match) is logged; weekly digest + on-demand performance review with a Markdown export for VS Code. | — |
-
-Persona: Cara is a warm, loyal "private aide" (the operator is her *boss*),
-specified in `prompts/cara_persona.md` and enforced structurally — the voice
-lives in templates, not in unconstrained model output.
+| **Discard / delete / purge** | Decline a fresh suggestion (`discard`); delete stored items by id/ids/count (`item_delete`); **bulk purge** by scope (all / category / stats / reminders / messages / issues) with a **typed confirmation phrase**. | Discard immediate; delete & purge confirmed (purge requires the exact phrase). |
+| **Proactive nudges** | Gentle, suggestion-only heads-up (overdue reminders, memory candidates waiting, items needing a category) — throttled and quiet-hours-aware (§7). | Suggestion-only; never acts. |
+| **Trace / why** | "почему ты так решила?" → the last trace timeline. Issues are logged; weekly digest + trace-summary export. | — |
 
 ---
 
-## 4. The one free-text exception (grounded Q&A)
+## 4. Conversation, grounded Q&A, and persona
 
-`ask` is the only action that returns generated prose. It is fenced so it
-cannot become a general chatbot:
+Cara has **two LLM-generated reply paths**, both bounded:
 
-- answers **only** from the operator's own stored notes (retrieved by BGE-M3
-  cosine similarity, keyword+recency fallback);
-- **never** uses outside/general knowledge; says "не нашла в твоих заметках"
-  when absent (and logs an `ask_no_context` issue);
-- replies in the question's language; cites the source `(#id)`;
-- stored content is wrapped as untrusted data (prompt-injection defense).
+- **`converse`** — warm, free-form conversation in Cara's own voice. Used for
+  greetings, smalltalk, anything personal or not a concrete task. It reads recent
+  conversation and her profile of the boss, **never changes state**, treats any
+  quoted/forwarded text as untrusted, and won't claim a real task was done. (If
+  the boss wants something done, he just asks and the relevant skill handles it,
+  with confirmation.)
+- **`ask`** — grounded Q&A over the boss's own stored notes (BGE-M3 retrieval),
+  in the question's language, citing `(#id)`; says "не нашла в твоих заметках"
+  when absent. Never uses outside knowledge; stored content is wrapped as
+  untrusted data.
 
-This relaxation was an explicit operator decision; every other interaction
-remains template-only.
+**Persona.** Cara presents as a real person with her own (fictional) private life
+— interests, friends, plans — that **grows from conversation** and stays
+consistent (`cara_life`). She is warm and loyal (the boss is her *boss*; never
+romantic/possessive), matches his language, and **does not break character with
+AI disclaimers** — a deliberate owner decision, made safe by owner-only access
+(§5). The persona is a *style* layer that sits **below** every operational rule
+(`persona.py` pins the order: security → tools → router → confirmation → memory →
+budget → persona), so it can never override safety, confirmation, or truth.
+Transactional/system messages remain deterministic `texts.py` templates with
+tone variants; only conversation and grounded answers are free-form.
 
 ---
 
-## 5. Data model (SQLite, WAL)
+## 5. Memory & learning
 
-`messages` (lifecycle `pending → suggested → confirmed`, plus `failed` /
-`duplicate`; unique per chat+message id for redelivery dedup; forward origin,
-username, dates) · `urls` · `images` (`local_path`, `object_key`) · `facts` ·
-`chunks` (text + BGE-M3 embedding for semantic search) · `categories`
-(canonical names; Cyrillic-safe dedup via Python `casefold`) · `reminders` ·
-`llm_usage` (ts/skill/kind/model/tokens/cost) · `feedback` · `preferences`
-(identity/config) · `pending_actions` (per-chat, TTL) · `conversation` (last 30
-turns for router context) · `issues` · `kv` (poll offset, flags).
+- **Boss profile (`boss_model`).** Confirmed facts vs inferred patterns kept
+  separate and shown separately; a sensitivity floor by kind (e.g. personal facts
+  → sensitive) means sensitive items are never surfaced casually or auto-stored.
+  Names resolve per language (`owner_name_ru`/`owner_name_en`), falling back to
+  «босс»/"boss" — never invented.
+- **Curation (`memory_curator`).** Proposes durable-memory **candidates** from
+  evidence (repeated corrections, confirmed source habits) that the boss confirms
+  via memory review. From ongoing conversation it also learns: **benign** facts
+  are stored as correctable *inferred* items; **sensitive** ones become
+  confirm-first candidates, never auto-stored.
+- **Cara's life (`cara_life`).** Her own evolving fictional life, seeded and
+  grown from conversation so her persona stays coherent across chats.
+- **Relationship (`relationship`).** Grounded working history: every entry traces
+  to a real row (a confirmed save/correction, a reminder, a saved document, a
+  review, an export). Never fabricated.
+
+---
+
+## 6. Proactive heartbeat
+
+A periodic, **suggestion-only** check (`proactive.py`) that may gently flag
+overdue reminders (urgent), memory candidates waiting, or items still needing a
+category. Rails:
+
+- **Suggestion-only** — a nudge asks the boss to act; it never changes state.
+- **Manifest-gated** — only the `proactive_heartbeat` skill runs here; a
+  destructive/external skill cannot.
+- **Throttled** — at most `PROACTIVE_MAX_PER_DAY` (default 1) non-urgent nudges
+  per day, never repeating the same nudge in a day; urgent (overdue) may bypass
+  the cap.
+- **Quiet hours** — no non-urgent nudge inside the configured window (default
+  22:00–08:00 local, wraps midnight); urgent ones only if explicitly allowed.
+- **Audited** — every evaluation (sent or suppressed, with reason) is written to
+  `proactive_log`, under its own trace, and never crashes the loop.
+
+Budget warnings and the weekly digest keep their own dedicated notifiers.
+
+---
+
+## 7. Durable runtime & observability
+
+- **Permission manifest (`skill_manifest`).** Single source of truth for every
+  action's risk, whether it writes state, its confirmation mode, and whether it
+  may run proactively. Enforced live: startup fails fast if a router action lacks
+  a policy; dispatch records each action's risk on the trace; destructive actions
+  must be typed-phrase-gated (tested); proactive code calls its gate.
+- **Tracing (`trace`).** One trace per inbound update and per scheduler tick,
+  with staged events; the trace id stamps `llm_usage` and `issues`. "почему ты
+  так решила?" replays the last trace.
+- **Events & jobs (`events`/`jobs`/`runtime`).** Durable, retryable background
+  work: the daily memory curator and maintenance (pending-ingest retry sweep,
+  media cleanup, expiring abandoned pending actions) run as jobs that survive
+  restart, retry on failure, and run under their own traces. The live
+  request→reply path stays synchronous by design (single-user, low volume).
+
+---
+
+## 8. Data model (SQLite, WAL)
+
+Core: `messages` (lifecycle `pending → suggested → confirmed`, plus `failed` /
+`duplicate`; unique per chat+message id; forward origin, username, dates) ·
+`urls` · `images` (`local_path`, `object_key`) · `files` (forwarded documents by
+`file_id`) · `facts` · `chunks` (BGE-M3 embeddings) · `categories` (Cyrillic-safe
+dedup) · `reminders` · `feedback` · `preferences` (identity/config) ·
+`pending_actions` (per-chat, TTL) · `conversation` (recent turns) · `kv`.
+
+Spend & reliability: `llm_usage` (ts/skill/kind/model/tokens/cost/trace) ·
+`model_cooldowns` (failover).
+
+Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity)
+· `memory_candidates` · `relationship_events` (title + trace) · `cara_life`.
+
+Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
+`proactive_log`.
 
 Cascade deletes and the `purge` scopes keep related rows and media consistent;
 **`llm_usage` (spend history) and `preferences` (identity) are never purged.**
 
 ---
 
-## 6. Voice & storage
+## 9. Voice & storage
 
 - **Voice (STT):** DO's serverless catalog exposes no transcription model, so
-  Cara runs **whisper.cpp locally** on the VPS (`ggml-small-q5_1`, ffmpeg
-  OGG→WAV), free, ~1 min per 30 s note on 1 vCPU. `STT_MODE` switches to a
-  remote OpenAI-compatible endpoint if one becomes available.
-- **Binary storage:** local files under `MEDIA_DIR` by default; an optional
-  **DO Spaces** backend (S3 Signature V4 in pure stdlib, validated against
-  AWS's published vectors) uploads photos for durability. Built and tested,
-  **dormant** until `SPACES_*` is configured.
+  Cara runs **whisper.cpp locally** on the VPS. A warm `whisper-server`
+  (`STT_MODE=local_server`, OpenBLAS build, `ggml-small-q5_1`) keeps the model
+  resident, transcribing a short note in ~12 s on 1 vCPU; `STT_MODE` can switch
+  to a remote OpenAI-compatible endpoint if one becomes available.
+- **Binary storage:** local files under `MEDIA_DIR` by default; an optional **DO
+  Spaces** backend (S3 Signature V4 in pure stdlib) uploads photos for
+  durability. Built and tested, **dormant** until `SPACES_*` is configured.
 
 ---
 
-## 7. Security
+## 10. Security
 
-- Chat-ID allowlist; unknown senders logged and ignored.
-- Closed router action set; JSON-only model output; template-only replies (one
-  fenced grounded-answer exception); untrusted-content delimiters; confidence
-  gate (clarify below threshold).
+- **Owner-only:** a message/callback is processed only when both the chat id and
+  the sender's user id are on the allowlist; everyone else is logged and ignored.
+- Closed router action set; JSON-only router output; confidence gate (converse on
+  low confidence rather than a cold rejection); untrusted-content delimiters for
+  forwarded/quoted text and stored notes (prompt-injection defense).
 - **Fetch SSRF guard:** http/https only, no URL credentials, every URL and
-  redirect hop resolved and rejected if it maps to a private/loopback/
-  link-local/reserved IP or the cloud metadata endpoint `169.254.169.254`.
+  redirect hop resolved and rejected if it maps to a private/loopback/link-local/
+  reserved IP or the metadata endpoint `169.254.169.254`.
 - **Bulk purge** requires a typed confirmation phrase (handled deterministically
-  before the router, so a stray "да" can't wipe data); 5-min TTL.
-- Secrets in `/etc/tg-ingest-agent.env` (0600), staged via files during
-  rotation — never in argv, shell history, or the journal; access keys redacted
-  from logged HTTP errors.
+  before the router, so a stray "да" can't wipe data); pending actions carry a
+  TTL and are swept when abandoned.
+- **Truthfulness:** the action-truth guard prevents "done/saved/scheduled"
+  wording before the DB write; Cara won't claim a real-world action she didn't
+  perform.
+- Secrets in `/etc/tg-ingest-agent.env` (0600), staged via files during rotation
+  — never in argv, shell history, or the journal; access keys redacted from
+  logged HTTP errors.
 - systemd hardening: non-root user, `NoNewPrivileges`, `ProtectSystem=strict`,
   `PrivateTmp`, writable only in `/var/lib/tg-ingest-agent`.
 - Dedicated bot token and dedicated DO inference key (independent billing &
   revocation).
-- **Housekeeping:** voice notes and orphaned media are auto-purged after
-  processing; review exports trimmed — disk stays bounded.
+- **Housekeeping:** voice notes and orphaned media auto-purged after processing;
+  review/export files trimmed — disk stays bounded.
 
 ---
 
-## 8. Operations
+## 11. Operations
 
 - **Host:** Pilot-VPS, `209.38.175.16:49191` (SSH key-only). systemd service
   `tg-ingest-agent`, app `/opt/tg-ingest-agent/`, state `/var/lib/tg-ingest-agent/`.
-- **Deploy:** `scp` + idempotent installer (backs up replaced files, preserves
-  env, `py_compile` gate, restarts only when secrets are complete).
+- **Deploy:** single-connection `deploy.sh` (tar → test → install → verify) with
+  an idempotent installer that backs up replaced files, preserves env, gates on
+  `py_compile`, and restarts only when secrets are complete; `--pull`/`--rollback`
+  supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 119 offline unit tests (no network; temp SQLite), run on the VPS.
-- **Observability:** journald (routing decisions with confidence, per-row
-  lifecycle), `llm_usage` for spend, `issues` for failure modes, weekly digest.
-- **Footprint:** ~20 MB RSS; disk ~10 % of 48 GB.
+- **Tests:** 200+ offline unit tests (no network; temp SQLite), run on the VPS as
+  part of every deploy.
+- **Observability:** journald (routing decisions with risk + confidence,
+  per-row lifecycle), `traces`/`trace_events`, `llm_usage` for spend, `issues`
+  and `proactive_log` for behavior, weekly digest + trace-summary export.
+- **Footprint:** tens of MB RSS; disk a small fraction of 48 GB.
 
 ---
 
-## 9. Roadmap / known gaps
+## 12. Roadmap / known gaps
 
-- Google Calendar sync dormant until a service-account key is provisioned
-  (.ics export works now).
-- DO Spaces dormant until a Space + keys are configured (local storage works).
+- Google Calendar sync dormant until a service-account key is provisioned (.ics
+  export works now); DO Spaces dormant until configured (local storage works).
 - A Telegram bot cannot read arbitrary chat history or private-channel links by
   URL — forwarding remains the path for those.
-- Recurrence limited to daily/weekly; image-as-document files stored
-  metadata-only; remote fetch is HTML/text + public t.me only (file shares
-  deferred).
+- Recurrence limited to daily/weekly; image-as-document files are kept
+  metadata-only as images (other documents are stored and re-sendable); remote
+  fetch is HTML/text + public t.me only.
+- Deferred by design (single-user posture): multi-channel adapters, any web
+  console/webhooks, MCP adapter, independent multi-agent processes, plugin
+  marketplace, and shell/browser automation — none are implemented.
+```
