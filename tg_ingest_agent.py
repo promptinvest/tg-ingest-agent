@@ -654,7 +654,7 @@ class Agent:
             # never describes herself as software. Capability questions go to `help`.
             self.do_converse(chat_id, lang, text)
         elif action == "boss_query":
-            self.reply(chat_id, boss_model.render_profile(self.conn, lang))
+            self.do_boss_query(chat_id, lang)
         elif action == "boss_memory_update":
             self.do_boss_memory(chat_id, lang, params)
         elif action == "style_update":
@@ -923,6 +923,42 @@ class Agent:
                 f"{len(unresolved)} unresolved")
 
     # -- Memory skill
+
+    def do_boss_query(self, chat_id, lang):
+        """What I know about you — said warmly, in Cara's voice, not a database
+        dump of #ids and status headers. Grounded in the stored facts (deduped),
+        gently marking what's sure vs sensed; deterministic view is the fallback."""
+        name, confirmed, inferred = boss_model.profile_facts(self.conn, lang)
+        if not (name or confirmed or inferred):
+            self.reply(chat_id, T(lang, "boss_query_empty"))
+            return
+        facts = []
+        if name:
+            facts.append(f"His name: {name}")
+        if confirmed:
+            facts.append("Things you're sure of:\n" + "\n".join(f"- {v}" for v in confirmed))
+        if inferred:
+            facts.append("Things you've only sensed, not confirmed:\n"
+                         + "\n".join(f"- {v}" for v in inferred))
+        lang_name = "Russian" if lang == "ru" else "English"
+        system = (
+            f"You are Cara, talking to your boss. In {lang_name}, warmly tell him what you know "
+            "about him — like a close friend reflecting out loud, NOT a database. 2–4 short, natural "
+            "sentences. No bullet points, no numbers, no '#id', no headings. Weave the facts together "
+            "and merge anything that repeats. Gently distinguish what you're sure of from what you've "
+            "only sensed ('замечаю, что…', 'кажется…'). Invent NOTHING beyond the facts given. End "
+            "with a light, warm nudge that he can correct you or have you forget something — in his "
+            "own words, no commands or #ids."
+        )
+        messages = [{"role": "system", "content": system},
+                    {"role": "user", "content": "\n\n".join(facts)}]
+        try:
+            reply = llm.chat_profile(self.cfg, self.conn, "boss_query", messages,
+                                     profile="converse_warm")
+        except (llm.BudgetExceeded, llm.LLMError):
+            reply = ""
+        reply = (reply or "").strip()
+        self.reply(chat_id, reply or boss_model.render_profile(self.conn, lang))
 
     def do_boss_memory(self, chat_id, lang, params):
         op = str(params.get("op") or "remember").strip().lower()

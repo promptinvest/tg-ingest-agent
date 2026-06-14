@@ -99,6 +99,50 @@ def _name_line(conn, lang):
     return (f"Вас зовут {both}." if lang == "ru" else f"Your name is {both}.")
 
 
+def _norm(s):
+    return re.sub(r"[^\w]+", " ", str(s or "").casefold(), flags=re.UNICODE).strip()
+
+
+def _similar(a, b, thresh=0.6):
+    """Rough near-duplicate check by shared-word ratio — catches reworded repeats
+    ('надёжный, держит слово, люди доверяют' vs '…и люди ему доверяют')."""
+    ta, tb = set(_norm(a).split()), set(_norm(b).split())
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / max(len(ta), len(tb)) >= thresh
+
+
+def _dedup(values, thresh=0.7):
+    out = []
+    for v in values:
+        if v and not any(_similar(v, kept, thresh) for kept in out):
+            out.append(v)
+    return out
+
+
+def is_duplicate(conn, text, thresh=0.7):
+    """True if a near-identical fact is already in the profile (so the curator
+    doesn't pile up reworded copies)."""
+    existing = [r["value"] for r in store.boss_items(conn, "confirmed", limit=60)] \
+        + [r["value"] for r in store.boss_items(conn, "inferred", limit=60)]
+    return any(_similar(text, e, thresh) for e in existing)
+
+
+def profile_facts(conn, lang):
+    """Deduped (name, confirmed, inferred) for a warm spoken summary. Inferred
+    items that merely restate a confirmed one are dropped."""
+    name_ru = store.pref_get(conn, "owner_name_ru")
+    name_en = store.pref_get(conn, "owner_name_en")
+    name = " / ".join(dict.fromkeys(n for n in (name_ru, name_en) if n)) \
+        or store.pref_get(conn, "owner_name") or None
+    confirmed = _dedup([r["value"] for r in store.boss_items(conn, "confirmed", limit=40)])
+    inferred = [v for v in _dedup(
+        [r["value"] for r in store.boss_items(conn, "inferred",
+                                              sensitivities=("normal", "private"), limit=40)])
+        if not any(_similar(v, c, 0.6) for c in confirmed)]
+    return name, confirmed, inferred
+
+
 def render_profile(conn, lang, include_inferred=True):
     confirmed = store.boss_items(conn, "confirmed")
     inferred = store.boss_items(conn, "inferred", sensitivities=("normal", "private")) \

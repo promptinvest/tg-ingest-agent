@@ -497,6 +497,10 @@ TEXTS = {
         "ru": "Готово, босс — переложила {n} в «{category}» ✅",
         "en": "Done, boss — moved {n} into «{category}» ✅",
     },
+    "boss_query_empty": {
+        "ru": "Пока знаю про тебя совсем немного, босс 🙂 Расскажи о себе — буду потихоньку запоминать.",
+        "en": "I still know only a little about you, boss 🙂 Tell me about yourself — I'll remember as we go.",
+    },
     # Sent once after a new build is installed on the VPS.
     "deploy_notice": {
         "ru": "Босс, свежие обновления установлены — я снова на связи ✨",

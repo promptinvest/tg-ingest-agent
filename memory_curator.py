@@ -144,7 +144,7 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
             continue
         text = str(item.get("text") or "").strip()
         kind = str(item.get("kind") or "personal_fact").strip().lower()
-        if not text or store.boss_find(conn, text):
+        if not text or boss_model.is_duplicate(conn, text):  # skip reworded repeats
             continue
         sens = boss_model.effective_sensitivity(kind, text)
         if boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]:
@@ -171,7 +171,7 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
             kind = "workflow"
         if not text:
             continue
-        if store.boss_find(conn, text):
+        if boss_model.is_duplicate(conn, text):
             # already learned, yet he's correcting it again -> auto-apply isn't
             # enough; flag for a code fix. Only when he actively corrected this
             # turn (not on background re-processing of an old window).

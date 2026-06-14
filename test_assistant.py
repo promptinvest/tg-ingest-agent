@@ -1302,6 +1302,59 @@ class LanguageDetectionTests(unittest.TestCase):
         self.assertEqual(common.detect_lang("what's the plan for today?"), "en")
 
 
+class BossQueryTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "b.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_profile_facts_dedups_near_duplicates(self):
+        import boss_model
+        store.pref_set(self.conn, "owner_name_ru", "Олег")
+        store.pref_set(self.conn, "owner_name_en", "Owen")
+        store.boss_add(self.conn, "relationship_note",
+                       "Он надёжный, держит слово, и люди ему доверяют.", status="confirmed")
+        store.boss_add(self.conn, "relationship_note",
+                       "Он надёжный, держит слово, люди доверяют.", status="inferred")  # near-dup
+        store.boss_add(self.conn, "tone", "Ценит честность.", status="inferred")
+        name, confirmed, inferred = boss_model.profile_facts(self.conn, "ru")
+        self.assertEqual(name, "Олег / Owen")
+        self.assertEqual(len(confirmed), 1)
+        self.assertNotIn("Он надёжный, держит слово, люди доверяют.", inferred)  # dropped
+        self.assertIn("Ценит честность.", inferred)
+
+    def test_boss_query_is_warm_and_id_free(self):
+        store.boss_add(self.conn, "tone", "Ценит честность.", status="confirmed")
+        warm = "Ну, кое-что уже знаю про тебя 🙂 Ты ценишь честность. Поправь, если что."
+        with mock.patch.object(llm, "chat_profile", return_value=warm) as cp, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_boss_query(1, "ru")
+        cp.assert_called_once()
+        self.assertEqual(cp.call_args.kwargs["profile"], "converse_warm")
+        self.assertEqual(r.call_args[0][1], warm)
+        self.assertNotIn("#", r.call_args[0][1])           # no #id dump, no status headers
+
+    def test_boss_query_empty_is_warm_no_llm(self):
+        with mock.patch.object(llm, "chat_profile") as cp, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_boss_query(1, "ru")
+        cp.assert_not_called()
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "boss_query_empty"))
+
+    def test_is_duplicate(self):
+        import boss_model
+        store.boss_add(self.conn, "tone", "Ценит честность и прямоту.", status="inferred")
+        self.assertTrue(boss_model.is_duplicate(self.conn, "Ценит честность, прямоту."))
+        self.assertFalse(boss_model.is_duplicate(self.conn, "Любит джаз по вечерам."))
+
+
 class SttNoiseTests(unittest.TestCase):
     def test_detects_whisper_hallucinations(self):
         for noise in ("[Subscribe]", "[ Music ]", "(applause)", "♪♪♪", "...", "",
