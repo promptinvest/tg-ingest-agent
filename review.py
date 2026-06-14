@@ -87,6 +87,41 @@ def collect(conn, period):
     ).fetchone()["n"]
     data["confirmed_about_you"] = store.boss_items(conn, "confirmed")
     data["pending_candidates"] = store.candidates_pending(conn, limit=20)
+    # saved items by category (confirmed only)
+    data["by_category"] = conn.execute(
+        "SELECT category, COUNT(*) AS n FROM messages WHERE received_at >= ?"
+        " AND status='confirmed' AND category IS NOT NULL"
+        " GROUP BY category ORDER BY n DESC LIMIT 15", (since,),
+    ).fetchall()
+    # facts learned this period (extracted at ingest)
+    data["facts_learned"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM facts f JOIN messages m ON f.message_id = m.id"
+        " WHERE m.received_at >= ?", (since,),
+    ).fetchone()["n"]
+    # reminders completed vs still-active-but-overdue
+    data["reminders_done"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM reminders WHERE status != 'active' AND created_at >= ?",
+        (since,),
+    ).fetchone()["n"]
+    data["reminders_overdue"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM reminders WHERE status = 'active' AND due_utc < ?",
+        (data["now"],),
+    ).fetchone()["n"]
+    # model fallback incidents (logged to trace_events by the llm gateway)
+    data["fallback_count"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM trace_events WHERE stage = 'llm.fallback' AND ts >= ?",
+        (since,),
+    ).fetchone()["n"]
+    data["fallbacks"] = conn.execute(
+        "SELECT ts, skill, message FROM trace_events WHERE stage = 'llm.fallback'"
+        " AND ts >= ? ORDER BY id DESC LIMIT 10", (since,),
+    ).fetchall()
+    # trace summary: how many units of work, by outcome
+    data["trace_status"] = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM traces WHERE started_at >= ?"
+        " GROUP BY status ORDER BY status", (since,),
+    ).fetchall()
+    data["rel_events"] = store.rel_recent(conn, since, limit=8)
     return data
 
 
@@ -105,8 +140,12 @@ def chat_text(conn, cfg, lang, period="week"):
     by_status = ", ".join(f"{r['status']}: {r['n']}" for r in data["messages"]) or "—"
     lines.append((f"📥 Сообщений: {total} ({by_status})" if ru
                   else f"📥 Messages: {total} ({by_status})"))
-    lines.append((f"⏰ Напоминаний поставлено: {data['reminders_set']}" if ru
-                  else f"⏰ Reminders set: {data['reminders_set']}"))
+    rem = (f"⏰ Напоминаний поставлено: {data['reminders_set']}" if ru
+           else f"⏰ Reminders set: {data['reminders_set']}")
+    if data["reminders_overdue"]:
+        rem += (f" · просрочено: {data['reminders_overdue']}" if ru
+                else f" · overdue: {data['reminders_overdue']}")
+    lines.append(rem)
     if data["ask_count"]:
         lines.append((f"❓ Ответила по базе: {data['ask_count']}" if ru
                       else f"❓ Answered from your KB: {data['ask_count']}"))
@@ -134,6 +173,9 @@ def chat_text(conn, cfg, lang, period="week"):
     calls = sum(r["calls"] for r in data["spend_by_skill"])
     lines.append((f"💸 Расходы AI: ${spend:.3f} ({calls} вызовов)" if ru
                   else f"💸 AI spend: ${spend:.3f} ({calls} calls)"))
+    if data["fallback_count"]:
+        lines.append((f"🔁 Запасная модель выручала: {data['fallback_count']}" if ru
+                      else f"🔁 Backup model used: {data['fallback_count']}×"))
     if data["pending_candidates"]:
         n = len(data["pending_candidates"])
         lines.append((f"📋 Хочу уточнить ({n}) — скажите «обзор памяти»" if ru
@@ -157,7 +199,13 @@ def markdown(conn, cfg, period="week"):
     lines.append(f"- messages ingested: **{total}**")
     for row in data["messages"]:
         lines.append(f"  - {row['status']}: {row['n']}")
-    lines.append(f"- reminders set: {data['reminders_set']}")
+    if data["by_category"]:
+        lines.append("- saved items by category:")
+        for row in data["by_category"]:
+            lines.append(f"  - {row['category']}: {row['n']}")
+    lines.append(f"- facts learned: {data['facts_learned']}")
+    lines.append(f"- reminders: {data['reminders_set']} set · {data['reminders_done']} completed · "
+                 f"{data['reminders_overdue']} overdue")
     lines.append("")
     lines.append("## Learning")
     lines.append("- new categories: " + (", ".join(data["new_categories"]) or "none"))
@@ -227,6 +275,32 @@ def markdown(conn, cfg, period="week"):
     else:
         lines.append("- none")
     lines.append("")
+    lines.append("## Working history (recent grounded moments)")
+    if data["rel_events"]:
+        for e in data["rel_events"]:
+            lines.append(f"- {e['title'] or e['kind']}: {e['summary']}")
+    else:
+        lines.append("- none recorded")
+    lines.append("")
+    lines.append("## Model fallback incidents")
+    if data["fallbacks"]:
+        lines.append(f"- {data['fallback_count']} fallback event(s) — primary model "
+                     "unavailable/invalid, served by a backup:")
+        for row in data["fallbacks"]:
+            msg = (row["message"] or "").replace("\n", " ")
+            lines.append(f"  - `{row['ts'][:16]}` {row['skill'] or '-'} — {msg}")
+    else:
+        lines.append("- none — primary models served every call")
+    lines.append("")
+    lines.append("## Trace summary")
+    if data["trace_status"]:
+        for row in data["trace_status"]:
+            lines.append(f"- traces {row['status']}: {row['n']}")
+    else:
+        lines.append("- no traces this period")
+    lines.append(f"- model fallbacks: {data['fallback_count']} · "
+                 f"issues logged: {sum(r['n'] for r in data['issue_counts'])}")
+    lines.append("")
     lines.append("## System health")
     try:
         import sysinfo
@@ -242,7 +316,7 @@ def markdown(conn, cfg, period="week"):
 
 # -- additional exports (spec §30.2) -----------------------------------------
 
-EXPORT_KINDS = ("review", "self", "profile", "history", "candidates")
+EXPORT_KINDS = ("review", "self", "profile", "history", "candidates", "trace")
 
 
 def export_document(conn, cfg, what, lang="en", period="week", full=False):
@@ -277,6 +351,21 @@ def export_document(conn, cfg, what, lang="en", period="week", full=False):
         if len(body) == 2:
             body.append("- none pending")
         return f"memory-candidates-{stamp}.md", "\n".join(body) + "\n"
+    if what == "trace":
+        data = collect(conn, period)
+        body = [f"# CARA_TRACE_SUMMARY — last {data['days']} day(s)", ""]
+        body.append("## Units of work (traces)")
+        body += [f"- {r['status']}: {r['n']}" for r in data["trace_status"]] or ["- none"]
+        body += ["", f"## Model fallbacks: {data['fallback_count']}"]
+        if data["fallbacks"]:
+            for r in data["fallbacks"]:
+                msg = (r["message"] or "").replace("\n", " ")
+                body.append(f"- `{r['ts'][:16]}` {r['skill'] or '-'} — {msg}")
+        else:
+            body.append("- none")
+        body += ["", "## Issues by kind"]
+        body += [f"- {r['kind']}: {r['n']}" for r in data["issue_counts"]] or ["- none"]
+        return f"cara-trace-summary-{stamp}.md", "\n".join(body) + "\n"
     # default: the full weekly review
     return f"cara-review-{normalize_period(period)}-{stamp}.md", markdown(conn, cfg, period)
 

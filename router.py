@@ -112,6 +112,7 @@ ROUTER_EXAMPLES = """Examples:
 "как давно ты мне помогаешь?" / "how have you helped me?" / "что ты сделала для меня?" -> {"action": "working_history", "params": {}, "confidence": 0.9}
 "выгрузи профиль файлом" / "export what you know about me" -> {"action": "export", "params": {"what": "profile"}, "confidence": 0.9}
 "экспортируй себя / историю / кандидатов в md" / "export your self profile" -> {"action": "export", "params": {"what": "self"}, "confidence": 0.85}
+"выгрузи трейс-сводку" / "экспортируй сбои моделей / трейсы" / "export the trace summary" -> {"action": "export", "params": {"what": "trace"}, "confidence": 0.85}
 "что ты помнишь из настроек?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
 "всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}

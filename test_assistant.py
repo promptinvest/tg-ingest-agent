@@ -457,6 +457,29 @@ class ReviewTests(unittest.TestCase):
             {"action": "review", "params": {"period": "week", "export": True}}, False)
         self.assertEqual(ok["action"], "review")
 
+    def test_new_digest_sections_and_trace_export(self):
+        import trace
+        store.set_facts(self.conn, 1, ["важный факт", "ещё факт"])         # facts learned
+        store.rel_add(self.conn, "document_saved", "kept a document: x.pdf",
+                      importance=2, title="x.pdf")                          # working history
+        tid = trace.start(self.conn, "telegram_message", 1)
+        trace.event(self.conn, tid, trace.LLM_FALLBACK,
+                    "router_fast:anthropic-claude-haiku-4.5 failed", skill="router")
+        trace.finish(self.conn, tid, "finished")
+        md = review.markdown(self.conn, self.cfg, "week")
+        for section in ("saved items by category", "facts learned: 2",
+                        "## Working history", "## Model fallback incidents",
+                        "## Trace summary"):
+            self.assertIn(section, md)
+        self.assertIn("крипта: 1", md)            # confirmed item counted by category
+        self.assertIn("x.pdf", md)                 # grounded working-history moment
+        # the new trace-summary export
+        fname, body = review.export_document(self.conn, self.cfg, "trace", "en", "week")
+        self.assertIn("cara-trace-summary-", fname)
+        self.assertIn("CARA_TRACE_SUMMARY", body)
+        self.assertIn("Model fallbacks: 1", body)
+        self.assertIn("trace", review.EXPORT_KINDS)
+
 
 class AgentViewTests(unittest.TestCase):
     def setUp(self):
