@@ -515,7 +515,9 @@ class AgentViewTests(unittest.TestCase):
         self.assertIn("Источник: Vandrouki", detail)
         self.assertIn("Cheap June flights", detail)
         self.assertIn("Пост: https://t.me/vandrouki/777", detail)
-        self.assertIn("Дата поста: ", detail)
+        self.assertIn("Создано: ", detail)
+        self.assertNotIn("T16:", detail)        # saved date no longer raw ISO with a 'T'
+        self.assertIn("📄 #%d · Flight Deals" % self.row_id, detail)  # sectioned header
         self.assertIn("• от 9800 руб туда-обратно", detail)
         by_query = self.agent.item_detail_text("en", {"query": "рейсы"})
         self.assertIn("Source: Vandrouki", by_query)

@@ -1430,45 +1430,77 @@ class Agent:
         rows = store.list_messages(self.conn, params.get("category"), params.get("query"), limit=1)
         return rows[0] if rows else None
 
+    def _fmt_ts_local(self, ts):
+        """Unix timestamp -> 'DD.MM.YYYY, HH:MM' in the boss's local time."""
+        local = datetime.fromtimestamp(int(ts), tz=timezone.utc) + timedelta(hours=self.tz_offset())
+        return local.strftime("%d.%m.%Y, %H:%M")
+
+    def _fmt_iso_local(self, iso):
+        """ISO string -> 'DD.MM.YYYY, HH:MM' local (no raw 'T' separator)."""
+        try:
+            dt = datetime.fromisoformat(str(iso))
+        except (ValueError, TypeError):
+            return str(iso)[:16].replace("T", " ")
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return (dt + timedelta(hours=self.tz_offset())).strftime("%d.%m.%Y, %H:%M")
+
     def item_detail_text(self, lang, params):
+        """Readable, sectioned detail card (plain text + emoji; sections split by
+        blank lines; rows shown only when present)."""
         ru = lang == "ru"
         row = self.resolve_item(params)
         if row is None:
             return T(lang, "items_empty")
-        category = row["category"] or row["suggested_category"] or "?"
-        lines = [f"#{row['id']} [{category}]"]
+
+        def L(r, e):
+            return r if ru else e
+
+        category = row["category"] or row["suggested_category"] or L("без категории", "uncategorized")
+        blocks = [[f"📄 #{row['id']} · {category}"]]
+
+        meta = []
         post_date = row["forward_date"] or row["tg_date"]
         if post_date:
-            local = datetime.fromtimestamp(int(post_date), tz=timezone.utc) \
-                + timedelta(hours=self.tz_offset())
-            lines.append(("Дата поста: " if ru else "Posted: ") + local.strftime("%Y-%m-%d %H:%M"))
-        lines.append(("Сохранено: " if ru else "Saved: ") + row["received_at"][:16])
+            meta.append("🗓 " + L("Создано: ", "Created: ") + self._fmt_ts_local(post_date))
+        if row["received_at"]:
+            meta.append("💾 " + L("Сохранено: ", "Saved: ") + self._fmt_iso_local(row["received_at"]))
         if row["forward_origin_title"]:
-            lines.append(("Источник: " if ru else "Source: ") + row["forward_origin_title"])
+            meta.append("👤 " + L("Источник: ", "Source: ") + row["forward_origin_title"])
         post_link = ingest.source_link(
             row["forward_origin_username"], row["forward_origin_chat_id"],
             row["forward_origin_message_id"],
         )
         if post_link:
-            lines.append(("Пост: " if ru else "Post: ") + post_link)
-        if row["summary"]:
-            lines.append(row["summary"][:500])
+            meta.append("🔗 " + L("Пост: ", "Post: ") + post_link)
+        if meta:
+            blocks.append(meta)
+
+        summary = (row["summary"] or "").strip()
+        if summary:
+            blocks.append(["📝 " + summary[:600]])
+
         facts = store.message_facts(self.conn, row["id"])
         if facts:
-            lines.append("Ключевые факты:" if ru else "Key facts:")
-            lines.extend(f"• {r['fact']}" for r in facts)
-        urls = store.message_urls(self.conn, row["id"])
-        if urls:
-            lines.append("Ссылки:" if ru else "Links:")
-            lines.extend(r["url"] for r in urls[:10])
-        images = store.message_images(self.conn, row["id"])
-        if images:
-            lines.append(("Фото: " if ru else "Photos: ") + str(len(images)))
+            blocks.append(["🔑 " + L("Ключевые факты:", "Key facts:")]
+                          + [f"   • {r['fact']}" for r in facts])
+
+        attachments = []
         files = store.message_files(self.conn, row["id"])
         if files:
-            names = ", ".join(f["file_name"] or "файл" for f in files[:10])
-            lines.append(("Файлы: " if ru else "Files: ") + names)
-        return "\n".join(lines)
+            names = ", ".join(f["file_name"] or L("файл", "file") for f in files[:10])
+            attachments.append("📎 " + L("Файлы: ", "Files: ") + names)
+        images = store.message_images(self.conn, row["id"])
+        if images:
+            attachments.append("🖼 " + L("Фото: ", "Photos: ") + str(len(images)))
+        urls = store.message_urls(self.conn, row["id"])
+        if urls:
+            attachments.append("🌐 " + L("Ссылки:", "Links:"))
+            attachments.extend(f"   {r['url']}" for r in urls[:10])
+        if attachments:
+            blocks.append(attachments)
+
+        return "\n\n".join("\n".join(b) for b in blocks)
 
     def do_item_detail(self, chat_id, lang, params):
         row = self.resolve_item(params)
