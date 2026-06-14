@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import action_truth
 import boss_model
 import common
 import events
@@ -829,6 +830,83 @@ class TraceTests(unittest.TestCase):
                 self.assertIn("trace_id", cols)
         finally:
             conn.close()
+
+
+class PersonaPatchTests(unittest.TestCase):
+    """v3 §0.1 persona-integration patch (Fixes 1, 2, 5, 6, 7)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "pp.db")
+        self.cfg = make_config()
+
+    def tearDown(self):
+        texts.set_intensity(2)  # restore default (module global)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    # Fix 1: persona layer order
+    def test_persona_below_operational_rules(self):
+        self.assertTrue(persona.persona_below_rules())
+        self.assertEqual(persona.PROMPT_LAYER_ORDER[-1], "user_message")
+        self.assertLess(persona.PROMPT_LAYER_ORDER.index("budget_rules"),
+                        persona.PROMPT_LAYER_ORDER.index("human_like_persona"))
+
+    def test_router_prompt_stays_strict(self):
+        prompt = router.build_system_prompt(self.cfg, None)
+        self.assertIn("JSON", prompt)
+        self.assertIn("closed", prompt.lower())
+        for leak in ("Tiny archive win", "архивная победа", "Caught it, boss"):
+            self.assertNotIn(leak, prompt)  # no persona variant prose in the router
+
+    # Fix 2: variant families + intensity select wording, not rules
+    def test_variant_family_and_intensity(self):
+        kw = dict(category="X", summary="s", counts="(c)")
+        texts.set_intensity(0)
+        self.assertIn("I'd file", texts.T("en", "suggestion", **kw))  # sober variant 0
+        texts.set_intensity(2)
+        warm = texts.T("en", "suggestion", **kw)
+        self.assertIn("X", warm)  # still valid, placeholders intact
+        # deterministic: same inputs render the same variant
+        self.assertEqual(warm, texts.T("en", "suggestion", **kw))
+
+    # Fix 5: action-truth guard
+    def test_action_truth_guard(self):
+        action_truth.assert_template_allowed(
+            "suggestion", "suggested", texts.T("en", "suggestion", category="X",
+                                               summary="s", counts="c"))  # no final verb: ok
+        action_truth.assert_template_allowed(
+            "confirmed", "confirmed", texts.T("en", "confirmed", category="X", row_id=1))
+        with self.assertRaises(ValueError):
+            action_truth.assert_template_allowed("x", "suggested", "I saved and filed it")
+        with self.assertRaises(ValueError):
+            action_truth.assert_template_allowed("x", "suggested", "Готово, сохранила")
+
+    # Fix 6: truthful STT failure copy (Cara doesn't keep the file / can't retry)
+    def test_stt_copy_truthful(self):
+        for lang in ("ru", "en"):
+            texts.set_intensity(0)
+            v0 = texts.T(lang, "stt_failed")
+            texts.set_intensity(2)
+            for txt in (v0, texts.T(lang, "stt_failed")):
+                low = txt.lower()
+                self.assertNotIn("saved", low)
+                self.assertNotIn("сохранила", low)
+                self.assertNotIn("not available", low)
+                self.assertNotIn("недоступ", low)
+                self.assertNotIn("retry", low)  # no false retry promise
+
+    # Fix 7: address resolution from preferences with боcс/boss fallback
+    def test_address_resolution(self):
+        self.assertEqual(boss_model.get_address(self.conn, "ru"), "босс")
+        self.assertEqual(boss_model.get_address(self.conn, "en"), "boss")
+        store.pref_set(self.conn, "owner_name", "Owen")
+        self.assertEqual(boss_model.get_address(self.conn, "en"), "Owen")
+        store.pref_set(self.conn, "owner_name_ru", "Олег")
+        self.assertEqual(boss_model.get_address(self.conn, "ru"), "Олег")  # lang-specific wins
+        self.assertEqual(boss_model.get_address(self.conn, "ru", allow_name=False), "босс")
+        store.pref_set(self.conn, "preferred_address_en", "chief")
+        self.assertEqual(boss_model.get_address(self.conn, "en", allow_name=False), "chief")
 
 
 class SelfBossPersonaTests(unittest.TestCase):

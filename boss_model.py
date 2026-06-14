@@ -32,6 +32,20 @@ def classify_sensitivity(text):
     return "sensitive" if _SENSITIVE_HINTS.search(text or "") else "normal"
 
 
+# Fix 7: resolve how to address the boss from stored preferences, with a safe
+# fallback — never a hard-coded name, never empty.
+DEFAULT_ADDRESS = {"ru": "босс", "en": "boss"}
+
+
+def get_address(conn, lang, allow_name=True):
+    if allow_name:
+        name = (store.pref_get(conn, f"owner_name_{lang}")
+                or store.pref_get(conn, "owner_name"))
+        if name:
+            return name
+    return store.pref_get(conn, f"preferred_address_{lang}") or DEFAULT_ADDRESS.get(lang, "boss")
+
+
 def effective_sensitivity(kind, text):
     """Max of the keyword guess and the kind's floor — so a personal_fact is
     never stored as 'normal' even if no keyword matched."""

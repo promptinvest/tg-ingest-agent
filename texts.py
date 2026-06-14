@@ -49,11 +49,24 @@ TEXTS = {
         "ru": "Я не совсем поняла 🤔 Это сохранить, поставить напоминание или показать статистику?",
         "en": "I didn't quite get that 🤔 Save this, set a reminder, or show stats?",
     },
+    # Variant family (pre-confirmation, state=suggested → no final verbs).
     "suggestion": {
-        "ru": ("Я бы отнесла это к «{category}» 💡\nКоротко: {summary}\n{counts}\n"
-               "Согласны? Ответьте или нажмите кнопку — либо назовите свою категорию."),
-        "en": ("I'd file this under \"{category}\" 💡\nIn short: {summary}\n{counts}\n"
-               "Sound right? Reply or tap a button — or name your own category."),
+        "ru": [
+            "Я бы отнесла это к «{category}» 💡\nКоротко: {summary}\n{counts}\n"
+            "Согласны? Ответьте или нажмите кнопку — либо назовите свою категорию.",
+            "Поймала, босс. Похоже на «{category}» 💡\nКоротко: {summary}\n{counts}\n"
+            "Подтвердить? Или назовите свою категорию.",
+            "Маленькая архивная победа. Отнесла бы к «{category}» 💡\nКоротко: {summary}\n{counts}\n"
+            "Так и оставить? Кнопка или своя категория.",
+        ],
+        "en": [
+            "I'd file this under \"{category}\" 💡\nIn short: {summary}\n{counts}\n"
+            "Sound right? Reply or tap a button — or name your own category.",
+            "Caught it, boss. Looks like \"{category}\" 💡\nIn short: {summary}\n{counts}\n"
+            "Confirm? Or name your own category.",
+            "Tiny archive win. I'd put this under \"{category}\" 💡\nIn short: {summary}\n{counts}\n"
+            "Keep it that way? Button or your own category.",
+        ],
     },
     "counts": {
         "ru": "(сохранила #{row_id}, фото: {images}, ссылок: {urls})",
@@ -81,9 +94,18 @@ TEXTS = {
         "ru": "Сохранила #{row_id}, но модель не ответила — попробую ещё раз чуть позже 🙏",
         "en": "Saved #{row_id}, but the model didn't answer — I'll retry a bit later 🙏",
     },
+    # Fix 6: truthful failure copy. Cara does NOT keep the voice file and has no
+    # STT retry queue, so she must not claim "saved / I'll retry" — she asks to
+    # resend. (state=failed_final, no false final verbs.)
     "stt_failed": {
-        "ru": "Не расслышала голосовое 😔 Напишите текстом, пожалуйста.",
-        "en": "I couldn't make out the voice note 😔 Please send it as text.",
+        "ru": [
+            "Не расслышала голосовое 😔 Пришлите ещё раз или текстом, пожалуйста.",
+            "Транскрипция в этот раз не прошла, босс. Повторите голосом или текстом?",
+        ],
+        "en": [
+            "I couldn't make out the voice note 😔 Please resend it, or send it as text.",
+            "Transcription didn't go through this time, boss. Resend by voice or text?",
+        ],
     },
     "voice_quote": {
         "ru": "🎤 Услышала: «{transcript}»",
@@ -390,7 +412,34 @@ TEXTS = {
 }
 
 
+# Personality intensity (spec §11.1): 0 neutral · 1 light · 2 warm aide (default)
+# · 3 max. It selects WHICH template variant is used, never whether rules apply.
+# Set once at startup from config; serious/destructive templates stay single
+# sober strings (no variants), so intensity can't make them playful.
+_INTENSITY = 2
+
+
+def set_intensity(level):
+    global _INTENSITY
+    try:
+        _INTENSITY = max(0, min(3, int(level)))
+    except (TypeError, ValueError):
+        _INTENSITY = 2
+
+
+def _pick(variants, kwargs):
+    """Deterministic variant choice: sober (index 0) at intensity 0; otherwise
+    vary by content so phrasing differs across messages but is stable for the
+    same one (testable, no RNG)."""
+    if _INTENSITY <= 0 or len(variants) == 1:
+        return variants[0]
+    seed = sum(ord(c) for c in "".join(str(v) for v in kwargs.values())) + len(kwargs)
+    return variants[seed % len(variants)]
+
+
 def T(lang, key, **kwargs):
     entry = TEXTS[key]
     template = entry.get(lang) or entry["en"]
+    if isinstance(template, (list, tuple)):  # variant family
+        template = _pick(list(template), kwargs)
     return template.format(**kwargs) if kwargs else template

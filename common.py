@@ -134,6 +134,8 @@ def load_config(env=None):
     cfg.llm_fallback_cooldown = int(env.get("LLM_FALLBACK_COOLDOWN_SECONDS") or "300")
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
+    # Personality intensity (0 neutral .. 3 max; selects template variants only)
+    cfg.personality_intensity = int(env.get("PERSONALITY_INTENSITY") or "2")
     # Knowledge Q&A (ask): semantic retrieval over the KB
     cfg.ask_top_k = int(env.get("ASK_TOP_K") or "6")
     cfg.ask_context_chars = int(env.get("ASK_CONTEXT_CHARS") or "6000")

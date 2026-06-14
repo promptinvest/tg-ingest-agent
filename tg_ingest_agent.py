@@ -35,6 +35,7 @@ import spend
 import storage
 import store
 import sysinfo
+import texts
 import trace
 from common import Config, ShutdownInterrupt, current_trace, load_config, log  # noqa: F401
 from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
@@ -54,6 +55,7 @@ class Agent:
             if normalized:
                 store.ensure_category(self.conn, normalized)
         self_model.seed(self.conn)  # Cara's deterministic self-knowledge
+        texts.set_intensity(cfg.personality_intensity)  # template variant warmth
         # The memory curator runs as a background job (no proactive nudge):
         # it builds candidates the boss pulls via memory_review.
         runtime.register("memory_curator", "run_memory_curator",
@@ -83,10 +85,8 @@ class Agent:
             return self.cfg.timezone_offset
 
     def owner_name(self):
-        name = store.pref_get(self.conn, "owner_name", "").strip()
-        if name:
-            return name
-        return "друг" if self.lang() == "ru" else "friend"
+        # Fix 7: language-specific name from preferences, else "босс"/"boss".
+        return boss_model.get_address(self.conn, self.lang())
 
     # -- Telegram helpers
 
