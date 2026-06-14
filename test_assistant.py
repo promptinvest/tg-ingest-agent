@@ -1598,6 +1598,82 @@ class MaintenanceJobTests(unittest.TestCase):
             self.agent.conn.execute("SELECT COUNT(*) AS n FROM pending_actions").fetchone()["n"], 0)
 
 
+class ReactionAndContextTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "r.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_react_validates_emoji_and_target(self):
+        import tg_ingest_agent
+        with mock.patch.object(tg_ingest_agent, "tg_set_reaction") as sr:
+            self.agent.react(1, 99, "🔥")        # valid
+            self.agent.react(1, 99, "🦖")        # not in palette -> skipped
+            self.agent.react(1, None, "🔥")      # no target -> skipped
+        sr.assert_called_once()
+        self.assertEqual(sr.call_args[0][2], 99)
+        self.assertEqual(sr.call_args[0][3], "🔥")
+
+    def test_incoming_reaction_logged_and_learned(self):
+        self.agent.handle_reaction({"chat": {"id": 1}, "user": {"id": 1}, "message_id": 5,
+                                    "new_reaction": [{"type": "emoji", "emoji": "👎"}]})
+        self.assertEqual(store.kv_get(self.conn, "last_reaction"), "👎")
+        n = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM issues WHERE kind='negative_reaction'").fetchone()["n"]
+        self.assertEqual(n, 1)                                  # negative reaction is a signal
+        self.assertTrue(store.rel_recent(self.conn, "2000-01-01"))
+
+    def test_incoming_reaction_owner_gated(self):
+        self.agent.handle_reaction({"chat": {"id": 1}, "user": {"id": 999}, "message_id": 5,
+                                    "new_reaction": [{"type": "emoji", "emoji": "👍"}]})
+        self.assertIsNone(store.kv_get(self.conn, "last_reaction"))
+
+    def test_converse_reaction_tag_applied_and_stripped(self):
+        import tg_ingest_agent
+        with mock.patch.object(llm, "chat_profile", return_value="[[react:🔥]] огонь, босс!"), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(tg_ingest_agent, "tg_set_reaction") as sr, \
+                mock.patch.object(self.agent, "maybe_curate_conversation"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_converse(1, "ru", "я закрыл сделку!", message_id=42)
+        sr.assert_called_once()
+        self.assertEqual(sr.call_args[0][3], "🔥")
+        self.assertEqual(r.call_args[0][1], "огонь, босс!")     # the tag is stripped from text
+
+    def test_part_of_day_and_context(self):
+        self.assertEqual(common.part_of_day(8, "ru"), "утро")
+        self.assertEqual(common.part_of_day(14, "ru"), "день")
+        self.assertEqual(common.part_of_day(20, "ru"), "вечер")
+        self.assertEqual(common.part_of_day(2, "ru"), "ночь")
+        self.assertEqual(common.part_of_day(8, "en"), "morning")
+        ctx = self.agent.converse_context("ru")
+        self.assertRegex(ctx, r"\d{2}:\d{2}")                  # a clock time
+        self.assertTrue(any(p in ctx for p in ("утро", "день", "вечер", "ночь")))
+
+    def test_router_points_at_recent_item_for_this(self):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
+                                               "received_at": store._now(), "raw_text": "Расписка.pdf"})
+        store.set_suggestion(self.conn, mid, "uncategorized", "filename only", "m")
+        captured = {}
+
+        def fake_chat(cfg, conn, skill, messages, **kw):
+            captured["user"] = messages[1]["content"]
+            return ('{"action":"recategorize","params":{"id":%d,"category":"Документы"},'
+                    '"confidence":0.9}' % mid)
+
+        with mock.patch.object(llm, "chat_profile", side_effect=fake_chat):
+            router.route(self.agent.cfg, self.conn, 1, "переложи это в Документы", None)
+        self.assertIn(f"#{mid}", captured["user"])             # item pointed out to the router
+        self.assertIn("recently saved", captured["user"])
+
+
 class AccessControlTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent

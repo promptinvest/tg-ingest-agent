@@ -238,6 +238,21 @@ def route(cfg, conn, chat_id, text, pending):
     user_content = ""
     if context_lines:
         user_content += "Recent conversation:\n" + "\n".join(context_lines) + "\n\n"
+    # Forward + a follow-up comment: when he refers to "это/this" (or a suggestion
+    # is pending), point the router at the item he just sent so the instruction
+    # acts on it (categorize / remind / re-file / delete / details).
+    low = (text or "").casefold()
+    refers = pending is not None or any(
+        w in low for w in ("это", "эту", "этот", "эти", "сюда", "туда", " this", " that", " it"))
+    if refers:
+        recent = store.list_messages(conn, limit=1)
+        if recent:
+            r = recent[0]
+            cat = r["category"] or r["suggested_category"] or "?"
+            summ = (r["summary"] or r["raw_text"] or "").replace("\n", " ")[:80]
+            user_content += (f"The item he most recently saved is #{r['id']} [{cat}] {summ}. "
+                             f"If this message is an instruction about it ('это'/'this'), target "
+                             f"#{r['id']}.\n\n")
     user_content += f"<user_request>\n{text}\n</user_request>"
     messages = [
         {"role": "system", "content": system},

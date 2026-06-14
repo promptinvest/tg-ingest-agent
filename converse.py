@@ -134,6 +134,14 @@ def build_system(conn, lang, extra_context=None):
                      + extra_context)
 
     parts.append(
+        "You can react to his message with a Telegram emoji when it genuinely adds warmth: "
+        "begin your reply with ONE token like [[react:🔥]] (it becomes a reaction, not text). "
+        "Use it sparingly — good news → 🎉/🔥, thanks → 🙏/❤️, something funny → 🤣/😁, something "
+        "sweet → 🥰, agreement → 👍/👌. Pick only from: 👍 ❤️ 🔥 🥰 👏 😁 🤔 🎉 🙏 👌 💯 🤣 🤝 "
+        "😍 👀 🫡. Most messages need NO reaction — then omit the token entirely."
+    )
+
+    parts.append(
         "Keep replies short and human — usually a sentence or three, like a text "
         "message. No bullet lists, no headings, no robotic sign-offs. Be warm."
     )

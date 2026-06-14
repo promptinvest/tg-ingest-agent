@@ -60,6 +60,38 @@ _STT_NOISE_PHRASES = (
 )
 
 
+# Emoji Cara may react with (a safe subset of Telegram's allowed reactions). If
+# Telegram rejects one anyway, the agent just logs and moves on.
+REACTION_PALETTE = frozenset({
+    "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🎉", "🤩", "🙏", "👌",
+    "💯", "🤣", "🤝", "✍️", "😢", "👀", "🫡", "😍", "🙈", "🤯", "😎", "🤗",
+})
+_POSITIVE_REACTIONS = {"👍", "❤️", "❤", "🔥", "🥰", "👏", "😁", "🎉", "🤩", "🙏",
+                       "👌", "💯", "🤣", "🤝", "😍", "😎", "🤗"}
+_NEGATIVE_REACTIONS = {"👎", "😢", "😭", "💔", "🤬", "😡", "🤨", "😐", "🥱", "💩"}
+
+
+def reaction_sentiment(emoji):
+    if emoji in _POSITIVE_REACTIONS:
+        return "positive"
+    if emoji in _NEGATIVE_REACTIONS:
+        return "negative"
+    return "neutral"
+
+
+def part_of_day(hour, lang="ru"):
+    """Coarse part-of-day label for a local hour (0-23)."""
+    if 5 <= hour < 12:
+        ru, en = "утро", "morning"
+    elif 12 <= hour < 18:
+        ru, en = "день", "afternoon"
+    elif 18 <= hour < 23:
+        ru, en = "вечер", "evening"
+    else:
+        ru, en = "ночь", "night"
+    return ru if lang == "ru" else en
+
+
 def is_stt_noise(text):
     """True if a transcript is a Whisper non-speech hallucination ('[Subscribe]',
     '[Music]', 'Спасибо за просмотр', 'Subtitles by…') or effectively empty — so
@@ -157,6 +189,9 @@ def load_config(env=None):
     # Conversational assistant settings
     cfg.language = (env.get("BOT_LANGUAGE") or "ru").strip().lower()
     cfg.timezone_offset = int(env.get("TIMEZONE_OFFSET_HOURS") or "3")  # MSK default
+    # Cara's own timezone (her fictional life); defaults to the boss's, so she
+    # only mentions a separate "her time" if it's explicitly set different.
+    cfg.cara_tz_offset = int(env.get("CARA_TIMEZONE_OFFSET_HOURS") or cfg.timezone_offset)
     cfg.confidence_threshold = float(env.get("ROUTER_CONFIDENCE_THRESHOLD") or "0.6")
     # Speech-to-text: mode 'local' = whisper.cpp on this host (free, slower);
     # mode 'remote' = OpenAI-compatible /audio/transcriptions endpoint.

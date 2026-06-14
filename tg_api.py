@@ -78,6 +78,13 @@ def tg_send_document(token, chat_id, filename, content_bytes, caption=None,
     return payload.get("result")
 
 
+def tg_set_reaction(token, chat_id, message_id, emoji, big=False):
+    """React to a message with one emoji (empty emoji clears the reaction)."""
+    reaction = [{"type": "emoji", "emoji": emoji}] if emoji else []
+    return tg_call(token, "setMessageReaction", {
+        "chat_id": chat_id, "message_id": message_id, "reaction": reaction, "is_big": big})
+
+
 def tg_send_document_file_id(token, chat_id, file_id, caption=None):
     """Re-send a previously received document by its file_id — no upload, free,
     and not subject to download-link expiry."""

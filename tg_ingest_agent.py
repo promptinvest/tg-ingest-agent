@@ -42,7 +42,7 @@ import texts
 import trace
 from common import Config, ShutdownInterrupt, current_trace, load_config, log  # noqa: F401
 from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
-                    tg_send_document_file_id, tg_send_photo)
+                    tg_send_document_file_id, tg_send_photo, tg_set_reaction)
 from texts import T
 
 COMMAND_ALIASES = {"/start": "start", "/stats": "stats", "/categories": "categories"}
@@ -238,7 +238,7 @@ class Agent:
                     {
                         "offset": offset,
                         "timeout": poll_timeout,
-                        "allowed_updates": ["message", "callback_query"],
+                        "allowed_updates": ["message", "callback_query", "message_reaction"],
                     },
                     timeout=poll_timeout + 15,
                 )
@@ -349,10 +349,43 @@ class Agent:
         allowed = self.cfg.allowed_chat_ids
         return chat_id in allowed and from_id in allowed
 
+    def react(self, chat_id, message_id, emoji):
+        """React to one of the boss's messages with an emoji (best-effort)."""
+        if not (message_id and emoji) or emoji not in common.REACTION_PALETTE:
+            return
+        try:
+            tg_set_reaction(self.cfg.token, chat_id, message_id, emoji)
+        except TelegramError as exc:
+            log(f"setMessageReaction failed ({emoji}): {exc}")
+
+    def handle_reaction(self, mr):
+        """The boss reacted to a message — Cara notices it: logged, learned
+        (positive/negative), and surfaced into her next conversation."""
+        chat_id = (mr.get("chat") or {}).get("id")
+        from_id = (mr.get("user") or {}).get("id")
+        if not self.is_owner(chat_id, from_id):
+            return
+        emojis = [r.get("emoji") for r in (mr.get("new_reaction") or [])
+                  if r.get("type") == "emoji" and r.get("emoji")]
+        if not emojis:
+            return  # reaction was removed
+        emoji = emojis[0]
+        sentiment = common.reaction_sentiment(emoji)
+        store.kv_set(self.conn, "last_reaction", emoji)  # surfaced once in converse
+        relationship.log_event(self.conn, "boss_reaction", f"reacted {emoji}",
+                               importance=1, title=f"reaction {emoji}")
+        if sentiment == "negative":
+            store.issue_add(self.conn, chat_id, "negative_reaction", emoji)
+        log(f"boss reacted {emoji} ({sentiment}) on message {mr.get('message_id')}")
+
     def handle_update(self, update):
         callback = update.get("callback_query")
         if callback:
             self.handle_callback(callback)
+            return
+        reaction = update.get("message_reaction")
+        if reaction:
+            self.handle_reaction(reaction)
             return
         msg = update.get("message")
         if not msg:
@@ -504,6 +537,7 @@ class Agent:
 
     def dispatch(self, chat_id, msg, text):
         lang = self.lang()
+        msg_id = msg.get("message_id")
         pending = store.pending_get(self.conn, chat_id)
         # A pending purge is confirmed ONLY by typing the exact phrase —
         # handled deterministically (no LLM), so a stray "да" can't wipe data.
@@ -528,7 +562,7 @@ class Agent:
             if kind == "ack":
                 return
             if kind:
-                self.do_converse(chat_id, lang, text)
+                self.do_converse(chat_id, lang, text, msg_id)
                 return
         try:
             decision = router.route(self.cfg, self.conn, chat_id, text, pending)
@@ -652,7 +686,7 @@ class Agent:
         elif action in ("converse", "persona", "smalltalk", "out_of_scope", "self_query"):
             # All identity/self questions answer in Cara's own (human) voice — she
             # never describes herself as software. Capability questions go to `help`.
-            self.do_converse(chat_id, lang, text)
+            self.do_converse(chat_id, lang, text, msg_id)
         elif action == "boss_query":
             self.do_boss_query(chat_id, lang)
         elif action == "boss_memory_update":
@@ -681,7 +715,7 @@ class Agent:
             self.reply(chat_id, question[:300] if question else T(lang, "clarify"))
         else:
             # Unknown action -> never a cold rejection; talk to him.
-            self.do_converse(chat_id, lang, text)
+            self.do_converse(chat_id, lang, text, msg_id)
 
     def handle_command(self, chat_id, name):
         lang = self.lang()
@@ -823,12 +857,36 @@ class Agent:
 
     # -- Free-form conversation (Cara as a person)
 
-    def do_converse(self, chat_id, lang, text):
-        """Reply in Cara's own voice — warm, human, language-matched. No state
-        changes here; real tasks go through the skills, which still confirm."""
+    def converse_context(self, lang):
+        """Live context for the conversation prompt: time of day (boss's, and
+        Cara's own if her timezone differs), the review schedule, and any reaction
+        the boss just left (surfaced once)."""
+        parts = []
+        boss_local = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
+        parts.append(f"Right now it's {boss_local.strftime('%H:%M')} for the boss — "
+                     f"{common.part_of_day(boss_local.hour, lang)}. Fit the time of day if relevant.")
+        if self.cfg.cara_tz_offset != self.tz_offset():
+            cara_local = datetime.now(timezone.utc) + timedelta(hours=self.cfg.cara_tz_offset)
+            parts.append(f"For you it's {cara_local.strftime('%H:%M')} "
+                         f"({common.part_of_day(cara_local.hour, lang)}).")
+        parts.append(self.review_schedule_text(lang))
+        reaction = store.kv_get(self.conn, "last_reaction")
+        if reaction:
+            store.kv_set(self.conn, "last_reaction", "")  # surface only once
+            parts.append(f"He just reacted {reaction} to your last message — you may acknowledge "
+                         "it warmly if it fits.")
+        return "\n".join(parts)
+
+    _REACT_TAG = None  # compiled lazily
+
+    def do_converse(self, chat_id, lang, text, message_id=None):
+        """Reply in Cara's own voice — warm, human, language-matched. May open with
+        an optional [[react:emoji]] tag, which becomes a Telegram reaction on his
+        message. No state changes here; real tasks go through the skills."""
+        import re
         self.send_chat_action(chat_id, "typing")
         messages = converse.build_messages(self.conn, chat_id, lang,
-                                           extra_context=self.review_schedule_text(lang))
+                                           extra_context=self.converse_context(lang))
         try:
             reply = llm.chat_profile(self.cfg, self.conn, "converse", messages,
                                      profile="converse_warm")
@@ -843,6 +901,11 @@ class Agent:
             self.reply(chat_id, T(lang, "llm_error"))
             return
         reply = (reply or "").strip()
+        # Pull an optional leading/anywhere reaction tag and apply it.
+        m = re.search(r"\[\[react:\s*(\S+?)\s*\]\]", reply)
+        if m:
+            self.react(chat_id, message_id, m.group(1))
+            reply = re.sub(r"\[\[react:.*?\]\]", "", reply).strip()
         if not reply:
             self.reply(chat_id, T(lang, "llm_error"))
             return
