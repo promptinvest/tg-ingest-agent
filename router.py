@@ -26,6 +26,7 @@ ACTIONS = {
     "list_items",        # params: category, query, limit — browse stored messages
     "item_detail",       # params: id OR query/category — one item in full (links, source)
     "item_delete",       # params: id OR query — delete a stored item (asks confirmation)
+    "recategorize",      # params: id/ids/query/count + category — change a saved item's category
     "show_media",        # params: id OR query — re-send the stored photo(s)
     "discard",           # decline adding the just-suggested item (deletes it)
     "vps_stats",         # read-only host resource usage report
@@ -76,6 +77,9 @@ ROUTER_EXAMPLES = """Examples:
 "удали это сообщение" / "delete it" / "сотри это" -> {"action": "item_delete", "params": {}, "confidence": 0.9}
 "удали #2" / "удали пост про рейсы" / "сотри #2" -> {"action": "item_delete", "params": {"id": 2}, "confidence": 0.9}
 "удали #2, 4 и 10" / "delete #2, #4, #10" -> {"action": "item_delete", "params": {"ids": [2, 4, 10]}, "confidence": 0.92}
+"поменяй категорию #2 на Документы" / "переложи #2 в Документы" / "смени категорию на Документы" / "recategorize #2 as Documents" / "change category to Documents" -> {"action": "recategorize", "params": {"id": 2, "category": "Документы"}, "confidence": 0.92}
+"поменяй категорию последнего на Чеки" / "переложи это в Чеки" (no id -> most recent) -> {"action": "recategorize", "params": {"category": "Чеки"}, "confidence": 0.9}
+"переложи всё из crypto в news" / "move category crypto to news" -> {"action": "recategorize", "params": {"query": "crypto", "category": "news"}, "confidence": 0.85}
 "удали 7 сообщений" / "удали последние 5 заметок" / "delete 5 notes" -> {"action": "item_delete", "params": {"count": 7}, "confidence": 0.85}
 "сотри заметки" / "удали все заметки" / "почисти заметки" / "delete all notes" -> {"action": "purge", "params": {"scope": "messages"}, "confidence": 0.9}
 "покажи фото" / "show the photo" / "покажи картинку из #2" -> {"action": "show_media", "params": {"id": 2}, "confidence": 0.9}

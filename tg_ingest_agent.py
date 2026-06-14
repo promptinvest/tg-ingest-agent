@@ -614,6 +614,8 @@ class Agent:
             self.reply(chat_id, self.items_text(lang, params))
         elif action == "item_detail":
             self.do_item_detail(chat_id, lang, params)
+        elif action == "recategorize":
+            self.do_recategorize(chat_id, lang, params)
         elif action == "item_delete":
             rows = self.resolve_items(params)
             if not rows:
@@ -870,6 +872,8 @@ class Agent:
     # named category can't be lost to a router mis-read).
     _CATEGORY_PATTERNS = (
         r"(?:^|\b)(?:категори[яюи]|category|раздел)\s*[:\-—=]\s*(.+)$",
+        r"(?:^|\b)категори[июя]\s+(?:на|->|→)\s+(.+)$",
+        r"(?:^|\b)(?:смени|измени|помен[яи]й)\s+категори[июя]\s+(?:на\s+)?(.+)$",
         r"(?:^|\b)в\s+категори[июы]\s+(.+)$",
         r"(?:^|\b)set\s+category\s+(?:to\s+)?(.+)$",
         r"(?:^|\b)(?:это|пусть будет|лучше)\s+категори[яю]\s+(.+)$",
@@ -1438,6 +1442,38 @@ class Agent:
         self.reply(chat_id, self.item_detail_text(lang, {"id": row["id"]}))
         # Hand back the actual photos/files attached to the item, too.
         self.send_attachments(chat_id, row)
+
+    def do_recategorize(self, chat_id, lang, params):
+        """Change the category of an already-saved item (by id/ids/query/count,
+        else the most recent). Reuses the confirm path, so the change is recorded
+        as a correction and feeds learning."""
+        category = llm.normalize_category(params.get("category"))
+        if not category:
+            self.reply(chat_id, T(lang, "clarify"))
+            return
+        # Resolve the TARGET item(s) WITHOUT the destination category (it's where
+        # they go, not a filter): explicit ids/count, a single id, "all in <cat>"
+        # / a text query (bulk), else the most recent.
+        if params.get("ids") or params.get("count"):
+            rows = self.resolve_items({k: params[k] for k in ("ids", "count")
+                                       if params.get(k) is not None})
+        elif params.get("id") is not None:
+            rows = self.resolve_items({"id": params["id"]})
+        elif params.get("query"):
+            q = params["query"]
+            rows = (store.list_messages(self.conn, q, None, limit=20)
+                    or store.list_messages(self.conn, None, q, limit=20))
+        else:
+            row = self.resolve_item({})
+            rows = [row] if row else []
+        if not rows:
+            self.reply(chat_id, T(lang, "items_empty"))
+            return
+        multi = len(rows) > 1
+        for row in rows:
+            self.apply_category_confirm(chat_id, row, category, reply_to=None, quiet=multi)
+        if multi:
+            self.reply(chat_id, T(lang, "recategorized_multi", n=len(rows), category=category))
 
     def issues_text(self, lang, period=None):
         period = str(period or "week").strip().lower()

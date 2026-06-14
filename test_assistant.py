@@ -548,6 +548,30 @@ class AgentViewTests(unittest.TestCase):
         self.assertEqual(store.message_urls(conn, self.row_id), [])
         self.assertIsNone(store.get_message(conn, dup_id)["duplicate_of"])
 
+    def test_recategorize_saved_item(self):
+        conn = self.agent.conn
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_recategorize(1, "ru", {"id": self.row_id, "category": "News"})
+        row = store.get_message(conn, self.row_id)
+        self.assertEqual(row["category"], "News")          # category actually changed
+        self.assertEqual(row["status"], "confirmed")
+        fb = conn.execute("SELECT corrected FROM feedback WHERE corrected='News'").fetchone()
+        self.assertIsNotNone(fb)                           # recorded as a correction (learning)
+        self.assertIn("News", r.call_args[0][1])
+
+    def test_recategorize_defaults_to_most_recent(self):
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_recategorize(1, "ru", {"category": "Docs"})  # no id -> most recent
+        self.assertEqual(store.get_message(self.agent.conn, self.row_id)["category"], "Docs")
+
+    def test_recategorize_router_and_parser(self):
+        self.assertEqual(router.validate_route(
+            {"action": "recategorize", "params": {"id": 2, "category": "X"}}, False)["action"],
+            "recategorize")
+        self.assertTrue(skill_manifest.known("recategorize"))
+        self.assertEqual(self.agent.explicit_category("поменяй категорию на Документы"), "Документы")
+        self.assertEqual(self.agent.explicit_category("смени категорию на Чеки"), "Чеки")
+
     def test_show_media_uses_file_id(self):
         import tg_ingest_agent
         conn = self.agent.conn
