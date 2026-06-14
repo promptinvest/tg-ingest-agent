@@ -767,6 +767,30 @@ class Agent:
             self.reply(chat_id, T(lang, "llm_error"))
             return
         self.reply(chat_id, reply)
+        self.maybe_curate_conversation(chat_id)
+
+    # How many conversational turns between background memory passes (cost vs.
+    # freshness): her life and what she learns about you fill in every few turns.
+    CURATE_EVERY = 3
+
+    def maybe_curate_conversation(self, chat_id):
+        """Throttled: every few converse turns, run one extraction pass that
+        grows Cara's life and learns benign facts about the boss (sensitive ones
+        become confirm-first candidates). Runs after the reply is already sent."""
+        key = f"converse_since_curate:{chat_id}"
+        n = int(store.kv_get(self.conn, key, "0") or 0) + 1
+        if n < self.CURATE_EVERY:
+            store.kv_set(self.conn, key, n)
+            return
+        store.kv_set(self.conn, key, 0)
+        try:
+            result = memory_curator.curate_conversation(self.conn, self.cfg, chat_id)
+        except Exception as exc:  # never let learning break a conversation
+            log(f"conversation curation failed: {exc}")
+            return
+        if result["life"] or result["boss"]:
+            log(f"conversation curated chat={chat_id}: "
+                f"+{result['life']} life, +{result['boss']} boss")
 
     # -- Memory skill
 

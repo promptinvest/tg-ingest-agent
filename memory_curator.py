@@ -60,6 +60,90 @@ def run_daily(conn):
     return created
 
 
+# Conversational learning -------------------------------------------------------
+# Cara grows from free chat: her own (fictional) life fills in automatically, and
+# benign facts the boss reveals are learned as correctable "inferred" items. Real
+# personal/sensitive data is never auto-stored — it becomes a candidate he must
+# confirm, preserving the spec §21 boundary for anything that matters.
+
+LIFE_KINDS = {"hobby", "friend", "place", "habit", "plan", "mood", "moment",
+              "home", "dream", "work", "taste"}
+
+_EXTRACT_SYSTEM = (
+    "You extract durable memory from a chat between Cara (a warm assistant who has "
+    "her own life) and her boss. Return STRICT JSON only, no prose:\n"
+    '{"cara_life": [{"kind": "...", "text": "..."}], '
+    '"boss_facts": [{"kind": "...", "text": "..."}]}\n'
+    "cara_life: NEW, lasting details Cara revealed about HER OWN life (a hobby, a "
+    "friend, a place, a plan, a taste). Each a short statement addressed to Cara in "
+    "her language, e.g. 'Ты любишь джаз.' / 'You're learning to bake.' Skip anything "
+    "already listed as known, and anything merely momentary.\n"
+    "boss_facts: NEW, lasting facts the BOSS stated about HIMSELF (a preference, a "
+    "project, a habit, a personal fact). Short third-person in his language, e.g. "
+    "'Любит короткие ответы.' kind in: tone, workflow, quality_bar, avoidance, "
+    "project, personal_fact, category_preference, identity.\n"
+    "Never invent — only what the text plainly supports. Use empty arrays when "
+    "nothing durable is new."
+)
+
+
+def curate_conversation(conn, cfg, chat_id, limit=12):
+    """One small LLM pass over recent free chat. Returns counts. Dedup (UNIQUE
+    life text, boss substring match, candidate text) makes overlapping windows
+    safe to re-run."""
+    import llm  # lazy: keeps the deterministic curator import-light
+    turns = [r for r in store.convo_recent(conn, chat_id, limit=limit)
+             if (r["text"] or "").strip()]
+    if len(turns) < 2:
+        return {"life": 0, "boss": 0}
+    transcript = "\n".join(
+        f"{'Boss' if r['role'] == 'user' else 'Cara'}: {r['text']}" for r in turns)
+    known = [r["text"] for r in store.life_facts(conn, limit=40)]
+    known_block = "\n".join(f"- {t}" for t in known[-24:]) or "(none yet)"
+    messages = [
+        {"role": "system", "content": _EXTRACT_SYSTEM},
+        {"role": "user",
+         "content": f"Known about Cara's life:\n{known_block}\n\nConversation:\n{transcript}"},
+    ]
+    try:
+        reply = llm.chat_profile(cfg, conn, "memory_curator", messages,
+                                 profile="memory_curator")
+    except (llm.BudgetExceeded, llm.LLMError):
+        return {"life": 0, "boss": 0}
+    parsed = llm.parse_llm_json(reply) or {}
+
+    life_added = 0
+    for item in (parsed.get("cara_life") or [])[:5]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        kind = str(item.get("kind") or "moment").strip().lower()
+        if kind not in LIFE_KINDS:
+            kind = "moment"
+        if text and store.life_add(conn, kind, text):
+            life_added += 1
+
+    boss_added = 0
+    for item in (parsed.get("boss_facts") or [])[:5]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        kind = str(item.get("kind") or "personal_fact").strip().lower()
+        if not text or store.boss_find(conn, text):
+            continue
+        sens = boss_model.effective_sensitivity(kind, text)
+        if boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]:
+            # benign -> learn it as a correctable inferred item (shows in profile)
+            store.boss_add(conn, kind, text, status="inferred", confidence=0.7,
+                           sensitivity=sens, source_table="conversation")
+            boss_added += 1
+        elif store.candidate_add(conn, kind, text, reason="from conversation",
+                                 sensitivity=sens, confidence=0.7,
+                                 source_table="conversation"):
+            boss_added += 1  # sensitive -> propose, never auto-store
+    return {"life": life_added, "boss": boss_added}
+
+
 def render_review(conn, lang, limit=8):
     pending = store.candidates_pending(conn, limit)
     if not pending:

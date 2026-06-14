@@ -1153,6 +1153,77 @@ class LanguageDetectionTests(unittest.TestCase):
         self.assertEqual(common.detect_lang("ok да"), "ru")  # tie -> Russian
 
 
+class ConversationLearningTests(unittest.TestCase):
+    """The memory pass that grows Cara's life and learns about the boss from
+    free chat."""
+
+    def setUp(self):
+        import memory_curator
+        self.memory_curator = memory_curator
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "l.db")
+        self.cfg = make_config()
+        converse.seed_life(self.conn)
+        store.convo_add(self.conn, 1, "user", "я терпеть не могу длинные ответы")
+        store.convo_add(self.conn, 1, "bot", "поняла! а я как раз учусь печь хлеб 🥖")
+        store.convo_add(self.conn, 1, "user", "кстати у меня аллергия на орехи")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_extraction_routes_by_sensitivity(self):
+        payload = (
+            '{"cara_life": [{"kind": "hobby", "text": "Ты учишься печь хлеб."}],'
+            ' "boss_facts": [{"kind": "tone", "text": "Не любит длинные ответы."},'
+            '                {"kind": "personal_fact", "text": "Аллергия на орехи."}]}'
+        )
+        before = store.life_count(self.conn)
+        with mock.patch.object(llm, "chat_profile", return_value=payload):
+            result = self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
+        # Cara's life grew (auto-stored, it's her own fiction)
+        self.assertEqual(store.life_count(self.conn), before + 1)
+        self.assertEqual(result["life"], 1)
+        # benign boss fact -> learned as a correctable inferred item
+        inferred = [r["value"] for r in store.boss_items(self.conn, "inferred")]
+        self.assertIn("Не любит длинные ответы.", inferred)
+        # sensitive boss fact -> NOT auto-stored; a confirm-first candidate
+        cand = [c["proposed_text"] for c in store.candidates_pending(self.conn)]
+        self.assertIn("Аллергия на орехи.", cand)
+        self.assertNotIn("Аллергия на орехи.",
+                         [r["value"] for r in store.boss_items(self.conn, "inferred")])
+
+    def test_extraction_dedups_on_rerun(self):
+        payload = '{"cara_life": [{"kind": "hobby", "text": "Ты учишься печь хлеб."}], "boss_facts": []}'
+        with mock.patch.object(llm, "chat_profile", return_value=payload):
+            self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
+            again = self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
+        self.assertEqual(again["life"], 0)  # UNIQUE life text -> no duplicate
+
+
+class CurationThrottleTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "t.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def test_curation_runs_every_n_turns(self):
+        import memory_curator
+        with mock.patch.object(memory_curator, "curate_conversation",
+                               return_value={"life": 0, "boss": 0}) as cc:
+            for _ in range(self.agent.CURATE_EVERY - 1):
+                self.agent.maybe_curate_conversation(1)
+            cc.assert_not_called()           # not yet
+            self.agent.maybe_curate_conversation(1)
+            cc.assert_called_once()           # fires on the Nth turn
+
+
 class SelfBossPersonaTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
