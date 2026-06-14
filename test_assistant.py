@@ -506,8 +506,8 @@ class AgentViewTests(unittest.TestCase):
 
     def test_items_listing_shows_first_url(self):
         text = self.agent.items_text("ru", {})
-        self.assertIn("#%d [Flight Deals]" % self.row_id, text)
-        self.assertIn("🔗 https://vandrouki.ru/x/", text)
+        self.assertIn("📄 #%d · Flight Deals" % self.row_id, text)  # sectioned card style
+        self.assertIn("🌐 https://vandrouki.ru/x/", text)
 
     def test_item_detail_by_id_query_and_fallback(self):
         detail = self.agent.item_detail_text("ru", {"id": self.row_id})

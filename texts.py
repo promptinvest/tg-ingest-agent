@@ -331,7 +331,11 @@ TEXTS = {
         "ru": "Расходы AI: сегодня ${day:.3f}, за месяц ${month:.3f}",
         "en": "AI spend: today ${day:.3f}, this month ${month:.3f}",
     },
-    "items_header": {"ru": "Последнее сохранённое{filter}:", "en": "Recently saved{filter}:"},
+    "items_header": {"ru": "🗂 Заметки{filter} · {n}", "en": "🗂 Notes{filter} · {n}"},
+    "items_footer": {
+        "ru": "Подробнее — «детали #N», файл — «покажи файл #N».",
+        "en": "More — \"details #N\", file — \"show file #N\".",
+    },
     "items_filter_category": {"ru": " (категория: {category})", "en": " (category: {category})"},
     "items_filter_query": {"ru": " (по запросу: {query})", "en": " (matching: {query})"},
     "items_empty": {

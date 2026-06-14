@@ -1223,21 +1223,37 @@ class Agent:
         rows = store.list_messages(self.conn, category, query, limit)
         if not rows:
             return T(lang, "items_empty")
+        ru = lang == "ru"
         filter_part = ""
         if category:
             filter_part = T(lang, "items_filter_category", category=category)
         elif query:
             filter_part = T(lang, "items_filter_query", query=query)
-        lines = [T(lang, "items_header", filter=filter_part)]
+        blocks = [T(lang, "items_header", filter=filter_part, n=len(rows))]
         for row in rows:
-            row_category = row["category"] or row["suggested_category"] or "?"
-            text = (row["summary"] or row["raw_text"] or "").replace("\n", " ")[:90]
-            marker = "" if row["status"] == "confirmed" else " (?)"
-            lines.append(f"#{row['id']} [{row_category}{marker}] {text}")
+            row_category = row["category"] or row["suggested_category"] or (
+                "без категории" if ru else "uncategorized")
+            pending = " ⏳" if row["status"] != "confirmed" else ""
+            item = [f"📄 #{row['id']} · {row_category}{pending}"]
+            text = (row["summary"] or row["raw_text"] or "").replace("\n", " ").strip()[:110]
+            if text:
+                item.append(f"   {text}")
+            marks = []
+            files = store.message_files(self.conn, row["id"])
+            if files:
+                marks.append("📎 " + ", ".join(f["file_name"] or ("файл" if ru else "file")
+                                               for f in files[:2]))
+            images = store.message_images(self.conn, row["id"])
+            if images:
+                marks.append(f"🖼 {len(images)}")
             urls = store.message_urls(self.conn, row["id"])
             if urls:
-                lines.append(f"   🔗 {urls[0]['url']}")
-        return "\n".join(lines)
+                marks.append(f"🌐 {urls[0]['url']}")
+            if marks:
+                item.append("   " + " · ".join(marks))
+            blocks.append("\n".join(item))
+        blocks.append(T(lang, "items_footer"))
+        return "\n\n".join(blocks)
 
     def send_attachments(self, chat_id, row):
         """Re-send everything stored with an item: photos first, then any file
