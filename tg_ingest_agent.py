@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import boss_model
+import common
+import converse
 import events
 import fetch
 import gcal
@@ -55,6 +57,8 @@ class Agent:
             if normalized:
                 store.ensure_category(self.conn, normalized)
         self_model.seed(self.conn)  # Cara's deterministic self-knowledge
+        converse.seed_life(self.conn)  # Cara's starting private life (grows over time)
+        self._migrate_owner_name()  # split a legacy combined name into ru/en forms
         texts.set_intensity(cfg.personality_intensity)  # template variant warmth
         # The memory curator runs as a background job (no proactive nudge):
         # it builds candidates the boss pulls via memory_review.
@@ -63,6 +67,10 @@ class Agent:
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0
+        # Reply language for the current turn: set from the incoming message so
+        # Cara answers in the language the boss just wrote in. None outside a
+        # turn (e.g. scheduler ticks) -> lang() falls back to the stored pref.
+        self.turn_lang = None
 
     def request_stop(self, signum, _frame):
         log(f"received signal {signum}, shutting down")
@@ -76,6 +84,11 @@ class Agent:
     # -- preferences-backed settings
 
     def lang(self):
+        # Match the language of the message in flight; otherwise the stored
+        # preference (default Russian). Per-message matching is what the boss
+        # asked for — reply in whatever language he wrote in.
+        if self.turn_lang:
+            return self.turn_lang
         return store.pref_get(self.conn, "language", self.cfg.language)
 
     def tz_offset(self):
@@ -171,6 +184,7 @@ class Agent:
         )
         while not self.stop:
             now = time.time()
+            self.turn_lang = None  # scheduler replies use the stored preference
             self.flush_albums(now)
             self.fire_due_reminders()
             self.check_budget_notice()
@@ -321,6 +335,9 @@ class Agent:
                        record=False)
 
         text = (msg.get("text") or "").strip()
+        # Reply in the language he wrote in (voice transcript counts); RU fallback.
+        # Slash-commands carry no language signal — keep the stored preference.
+        self.turn_lang = None if text.startswith("/") else common.detect_lang(text)
         is_content = bool(
             msg.get("forward_origin") or msg.get("photo") or msg.get("document")
             or msg.get("media_group_id")
@@ -434,16 +451,16 @@ class Agent:
         if pending and pending["kind"] == "purge":
             self.resolve_purge(chat_id, lang, pending, text)
             return
-        # Greetings answered instantly without burning router tokens; with a
-        # pending action, short acks like «ок» must reach the router instead
-        # (they are confirmations there).
+        # Obvious greetings / "how are you" / identity pings go straight to warm
+        # free-form Cara, skipping the router (one chat call, no template). A bare
+        # "ок"/"👍" needs no reply, like a human. With a pending action, short acks
+        # must reach the router instead (they're confirmations there).
         if pending is None:
             kind = router.detect_smalltalk(text)
-            if kind == "who_are_you":  # identity ping -> the rich character portrait
-                self.reply(chat_id, T(lang, "persona_character", name=self.owner_name()))
+            if kind == "ack":
                 return
             if kind:
-                self.reply(chat_id, T(lang, f"smalltalk_{kind}", name=self.owner_name()))
+                self.do_converse(chat_id, lang, text)
                 return
         try:
             decision = router.route(self.cfg, self.conn, chat_id, text, pending)
@@ -556,11 +573,8 @@ class Agent:
             self.do_review(chat_id, lang, params)
         elif action == "self_query":
             self.reply(chat_id, self_model.answer_self_query(self.conn, lang, self.cfg))
-        elif action == "persona":
-            topic = str(params.get("topic") or "character").strip().lower()
-            key = {"relationship": "persona_relationship",
-                   "origin": "persona_origin"}.get(topic, "persona_character")
-            self.reply(chat_id, T(lang, key, name=self.owner_name()))
+        elif action in ("converse", "persona", "smalltalk", "out_of_scope"):
+            self.do_converse(chat_id, lang, text)
         elif action == "boss_query":
             self.reply(chat_id, boss_model.render_profile(self.conn, lang))
         elif action == "boss_memory_update":
@@ -581,11 +595,6 @@ class Agent:
             self.do_remember(chat_id, params, lang)
         elif action == "forget":
             self.do_forget(chat_id, params, lang)
-        elif action == "smalltalk":
-            kind = str(params.get("kind") or "hello").strip().lower()
-            if kind not in router.SMALLTALK_KINDS:
-                kind = "hello"
-            self.reply(chat_id, T(lang, f"smalltalk_{kind}", name=self.owner_name()))
         elif action in ("confirm", "amend", "cancel"):
             self.resolve_pending(chat_id, action, params, pending, lang)
         elif action == "clarify":
@@ -593,8 +602,8 @@ class Agent:
             question = str(params.get("question") or "").strip()
             self.reply(chat_id, question[:300] if question else T(lang, "clarify"))
         else:
-            store.issue_add(self.conn, chat_id, "out_of_scope", text[:200])
-            self.reply(chat_id, T(lang, "out_of_scope"))
+            # Unknown action -> never a cold rejection; talk to him.
+            self.do_converse(chat_id, lang, text)
 
     def handle_command(self, chat_id, name):
         lang = self.lang()
@@ -733,6 +742,32 @@ class Agent:
             store.issue_add(self.conn, chat_id, "calendar_failed", str(exc)[:200])
             self.reply(chat_id, T(lang, "calendar_failed", error=str(exc)[:200]))
 
+    # -- Free-form conversation (Cara as a person)
+
+    def do_converse(self, chat_id, lang, text):
+        """Reply in Cara's own voice — warm, human, language-matched. No state
+        changes here; real tasks go through the skills, which still confirm."""
+        self.send_chat_action(chat_id, "typing")
+        messages = converse.build_messages(self.conn, chat_id, lang)
+        try:
+            reply = llm.chat_profile(self.cfg, self.conn, "converse", messages,
+                                     profile="converse_warm")
+        except llm.BudgetExceeded as exc:
+            store.issue_add(self.conn, chat_id, "budget_stop", text[:200])
+            self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
+                                  period=T(lang, f"period_{exc.period}")))
+            return
+        except llm.LLMError as exc:
+            log(f"converse failed: {exc}")
+            store.issue_add(self.conn, chat_id, "llm_error", f"converse: {exc}")
+            self.reply(chat_id, T(lang, "llm_error"))
+            return
+        reply = (reply or "").strip()
+        if not reply:
+            self.reply(chat_id, T(lang, "llm_error"))
+            return
+        self.reply(chat_id, reply)
+
     # -- Memory skill
 
     def do_boss_memory(self, chat_id, lang, params):
@@ -840,12 +875,36 @@ class Agent:
             truthy = value.strip().casefold() in ("1", "true", "yes", "да", "on")
             store.pref_set(self.conn, "auto_calendar", "true" if truthy else "false")
         elif key == "owner_name":
-            store.pref_set(self.conn, "owner_name", value.strip()[:60])
+            self.store_owner_name(value)
         else:
             note_id = int(store.kv_get(self.conn, "note_seq", "0") or 0) + 1
             store.kv_set(self.conn, "note_seq", note_id)
             store.pref_set(self.conn, f"note:{note_id}", value)
         self.reply(chat_id, T(self.lang(), "remember_saved", value=value))
+
+    def _migrate_owner_name(self):
+        """One-time: an older build stored the name as a single combined pref
+        ('Олег (Owen)'). Re-split it into owner_name_ru/owner_name_en so each
+        reply language uses the right form. Idempotent."""
+        if store.pref_get(self.conn, "owner_name") and not (
+                store.pref_get(self.conn, "owner_name_ru")
+                or store.pref_get(self.conn, "owner_name_en")):
+            self.store_owner_name(store.pref_get(self.conn, "owner_name"))
+
+    def store_owner_name(self, value):
+        """Store the boss's name, keeping Russian and English forms apart so
+        get_address() can return the right one per reply language. "Олег / Owen"
+        -> owner_name_ru=Олег, owner_name_en=Owen."""
+        import re
+        value = str(value or "")
+        cyr = re.findall(r"[А-Яа-яЁё][А-Яа-яЁё\-]*", value)
+        lat = re.findall(r"[A-Za-z][A-Za-z\-]*", value)
+        if cyr:
+            store.pref_set(self.conn, "owner_name_ru", cyr[0][:60])
+        if lat:
+            store.pref_set(self.conn, "owner_name_en", lat[0][:60])
+        primary = (cyr[0] if cyr else (lat[0] if lat else value.strip()))[:60]
+        store.pref_set(self.conn, "owner_name", primary)
 
     def do_forget(self, chat_id, params, lang):
         query = str(params.get("value") or params.get("key") or "").strip().casefold()

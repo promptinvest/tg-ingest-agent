@@ -96,7 +96,7 @@ def _base_url(cfg):
     return base if base.endswith("/v1") else base + "/v1"
 
 
-def chat(cfg, conn, skill, messages, max_tokens=300, model=None):
+def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
     """Budget-guarded chat completion; logs usage; returns content string."""
     _check_budget(cfg, conn)
     model = model or cfg.do_model
@@ -104,7 +104,7 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None):
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
-        "temperature": 0,
+        "temperature": temperature,
         "stream": False,
     }
     request = Request(
@@ -150,6 +150,10 @@ def default_profiles(cfg):
         "router_fast": {"primary": router, "fallbacks": fb, "max_tokens": 200, "json_required": True},
         "ingest_balanced": {"primary": primary, "fallbacks": fb, "max_tokens": 600, "json_required": True},
         "ask_grounded": {"primary": primary, "fallbacks": [], "max_tokens": 500, "json_required": False},
+        # Warm free-form conversation as Cara. A little temperature so she sounds
+        # alive rather than canned; a fallback so a chat never dead-ends.
+        "converse_warm": {"primary": primary, "fallbacks": fb, "max_tokens": 320,
+                          "json_required": False, "temperature": 0.7},
         "memory_curator": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
         "review_balanced": {"primary": primary, "fallbacks": [], "max_tokens": 900, "json_required": False},
     }
@@ -175,6 +179,7 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
         "primary": cfg.do_model, "fallbacks": [], "max_tokens": 300, "json_required": False}
     mt = max_tokens or prof.get("max_tokens", 300)
     jr = prof.get("json_required", False) if json_required is None else json_required
+    temp = prof.get("temperature", 0)
     models = [prof["primary"]] + list(prof.get("fallbacks") or [])
     active = [m for m in models if not store.cooldown_active(conn, profile, m)]
     if not active:
@@ -183,7 +188,8 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
     last_content = None
     for model in active:
         try:
-            content = chat(cfg, conn, skill, messages, max_tokens=mt, model=model)
+            content = chat(cfg, conn, skill, messages, max_tokens=mt, model=model,
+                           temperature=temp)
         except BudgetExceeded:
             raise  # budget hard-stop sits above failover
         except LLMError as exc:

@@ -295,6 +295,13 @@ CREATE TABLE IF NOT EXISTS relationship_events (
 
 CREATE INDEX IF NOT EXISTS idx_candidates_status ON memory_candidates(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_rel_recent ON relationship_events(created_at, importance);
+
+CREATE TABLE IF NOT EXISTS cara_life (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  text TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
 """
 
 
@@ -503,6 +510,33 @@ def rel_recent(conn, since_iso, limit=8):
         " ORDER BY importance DESC, id DESC LIMIT ?",
         (since_iso, limit),
     ).fetchall()
+
+
+# -- Cara's (fictional) private life: persisted so she stays consistent -------
+
+def life_add(conn, kind, text):
+    text = str(text or "").strip()[:300]
+    if not text:
+        return None
+    try:
+        cur = conn.execute(
+            "INSERT INTO cara_life (kind, text, created_at) VALUES (?, ?, ?)",
+            (kind, text, _now()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.IntegrityError:  # UNIQUE(text) — already known
+        return None
+
+
+def life_facts(conn, limit=40):
+    return conn.execute(
+        "SELECT kind, text FROM cara_life ORDER BY id LIMIT ?", (limit,)
+    ).fetchall()
+
+
+def life_count(conn):
+    return conn.execute("SELECT COUNT(*) AS n FROM cara_life").fetchone()["n"]
 
 
 # -- model cooldowns (failover) ----------------------------------------------

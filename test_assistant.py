@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import action_truth
 import boss_model
 import common
+import converse
 import events
 import fetch
 import gcal
@@ -144,7 +145,7 @@ class GatewayTests(unittest.TestCase):
         cfg = make_config()
         calls = []
 
-        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None):
+        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None, temperature=0):
             calls.append(model)
             if model == cfg.router_model:
                 raise llm.LLMError("primary down")
@@ -172,7 +173,7 @@ class GatewayTests(unittest.TestCase):
         cfg = make_config()
         outs = iter(["not json at all", '{"ok": true}'])
 
-        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None):
+        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None, temperature=0):
             return next(outs)
         with mock.patch.object(llm, "chat", side_effect=fake_chat):
             out = llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
@@ -1004,9 +1005,10 @@ class PersonaPatchTests(unittest.TestCase):
             self.assertNotIn("years", low)
 
 
-class PersonaDispatchTests(unittest.TestCase):
-    """Full dispatch path — catches the smalltalk-intercept gap that made
-    'расскажи о себе' return the short identity line instead of the persona."""
+class ConversationDispatchTests(unittest.TestCase):
+    """Full dispatch path for the free-form conversational Cara — greetings,
+    personal questions and unknown intents all reach the warm converse path
+    (the model writes the reply), never a fixed template."""
 
     def setUp(self):
         import tg_ingest_agent
@@ -1019,27 +1021,136 @@ class PersonaDispatchTests(unittest.TestCase):
         self.agent.conn.close()
         self.tmp.cleanup()
 
-    def test_about_self_reaches_rich_persona(self):
-        # "расскажи о себе" is smalltalk(who_are_you) -> must now render the RICH
-        # persona_character (has 'веснушк'/'freckles'), not the short identity line.
-        self.assertEqual(router.detect_smalltalk("расскажи о себе"), "who_are_you")
-        # reply language follows the stored preference (ru by default), not the
-        # message language — so all render the rich RU persona ('веснушк').
-        for text in ("расскажи о себе", "кто ты?", "tell me about yourself"):
-            with mock.patch.object(self.agent, "reply") as r:
-                self.agent.dispatch(1, {}, text)  # smalltalk short-circuits: no LLM
-            out = r.call_args[0][1]
-            self.assertIn("веснушк", out)  # the rich persona_character, not the short line
+    def test_greeting_short_circuits_to_free_form(self):
+        # "расскажи о себе"/"кто ты" are smalltalk -> straight to converse (LLM),
+        # skipping the router, NO template.
+        for text in ("расскажи о себе", "кто ты?", "привет"):
+            with mock.patch.object(llm, "chat_profile", return_value="Рыжая и рада тебе 🙂") as cp, \
+                    mock.patch.object(self.agent, "send_chat_action"), \
+                    mock.patch.object(self.agent, "reply") as r:
+                self.agent.dispatch(1, {}, text)
+            cp.assert_called_once()  # the model wrote the reply
+            self.assertEqual(cp.call_args.kwargs["profile"], "converse_warm")
+            self.assertEqual(r.call_args[0][1], "Рыжая и рада тебе 🙂")
 
-    def test_past_is_not_smalltalk_and_routes_to_origin(self):
-        # must NOT be intercepted by smalltalk -> reaches the router -> persona origin
-        self.assertIsNone(router.detect_smalltalk("расскажи про своё прошлое"))
+    def test_personal_question_routes_to_converse(self):
         with mock.patch.object(router, "route",
-                               return_value={"action": "persona",
-                                             "params": {"topic": "origin"}, "confidence": 0.9}), \
+                               return_value={"action": "converse", "params": {}, "confidence": 0.9}), \
+                mock.patch.object(llm, "chat_profile", return_value="День был тихий, гуляла у реки.") as cp, \
+                mock.patch.object(self.agent, "send_chat_action"), \
                 mock.patch.object(self.agent, "reply") as r:
-            self.agent.dispatch(1, {}, "расскажи про своё прошлое")
-        self.assertIn("прошл", r.call_args[0][1].lower())  # the origin answer
+            self.agent.dispatch(1, {}, "как прошёл твой день?")
+        cp.assert_called_once()
+        self.assertEqual(r.call_args[0][1], "День был тихий, гуляла у реки.")
+
+    def test_bare_ack_gets_no_reply(self):
+        # A lone "ок"/"👍" needs no answer, like a human.
+        with mock.patch.object(llm, "chat_profile") as cp, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {}, "ок")
+        cp.assert_not_called()
+        r.assert_not_called()
+
+    def test_out_of_scope_is_warm_not_template(self):
+        with mock.patch.object(router, "route",
+                               return_value={"action": "out_of_scope", "params": {}, "confidence": 0.95}), \
+                mock.patch.object(llm, "chat_profile", return_value="Ой, давай лучше я помогу с делами 🙂") as cp, \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {}, "напиши эссе про Канта")
+        cp.assert_called_once()
+        self.assertEqual(r.call_args[0][1], "Ой, давай лучше я помогу с делами 🙂")
+
+
+class ConverseModuleTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "c.db")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_seed_life_idempotent_and_in_prompt(self):
+        converse.seed_life(self.conn)
+        n = store.life_count(self.conn)
+        converse.seed_life(self.conn)  # idempotent
+        self.assertEqual(store.life_count(self.conn), n)
+        self.assertGreater(n, 0)
+        sys_ru = converse.build_system(self.conn, "ru")
+        self.assertIn("Cara", sys_ru)
+        self.assertIn("Russian", sys_ru)              # language-match directive
+        self.assertIn("Майя", sys_ru)                 # a seeded life fact surfaces
+
+    def test_system_prompt_language_and_name(self):
+        store.pref_set(self.conn, "owner_name_ru", "Олег")
+        store.pref_set(self.conn, "owner_name_en", "Owen")
+        sys_en = converse.build_system(self.conn, "en")
+        self.assertIn("English", sys_en)
+        self.assertIn("Owen", sys_en)                 # boss's name is in context
+        # the model is told to stay honest only if sincerely pressed
+        self.assertIn("AI", sys_en)
+
+    def test_history_becomes_chat_turns(self):
+        converse.seed_life(self.conn)
+        store.convo_add(self.conn, 1, "user", "привет")
+        store.convo_add(self.conn, 1, "bot", "привет!")
+        store.convo_add(self.conn, 1, "user", "как ты?")
+        msgs = converse.build_messages(self.conn, 1, "ru")
+        self.assertEqual(msgs[0]["role"], "system")
+        self.assertEqual(msgs[-1], {"role": "user", "content": "как ты?"})
+        self.assertEqual(msgs[2]["role"], "assistant")  # bot turn mapped
+
+
+class NameHandlingTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "n.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_store_owner_name_splits_scripts(self):
+        self.agent.store_owner_name("Олег / Owen")
+        self.assertEqual(store.pref_get(self.conn, "owner_name_ru"), "Олег")
+        self.assertEqual(store.pref_get(self.conn, "owner_name_en"), "Owen")
+
+    def test_legacy_combined_name_migrated_on_start(self):
+        import tg_ingest_agent
+        dbp = Path(self.tmp.name) / "legacy.db"
+        c = store.open_db(dbp)
+        store.pref_set(c, "owner_name", "Олег (Owen)")  # old single-pref form
+        c.close()
+        cfg = make_config(DB_PATH=str(dbp), MEDIA_DIR=str(Path(self.tmp.name) / "m2"))
+        ag = tg_ingest_agent.Agent(cfg)
+        try:
+            self.assertEqual(store.pref_get(ag.conn, "owner_name_ru"), "Олег")
+            self.assertEqual(store.pref_get(ag.conn, "owner_name_en"), "Owen")
+        finally:
+            ag.conn.close()
+
+    def test_profile_surfaces_the_name(self):
+        # the screenshot bug: name stored but "что ты обо мне знаешь" showed nothing.
+        self.agent.store_owner_name("Олег / Owen")
+        out_ru = boss_model.render_profile(self.conn, "ru")
+        self.assertIn("Олег", out_ru)
+        self.assertIn("Вас зовут", out_ru)
+        out_en = boss_model.render_profile(self.conn, "en")
+        self.assertIn("Owen", out_en)
+        self.assertIn("Your name is", out_en)
+
+
+class LanguageDetectionTests(unittest.TestCase):
+    def test_detects_message_language(self):
+        self.assertEqual(common.detect_lang("привет, как дела?"), "ru")
+        self.assertEqual(common.detect_lang("hello there"), "en")
+        self.assertIsNone(common.detect_lang("123 :) 🙂"))  # uncertain -> caller falls back
+        self.assertEqual(common.detect_lang("ok да"), "ru")  # tie -> Russian
 
 
 class SelfBossPersonaTests(unittest.TestCase):

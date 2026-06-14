@@ -86,19 +86,34 @@ def confirm(conn, query):
     return item["value"]
 
 
+def _name_line(conn, lang):
+    """A 'your name is …' line for the profile view, drawn from the stored name
+    (which 'как меня зовут' otherwise couldn't surface). '' when unknown."""
+    name_ru = store.pref_get(conn, "owner_name_ru")
+    name_en = store.pref_get(conn, "owner_name_en")
+    name = (store.pref_get(conn, f"owner_name_{lang}")
+            or store.pref_get(conn, "owner_name"))
+    if not (name or name_ru or name_en):
+        return ""
+    both = " / ".join(p for p in dict.fromkeys([name_ru, name_en]) if p) or name
+    return (f"Вас зовут {both}." if lang == "ru" else f"Your name is {both}.")
+
+
 def render_profile(conn, lang, include_inferred=True):
     confirmed = store.boss_items(conn, "confirmed")
     inferred = store.boss_items(conn, "inferred", sensitivities=("normal", "private")) \
         if include_inferred else []
+    name_line = _name_line(conn, lang)
+    name_block = [name_line, ""] if name_line else []
     if lang == "ru":
-        lines = [T(lang, "boss_profile_header"), "", T(lang, "boss_confirmed")]
+        lines = [T(lang, "boss_profile_header"), ""] + name_block + [T(lang, "boss_confirmed")]
         lines += [f"  #{r['id']} {r['value']}" for r in confirmed] or ["  — пока нет"]
         if include_inferred:
             lines += ["", T(lang, "boss_inferred")]
             lines += [f"  #{r['id']} {r['value']}" for r in inferred] or ["  — пока нет"]
         lines += ["", T(lang, "boss_edit_hint")]
         return "\n".join(lines)
-    lines = [T(lang, "boss_profile_header"), "", T(lang, "boss_confirmed")]
+    lines = [T(lang, "boss_profile_header"), ""] + name_block + [T(lang, "boss_confirmed")]
     lines += [f"  #{r['id']} {r['value']}" for r in confirmed] or ["  — none yet"]
     if include_inferred:
         lines += ["", T(lang, "boss_inferred")]

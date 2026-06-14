@@ -89,6 +89,9 @@ SKILLS = {
     "proactive_heartbeat": {"risk": "read_only_suggestion", "allowed_proactive": True,
                             "persona_context": True, "internal": True,
                             "title": {"en": "Proactive check", "ru": "Проактивная проверка"}},
+    # -- free-form conversation as Cara (warm chat; reads context, never writes state)
+    "converse": {"risk": "read_only", "uses_llm": True, "persona_context": True,
+                 "title": {"en": "Conversation", "ru": "Общение"}},
     # -- conversational glue (no capability surface)
     "smalltalk": {"risk": "meta"}, "confirm": {"risk": "meta"}, "amend": {"risk": "meta"},
     "cancel": {"risk": "meta"}, "clarify": {"risk": "meta"}, "out_of_scope": {"risk": "meta"},

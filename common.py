@@ -31,6 +31,18 @@ def utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def detect_lang(text):
+    """Reply-language from the message: 'ru' if Cyrillic-dominant, 'en' if
+    Latin-dominant, None when there are no letters (caller falls back to the
+    stored preference, which defaults to Russian)."""
+    t = str(text or "")
+    cyr = sum(1 for c in t if "Ѐ" <= c <= "ӿ")
+    lat = sum(1 for c in t if ("a" <= c <= "z") or ("A" <= c <= "Z"))
+    if cyr == 0 and lat == 0:
+        return None
+    return "ru" if cyr >= lat else "en"
+
+
 # Current trace id for the in-flight unit of work (single-threaded poll loop,
 # so a module global is safe). store.usage_add/issue_add default to this so
 # every model call and issue is trace-linked without threading an arg through
