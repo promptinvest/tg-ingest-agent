@@ -992,10 +992,54 @@ class PersonaPatchTests(unittest.TestCase):
                 self.assertNotIn(banned, low)  # §3 boundaries
 
     def test_router_and_manifest_have_persona(self):
-        for topic in ("character", "relationship"):
+        for topic in ("character", "relationship", "origin"):
             self.assertEqual(router.validate_route(
                 {"action": "persona", "params": {"topic": topic}}, False)["action"], "persona")
         self.assertTrue(skill_manifest.known("persona"))
+
+    def test_origin_is_honest(self):
+        for lang in ("ru", "en"):
+            low = texts.T(lang, "persona_origin", name=("босс" if lang == "ru" else "boss")).lower()
+            self.assertTrue("человеческого" in low or "no human" in low)  # no fake past
+            self.assertNotIn("years", low)
+
+
+class PersonaDispatchTests(unittest.TestCase):
+    """Full dispatch path — catches the smalltalk-intercept gap that made
+    'расскажи о себе' return the short identity line instead of the persona."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "pd.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def test_about_self_reaches_rich_persona(self):
+        # "расскажи о себе" is smalltalk(who_are_you) -> must now render the RICH
+        # persona_character (has 'веснушк'/'freckles'), not the short identity line.
+        self.assertEqual(router.detect_smalltalk("расскажи о себе"), "who_are_you")
+        # reply language follows the stored preference (ru by default), not the
+        # message language — so all render the rich RU persona ('веснушк').
+        for text in ("расскажи о себе", "кто ты?", "tell me about yourself"):
+            with mock.patch.object(self.agent, "reply") as r:
+                self.agent.dispatch(1, {}, text)  # smalltalk short-circuits: no LLM
+            out = r.call_args[0][1]
+            self.assertIn("веснушк", out)  # the rich persona_character, not the short line
+
+    def test_past_is_not_smalltalk_and_routes_to_origin(self):
+        # must NOT be intercepted by smalltalk -> reaches the router -> persona origin
+        self.assertIsNone(router.detect_smalltalk("расскажи про своё прошлое"))
+        with mock.patch.object(router, "route",
+                               return_value={"action": "persona",
+                                             "params": {"topic": "origin"}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {}, "расскажи про своё прошлое")
+        self.assertIn("прошл", r.call_args[0][1].lower())  # the origin answer
 
 
 class SelfBossPersonaTests(unittest.TestCase):

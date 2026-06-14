@@ -94,6 +94,7 @@ ROUTER_EXAMPLES = """Examples:
 "что ты умеешь?" / "как ты устроена?" / "какие у тебя ограничения?" / "what can you do?" -> {"action": "self_query", "params": {}, "confidence": 0.9}
 "расскажи о себе" / "про свою личность" / "какая ты?" / "опиши себя" / "tell me about yourself" / "what are you like?" -> {"action": "persona", "params": {"topic": "character"}, "confidence": 0.9}
 "как ты ко мне относишься?" / "what do you think of me?" / "how do you feel about me?" -> {"action": "persona", "params": {"topic": "relationship"}, "confidence": 0.9}
+"расскажи про своё прошлое" / "твоя история" / "как ты появилась?" / "tell me about your past" / "your story" -> {"action": "persona", "params": {"topic": "origin"}, "confidence": 0.9}
 "что ты обо мне знаешь?" / "what do you know about me?" -> {"action": "boss_query", "params": {}, "confidence": 0.92}
 "запомни про меня: я не люблю длинные ответы" / "remember about me: I prefer short answers" -> {"action": "boss_memory_update", "params": {"op": "remember", "value": "предпочитает короткие ответы", "kind": "tone"}, "confidence": 0.9}
 "забудь #3" / "forget what you know about my tone" -> {"action": "boss_memory_update", "params": {"op": "forget", "value": "#3"}, "confidence": 0.9}

@@ -439,6 +439,9 @@ class Agent:
         # (they are confirmations there).
         if pending is None:
             kind = router.detect_smalltalk(text)
+            if kind == "who_are_you":  # identity ping -> the rich character portrait
+                self.reply(chat_id, T(lang, "persona_character", name=self.owner_name()))
+                return
             if kind:
                 self.reply(chat_id, T(lang, f"smalltalk_{kind}", name=self.owner_name()))
                 return
@@ -555,7 +558,8 @@ class Agent:
             self.reply(chat_id, self_model.answer_self_query(self.conn, lang, self.cfg))
         elif action == "persona":
             topic = str(params.get("topic") or "character").strip().lower()
-            key = "persona_relationship" if topic == "relationship" else "persona_character"
+            key = {"relationship": "persona_relationship",
+                   "origin": "persona_origin"}.get(topic, "persona_character")
             self.reply(chat_id, T(lang, key, name=self.owner_name()))
         elif action == "boss_query":
             self.reply(chat_id, boss_model.render_profile(self.conn, lang))
