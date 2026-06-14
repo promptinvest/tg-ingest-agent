@@ -92,7 +92,7 @@ ROUTER_EXAMPLES = """Examples:
 "когда мой рейс?" / "when is my flight?" -> {"action": "ask", "params": {"question": "когда мой рейс?"}, "confidence": 0.9}
 "что у нас по плану на сегодня?" / "what's the plan for today?" -> {"action": "ask", "params": {"question": "что у нас по плану на сегодня?"}, "confidence": 0.9}
 "во сколько выезд в аэропорт?" -> {"action": "ask", "params": {"question": "во сколько выезд в аэропорт?"}, "confidence": 0.85}
-"что ты умеешь?" / "как ты устроена?" / "какие у тебя ограничения?" / "what can you do?" -> {"action": "self_query", "params": {}, "confidence": 0.9}
+"как ты устроена?" / "из чего ты сделана?" / "ты на каком ИИ работаешь?" / "how are you built?" / "are you built on GPT?" -> {"action": "self_query", "params": {}, "confidence": 0.85}
 "расскажи о себе" / "какая ты?" / "как твои дела?" / "что делаешь?" / "как прошёл день?" / "tell me about yourself" / "how was your day?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "как ты ко мне относишься?" / "скучала?" / "what do you think of me?" / "how do you feel about me?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "расскажи про своё прошлое" / "твоя история" / "чем занималась на выходных?" / "tell me about your past" / "your story" -> {"action": "converse", "params": {}, "confidence": 0.9}

@@ -1088,8 +1088,11 @@ class ConverseModuleTests(unittest.TestCase):
         sys_en = converse.build_system(self.conn, "en")
         self.assertIn("English", sys_en)
         self.assertIn("Owen", sys_en)                 # boss's name is in context
-        # the model is told to stay honest only if sincerely pressed
-        self.assertIn("AI", sys_en)
+        # she's instructed to be fully human with no AI disclaimers, ever
+        low = sys_en.lower()
+        self.assertIn("human", low)
+        self.assertIn("disclaimer", low)
+        self.assertIn("not an ai", low)
 
     def test_history_becomes_chat_turns(self):
         converse.seed_life(self.conn)
@@ -1199,6 +1202,33 @@ class ConversationLearningTests(unittest.TestCase):
             self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
             again = self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
         self.assertEqual(again["life"], 0)  # UNIQUE life text -> no duplicate
+
+
+class AccessControlTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="111",
+                          DB_PATH=str(Path(self.tmp.name) / "a.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def test_only_owner_in_owner_chat(self):
+        self.assertTrue(self.agent.is_owner(111, 111))    # the owner in his chat
+        self.assertFalse(self.agent.is_owner(111, 999))   # stranger posting in the chat
+        self.assertFalse(self.agent.is_owner(999, 111))   # owner's id, but another chat/group
+        self.assertFalse(self.agent.is_owner(None, None))
+        self.assertFalse(self.agent.is_owner(111, None))
+
+    def test_handle_update_ignores_non_owner(self):
+        update = {"message": {"chat": {"id": 111}, "from": {"id": 999}, "text": "привет"}}
+        with mock.patch.object(self.agent, "dispatch") as d:
+            self.agent.handle_update(update)
+        d.assert_not_called()  # a stranger never reaches dispatch
 
 
 class CurationThrottleTests(unittest.TestCase):

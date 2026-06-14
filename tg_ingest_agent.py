@@ -302,6 +302,15 @@ class Agent:
 
     # -- Update handling
 
+    def is_owner(self, chat_id, from_id):
+        """Cara talks ONLY to her owner, and only in his private chat. Both the
+        chat AND the sender's account must be on the allowlist — so a stranger
+        can't reach her by sharing a chat, and the owner's account isn't acted on
+        in any other chat (e.g. a group the bot was added to). ALLOWED_CHAT_IDS
+        holds the owner's id (his private chat id == his user id)."""
+        allowed = self.cfg.allowed_chat_ids
+        return chat_id in allowed and from_id in allowed
+
     def handle_update(self, update):
         callback = update.get("callback_query")
         if callback:
@@ -311,8 +320,8 @@ class Agent:
         if not msg:
             return
         chat_id = (msg.get("chat") or {}).get("id")
-        if chat_id not in self.cfg.allowed_chat_ids:
-            from_id = (msg.get("from") or {}).get("id")
+        from_id = (msg.get("from") or {}).get("id")
+        if not self.is_owner(chat_id, from_id):
             log(f"ignored message from chat_id={chat_id} user_id={from_id}")
             return
 
@@ -571,9 +580,9 @@ class Agent:
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "review":
             self.do_review(chat_id, lang, params)
-        elif action == "self_query":
-            self.reply(chat_id, self_model.answer_self_query(self.conn, lang, self.cfg))
-        elif action in ("converse", "persona", "smalltalk", "out_of_scope"):
+        elif action in ("converse", "persona", "smalltalk", "out_of_scope", "self_query"):
+            # All identity/self questions answer in Cara's own (human) voice — she
+            # never describes herself as software. Capability questions go to `help`.
             self.do_converse(chat_id, lang, text)
         elif action == "boss_query":
             self.reply(chat_id, boss_model.render_profile(self.conn, lang))
@@ -1389,7 +1398,7 @@ class Agent:
         msg = callback.get("message") or {}
         chat_id = (msg.get("chat") or {}).get("id")
         from_id = (callback.get("from") or {}).get("id")
-        if chat_id not in self.cfg.allowed_chat_ids and from_id not in self.cfg.allowed_chat_ids:
+        if not self.is_owner(chat_id, from_id):
             self.answer_callback(callback_id, "Not allowed.")
             return
         data = callback.get("data") or ""
