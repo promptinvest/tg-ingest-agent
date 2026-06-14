@@ -41,7 +41,7 @@ import texts
 import trace
 from common import Config, ShutdownInterrupt, current_trace, load_config, log  # noqa: F401
 from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
-                    tg_send_photo)
+                    tg_send_document_file_id, tg_send_photo)
 from texts import T
 
 COMMAND_ALIASES = {"/start": "start", "/stats": "stats", "/categories": "categories"}
@@ -188,7 +188,7 @@ class Agent:
             self.flush_albums(now)
             self.fire_due_reminders()
             self.check_budget_notice()
-            self.check_weekly_issues_report()
+            self.check_weekly_review()
             self.check_daily_curator()
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
@@ -546,7 +546,7 @@ class Agent:
         elif action == "list_items":
             self.reply(chat_id, self.items_text(lang, params))
         elif action == "item_detail":
-            self.reply(chat_id, self.item_detail_text(lang, params))
+            self.do_item_detail(chat_id, lang, params)
         elif action == "item_delete":
             rows = self.resolve_items(params)
             if not rows:
@@ -757,7 +757,8 @@ class Agent:
         """Reply in Cara's own voice — warm, human, language-matched. No state
         changes here; real tasks go through the skills, which still confirm."""
         self.send_chat_action(chat_id, "typing")
-        messages = converse.build_messages(self.conn, chat_id, lang)
+        messages = converse.build_messages(self.conn, chat_id, lang,
+                                           extra_context=self.review_schedule_text(lang))
         try:
             reply = llm.chat_profile(self.cfg, self.conn, "converse", messages,
                                      profile="converse_warm")
@@ -1016,15 +1017,13 @@ class Agent:
                 lines.append(f"   🔗 {urls[0]['url']}")
         return "\n".join(lines)
 
-    def do_show_media(self, chat_id, lang, params):
-        row = self.resolve_item(params)
-        if row is None:
-            self.reply(chat_id, T(lang, "items_empty"))
-            return
-        images = store.message_images(self.conn, row["id"])
+    def send_attachments(self, chat_id, row):
+        """Re-send everything stored with an item: photos first, then any file
+        attachments (PDF, doc…) by file_id. Returns how many were sent."""
+        rid = row["id"]
         sent = 0
-        for img in images:
-            caption = f"#{row['id']}" if sent == 0 else None
+        for img in store.message_images(self.conn, rid):
+            caption = f"#{rid}" if sent == 0 else None
             try:
                 if img["tg_file_id"]:
                     tg_send_photo(self.cfg.token, chat_id, img["tg_file_id"], caption=caption)
@@ -1035,8 +1034,24 @@ class Agent:
                                   caption=caption, by_file_id=False)
                     sent += 1
             except TelegramError as exc:
-                log(f"sendPhoto failed for #{row['id']}: {exc}")
-        if sent == 0:
+                log(f"sendPhoto failed for #{rid}: {exc}")
+        for f in store.message_files(self.conn, rid):
+            if not f["tg_file_id"]:
+                continue
+            caption = f["file_name"] or (f"#{rid}" if sent == 0 else None)
+            try:
+                tg_send_document_file_id(self.cfg.token, chat_id, f["tg_file_id"], caption=caption)
+                sent += 1
+            except TelegramError as exc:
+                log(f"sendDocument failed for #{rid}: {exc}")
+        return sent
+
+    def do_show_media(self, chat_id, lang, params):
+        row = self.resolve_item(params)
+        if row is None:
+            self.reply(chat_id, T(lang, "items_empty"))
+            return
+        if self.send_attachments(chat_id, row) == 0:
             self.reply(chat_id, T(lang, "no_media", row_id=row["id"]))
 
     def do_discard(self, chat_id, lang, pending):
@@ -1145,7 +1160,7 @@ class Agent:
             self.reply(chat_id, T(lang, "stored_retry", row_id=row_id))
             return
         category, alternatives, summary = suggestion
-        counts = T(lang, "counts", row_id=row_id, images=0, urls=1)
+        counts = T(lang, "counts", row_id=row_id, images=0, files=0, urls=1)
         self.present_suggestion(row_id, chat_id, None, category, alternatives, summary, counts)
 
     def do_ask(self, chat_id, lang, params, text):
@@ -1290,7 +1305,20 @@ class Agent:
         images = store.message_images(self.conn, row["id"])
         if images:
             lines.append(("Фото: " if ru else "Photos: ") + str(len(images)))
+        files = store.message_files(self.conn, row["id"])
+        if files:
+            names = ", ".join(f["file_name"] or "файл" for f in files[:10])
+            lines.append(("Файлы: " if ru else "Files: ") + names)
         return "\n".join(lines)
+
+    def do_item_detail(self, chat_id, lang, params):
+        row = self.resolve_item(params)
+        if row is None:
+            self.reply(chat_id, T(lang, "items_empty"))
+            return
+        self.reply(chat_id, self.item_detail_text(lang, {"id": row["id"]}))
+        # Hand back the actual photos/files attached to the item, too.
+        self.send_attachments(chat_id, row)
 
     def issues_text(self, lang, period=None):
         period = str(period or "week").strip().lower()
@@ -1325,15 +1353,33 @@ class Agent:
             jobs.add_job(self.conn, "memory_curator", "run_memory_curator",
                          trace_id=current_trace())
 
-    def check_weekly_issues_report(self):
+    def next_review_dt(self, now=None):
+        now = now or datetime.now(timezone.utc)
+        return review.next_review_utc(now, self.tz_offset(), self.cfg.review_weekday,
+                                      self.cfg.review_hour)
+
+    def review_schedule_text(self, lang):
+        local = self.next_review_dt() + timedelta(hours=self.tz_offset())
+        return T(lang, "review_schedule",
+                 weekday=review.weekday_name(lang, self.cfg.review_weekday),
+                 date=local.strftime("%d.%m"), time=local.strftime("%H:%M"))
+
+    def check_weekly_review(self):
+        """Hold the weekly performance review on its scheduled local weekday/hour
+        (so Cara can also tell the boss exactly when the next one is)."""
         now = datetime.now(timezone.utc)
-        last = store.kv_get(self.conn, "last_issues_report")
-        if not last:
-            store.kv_set(self.conn, "last_issues_report", now.isoformat())
+        nxt = store.kv_get(self.conn, "next_review_utc")
+        if not nxt:
+            store.kv_set(self.conn, "next_review_utc", self.next_review_dt(now).isoformat())
             return
-        if (now - datetime.fromisoformat(last)).days < 7:
+        try:
+            due = datetime.fromisoformat(nxt)
+        except ValueError:
+            store.kv_set(self.conn, "next_review_utc", self.next_review_dt(now).isoformat())
             return
-        store.kv_set(self.conn, "last_issues_report", now.isoformat())
+        if now < due:
+            return
+        store.kv_set(self.conn, "next_review_utc", self.next_review_dt(now).isoformat())
         lang = self.lang()
         report = review.chat_text(self.conn, self.cfg, lang, "week")
         for chat_id in self.cfg.allowed_chat_ids:
@@ -1341,6 +1387,11 @@ class Agent:
                        + "\n" + report)
 
     def do_review(self, chat_id, lang, params):
+        if params.get("schedule") or str(params.get("when") or "").strip().lower() in (
+            "when", "schedule", "next"
+        ):
+            self.reply(chat_id, self.review_schedule_text(lang))
+            return
         period = review.normalize_period(params.get("period"))
         self.reply(chat_id, review.chat_text(self.conn, self.cfg, lang, period))
         if not params.get("export"):
@@ -1529,6 +1580,14 @@ class Agent:
         reply_to = first.get("message_id")
         doc_text, doc_name = self.read_text_document(parts)
         raw_text = doc_text or ingest.first_text(parts)
+        # A file-only message (e.g. a forwarded PDF) has no text — fall back to
+        # the attachment names so the item is still categorizable and findable.
+        if not raw_text:
+            doc_names = [(p.get("document") or {}).get("file_name") for p in parts
+                         if (p.get("document") or {}).get("file_id")]
+            doc_names = [n for n in doc_names if n]
+            if doc_names:
+                raw_text = ", ".join(doc_names)
         urls = ingest.collect_urls(parts)
         forward = ingest.parse_forward_origin(first.get("forward_origin"))
         title = forward.get("title") or (doc_name if doc_text else None)
@@ -1556,6 +1615,7 @@ class Agent:
         for url in urls:
             store.insert_url(self.conn, row_id, url)
         image_count = 0
+        file_count = 0
         for part in parts:
             photo_sizes = part.get("photo") or []
             if photo_sizes:
@@ -1571,16 +1631,23 @@ class Agent:
                 image_count += 1
                 continue
             document = part.get("document") or {}
+            if not document.get("file_id"):
+                continue
             if str(document.get("mime_type") or "").startswith("image/"):
-                # v1 limitation: uncompressed image documents are stored as
-                # metadata only and not sent to the LLM.
+                # uncompressed image sent as a document: keep it as an image
+                # (metadata only — not sent to the vision LLM).
                 log(f"image document stored metadata-only for message #{row_id}")
                 store.insert_image(self.conn, row_id, part.get("message_id"), document, None)
+            else:
+                # any other attachment (PDF, doc, sheet, text…): keep its file_id
+                # so it can be re-sent on demand.
+                store.insert_file(self.conn, row_id, part.get("message_id"), document)
+                file_count += 1
         if image_count:
             storage.offload(self.cfg, self.conn, row_id)  # durable copy (dormant on local backend)
         log(
-            f"stored message #{row_id} (chat={chat_id}, images={image_count}, urls={len(urls)}, "
-            f"forward={forward.get('title') or '-'})"
+            f"stored message #{row_id} (chat={chat_id}, images={image_count}, files={file_count}, "
+            f"urls={len(urls)}, forward={forward.get('title') or '-'})"
         )
         if forward.get("chat_id") is not None and forward.get("message_id") is not None:
             original = store.find_forward_duplicate(
@@ -1612,7 +1679,8 @@ class Agent:
             self.reply(chat_id, T(lang, "auto_confirmed", category=auto_category,
                                   row_id=row_id, summary=summary[:300]), reply_to)
             return
-        counts = T(lang, "counts", row_id=row_id, images=image_count, urls=len(urls))
+        counts = T(lang, "counts", row_id=row_id, images=image_count, files=file_count,
+                   urls=len(urls))
         self.present_suggestion(row_id, chat_id, reply_to, category, alternatives, summary, counts)
 
     def suggest_row(self, row):

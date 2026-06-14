@@ -302,6 +302,19 @@ CREATE TABLE IF NOT EXISTS cara_life (
   text TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS files (
+  id INTEGER PRIMARY KEY,
+  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  tg_message_id INTEGER,
+  tg_file_id TEXT NOT NULL,
+  tg_file_unique_id TEXT,
+  file_name TEXT,
+  mime_type TEXT,
+  file_size INTEGER,
+  local_path TEXT,
+  created_at TEXT NOT NULL
+);
 """
 
 
@@ -709,6 +722,34 @@ def set_image_object_key(conn, image_id, object_key):
     conn.commit()
 
 
+def insert_file(conn, message_id, tg_message_id, document, local_path=None):
+    """Store a non-image document attachment (PDF, doc, sheet, text…). We keep
+    its tg_file_id so it can be re-sent later for free, no download needed."""
+    conn.execute(
+        "INSERT INTO files (message_id, tg_message_id, tg_file_id, tg_file_unique_id,"
+        " file_name, mime_type, file_size, local_path, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            message_id,
+            tg_message_id,
+            document.get("file_id"),
+            document.get("file_unique_id"),
+            document.get("file_name"),
+            document.get("mime_type"),
+            document.get("file_size"),
+            local_path,
+            _now(),
+        ),
+    )
+    conn.commit()
+
+
+def message_files(conn, message_id):
+    return conn.execute(
+        "SELECT * FROM files WHERE message_id = ? ORDER BY id", (message_id,)
+    ).fetchall()
+
+
 def set_chunks(conn, message_id, chunks):
     """Replace a message's embedding chunks (idempotent for re-indexing).
     chunks: list of (text, embedding_list_or_None)."""
@@ -865,6 +906,7 @@ def delete_message(conn, message_id):
     """Delete a message row (urls/images cascade); returns media paths to
     unlink. Other rows referencing it as duplicate_of keep their copy."""
     paths = [r["local_path"] for r in message_images(conn, message_id) if r["local_path"]]
+    paths += [r["local_path"] for r in message_files(conn, message_id) if r["local_path"]]
     conn.execute("UPDATE messages SET duplicate_of = NULL WHERE duplicate_of = ?", (message_id,))
     conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
     conn.commit()

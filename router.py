@@ -79,6 +79,7 @@ ROUTER_EXAMPLES = """Examples:
 "удали 7 сообщений" / "удали последние 5 заметок" / "delete 5 notes" -> {"action": "item_delete", "params": {"count": 7}, "confidence": 0.85}
 "сотри заметки" / "удали все заметки" / "почисти заметки" / "delete all notes" -> {"action": "purge", "params": {"scope": "messages"}, "confidence": 0.9}
 "покажи фото" / "show the photo" / "покажи картинку из #2" -> {"action": "show_media", "params": {"id": 2}, "confidence": 0.9}
+"покажи файл" / "пришли документ" / "скинь вложение из #1" / "send me the file" / "show the attachment" -> {"action": "show_media", "params": {}, "confidence": 0.9}
 "не сохраняй это" / "не надо сохранять" / "discard" / "don't save this" -> {"action": "discard", "params": {}, "confidence": 0.9}
 "загрузка сервера" / "сколько ресурсов занято" / "vps status" / "how's the server?" -> {"action": "vps_stats", "params": {}, "confidence": 0.9}
 "удали всё что у тебя есть" / "wipe everything" -> {"action": "purge", "params": {"scope": "all"}, "confidence": 0.9}
@@ -87,7 +88,8 @@ ROUTER_EXAMPLES = """Examples:
 "очисти все напоминания" / "clear all reminders" -> {"action": "purge", "params": {"scope": "reminders"}, "confidence": 0.9}
 "очисти журнал проблем" / "clear the issues log" / "удали статистику проблем" -> {"action": "purge", "params": {"scope": "issues"}, "confidence": 0.9}
 "какие были проблемы на этой неделе?" / "what went wrong this week?" -> {"action": "issues_report", "params": {"period": "week"}, "confidence": 0.9}
-"как ты поработала за неделю?" / "performance review" / "что ты выучила?" -> {"action": "review", "params": {"period": "week"}, "confidence": 0.9}
+"как ты поработала за неделю?" / "проведи ревью" / "что ты выучила?" -> {"action": "review", "params": {"period": "week"}, "confidence": 0.9}
+"когда у нас следующий performance review?" / "когда по плану ревью?" / "when is our next performance review?" -> {"action": "review", "params": {"schedule": true}, "confidence": 0.92}
 "сделай отчёт файлом" / "export the review as md" -> {"action": "review", "params": {"period": "week", "export": true}, "confidence": 0.9}
 "когда мой рейс?" / "when is my flight?" -> {"action": "ask", "params": {"question": "когда мой рейс?"}, "confidence": 0.9}
 "что у нас по плану на сегодня?" / "what's the plan for today?" -> {"action": "ask", "params": {"question": "что у нас по плану на сегодня?"}, "confidence": 0.9}

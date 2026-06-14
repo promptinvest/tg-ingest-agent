@@ -78,6 +78,15 @@ def tg_send_document(token, chat_id, filename, content_bytes, caption=None,
     return payload.get("result")
 
 
+def tg_send_document_file_id(token, chat_id, file_id, caption=None):
+    """Re-send a previously received document by its file_id — no upload, free,
+    and not subject to download-link expiry."""
+    params = {"chat_id": chat_id, "document": file_id}
+    if caption:
+        params["caption"] = caption[:1000]
+    return tg_call(token, "sendDocument", params)
+
+
 def tg_send_photo(token, chat_id, photo, caption=None, by_file_id=True):
     """Send a photo. by_file_id=True re-sends a stored file_id (no upload,
     free); otherwise `photo` is (filename, bytes) uploaded via multipart."""

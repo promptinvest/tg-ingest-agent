@@ -16,6 +16,31 @@ from texts import TEXTS
 PERIOD_DAYS = {"day": 1, "week": 7, "month": 30}
 
 
+# Weekday names in the form that reads naturally after Russian "в …" / English
+# "on …" (Russian uses the accusative: в понедельник / в среду / в пятницу).
+WEEKDAY_NAMES = {
+    "ru": ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу",
+           "воскресенье"],
+    "en": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+}
+
+
+def weekday_name(lang, weekday):
+    names = WEEKDAY_NAMES.get(lang, WEEKDAY_NAMES["en"])
+    return names[weekday % 7]
+
+
+def next_review_utc(now_utc, tz_offset, weekday, hour):
+    """UTC datetime of the next weekly review occurrence strictly after now,
+    given the boss's local timezone offset and the configured local weekday/hour."""
+    local = now_utc + timedelta(hours=tz_offset)
+    target = local.replace(hour=hour, minute=0, second=0, microsecond=0) \
+        + timedelta(days=(weekday - local.weekday()) % 7)
+    if target <= local:
+        target += timedelta(days=7)
+    return target - timedelta(hours=tz_offset)
+
+
 def normalize_period(value):
     value = str(value or "week").strip().lower()
     aliases = {"today": "day", "сегодня": "day", "день": "day",

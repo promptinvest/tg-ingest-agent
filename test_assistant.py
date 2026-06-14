@@ -534,13 +534,56 @@ class AgentViewTests(unittest.TestCase):
             self.agent.do_show_media(1, "ru", {"id": self.row_id})
         send.assert_called_once()
         self.assertEqual(send.call_args[0][2], "FILEID123")  # re-sent by file_id, no upload
-        # no photos -> friendly reply, no send
+
+    def test_file_attachment_stored_listed_and_resent(self):
+        import tg_ingest_agent
+        conn = self.agent.conn
+        store.insert_file(conn, self.row_id, 5, {
+            "file_id": "DOCID9", "file_unique_id": "du1", "file_name": "Расписка.pdf",
+            "mime_type": "application/pdf", "file_size": 3100000,
+        })
+        # detail names the file
+        detail = self.agent.item_detail_text("ru", {"id": self.row_id})
+        self.assertIn("Файлы: Расписка.pdf", detail)
+        # show_media re-sends it as a document by file_id (no upload)
+        with mock.patch.object(tg_ingest_agent, "tg_send_document_file_id") as send_doc, \
+             mock.patch.object(tg_ingest_agent, "tg_send_photo"):
+            self.agent.do_show_media(1, "ru", {"id": self.row_id})
+        send_doc.assert_called_once()
+        self.assertEqual(send_doc.call_args[0][2], "DOCID9")
+
+    def test_finalize_stores_forwarded_pdf(self):
+        msg = {
+            "chat": {"id": 1}, "message_id": 50, "date": 1781200000,
+            "from": {"id": 1},
+            "forward_origin": {"type": "user", "sender_user_name": "Mikhail"},
+            "document": {"file_id": "PDF1", "file_unique_id": "pu1",
+                         "file_name": "Расписка.pdf", "mime_type": "application/pdf"},
+        }
+        with mock.patch.object(self.agent, "suggest_row", return_value=("docs", [], "s")), \
+             mock.patch.object(self.agent, "present_suggestion"):
+            self.agent.finalize([msg])
+        row = self.agent.conn.execute(
+            "SELECT id, raw_text FROM messages WHERE tg_message_id=50").fetchone()
+        files = store.message_files(self.agent.conn, row["id"])
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["file_name"], "Расписка.pdf")
+        self.assertEqual(files[0]["tg_file_id"], "PDF1")
+        # filename became the searchable text so the item isn't "no content"
+        self.assertEqual(row["raw_text"], "Расписка.pdf")
+
+    def test_show_media_no_media(self):
+        import tg_ingest_agent
+        conn = self.agent.conn
+        # no photos and no files -> friendly reply, nothing sent
         with mock.patch.object(tg_ingest_agent, "tg_send_photo") as send2, \
+                mock.patch.object(tg_ingest_agent, "tg_send_document_file_id") as send_doc, \
                 mock.patch.object(self.agent, "reply") as reply:
             other = store.insert_message(conn, {"chat_id": 1, "tg_message_id": 9,
                                                 "received_at": "ts", "raw_text": "no pics"})
             self.agent.do_show_media(1, "ru", {"id": other})
             send2.assert_not_called()
+            send_doc.assert_not_called()
             self.assertIn("нет сохранённых фото", reply.call_args[0][1])
 
     def test_discard_deletes_pending_fresh_item(self):
@@ -1229,6 +1272,38 @@ class AccessControlTests(unittest.TestCase):
         with mock.patch.object(self.agent, "dispatch") as d:
             self.agent.handle_update(update)
         d.assert_not_called()  # a stranger never reaches dispatch
+
+
+class ReviewScheduleTests(unittest.TestCase):
+    def test_next_review_is_future_weekday_hour(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 6, 14, 8, 0, tzinfo=timezone.utc)         # Sunday
+        nxt = review.next_review_utc(now, tz_offset=3, weekday=0, hour=10)  # Mon 10:00 MSK
+        self.assertEqual(nxt, datetime(2026, 6, 15, 7, 0, tzinfo=timezone.utc))
+        self.assertGreater(nxt, now)
+
+    def test_same_day_past_hour_rolls_a_week(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 6, 15, 8, 0, tzinfo=timezone.utc)         # Mon 11:00 MSK, past 10
+        nxt = review.next_review_utc(now, tz_offset=3, weekday=0, hour=10)
+        self.assertEqual(nxt, datetime(2026, 6, 22, 7, 0, tzinfo=timezone.utc))  # +1 week
+
+    def test_do_review_answers_schedule_without_running_report(self):
+        import tg_ingest_agent
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        cfg = make_config(REVIEW_WEEKDAY="0", REVIEW_HOUR="10",
+                          DB_PATH=str(Path(tmp.name) / "r.db"),
+                          MEDIA_DIR=str(Path(tmp.name) / "m"))
+        agent = tg_ingest_agent.Agent(cfg)
+        self.addCleanup(agent.conn.close)
+        with mock.patch.object(agent, "reply") as r, \
+             mock.patch.object(review, "chat_text") as report:
+            agent.do_review(1, "ru", {"schedule": True})
+        report.assert_not_called()                    # schedule answer, not the full report
+        msg = r.call_args[0][1]
+        self.assertIn("performance review", msg.lower())
+        self.assertIn("понедельник", msg)             # configured weekday
 
 
 class CurationThrottleTests(unittest.TestCase):

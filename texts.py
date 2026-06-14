@@ -117,8 +117,8 @@ TEXTS = {
         ],
     },
     "counts": {
-        "ru": "(сохранила #{row_id}, фото: {images}, ссылок: {urls})",
-        "en": "(saved #{row_id}, {images} images, {urls} URLs)",
+        "ru": "(сохранила #{row_id}, фото: {images}, файлов: {files}, ссылок: {urls})",
+        "en": "(saved #{row_id}, {images} images, {files} files, {urls} URLs)",
     },
     "confirmed": {
         "ru": "Готово, босс — «{category}» (#{row_id}) ✅",
@@ -466,6 +466,10 @@ TEXTS = {
     "review_file_caption": {
         "ru": "Отчёт готов, босс — можно отдать его в VS Code 📎",
         "en": "Report ready, boss — feed it to VS Code 📎",
+    },
+    "review_schedule": {
+        "ru": "Наш performance review — еженедельно, в {weekday}. Следующий: {date} в {time}. Хотите, проведу прямо сейчас?",
+        "en": "Our performance review is weekly, on {weekday}. Next one: {date} at {time}. Want me to run it now?",
     },
 }
 

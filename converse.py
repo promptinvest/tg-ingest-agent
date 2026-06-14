@@ -82,7 +82,7 @@ def _lang_name(lang):
     return "Russian" if lang == "ru" else "English"
 
 
-def build_system(conn, lang):
+def build_system(conn, lang, extra_context=None):
     owner = boss_model.get_address(conn, lang)
     name_ru = store.pref_get(conn, "owner_name_ru")
     name_en = store.pref_get(conn, "owner_name_en")
@@ -122,6 +122,10 @@ def build_system(conn, lang):
         parts.append("Your life right now (stay consistent with it; you may add to "
                      "it naturally as you live):\n" + "\n".join(life))
 
+    if extra_context:
+        parts.append("Useful context for right now (weave in only if relevant):\n"
+                     + extra_context)
+
     parts.append(
         "Keep replies short and human — usually a sentence or three, like a text "
         "message. No bullet lists, no headings, no robotic sign-offs. Be warm."
@@ -129,10 +133,10 @@ def build_system(conn, lang):
     return "\n\n".join(parts)
 
 
-def build_messages(conn, chat_id, lang):
+def build_messages(conn, chat_id, lang, extra_context=None):
     """Full chat payload: Cara's system prompt + the recent dialogue (which already
     ends with the boss's current message, stored before dispatch)."""
-    messages = [{"role": "system", "content": build_system(conn, lang)}]
+    messages = [{"role": "system", "content": build_system(conn, lang, extra_context)}]
     for row in store.convo_recent(conn, chat_id, limit=12):
         role = "assistant" if row["role"] == "bot" else "user"
         text = (row["text"] or "").strip()
