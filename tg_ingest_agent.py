@@ -675,7 +675,8 @@ class Agent:
             )
             relationship.log_event(self.conn, "reminder_set",
                                    f"set a reminder: {payload['title']}", importance=1,
-                                   source_table="reminders", source_id=rid)
+                                   source_table="reminders", source_id=rid,
+                                   title=payload["title"])
             store.pending_clear(self.conn, chat_id)
             self.reply(chat_id, T(
                 lang, "reminder_set", rid=rid, title=payload["title"],
@@ -868,6 +869,9 @@ class Agent:
         try:
             tg_send_document(self.cfg.token, chat_id, filename, md.encode("utf-8"),
                              caption=T(lang, "review_file_caption"), content_type="text/markdown")
+            relationship.log_event(self.conn, "export_created",
+                                   f"exported {what} to {filename}", importance=1,
+                                   title=filename)
         except TelegramError as exc:
             log(f"export send failed: {exc}")
             self.reply(chat_id, T(lang, "llm_error"))
@@ -1393,6 +1397,9 @@ class Agent:
         store.kv_set(self.conn, "next_review_utc", self.next_review_dt(now).isoformat())
         lang = self.lang()
         report = review.chat_text(self.conn, self.cfg, lang, "week")
+        relationship.log_event(self.conn, "weekly_review",
+                               "ran our weekly performance review", importance=2,
+                               title="weekly review")
         for chat_id in self.cfg.allowed_chat_ids:
             self.reply(chat_id, T(lang, "review_weekly_intro", name=self.owner_name())
                        + "\n" + report)
@@ -1510,15 +1517,25 @@ class Agent:
         lang = self.lang()
         canonical = store.ensure_category(self.conn, category)
         store.confirm_category(self.conn, row["id"], canonical)
-        if row["suggested_category"] and canonical.casefold() != row["suggested_category"].casefold():
+        corrected = bool(row["suggested_category"]
+                         and canonical.casefold() != row["suggested_category"].casefold())
+        if corrected:
             store.feedback_add(
                 self.conn, "ingest", (row["raw_text"] or "")[:100],
                 row["suggested_category"], canonical,
             )
         log(f"message #{row['id']} confirmed as {canonical}")
-        relationship.log_event(self.conn, "category_confirmed",
-                               f"filed a message as «{canonical}»", importance=1,
-                               source_table="messages", source_id=row["id"])
+        if corrected:
+            relationship.log_event(
+                self.conn, "category_corrected",
+                f"learned a correction: «{row['suggested_category']}» → «{canonical}»",
+                importance=2, source_table="messages", source_id=row["id"],
+                title=f"correction → {canonical}")
+        else:
+            relationship.log_event(self.conn, "category_confirmed",
+                                   f"filed a message as «{canonical}»", importance=1,
+                                   source_table="messages", source_id=row["id"],
+                                   title=f"filed: {canonical}")
         updated = store.get_message(self.conn, row["id"])
         self.edit_suggestion_message(
             chat_id, edit_message_id or row["suggestion_message_id"], updated
@@ -1656,6 +1673,12 @@ class Agent:
                 file_count += 1
         if image_count:
             storage.offload(self.cfg, self.conn, row_id)  # durable copy (dormant on local backend)
+        if file_count:
+            kept = ", ".join(f["file_name"] or "файл"
+                             for f in store.message_files(self.conn, row_id)[:5])
+            relationship.log_event(self.conn, "document_saved",
+                                   f"kept a document: {kept}", importance=2,
+                                   source_table="messages", source_id=row_id, title=kept)
         log(
             f"stored message #{row_id} (chat={chat_id}, images={image_count}, files={file_count}, "
             f"urls={len(urls)}, forward={forward.get('title') or '-'})"

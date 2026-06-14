@@ -286,10 +286,12 @@ CREATE TABLE IF NOT EXISTS memory_candidates (
 CREATE TABLE IF NOT EXISTS relationship_events (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL,
+  title TEXT,
   summary TEXT NOT NULL,
   importance INTEGER NOT NULL DEFAULT 1,
   source_table TEXT,
   source_id INTEGER,
+  trace_id TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -508,11 +510,12 @@ def candidate_set_status(conn, candidate_id, status):
 
 # -- relationship events -----------------------------------------------------
 
-def rel_add(conn, kind, summary, importance=1, source_table=None, source_id=None):
+def rel_add(conn, kind, summary, importance=1, source_table=None, source_id=None, title=None):
     conn.execute(
-        "INSERT INTO relationship_events (kind, summary, importance, source_table, source_id,"
-        " created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (kind, str(summary)[:300], importance, source_table, source_id, _now()),
+        "INSERT INTO relationship_events (kind, title, summary, importance, source_table,"
+        " source_id, trace_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (kind, title, str(summary)[:300], importance, source_table, source_id,
+         _trace_id(), _now()),
     )
     conn.commit()
 
@@ -602,6 +605,11 @@ def _migrate(conn):
     issue_columns = {row["name"] for row in conn.execute("PRAGMA table_info(issues)")}
     if "trace_id" not in issue_columns:
         conn.execute("ALTER TABLE issues ADD COLUMN trace_id TEXT")
+    rel_columns = {row["name"] for row in conn.execute("PRAGMA table_info(relationship_events)")}
+    if "title" not in rel_columns:
+        conn.execute("ALTER TABLE relationship_events ADD COLUMN title TEXT")
+    if "trace_id" not in rel_columns:
+        conn.execute("ALTER TABLE relationship_events ADD COLUMN trace_id TEXT")
 
 
 # -- kv ----------------------------------------------------------------------

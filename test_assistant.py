@@ -1599,6 +1599,18 @@ class MemoryCuratorTests(unittest.TestCase):
         self.assertIn("Saved & filed: 1", hist)
         self.assertIn("News", hist)
 
+    def test_rel_event_stores_title_and_trace(self):
+        import common
+        common.set_current_trace("tr_test_1")
+        try:
+            relationship.log_event(self.conn, "document_saved", "kept a document: Расписка.pdf",
+                                   importance=2, title="Расписка.pdf")
+        finally:
+            common.set_current_trace(None)
+        row = store.rel_recent(self.conn, "2000-01-01")[0]
+        self.assertEqual(row["title"], "Расписка.pdf")
+        self.assertEqual(row["trace_id"], "tr_test_1")
+
     def test_router_accepts_phase_c_actions(self):
         for action in ("memory_review", "working_history"):
             self.assertEqual(router.validate_route({"action": action, "params": {}}, False)["action"],

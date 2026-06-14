@@ -168,7 +168,8 @@ def confirm_candidate(conn, candidate_id, accept):
                        source_table="memory_candidate", source_id=candidate_id)
         store.candidate_set_status(conn, candidate_id, "confirmed")
         store.rel_add(conn, "memory_confirmed", f"confirmed: {cand['proposed_text']}",
-                      importance=2, source_table="memory_candidates", source_id=candidate_id)
+                      importance=2, source_table="memory_candidates", source_id=candidate_id,
+                      title="learned about you")
         return cand["proposed_text"], True
     store.candidate_set_status(conn, candidate_id, "rejected")
     return cand["proposed_text"], False

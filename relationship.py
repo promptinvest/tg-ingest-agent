@@ -9,8 +9,8 @@ import store
 from texts import T
 
 
-def log_event(conn, kind, summary, importance=1, source_table=None, source_id=None):
-    store.rel_add(conn, kind, summary, importance, source_table, source_id)
+def log_event(conn, kind, summary, importance=1, source_table=None, source_id=None, title=None):
+    store.rel_add(conn, kind, summary, importance, source_table, source_id, title=title)
 
 
 def render_working_history(conn, lang, days=30):
