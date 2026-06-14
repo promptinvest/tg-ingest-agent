@@ -249,10 +249,46 @@ from common import build_multipart  # noqa: E402 (shared with tg_api/gcal)
 
 
 def transcribe(cfg, conn, skill, audio_path, duration_seconds):
-    """Voice -> text; local whisper.cpp or the remote transcriptions endpoint."""
+    """Voice -> text. local = cold whisper-cli; local_server = warm
+    whisper-server on localhost (no per-call model reload); remote = an
+    OpenAI-compatible transcriptions endpoint."""
     if cfg.stt_mode == "local":
         return _transcribe_local(cfg, conn, skill, audio_path, duration_seconds)
+    if cfg.stt_mode == "local_server":
+        return _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds)
     return _transcribe_remote(cfg, conn, skill, audio_path, duration_seconds)
+
+
+def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
+    """POST the audio to the warm whisper-server (/inference). The server is
+    launched with --convert, so it ffmpegs the OGG itself; the 190 MB model
+    stays loaded between calls. Free, on-box, no model reload."""
+    audio_path = Path(audio_path)
+    body, boundary = build_multipart(
+        {"response_format": "json", "temperature": "0"},
+        "file", audio_path.name, audio_path.read_bytes(), "audio/ogg",
+    )
+    request = Request(
+        cfg.whisper_server_url.rstrip("/") + "/inference",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                 "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=cfg.stt_local_timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        raise LLMError(f"whisper-server HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise LLMError(f"whisper-server unreachable: {exc.reason}") from exc
+    try:
+        text = str((json.loads(raw) or {}).get("text") or "").strip()
+    except (ValueError, AttributeError):
+        text = raw.strip()
+    store.usage_add(conn, skill, "stt", "whisper.cpp-server",
+                    seconds=duration_seconds, cost_usd=0.0)
+    return text
 
 
 def _transcribe_local(cfg, conn, skill, audio_path, duration_seconds):

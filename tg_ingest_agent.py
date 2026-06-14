@@ -109,6 +109,14 @@ class Agent:
             log(f"sendMessage failed: {exc}")
             return None
 
+    def send_chat_action(self, chat_id, action="typing"):
+        """Show an activity indicator (lasts ~5s in the client) so a few-second
+        transcription/LLM wait feels responsive. Best-effort."""
+        try:
+            tg_call(self.cfg.token, "sendChatAction", {"chat_id": chat_id, "action": action})
+        except TelegramError:
+            pass
+
     def answer_callback(self, callback_id, text):
         try:
             tg_call(
@@ -354,6 +362,7 @@ class Agent:
             self.reply(chat_id, T(lang, "stt_failed"))
             return None
         path = None
+        self.send_chat_action(chat_id, "typing")  # "Cara is typing…" while we transcribe
         try:
             path = self.download_file(voice.get("file_id"), voice.get("file_unique_id"), ".oga")
             transcript = llm.transcribe(

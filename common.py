@@ -113,12 +113,15 @@ def load_config(env=None):
     cfg.confidence_threshold = float(env.get("ROUTER_CONFIDENCE_THRESHOLD") or "0.6")
     # Speech-to-text: mode 'local' = whisper.cpp on this host (free, slower);
     # mode 'remote' = OpenAI-compatible /audio/transcriptions endpoint.
+    # STT_MODE: local (cold whisper-cli) | local_server (warm whisper-server,
+    # no per-call model reload) | remote (OpenAI-compatible endpoint).
     cfg.stt_enabled = (env.get("STT_ENABLED") or "true").strip().lower() == "true"
     cfg.stt_mode = (env.get("STT_MODE") or "remote").strip().lower()
     cfg.stt_model = (env.get("STT_MODEL") or "whisper-large-v3").strip()
     cfg.whisper_bin = (env.get("WHISPER_BIN") or "/opt/whisper.cpp/build/bin/whisper-cli").strip()
     cfg.whisper_model = (env.get("WHISPER_MODEL")
                          or "/opt/whisper.cpp/models/ggml-small-q5_1.bin").strip()
+    cfg.whisper_server_url = (env.get("WHISPER_SERVER_URL") or "http://127.0.0.1:8089").strip()
     cfg.stt_local_timeout = int(env.get("STT_LOCAL_TIMEOUT_SECONDS") or "600")
     # Spend control
     cfg.budget_daily_usd = float(env.get("BUDGET_DAILY_USD") or "1.0")

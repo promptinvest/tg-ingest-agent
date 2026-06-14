@@ -177,6 +177,23 @@ class GatewayTests(unittest.TestCase):
             out = llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
         self.assertEqual(out, '{"ok": true}')  # fell through to JSON-clean fallback
 
+    def test_transcribe_local_server(self):
+        cfg = make_config(STT_MODE="local_server", WHISPER_SERVER_URL="http://127.0.0.1:8089")
+        self.assertEqual(cfg.stt_mode, "local_server")
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "v.oga"
+            p.write_bytes(b"OGGDATA")
+
+            class Resp:
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def read(self): return b'{"text": "  \xd0\xbd\xd0\xb0\xd0\xbf\xd0\xbe\xd0\xbc\xd0\xbd\xd0\xb8  "}'
+            with mock.patch.object(llm, "urlopen", return_value=Resp()) as up:
+                text = llm.transcribe(cfg, self.conn, "stt", str(p), 4)
+            self.assertEqual(text, "напомни")  # JSON {"text"} parsed + trimmed
+            self.assertIn("/inference", up.call_args[0][0].full_url)  # warm-server endpoint
+            self.assertEqual(store.usage_total(self.conn, "day"), 0.0)  # on-box, free
+
     def test_build_multipart(self):
         body, boundary = llm.build_multipart(
             {"model": "whisper"}, "file", "voice.oga", b"AUDIO", "audio/ogg"
