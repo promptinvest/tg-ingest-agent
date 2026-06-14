@@ -837,7 +837,7 @@ def delete_message(conn, message_id):
     return paths
 
 
-PURGE_SCOPES = ("all", "category", "stats", "reminders")
+PURGE_SCOPES = ("all", "category", "stats", "reminders", "messages")
 
 
 def _messages_in_category(conn, category):
@@ -872,6 +872,8 @@ def purge_preview(conn, scope, category=None):
         info["feedback"] = count("SELECT COUNT(*) FROM feedback")
     elif scope == "reminders":
         info["reminders"] = count("SELECT COUNT(*) FROM reminders WHERE status='active'")
+    elif scope == "messages":  # all saved notes/messages, keep categories/reminders/settings
+        info["messages"] = count("SELECT COUNT(*) FROM messages")
     return info
 
 
@@ -899,6 +901,11 @@ def purge_execute(conn, scope, category=None):
             conn.execute(f"DELETE FROM {table}")
     elif scope == "reminders":
         conn.execute("DELETE FROM reminders WHERE status='active'")
+    elif scope == "messages":
+        paths = [r["local_path"] for r in
+                 conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
+        for table in ("facts", "chunks", "urls", "images", "messages"):
+            conn.execute(f"DELETE FROM {table}")
     conn.commit()
     return info, [p for p in paths if p]
 

@@ -628,6 +628,66 @@ class PurgeTests(unittest.TestCase):
         ok = router.validate_route({"action": "purge", "params": {"scope": "all"}}, False)
         self.assertEqual(ok["action"], "purge")
 
+    def test_messages_scope_keeps_categories_reminders_usage(self):
+        info, _ = store.purge_execute(self.conn, "messages")
+        self.assertEqual(info["messages"], 3)
+        self.assertEqual(store.purge_preview(self.conn, "all")["messages"], 0)  # notes gone
+        self.assertGreater(len(store.known_categories(self.conn)), 0)           # categories kept
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), 1)          # reminders kept
+        self.assertEqual(store.usage_total(self.conn, "month"), 0.01)          # spend kept
+
+
+class MultiDeleteTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "d.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.ids = []
+        for i in range(5):
+            mid = store.insert_message(self.agent.conn, {
+                "chat_id": 1, "tg_message_id": i + 1, "received_at": store._now(),
+                "raw_text": f"note{i}"})
+            store.set_suggestion(self.agent.conn, mid, "News", "s", "m")
+            store.confirm_category(self.agent.conn, mid, store.ensure_category(self.agent.conn, "News"))
+            self.ids.append(mid)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def test_resolve_items_ids_count_single(self):
+        by_ids = self.agent.resolve_items({"ids": [self.ids[0], self.ids[2], 9999]})
+        self.assertEqual([r["id"] for r in by_ids], [self.ids[0], self.ids[2]])  # bad id skipped
+        self.assertEqual(len(self.agent.resolve_items({"count": 3})), 3)
+        self.assertEqual(len(self.agent.resolve_items({"count": 99})), 5)  # capped at available
+        self.assertEqual([r["id"] for r in self.agent.resolve_items({"id": self.ids[1]})],
+                         [self.ids[1]])
+
+    def test_multi_delete_confirm(self):
+        store.pending_set(self.agent.conn, 1, "delete", {"row_ids": [self.ids[0], self.ids[1]]})
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.resolve_pending(1, "confirm", {}, store.pending_get(self.agent.conn, 1), "ru")
+        self.assertIsNone(store.get_message(self.agent.conn, self.ids[0]))
+        self.assertIsNone(store.get_message(self.agent.conn, self.ids[1]))
+        self.assertIsNotNone(store.get_message(self.agent.conn, self.ids[2]))  # others kept
+        self.assertIn("записей", r.call_args[0][1])  # deleted_multi
+        self.assertIsNone(store.pending_get(self.agent.conn, 1))
+
+    def test_delete_cancel_keeps_everything(self):
+        store.pending_set(self.agent.conn, 1, "delete", {"row_ids": [self.ids[0]]})
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_pending(1, "cancel", {}, store.pending_get(self.agent.conn, 1), "ru")
+        self.assertIsNotNone(store.get_message(self.agent.conn, self.ids[0]))
+
+    def test_router_accepts_multi_and_count_and_messages(self):
+        for params in ({"ids": [1, 2, 3]}, {"count": 7}):
+            self.assertEqual(router.validate_route(
+                {"action": "item_delete", "params": params}, False)["action"], "item_delete")
+        self.assertEqual(router.validate_route(
+            {"action": "purge", "params": {"scope": "messages"}}, False)["action"], "purge")
+
 
 class PurgeFlowTests(unittest.TestCase):
     def setUp(self):

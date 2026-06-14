@@ -46,8 +46,10 @@ TEXTS = {
                "messages, reminders, calendar, AI spend, and remembering your preferences."),
     },
     "clarify": {
-        "ru": "Я не совсем поняла 🤔 Это сохранить, поставить напоминание или показать статистику?",
-        "en": "I didn't quite get that 🤔 Save this, set a reminder, or show stats?",
+        "ru": ("Я не совсем поняла 🤔 Подскажите, что нужно: сохранить, найти/показать "
+               "сохранённое, удалить, напоминание, календарь, расходы или статистику?"),
+        "en": ("I didn't quite get that 🤔 Tell me what you need: save, find/show saved, "
+               "delete, a reminder, calendar, spend, or stats?"),
     },
     # Variant family (pre-confirmation, state=suggested → no final verbs).
     "suggestion": {
@@ -350,6 +352,7 @@ TEXTS = {
     "purge_phrase_category": {"ru": "удалить категорию {category}", "en": "delete category {category}"},
     "purge_phrase_stats": {"ru": "сбросить всю статистику", "en": "reset all stats"},
     "purge_phrase_reminders": {"ru": "удалить все напоминания", "en": "delete all reminders"},
+    "purge_phrase_messages": {"ru": "удалить все заметки", "en": "delete all notes"},
     "calendar_added": {
         "ru": "Записала в Google Calendar: {title} 📅\n{link}",
         "en": "Added to Google Calendar: {title} 📅\n{link}",
@@ -375,6 +378,14 @@ TEXTS = {
     "deleted": {
         "ru": "Удалила #{row_id} — и записи, и файлы 🗑",
         "en": "Deleted #{row_id} — records and files 🗑",
+    },
+    "delete_confirm_multi": {
+        "ru": "Удалить {n} записей ({ids})? Это насовсем — скажите «да», и я удалю.",
+        "en": "Delete {n} items ({ids})? This is permanent — say \"yes\" and I'll remove them.",
+    },
+    "deleted_multi": {
+        "ru": "Удалила {n} записей — и тексты, и файлы 🗑",
+        "en": "Deleted {n} items — text and files 🗑",
     },
     "llm_error": {
         "ru": "Модель сейчас не отвечает 😔 Попробуйте чуть позже — я ничего не потеряла.",

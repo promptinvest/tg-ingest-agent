@@ -71,8 +71,11 @@ ROUTER_EXAMPLES = """Examples:
 "покажи ссылку" / "show the link" -> {"action": "item_detail", "params": {}, "confidence": 0.9}
 "покажи #3" / "детали 3" -> {"action": "item_detail", "params": {"id": 3}, "confidence": 0.9}
 "ссылку из поста про рейсы" -> {"action": "item_detail", "params": {"query": "рейсы"}, "confidence": 0.9}
-"удали это сообщение" / "delete it" -> {"action": "item_delete", "params": {}, "confidence": 0.9}
-"удали #2" / "удали пост про рейсы" -> {"action": "item_delete", "params": {"id": 2}, "confidence": 0.9}
+"удали это сообщение" / "delete it" / "сотри это" -> {"action": "item_delete", "params": {}, "confidence": 0.9}
+"удали #2" / "удали пост про рейсы" / "сотри #2" -> {"action": "item_delete", "params": {"id": 2}, "confidence": 0.9}
+"удали #2, 4 и 10" / "delete #2, #4, #10" -> {"action": "item_delete", "params": {"ids": [2, 4, 10]}, "confidence": 0.92}
+"удали 7 сообщений" / "удали последние 5 заметок" / "delete 5 notes" -> {"action": "item_delete", "params": {"count": 7}, "confidence": 0.85}
+"сотри заметки" / "удали все заметки" / "почисти заметки" / "delete all notes" -> {"action": "purge", "params": {"scope": "messages"}, "confidence": 0.9}
 "покажи фото" / "show the photo" / "покажи картинку из #2" -> {"action": "show_media", "params": {"id": 2}, "confidence": 0.9}
 "не сохраняй это" / "не надо сохранять" / "discard" / "don't save this" -> {"action": "discard", "params": {}, "confidence": 0.9}
 "загрузка сервера" / "сколько ресурсов занято" / "vps status" / "how's the server?" -> {"action": "vps_stats", "params": {}, "confidence": 0.9}
@@ -170,6 +173,12 @@ def build_system_prompt(cfg, pending, now_utc=None):
         f" The user's local timezone is UTC{cfg.timezone_offset:+d}."
         " All due_utc values must be ISO 8601 UTC like 2026-06-13T07:00:00+00:00.\n"
         f"{pending_line}\n"
+        "'заметки'/'notes' mean the user's saved messages; 'сотри'/'удали' both mean delete."
+        " A bounded delete — specific ids ('#2, #4') or a count ('7 сообщений') — must NEVER"
+        " become purge-all; route it to item_delete. Explicit 'удали всё'/'wipe everything' IS"
+        " purge scope=all (the user will still be asked to type a confirmation phrase); a category,"
+        " stats, reminders, or all notes ('все заметки') are their own purge scopes. Only when"
+        " genuinely unsure pick the smaller action or clarify.\n"
         "If intent is unclear, use clarify with a short question (do not guess).\n"
         "Reply with ONLY a JSON object: {\"action\": ..., \"params\": {...},"
         " \"confidence\": <0..1>}.\n"

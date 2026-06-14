@@ -519,15 +519,21 @@ class Agent:
         elif action == "item_detail":
             self.reply(chat_id, self.item_detail_text(lang, params))
         elif action == "item_delete":
-            row = self.resolve_item(params)
-            if row is None:
+            rows = self.resolve_items(params)
+            if not rows:
                 self.reply(chat_id, T(lang, "items_empty"))
-            else:
-                store.pending_set(self.conn, chat_id, "delete", {"row_id": row["id"]})
+            elif len(rows) == 1:
+                row = rows[0]
+                store.pending_set(self.conn, chat_id, "delete", {"row_ids": [row["id"]]})
                 snippet = (row["summary"] or row["raw_text"] or "")[:60].replace("\n", " ")
                 self.reply(chat_id, T(lang, "delete_confirm", row_id=row["id"],
                                       category=row["category"] or row["suggested_category"] or "?",
                                       snippet=snippet))
+            else:
+                ids = [r["id"] for r in rows]
+                store.pending_set(self.conn, chat_id, "delete", {"row_ids": ids})
+                listing = ", ".join(f"#{i}" for i in ids)
+                self.reply(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
         elif action == "show_media":
             self.do_show_media(chat_id, lang, params)
         elif action == "discard":
@@ -663,12 +669,20 @@ class Agent:
                 self.reply(chat_id, T(lang, "cancelled"))
                 return
             store.pending_clear(self.conn, chat_id)
-            row_id = payload.get("row_id")
-            if store.get_message(self.conn, row_id) is not None:
-                for path in store.delete_message(self.conn, row_id):
-                    Path(path).unlink(missing_ok=True)
-                log(f"message #{row_id} deleted by operator")
-                self.reply(chat_id, T(lang, "deleted", row_id=row_id))
+            ids = payload.get("row_ids") or ([payload["row_id"]] if payload.get("row_id") else [])
+            deleted = []
+            for rid in ids:
+                if store.get_message(self.conn, rid) is not None:
+                    for path in store.delete_message(self.conn, rid):
+                        Path(path).unlink(missing_ok=True)
+                    deleted.append(rid)
+            log(f"deleted {len(deleted)} message(s) by operator: {deleted}")
+            if len(deleted) == 1:
+                self.reply(chat_id, T(lang, "deleted", row_id=deleted[0]))
+            elif deleted:
+                self.reply(chat_id, T(lang, "deleted_multi", n=len(deleted)))
+            else:
+                self.reply(chat_id, T(lang, "items_empty"))
         elif kind == "habit":
             store.pending_clear(self.conn, chat_id)
             source = payload["source_chat_id"]
@@ -1101,6 +1115,33 @@ class Agent:
         except OSError:
             pass
         return total
+
+    def resolve_items(self, params):
+        """Resolve one or more items: an explicit ids list, a count of most
+        recent ('удали 7 сообщений'), or a single id/query/category. Returns a
+        list of message rows (possibly empty)."""
+        ids = params.get("ids")
+        if isinstance(ids, list) and ids:
+            out = []
+            for i in ids:
+                try:
+                    row = store.get_message(self.conn, int(i))
+                except (TypeError, ValueError):
+                    row = None
+                if row is not None:
+                    out.append(row)
+            if out:
+                return out
+        count = params.get("count")
+        if count is not None:
+            try:
+                n = max(1, min(int(count), 20))
+            except (TypeError, ValueError):
+                n = 0
+            if n:
+                return store.list_messages(self.conn, limit=n)
+        row = self.resolve_item(params)
+        return [row] if row else []
 
     def resolve_item(self, params):
         """Resolve an item by explicit id, query/category, or most recent."""
