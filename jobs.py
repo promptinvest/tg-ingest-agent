@@ -12,6 +12,16 @@ from datetime import datetime, timezone
 
 import store
 
+# Known durable background jobs (skill, action). Documentation + a test guard
+# that every one has a registered handler. The live request/response path is
+# deliberately NOT a job — it stays synchronous (P0.4 background-only).
+JOB_KINDS = (
+    ("memory_curator", "run_memory_curator"),  # daily memory curation
+    ("maintenance", "retry_sweep"),            # reprocess pending ingests
+    ("maintenance", "media_cleanup"),          # prune orphan media / old exports
+    ("maintenance", "pending_expire"),         # drop abandoned pending actions
+)
+
 
 def _now():
     return datetime.now(timezone.utc).isoformat()

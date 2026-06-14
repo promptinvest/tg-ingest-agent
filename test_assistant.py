@@ -1351,6 +1351,46 @@ class ProactiveTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
 
 
+class MaintenanceJobTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "m.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def test_handlers_registered_for_all_job_kinds(self):
+        import runtime
+        import jobs
+        for skill, action in jobs.JOB_KINDS:
+            self.assertIn((skill, action), runtime._HANDLERS, f"no handler for {skill}/{action}")
+
+    def test_enqueue_is_idempotent(self):
+        self.agent.enqueue_maintenance_jobs()
+        self.agent.enqueue_maintenance_jobs()  # second call must not double-queue
+        n = self.agent.conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE skill='maintenance' AND status='pending'"
+        ).fetchone()["n"]
+        self.assertEqual(n, 3)  # one per action, not six
+
+    def test_drain_runs_maintenance_and_expires_pending(self):
+        import runtime
+        store.pending_set(self.agent.conn, 1, "category", {"row_id": 1}, ttl_seconds=-10)  # stale
+        self.agent.enqueue_maintenance_jobs()
+        runtime.drain(self.agent.conn, self.agent)
+        # every maintenance job completed durably
+        left = self.agent.conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE status != 'done'").fetchone()["n"]
+        self.assertEqual(left, 0)
+        # the abandoned pending action was swept by the pending_expire job
+        self.assertEqual(
+            self.agent.conn.execute("SELECT COUNT(*) AS n FROM pending_actions").fetchone()["n"], 0)
+
+
 class AccessControlTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent

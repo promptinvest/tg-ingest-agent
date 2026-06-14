@@ -68,6 +68,15 @@ class Agent:
         # it builds candidates the boss pulls via memory_review.
         runtime.register("memory_curator", "run_memory_curator",
                          lambda ctx, conn, payload, job: {"created": memory_curator.run_daily(conn)})
+        # Background maintenance now runs through the durable job runner (P0.4,
+        # background-only): each runs under its own trace, retries on failure,
+        # and survives restart. The live request path stays synchronous.
+        runtime.register("maintenance", "retry_sweep",
+                         lambda ctx, conn, payload, job: {"reprocessed": ctx.retry_sweep()})
+        runtime.register("maintenance", "media_cleanup",
+                         lambda ctx, conn, payload, job: {"removed": ctx.housekeep()})
+        runtime.register("maintenance", "pending_expire",
+                         lambda ctx, conn, payload, job: {"expired": store.pending_expire(conn)})
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0
@@ -199,9 +208,8 @@ class Agent:
             self.check_proactive()
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
-                self.retry_sweep()
-                runtime.drain(self.conn, self)  # runs due jobs (e.g. memory curator)
-                self.housekeep()
+                self.enqueue_maintenance_jobs()
+                runtime.drain(self.conn, self)  # runs due jobs (curator + maintenance)
             poll_timeout = 2 if self.albums else self.cfg.poll_timeout
             try:
                 updates = tg_call(
@@ -296,9 +304,10 @@ class Agent:
 
     def retry_sweep(self):
         rows = store.pending_messages(self.conn, self.cfg.llm_max_attempts)
+        reprocessed = 0
         for row in rows:
             if self.stop:
-                return
+                break
             suggestion = self.suggest_row(row)
             if suggestion:
                 category, alternatives, summary = suggestion
@@ -306,6 +315,8 @@ class Agent:
                     row["id"], row["chat_id"], row["tg_message_id"],
                     category, alternatives, summary, "",
                 )
+                reprocessed += 1
+        return reprocessed
 
     # -- Update handling
 
@@ -456,6 +467,14 @@ class Agent:
                 removed += 1
         if removed:
             log(f"housekeep removed {removed} interim artifact(s)")
+        return removed
+
+    def enqueue_maintenance_jobs(self):
+        """Queue the recurring background jobs (idempotent — skip if one is still
+        pending). runtime.drain runs them, durably and under their own traces."""
+        for action in ("retry_sweep", "media_cleanup", "pending_expire"):
+            if not jobs.has_pending(self.conn, "maintenance", action):
+                jobs.add_job(self.conn, "maintenance", action)
 
     # -- Router dispatch
 

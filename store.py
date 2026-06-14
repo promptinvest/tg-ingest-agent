@@ -1169,6 +1169,14 @@ def pending_clear(conn, chat_id):
     conn.commit()
 
 
+def pending_expire(conn):
+    """Proactively drop pending actions past their expires_at (pending_get only
+    expires the one chat it reads — this sweeps abandoned ones). Returns count."""
+    cur = conn.execute("DELETE FROM pending_actions WHERE expires_at < ?", (_now(),))
+    conn.commit()
+    return cur.rowcount
+
+
 def convo_add(conn, chat_id, role, text):
     conn.execute(
         "INSERT INTO conversation (chat_id, ts, role, text) VALUES (?, ?, ?, ?)",
