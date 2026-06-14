@@ -115,6 +115,20 @@ def known(action):
     return action in SKILLS
 
 
+def confirmation_for(action):
+    """The confirmation mode a skill requires: False | True | 'typed_phrase'."""
+    return get_policy(action)["requires_confirmation"]
+
+
+def assert_covers(actions):
+    """Every router action MUST have a declared policy. Called at startup so
+    drift (a new router action with no manifest entry) crashes immediately
+    instead of shipping un-permissioned."""
+    missing = sorted(a for a in actions if a not in SKILLS)
+    if missing:
+        raise SkillPolicyError(f"router actions missing a manifest policy: {missing}")
+
+
 def assert_proactive_allowed(action):
     if not get_policy(action).get("allowed_proactive"):
         raise SkillPolicyError(f"{action} is not allowed in proactive mode")

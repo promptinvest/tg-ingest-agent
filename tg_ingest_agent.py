@@ -49,6 +49,9 @@ COMMAND_ALIASES = {"/start": "start", "/stats": "stats", "/categories": "categor
 
 class Agent:
     def __init__(self, cfg):
+        # Fail fast if a router action lacks a manifest policy (P0.1: the
+        # manifest is the live permission gate, not just documentation).
+        skill_manifest.assert_covers(router.ACTIONS)
         self.cfg = cfg
         self.conn = store.open_db(cfg.db_path)
         cfg.media_dir.mkdir(parents=True, exist_ok=True)
@@ -484,9 +487,17 @@ class Agent:
             self.reply(chat_id, T(lang, "llm_error"))
             return
         action, params = decision["action"], decision["params"]
-        log(f"routed chat={chat_id} action={action} confidence={decision['confidence']:.2f}")
+        # Consult the manifest live: log the action's risk on the trace, and
+        # hold the destructive boundary — a destructive action may only set up a
+        # typed-phrase confirmation, never execute inline (purge does this; the
+        # actual delete runs from the pending-purge branch above once the exact
+        # phrase is typed).
+        policy = skill_manifest.get_policy(action)
+        log(f"routed chat={chat_id} action={action} risk={policy['risk']} "
+            f"confidence={decision['confidence']:.2f}")
         trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED, f"action={action}",
-                    skill=action, data={"confidence": decision["confidence"]})
+                    skill=action, data={"confidence": decision["confidence"],
+                                        "risk": policy["risk"]})
 
         if action == "ingest":
             self.finalize([msg])

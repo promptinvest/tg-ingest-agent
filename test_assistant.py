@@ -882,6 +882,27 @@ class SkillManifestTests(unittest.TestCase):
         # meta glue (confirm/cancel/router) is not surfaced as a capability
         self.assertNotIn("", titles_en)
 
+    def test_assert_covers_catches_drift(self):
+        skill_manifest.assert_covers(router.ACTIONS)            # current set: no raise
+        with self.assertRaises(skill_manifest.SkillPolicyError):
+            skill_manifest.assert_covers(router.ACTIONS | {"a_brand_new_action"})
+
+    def test_destructive_requires_typed_phrase(self):
+        # safety contract: anything destructive must demand the exact typed phrase
+        for action, _ in skill_manifest.SKILLS.items():
+            policy = skill_manifest.get_policy(action)
+            if policy["destructive"]:
+                self.assertEqual(policy["requires_confirmation"], "typed_phrase",
+                                 f"{action} is destructive but not typed_phrase-gated")
+
+    def test_proactive_skills_are_never_dangerous(self):
+        # P1.6 floor: a proactive nudge can never be destructive or an external write
+        for action, _ in skill_manifest.SKILLS.items():
+            policy = skill_manifest.get_policy(action)
+            if policy["allowed_proactive"]:
+                self.assertNotIn(policy["risk"], ("destructive", "external_write"),
+                                 f"{action} is proactive but {policy['risk']}")
+
 
 class TraceTests(unittest.TestCase):
     def setUp(self):
