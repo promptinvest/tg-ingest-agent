@@ -1278,6 +1278,32 @@ class LanguageDetectionTests(unittest.TestCase):
         self.assertEqual(common.detect_lang("what's the plan for today?"), "en")
 
 
+class SttNoiseTests(unittest.TestCase):
+    def test_detects_whisper_hallucinations(self):
+        for noise in ("[Subscribe]", "[ Music ]", "(applause)", "♪♪♪", "...", "",
+                      "Спасибо за просмотр!", "Subtitles by the Amara.org community"):
+            self.assertTrue(common.is_stt_noise(noise), noise)
+        for real in ("привет, как дела?", "позвони в банк завтра",
+                     "[важно] перезвони мне", "напомни про встречу"):
+            self.assertFalse(common.is_stt_noise(real), real)
+
+    def test_transcribe_voice_rejects_hallucination(self):
+        import tg_ingest_agent
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        cfg = make_config(DB_PATH=str(Path(tmp.name) / "v.db"),
+                          MEDIA_DIR=str(Path(tmp.name) / "m"))
+        agent = tg_ingest_agent.Agent(cfg)
+        self.addCleanup(agent.conn.close)
+        with mock.patch.object(agent, "download_file", return_value=str(Path(tmp.name) / "x.oga")), \
+                mock.patch.object(llm, "transcribe", return_value="[Subscribe]"), \
+                mock.patch.object(agent, "send_chat_action"), \
+                mock.patch.object(agent, "reply") as r:
+            out = agent.transcribe_voice(1, {"file_id": "f", "file_unique_id": "u", "duration": 9})
+        self.assertIsNone(out)  # garbage is never dispatched as a real message
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "stt_failed"))
+
+
 class ConversationLearningTests(unittest.TestCase):
     """The memory pass that grows Cara's life and learns about the boss from
     free chat."""

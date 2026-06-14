@@ -447,8 +447,12 @@ class Agent:
             # transcript. Delete it once processing is done (not on shutdown).
             if path and not self.stop:
                 Path(path).unlink(missing_ok=True)
-        if not transcript:
-            store.issue_add(self.conn, chat_id, "stt_failed", "empty transcript")
+        # Reject empty transcripts AND Whisper's non-speech hallucinations
+        # ("[Subscribe]", "Спасибо за просмотр") — acting on them confuses both
+        # of us; ask for a resend instead.
+        if not transcript or common.is_stt_noise(transcript):
+            store.issue_add(self.conn, chat_id, "stt_failed",
+                            f"unusable transcript: {transcript[:80]!r}")
             self.reply(chat_id, T(lang, "stt_failed"))
             return None
         return transcript

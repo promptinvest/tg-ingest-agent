@@ -270,9 +270,11 @@ def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
     launched with --convert, so it ffmpegs the OGG itself; the 190 MB model
     stays loaded between calls. Free, on-box, no model reload."""
     audio_path = Path(audio_path)
+    fields = {"response_format": "json", "temperature": "0"}
+    if cfg.stt_language and cfg.stt_language != "auto":
+        fields["language"] = cfg.stt_language  # pin language -> fewer hallucinations
     body, boundary = build_multipart(
-        {"response_format": "json", "temperature": "0"},
-        "file", audio_path.name, audio_path.read_bytes(), "audio/ogg",
+        fields, "file", audio_path.name, audio_path.read_bytes(), "audio/ogg",
     )
     request = Request(
         cfg.whisper_server_url.rstrip("/") + "/inference",
@@ -313,7 +315,7 @@ def _transcribe_local(cfg, conn, skill, audio_path, duration_seconds):
         )
         result = subprocess.run(
             ["nice", "-n", "10", cfg.whisper_bin, "-m", cfg.whisper_model,
-             "-f", str(wav_path), "-l", "auto", "-np", "-nt"],
+             "-f", str(wav_path), "-l", (cfg.stt_language or "auto"), "-np", "-nt"],
             capture_output=True, check=True, timeout=cfg.stt_local_timeout,
         )
     except subprocess.TimeoutExpired as exc:

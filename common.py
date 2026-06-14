@@ -49,6 +49,35 @@ def detect_lang(text):
     return "ru" if cyr_words >= lat_words else "en"
 
 
+# Whisper's well-known non-speech hallucinations (from YouTube training data) —
+# emitted on silence, music, or wrong-language audio. Specific enough not to
+# collide with real messages.
+_STT_NOISE_PHRASES = (
+    "subtitles by", "amara.org", "thanks for watching", "thank you for watching",
+    "please subscribe", "продолжение следует", "спасибо за просмотр",
+    "подписывайтесь на канал", "субтитры подготовил", "субтитры сделал",
+    "редактор субтитров", "dimatorzok",
+)
+
+
+def is_stt_noise(text):
+    """True if a transcript is a Whisper non-speech hallucination ('[Subscribe]',
+    '[Music]', 'Спасибо за просмотр', 'Subtitles by…') or effectively empty — so
+    we ask for a resend instead of acting on garbage."""
+    t = str(text or "").strip()
+    if not t:
+        return True
+    # nothing but brackets / punctuation / music glyphs -> not speech
+    core = re.sub(r"[\[\](){}<>♪♫*~_\-—–.,!?…:;\"'«»\s]", "", t)
+    if len(core) <= 1:
+        return True
+    # the whole transcript is a single bracketed tag: [Subscribe], (applause)
+    if re.fullmatch(r"[\[(<][^\])>]{0,40}[\])>]", t):
+        return True
+    low = t.casefold()
+    return any(p in low for p in _STT_NOISE_PHRASES)
+
+
 # Current trace id for the in-flight unit of work (single-threaded poll loop,
 # so a module global is safe). store.usage_add/issue_add default to this so
 # every model call and issue is trace-linked without threading an arg through
@@ -136,6 +165,10 @@ def load_config(env=None):
     cfg.stt_enabled = (env.get("STT_ENABLED") or "true").strip().lower() == "true"
     cfg.stt_mode = (env.get("STT_MODE") or "remote").strip().lower()
     cfg.stt_model = (env.get("STT_MODEL") or "whisper-large-v3").strip()
+    # Language hint for Whisper. 'auto' lets it detect, but a wrong guess on the
+    # first moments yields YouTube-style hallucinations ('[Subscribe]'); pinning
+    # a language (e.g. STT_LANGUAGE=ru) cuts those for a single-language speaker.
+    cfg.stt_language = (env.get("STT_LANGUAGE") or "auto").strip().lower()
     cfg.whisper_bin = (env.get("WHISPER_BIN") or "/opt/whisper.cpp/build/bin/whisper-cli").strip()
     cfg.whisper_model = (env.get("WHISPER_MODEL")
                          or "/opt/whisper.cpp/models/ggml-small-q5_1.bin").strip()
