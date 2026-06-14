@@ -317,6 +317,17 @@ CREATE TABLE IF NOT EXISTS files (
   local_path TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS proactive_log (
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  day TEXT NOT NULL,
+  trace_id TEXT,
+  check_name TEXT NOT NULL,
+  result TEXT NOT NULL,
+  sent_message INTEGER NOT NULL DEFAULT 0,
+  reason TEXT
+);
 """
 
 
@@ -553,6 +564,32 @@ def life_facts(conn, limit=40):
 
 def life_count(conn):
     return conn.execute("SELECT COUNT(*) AS n FROM cara_life").fetchone()["n"]
+
+
+# -- proactive heartbeat audit log -------------------------------------------
+
+def proactive_log_add(conn, check_name, result, sent=False, reason=None, day=None):
+    ts = _now()
+    conn.execute(
+        "INSERT INTO proactive_log (ts, day, trace_id, check_name, result, sent_message, reason)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (ts, day or ts[:10], _trace_id(), check_name, result, 1 if sent else 0, reason),
+    )
+    conn.commit()
+
+
+def proactive_sent_count(conn, day):
+    """How many proactive nudges were actually sent on a given UTC day."""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM proactive_log WHERE day = ? AND sent_message = 1", (day,)
+    ).fetchone()["n"]
+
+
+def proactive_key_sent_today(conn, day, check_name):
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM proactive_log WHERE day = ? AND check_name = ?"
+        " AND sent_message = 1", (day, check_name),
+    ).fetchone()["n"] > 0
 
 
 # -- model cooldowns (failover) ----------------------------------------------

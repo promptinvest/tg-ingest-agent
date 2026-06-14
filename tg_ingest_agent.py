@@ -26,6 +26,7 @@ import knowledge
 import llm
 import memory_curator
 import persona
+import proactive
 import reminders
 import relationship
 import review
@@ -70,6 +71,8 @@ class Agent:
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0
+        # Don't nudge the instant the service (re)starts — wait one interval.
+        self.last_proactive = time.time()
         # Reply language for the current turn: set from the incoming message so
         # Cara answers in the language the boss just wrote in. None outside a
         # turn (e.g. scheduler ticks) -> lang() falls back to the stored pref.
@@ -193,6 +196,7 @@ class Agent:
             self.check_budget_notice()
             self.check_weekly_review()
             self.check_daily_curator()
+            self.check_proactive()
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
                 self.retry_sweep()
@@ -1378,6 +1382,26 @@ class Agent:
         return T(lang, "review_schedule",
                  weekday=review.weekday_name(lang, self.cfg.review_weekday),
                  date=local.strftime("%d.%m"), time=local.strftime("%H:%M"))
+
+    def check_proactive(self):
+        """Evaluate the proactive heartbeat at most once per interval; it sends
+        at most one gentle, suggestion-only nudge (throttle/quiet-hours/manifest
+        gating all live in proactive.run)."""
+        now = time.time()
+        if now - self.last_proactive < self.cfg.proactive_interval:
+            return
+        self.last_proactive = now
+        self.turn_lang = None  # scheduler context -> stored preference language
+        chat_id = next(iter(self.cfg.allowed_chat_ids))
+        lang = self.lang()
+        tid = trace.start(self.conn, "proactive_tick", chat_id)
+        try:
+            sent = proactive.run(self.conn, self.cfg, lang,
+                                 lambda text: self.reply(chat_id, text))
+            trace.finish(self.conn, tid, "finished", summary=f"nudge={sent or '-'}")
+        except Exception as exc:  # a heartbeat hiccup must never crash the loop
+            log(f"proactive check failed: {exc}")
+            trace.finish(self.conn, tid, "failed", summary=str(exc)[:200])
 
     def check_weekly_review(self):
         """Hold the weekly performance review on its scheduled local weekday/hour

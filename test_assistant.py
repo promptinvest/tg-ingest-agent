@@ -1291,6 +1291,66 @@ class ConversationLearningTests(unittest.TestCase):
         self.assertEqual(again["life"], 0)  # UNIQUE life text -> no duplicate
 
 
+class ProactiveTests(unittest.TestCase):
+    def setUp(self):
+        import proactive
+        self.proactive = proactive
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "p.db")
+        self.cfg = make_config()  # tz +3, quiet 22-8, max 1/day, enabled
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _now_local(self, local_hour):
+        # cfg.timezone_offset defaults to +3, so UTC = local - 3
+        from datetime import datetime, timezone
+        return datetime(2026, 6, 15, (local_hour - 3) % 24, 0, tzinfo=timezone.utc)
+
+    def test_quiet_hours_wrap_midnight(self):
+        self.assertTrue(self.proactive.in_quiet_hours(self.cfg, self.conn, self._now_local(23)))
+        self.assertTrue(self.proactive.in_quiet_hours(self.cfg, self.conn, self._now_local(7)))
+        self.assertFalse(self.proactive.in_quiet_hours(self.cfg, self.conn, self._now_local(12)))
+
+    def test_sends_one_nudge_and_logs(self):
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        sent = []
+        key = self.proactive.run(self.conn, self.cfg, "ru", sent.append, now=self._now_local(12))
+        self.assertEqual(key, "candidates")
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(store.proactive_sent_count(self.conn, "2026-06-15"), 1)
+
+    def test_daily_cap_blocks_second_nonurgent(self):
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        self.conn.execute("INSERT INTO messages (chat_id, tg_message_id, received_at, status,"
+                          " suggested_category) VALUES (1, 1, ?, 'suggested', 'news')",
+                          (store._now(),))
+        self.conn.commit()
+        first = self.proactive.run(self.conn, self.cfg, "ru", lambda t: None, now=self._now_local(12))
+        second = self.proactive.run(self.conn, self.cfg, "ru", lambda t: None, now=self._now_local(13))
+        self.assertEqual(first, "candidates")
+        self.assertIsNone(second)  # max_per_day=1 reached
+
+    def test_quiet_hours_suppress_nonurgent(self):
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        sent = []
+        key = self.proactive.run(self.conn, self.cfg, "ru", sent.append, now=self._now_local(23))
+        self.assertIsNone(key)
+        self.assertEqual(sent, [])
+
+    def test_overdue_is_urgent_and_bypasses_cap(self):
+        from datetime import datetime, timezone, timedelta
+        past = (datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc) - timedelta(days=1)).isoformat()
+        store.reminder_add(self.conn, 1, "call the bank", past)
+        # cap already spent today by a non-urgent nudge
+        store.proactive_log_add(self.conn, "candidates", "sent", sent=True)
+        sent = []
+        key = self.proactive.run(self.conn, self.cfg, "ru", sent.append, now=self._now_local(12))
+        self.assertEqual(key, "overdue")        # urgent fires despite the cap
+        self.assertEqual(len(sent), 1)
+
+
 class AccessControlTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent

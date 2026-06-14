@@ -471,6 +471,19 @@ TEXTS = {
         "ru": "Наш performance review — еженедельно, в {weekday}. Следующий: {date} в {time}. Хотите, проведу прямо сейчас?",
         "en": "Our performance review is weekly, on {weekday}. Next one: {date} at {time}. Want me to run it now?",
     },
+    # Proactive nudges (suggestion-only; Cara never acts on them herself).
+    "nudge_candidates": {
+        "ru": "Босс, у меня накопилось {n} предложений в память. Скажете «обзор памяти» — покажу, и решите.",
+        "en": "Boss, I've got {n} memory suggestions waiting. Say \"memory review\" and you decide.",
+    },
+    "nudge_unsorted": {
+        "ru": "У меня {n} сохранённых ждут категорию. Разберём, когда будет минутка?",
+        "en": "{n} saved items are still waiting for a category. Sort them when you have a minute?",
+    },
+    "nudge_overdue": {
+        "ru": "Просрочено напоминаний: {n}. Перенести их или отметить выполненными?",
+        "en": "{n} reminder(s) are overdue. Reschedule them, or mark them done?",
+    },
 }
 
 

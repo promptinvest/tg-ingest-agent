@@ -145,6 +145,15 @@ def load_config(env=None):
     # weekday/hour and can tell you when the next one is. 0=Monday … 6=Sunday.
     cfg.review_weekday = max(0, min(6, int(env.get("REVIEW_WEEKDAY") or "0")))
     cfg.review_hour = max(0, min(23, int(env.get("REVIEW_HOUR") or "10")))
+    # Proactive heartbeat: gentle, suggestion-only nudges. Off-hours respected,
+    # at most N non-urgent nudges/day; urgent (overdue) may bypass the cap.
+    cfg.proactive_enabled = (env.get("PROACTIVE_ENABLED") or "true").strip().lower() == "true"
+    cfg.quiet_start = max(0, min(23, int(env.get("QUIET_HOURS_START") or "22")))  # local hour
+    cfg.quiet_end = max(0, min(23, int(env.get("QUIET_HOURS_END") or "8")))       # local hour
+    cfg.proactive_max_per_day = int(env.get("PROACTIVE_MAX_PER_DAY") or "1")
+    cfg.proactive_urgent_bypass_quiet = (
+        env.get("PROACTIVE_URGENT_BYPASS_QUIET") or "false").strip().lower() == "true"
+    cfg.proactive_interval = int(env.get("PROACTIVE_INTERVAL_SECONDS") or "3600")
     # Model profiles / failover (llm.chat_profile)
     cfg.llm_profiles_json = (env.get("LLM_PROFILES_JSON") or "").strip()
     cfg.llm_fallback_cooldown = int(env.get("LLM_FALLBACK_COOLDOWN_SECONDS") or "300")
