@@ -1108,6 +1108,32 @@ class ConversationDispatchTests(unittest.TestCase):
         self.agent.conn.close()
         self.tmp.cleanup()
 
+    def test_explicit_category_assignment_applies_named_category(self):
+        # the screenshot bug: "Категория - Документы" while a suggestion is pending
+        # was confirming the fallback ("uncategorized") instead of setting Документы.
+        conn = self.agent.conn
+        mid = store.insert_message(conn, {"chat_id": 1, "tg_message_id": 1,
+                                          "received_at": store._now(), "raw_text": "Расписка.pdf"})
+        store.set_suggestion(conn, mid, "uncategorized", "filename only", "m")
+        store.pending_set(conn, 1, "category", {"row_id": mid})
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {}, "Категория - Документы")
+        route.assert_not_called()                      # resolved deterministically, no router
+        row = store.get_message(conn, mid)
+        self.assertEqual(row["category"], "Документы")  # named category applied, not fallback
+        self.assertEqual(row["status"], "confirmed")
+        # it's a correction (suggested != confirmed) -> logged as feedback for learning
+        fb = conn.execute("SELECT corrected FROM feedback WHERE corrected='Документы'").fetchone()
+        self.assertIsNotNone(fb)
+
+    def test_explicit_category_parser_variants(self):
+        for text in ("Категория - Документы", "категория: Документы",
+                     "в категорию Документы", "set category to Документы"):
+            self.assertEqual(self.agent.explicit_category(text), "Документы")
+        self.assertIsNone(self.agent.explicit_category("какая категория?"))
+        self.assertIsNone(self.agent.explicit_category("покажи заметки"))
+
     def test_greeting_short_circuits_to_free_form(self):
         # "расскажи о себе"/"кто ты" are smalltalk -> straight to converse (LLM),
         # skipping the router, NO template.

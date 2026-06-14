@@ -506,6 +506,15 @@ class Agent:
         if pending and pending["kind"] == "purge":
             self.resolve_purge(chat_id, lang, pending, text)
             return
+        # Explicit category assignment while a suggestion is pending ("Категория -
+        # Документы", "в категорию X", "set category to X") — resolve it
+        # deterministically so the named category is never lost to a router
+        # mis-read that confirms the fallback instead.
+        if pending and pending["kind"] == "category":
+            explicit = self.explicit_category(text)
+            if explicit:
+                self.resolve_pending(chat_id, "amend", {"category": explicit}, pending, lang)
+                return
         # Obvious greetings / "how are you" / identity pings go straight to warm
         # free-form Cara, skipping the router (one chat call, no template). A bare
         # "ок"/"👍" needs no reply, like a human. With a pending action, short acks
@@ -852,6 +861,24 @@ class Agent:
     def looks_like_correction(self, text):
         t = (text or "").casefold()
         return any(h in t for h in self._CORRECTION_HINTS)
+
+    # Explicit "set the category to X" phrasings (resolved deterministically so a
+    # named category can't be lost to a router mis-read).
+    _CATEGORY_PATTERNS = (
+        r"(?:^|\b)(?:категори[яюи]|category|раздел)\s*[:\-—=]\s*(.+)$",
+        r"(?:^|\b)в\s+категори[июы]\s+(.+)$",
+        r"(?:^|\b)set\s+category\s+(?:to\s+)?(.+)$",
+        r"(?:^|\b)(?:это|пусть будет|лучше)\s+категори[яю]\s+(.+)$",
+    )
+
+    def explicit_category(self, text):
+        import re
+        t = (text or "").strip()
+        for pattern in self._CATEGORY_PATTERNS:
+            m = re.search(pattern, t, re.IGNORECASE)
+            if m:
+                return llm.normalize_category(m.group(1).strip(" .!?\"'«»"))
+        return None
 
     def maybe_curate_conversation(self, chat_id, lang=None, force=False):
         """Extract durable memory from recent chat: grows Cara's life, learns

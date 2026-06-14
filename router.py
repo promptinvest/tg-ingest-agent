@@ -124,6 +124,7 @@ ROUTER_EXAMPLES = """Examples:
 "да" (with a pending action) -> {"action": "confirm", "params": {}, "confidence": 0.95}
 "нет, лучше в 16:00" (pending reminder) -> {"action": "amend", "params": {"due_utc": "<same day 16:00 local in UTC>"}, "confidence": 0.9}
 "это скорее крипта" (pending category) -> {"action": "amend", "params": {"category": "крипта"}, "confidence": 0.9}
+"категория - Документы" / "категория: крипта" / "в категорию Документы" / "set category to Documents" (pending category) -> {"action": "amend", "params": {"category": "Документы"}, "confidence": 0.92}
 "готово" (pending fired reminder) -> {"action": "amend", "params": {"done": true}, "confidence": 0.9}
 "через полчаса" (pending fired reminder) -> {"action": "amend", "params": {"snooze_minutes": 30}, "confidence": 0.9}
 "привет, как ты?" / "приветик" / "доброе утро" -> {"action": "converse", "params": {}, "confidence": 0.95}
