@@ -812,30 +812,46 @@ class Agent:
             self.reply(chat_id, T(lang, "llm_error"))
             return
         self.reply(chat_id, reply)
-        self.maybe_curate_conversation(chat_id)
+        # Learn immediately when he's correcting me; otherwise on the usual cadence.
+        self.maybe_curate_conversation(chat_id, force=self.looks_like_correction(text))
 
     # How many conversational turns between background memory passes (cost vs.
     # freshness): her life and what she learns about you fill in every few turns.
     CURATE_EVERY = 3
 
-    def maybe_curate_conversation(self, chat_id):
-        """Throttled: every few converse turns, run one extraction pass that
-        grows Cara's life and learns benign facts about the boss (sensitive ones
-        become confirm-first candidates). Runs after the reply is already sent."""
+    # Phrases that signal the boss is correcting Cara's behavior — capture the
+    # lesson on the spot, don't wait for the throttle.
+    _CORRECTION_HINTS = (
+        "почему ты", "почему на ", "ты ошиб", "ошиблась", "неправиль", "не так",
+        "не надо", "перестань", "хватит", "опять ты", "я же сказал", "я же писал",
+        "не на том язык", "не по-", "wrong", "you said", "why did you", "don't ",
+        "do not ", "stop doing", "not in ",
+    )
+
+    def looks_like_correction(self, text):
+        t = (text or "").casefold()
+        return any(h in t for h in self._CORRECTION_HINTS)
+
+    def maybe_curate_conversation(self, chat_id, force=False):
+        """Extract durable memory from recent chat: grows Cara's life, learns
+        benign boss facts (sensitive -> confirm-first), and captures behavioral
+        CORRECTIONS as standing guidance + an issue. Throttled to every few turns,
+        but `force` runs it now (used the moment he corrects her). After-reply."""
         key = f"converse_since_curate:{chat_id}"
-        n = int(store.kv_get(self.conn, key, "0") or 0) + 1
-        if n < self.CURATE_EVERY:
-            store.kv_set(self.conn, key, n)
-            return
+        if not force:
+            n = int(store.kv_get(self.conn, key, "0") or 0) + 1
+            if n < self.CURATE_EVERY:
+                store.kv_set(self.conn, key, n)
+                return
         store.kv_set(self.conn, key, 0)
         try:
             result = memory_curator.curate_conversation(self.conn, self.cfg, chat_id)
         except Exception as exc:  # never let learning break a conversation
             log(f"conversation curation failed: {exc}")
             return
-        if result["life"] or result["boss"]:
-            log(f"conversation curated chat={chat_id}: "
-                f"+{result['life']} life, +{result['boss']} boss")
+        if result.get("life") or result.get("boss") or result.get("corrections"):
+            log(f"conversation curated chat={chat_id}: +{result.get('life', 0)} life, "
+                f"+{result.get('boss', 0)} boss, +{result.get('corrections', 0)} corrections")
 
     # -- Memory skill
 

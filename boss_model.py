@@ -134,3 +134,27 @@ def confirmed_context(conn, max_items=8, max_chars=600):
         out.append(line)
         used += len(line)
     return out
+
+
+# Behavioral guidance: rules the boss set or corrected (how Cara should act).
+# Both confirmed AND inferred — a correction learned from conversation lands as
+# 'inferred' and must reach the prompt so Cara honors it next turn.
+GUIDANCE_KINDS = ("tone", "workflow", "avoidance", "quality_bar")
+
+
+def standing_guidance(conn, max_items=8, max_chars=600):
+    out, used, seen = [], 0, set()
+    for status in ("confirmed", "inferred"):
+        for row in store.boss_items(conn, status, sensitivities=("normal",), limit=20):
+            if row["kind"] not in GUIDANCE_KINDS:
+                continue
+            value = (row["value"] or "").strip()
+            if not value or value in seen:
+                continue
+            line = f"- {value}"
+            if used + len(line) > max_chars:
+                return out
+            out.append(line)
+            used += len(line)
+            seen.add(value)
+    return out

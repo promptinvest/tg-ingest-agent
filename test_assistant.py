@@ -1299,6 +1299,33 @@ class ConversationLearningTests(unittest.TestCase):
             again = self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
         self.assertEqual(again["life"], 0)  # UNIQUE life text -> no duplicate
 
+    def test_correction_is_learned_logged_and_injected(self):
+        import boss_model
+        import converse
+        rule = "Отвечай на том языке, на котором он пишет."
+        payload = ('{"cara_life": [], "boss_facts": [],'
+                   ' "corrections": [{"kind": "workflow", "text": "' + rule + '"}]}')
+        with mock.patch.object(llm, "chat_profile", return_value=payload):
+            result = self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
+        self.assertEqual(result["corrections"], 1)
+        # stored as a correctable standing-guidance item...
+        self.assertIn(rule, [r["value"] for r in store.boss_items(self.conn, "inferred")])
+        # ...logged as an issue so recurring mistakes surface in the weekly review...
+        n = self.conn.execute("SELECT COUNT(*) AS n FROM issues WHERE kind='correction'").fetchone()["n"]
+        self.assertEqual(n, 1)
+        # ...and reaches her conversation prompt so she honours it next turn
+        self.assertTrue(any(rule in g for g in boss_model.standing_guidance(self.conn)))
+        self.assertIn(rule, converse.build_system(self.conn, "ru"))
+
+    def test_correction_not_relogged_on_rerun(self):
+        payload = ('{"cara_life": [], "boss_facts": [],'
+                   ' "corrections": [{"kind": "tone", "text": "Будь короче."}]}')
+        with mock.patch.object(llm, "chat_profile", return_value=payload):
+            self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
+            self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
+        n = self.conn.execute("SELECT COUNT(*) AS n FROM issues WHERE kind='correction'").fetchone()["n"]
+        self.assertEqual(n, 1)  # already-known correction not re-logged
+
 
 class ProactiveTests(unittest.TestCase):
     def setUp(self):
@@ -1480,6 +1507,16 @@ class CurationThrottleTests(unittest.TestCase):
             cc.assert_not_called()           # not yet
             self.agent.maybe_curate_conversation(1)
             cc.assert_called_once()           # fires on the Nth turn
+
+    def test_correction_forces_immediate_learning(self):
+        import memory_curator
+        self.assertTrue(self.agent.looks_like_correction("Почему ты ответила на английском?"))
+        self.assertTrue(self.agent.looks_like_correction("ты опять ошиблась"))
+        self.assertFalse(self.agent.looks_like_correction("когда мой рейс?"))
+        with mock.patch.object(memory_curator, "curate_conversation",
+                               return_value={"life": 0, "boss": 0, "corrections": 1}) as cc:
+            self.agent.maybe_curate_conversation(1, force=True)  # no waiting for the throttle
+            cc.assert_called_once()
 
 
 class SelfBossPersonaTests(unittest.TestCase):

@@ -69,11 +69,15 @@ def run_daily(conn):
 LIFE_KINDS = {"hobby", "friend", "place", "habit", "plan", "mood", "moment",
               "home", "dream", "work", "taste"}
 
+# Behavioral-correction kinds — standing guidance Cara must follow going forward.
+GUIDANCE_KINDS = {"tone", "workflow", "avoidance", "quality_bar"}
+
 _EXTRACT_SYSTEM = (
     "You extract durable memory from a chat between Cara (a warm assistant who has "
     "her own life) and her boss. Return STRICT JSON only, no prose:\n"
     '{"cara_life": [{"kind": "...", "text": "..."}], '
-    '"boss_facts": [{"kind": "...", "text": "..."}]}\n'
+    '"boss_facts": [{"kind": "...", "text": "..."}], '
+    '"corrections": [{"kind": "...", "text": "..."}]}\n'
     "cara_life: NEW, lasting details Cara revealed about HER OWN life (a hobby, a "
     "friend, a place, a plan, a taste). Each a short statement addressed to Cara in "
     "her language, e.g. 'Ты любишь джаз.' / 'You're learning to bake.' Skip anything "
@@ -82,6 +86,14 @@ _EXTRACT_SYSTEM = (
     "project, a habit, a personal fact). Short third-person in his language, e.g. "
     "'Любит короткие ответы.' kind in: tone, workflow, quality_bar, avoidance, "
     "project, personal_fact, category_preference, identity.\n"
+    "corrections: standing instructions the BOSS gave about HOW CARA SHOULD BEHAVE "
+    "going forward — something to do or to stop doing, or a mistake not to repeat "
+    "(e.g. reply in the language he writes in; be shorter; don't switch languages). "
+    "Write each as a short imperative IN HIS LANGUAGE addressed to Cara, e.g. "
+    "'Отвечай на том языке, на котором он пишет.' kind in: tone, workflow, "
+    "avoidance, quality_bar. Capture it even if he complained only once. Do NOT "
+    "capture insults, venting, emotions, or one-off task content — only durable "
+    "behavioral rules Cara can actually follow.\n"
     "Never invent — only what the text plainly supports. Use empty arrays when "
     "nothing durable is new."
 )
@@ -141,7 +153,29 @@ def curate_conversation(conn, cfg, chat_id, limit=12):
                                  sensitivity=sens, confidence=0.7,
                                  source_table="conversation"):
             boss_added += 1  # sensitive -> propose, never auto-store
-    return {"life": life_added, "boss": boss_added}
+
+    # Behavioral corrections: store as standing guidance Cara honors next turn,
+    # AND log each new one as an issue so recurring mistakes surface in review.
+    corrections_added = 0
+    for item in (parsed.get("corrections") or [])[:5]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        kind = str(item.get("kind") or "workflow").strip().lower()
+        if kind not in GUIDANCE_KINDS:
+            kind = "workflow"
+        if not text or store.boss_find(conn, text):
+            continue
+        store.issue_add(conn, chat_id, "correction", text)
+        sens = boss_model.effective_sensitivity(kind, text)
+        if boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]:
+            store.boss_add(conn, kind, text, status="inferred", confidence=0.8,
+                           sensitivity=sens, source_table="correction")
+        else:
+            store.candidate_add(conn, kind, text, reason="correction",
+                                sensitivity=sens, confidence=0.8, source_table="correction")
+        corrections_added += 1
+    return {"life": life_added, "boss": boss_added, "corrections": corrections_added}
 
 
 def render_review(conn, lang, limit=8):

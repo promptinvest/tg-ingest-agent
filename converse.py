@@ -89,6 +89,7 @@ def build_system(conn, lang, extra_context=None):
     name_any = store.pref_get(conn, "owner_name")
     life = [f"- {row['text']}" for row in store.life_facts(conn, limit=24)]
     prefs = boss_model.confirmed_context(conn)
+    guidance = boss_model.standing_guidance(conn)
 
     parts = [CHARACTER, ""]
 
@@ -111,6 +112,12 @@ def build_system(conn, lang, extra_context=None):
         addr += (" You don't know his name yet; if it comes up naturally, you can "
                  "ask, warmly.")
     parts.append(addr)
+
+    if guidance:
+        parts.append(
+            "Standing guidance from your boss — FOLLOW these every time; they came "
+            "from his own instructions and corrections:\n" + "\n".join(guidance)
+        )
 
     if prefs:
         parts.append(
