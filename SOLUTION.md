@@ -98,6 +98,7 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 | `router.py` | closed-world intent router (LLM, JSON-only, confidence gate, context recall) |
 | `converse.py` | **free-form warm conversation as Cara** — persona, her evolving life, boss facts, language matching |
 | `ingest.py` | message parsing, URL extraction (UTF-16-safe), category + facts + summary suggestion |
+| `pdftext.py` | best-effort PDF text-layer extraction (stdlib only) |
 | `knowledge.py` | document chunking, cosine retrieval, grounded-answer prompt (the `ask` skill) |
 | `reminders.py` | reminder drafts, recurrence, local-time rendering |
 | `gcal.py` | Google Calendar (service-account JWT) + .ics export |
@@ -118,7 +119,7 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 | `storage.py` | binary backend: local default; DO Spaces (S3 SigV4 in stdlib), dormant |
 | `llm.py` | DO Gradient gateway: chat profiles + failover + cooldowns, embeddings, STT, pricing, budgets |
 | `store.py` | SQLite schema + helpers; additive migrations |
-| `tg_api.py` | Telegram Bot API client (send message/photo/document, getFile) |
+| `tg_api.py` | Telegram Bot API client (send message/photo/document, **reactions**, getFile) |
 | `texts.py` | bilingual (ru/en) reply templates with tone/intensity variants — Cara's transactional voice |
 | `common.py` | config loading, language detection, shared helpers |
 
@@ -130,21 +131,26 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 |---|---|---|
 | **Conversation** | Greetings, smalltalk, anything personal/emotional or not a concrete task → a warm, free-form reply in Cara's own voice (`converse`), in the boss's language. Reads recent context; never changes state. | — (read-only) |
 | **Ingest** | Stores forwarded posts and notes (text, URLs, photos; an album = one message) with forward origin, **t.me source link**, and post date. A vision-capable LLM suggests a category from the confirmed taxonomy (matched by meaning across RU/EN), a summary, and up to 5 **key facts** in the source language. Re-forwarded posts are deduplicated. | Category confirmed by reply or button; corrections logged as feedback. |
-| **Files** | Forwarded documents (PDF, doc, sheet…) are stored by Telegram `file_id`; a file-only message uses the filename as searchable text. "покажи детали"/"покажи файл" re-sends the actual file. | — |
+| **Files & forward rules** | For a forward, the **text is parsed first**; only **images** (vision) and **PDFs** (text extraction) are analyzed; **every other attachment** (voice, audio, video, documents…) is **stored** by `file_id`, fetchable later — never parsed. Only the boss's *own* voice notes are transcribed (commands); forwarded voice is stored, not transcribed. "покажи детали"/"покажи файл" re-sends the actual file. | — |
+| **Re-categorize** | "поменяй категорию #2 на Документы", "переложи это в Чеки" (most recent), "переложи всё из crypto в news" (bulk). Logged as a correction → feeds learning. | — |
 | **Ask (KB Q&A)** | "когда мой рейс?", "что у нас по плану?" → semantic retrieval (BGE-M3) over stored notes, then a **grounded** answer in the question's language citing `(#id)`; refuses if it isn't in the notes. | — (read-only) |
 | **Reminders** | NL time parsing (RU/EN), one-shot / daily / weekly, fired from the poll loop (~1 min precision), snooze by natural reply; survives restart & nightly reboot. | Draft echoed before scheduling. |
 | **Calendar** | "добавь в календарь…" → .ics file (no setup) or direct Google Calendar via a service account; `auto_calendar` syncs every confirmed reminder. | Uses confirmed reminders / explicit times. |
 | **Spend** | "сколько потратили за месяц?" → totals + breakdown by skill & model + budget status. | — |
+| **Budget control** | "подними дневной лимит до $3" / "set the monthly AI budget to 20" → changes the cap at runtime (stored override, enforced by the gateway). | — (explicit request) |
+| **Reactions** | Cara may react to a message with a fitting emoji (sparingly), and *sees* the boss's reactions — positive/negative is logged and surfaced into her next reply. | — |
 | **Self & persona** | "что ты умеешь?" → capabilities generated from the manifest (dormant features named as dormant); "расскажи о себе / какая ты?" → in-character. | — |
-| **Boss profile & memory** | "запомни: …", "что ты обо мне знаешь?", "забудь…", "как меня зовут?". Confirmed vs inferred kept separate; sensitive facts gated. | Consent-first; auditable & deletable. |
-| **Memory review** | Cara proposes durable-memory **candidates** from evidence; "обзор памяти" lists them with confirm/skip buttons. | Durable memory only after a yes. |
+| **Boss profile & memory** | "запомни: …", "что ты обо мне знаешь?" (a warm, deduped summary), "забудь…", "как меня зовут?". Confirmed vs inferred kept separate; sensitive facts gated. | Consent-first; auditable & deletable. |
+| **Memory provenance** | "откуда ты это знаешь?" / "почему ты это помнишь?" → she cites *how* she learned a fact, in character ("ты сам мне это сказал", "заметила из наших разговоров", with the date). | — |
+| **Corrections that stick** | When the boss corrects her behavior she **says** she learned it, **applies** it (injected into her prompt), and **reports** it in the review; a *recurring* correction is flagged as **needing a code fix** rather than pretended-fixed. | — |
+| **Memory review** | Cara proposes durable-memory **candidates** from evidence; "обзор памяти" lists them with confirm/skip buttons. A learned fact that **contradicts a confirmed one** is proposed, not auto-stored. | Durable memory only after a yes. |
 | **Working history** | "как ты мне помогала?" → a grounded summary of real confirmed actions (saves, reminders, corrections, reviews, exports). | — |
-| **Review** | "как ты поработала за неделю?" → digest; "когда следующий performance review?" → next scheduled date; weekly review runs on a fixed schedule. Markdown exports for VS Code. | — |
+| **Review** | "как ты поработала за неделю?" → digest with a **scorecard** (first-guess category accuracy, unclear-request count, proactive nudges, memory counts); "когда следующий performance review?" → next scheduled date; weekly review runs on a fixed schedule. Markdown exports for VS Code. | — |
 | **Show media** | "покажи фото/файл из #2" → re-sends stored photos and documents by `file_id` (no re-upload). | — |
 | **Fetch** | "прочитай https://…" → fetches a public page (or public t.me web view), extracts text, ingests it. SSRF-guarded. | As ingest. |
 | **VPS stats** | "как сервер?" → CPU load, memory, disk, uptime, Cara's own footprint. | — |
 | **Discard / delete / purge** | Decline a fresh suggestion (`discard`); delete stored items by id/ids/count (`item_delete`); **bulk purge** by scope (all / category / stats / reminders / messages / issues) with a **typed confirmation phrase**. | Discard immediate; delete & purge confirmed (purge requires the exact phrase). |
-| **Proactive nudges** | Gentle, suggestion-only heads-up (overdue reminders, memory candidates waiting, items needing a category) — throttled and quiet-hours-aware (§7). | Suggestion-only; never acts. |
+| **Proactive nudges** | Gentle, suggestion-only heads-up (overdue reminders, memory candidates waiting, items needing a category) — throttled and quiet-hours-aware (§6). Tunable in plain language ("пиши только по выходным", "не беспокой до 10", "отключи напоминания", "можно почаще"). | Suggestion-only; never acts. |
 | **Trace / why** | "почему ты так решила?" → the last trace timeline. Issues are logged; weekly digest + trace-summary export. | — |
 
 ---
@@ -187,8 +193,14 @@ tone variants; only conversation and grounded answers are free-form.
 - **Curation (`memory_curator`).** Proposes durable-memory **candidates** from
   evidence (repeated corrections, confirmed source habits) that the boss confirms
   via memory review. From ongoing conversation it also learns: **benign** facts
-  are stored as correctable *inferred* items; **sensitive** ones become
-  confirm-first candidates, never auto-stored.
+  are stored as correctable *inferred* items; **sensitive** ones — and any fact
+  that **contradicts something already confirmed** — become confirm-first
+  candidates, never auto-stored. It also captures **behavioral corrections** as
+  standing guidance (injected into her prompt) and escalates recurring ones as
+  "needs a code fix".
+- **Provenance (`boss_model.explain`).** "Откуда ты это знаешь?" cites how a fact
+  was learned, in character (the source she stored + the date) — memory you can
+  inspect, not magic.
 - **Cara's life (`cara_life`).** Her own evolving fictional life, seeded and
   grown from conversation so her persona stays coherent across chats.
 - **Relationship (`relationship`).** Grounded working history: every entry traces
@@ -213,6 +225,9 @@ category. Rails:
   22:00–08:00 local, wraps midnight); urgent ones only if explicitly allowed.
 - **Audited** — every evaluation (sent or suppressed, with reason) is written to
   `proactive_log`, under its own trace, and never crashes the loop.
+- **Tunable in plain language** — "пиши только по выходным", "не беспокой до 10",
+  "отключи напоминания", "можно почаще" store overrides (on/off · days · quiet
+  window · frequency) that the heartbeat honors.
 
 Budget warnings and the weekly digest keep their own dedicated notifiers.
 
@@ -264,8 +279,11 @@ Cascade deletes and the `purge` scopes keep related rows and media consistent;
 - **Voice (STT):** DO's serverless catalog exposes no transcription model, so
   Cara runs **whisper.cpp locally** on the VPS. A warm `whisper-server`
   (`STT_MODE=local_server`, OpenBLAS build, `ggml-small-q5_1`) keeps the model
-  resident, transcribing a short note in ~12 s on 1 vCPU; `STT_MODE` can switch
-  to a remote OpenAI-compatible endpoint if one becomes available.
+  resident, transcribing a short note in ~12 s on 1 vCPU. The language is **pinned
+  to Russian** (`STT_LANGUAGE=ru`) to avoid wrong-language hallucinations; a
+  non-speech hallucination filter ("[Subscribe]", "Спасибо за просмотр"…) and an
+  honest >20 MB ("too big") message keep garbage out of dispatch. Only the boss's
+  **own** voice notes are transcribed; forwarded voice/audio is stored, not read.
 - **Binary storage:** local files under `MEDIA_DIR` by default; an optional **DO
   Spaces** backend (S3 Signature V4 in pure stdlib) uploads photos for
   durability. Built and tested, **dormant** until `SPACES_*` is configured.
@@ -310,8 +328,11 @@ Cascade deletes and the `purge` scopes keep related rows and media consistent;
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 200+ offline unit tests (no network; temp SQLite), run on the VPS as
-  part of every deploy.
+- **Tests:** 250 offline unit tests (no network; temp SQLite), run on the VPS as
+  part of every deploy — including a **golden-transcript harness** that replays
+  end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
+  captured) and asserts replies, DB writes, and **no state change before
+  confirmation** (an un-scripted LLM call fails the scenario).
 - **Observability:** journald (routing decisions with risk + confidence,
   per-row lifecycle), `traces`/`trace_events`, `llm_usage` for spend, `issues`
   and `proactive_log` for behavior, weekly digest + trace-summary export.
@@ -325,9 +346,12 @@ Cascade deletes and the `purge` scopes keep related rows and media consistent;
   export works now); DO Spaces dormant until configured (local storage works).
 - A Telegram bot cannot read arbitrary chat history or private-channel links by
   URL — forwarding remains the path for those.
-- Recurrence limited to daily/weekly; image-as-document files are kept
-  metadata-only as images (other documents are stored and re-sendable); remote
-  fetch is HTML/text + public t.me only.
+- Recurrence limited to daily/weekly; remote fetch is HTML/text + public t.me only.
+- **PDFs:** text-layer PDFs are extracted; **scanned/image or Cyrillic CID-font
+  PDFs yield no text** (would need OCR, out of scope) — they're stored and
+  re-sendable. Image-as-document files are kept metadata-only as images.
+- **TTS** (Cara replying with voice) is the one researched-but-unbuilt item —
+  parked pending a decision (a real engine install on a small box).
 - Deferred by design (single-user posture): multi-channel adapters, any web
   console/webhooks, MCP adapter, independent multi-agent processes, plugin
   marketplace, and shell/browser automation — none are implemented.

@@ -124,7 +124,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   gated.
 - **Memory candidates:** she proposes durable memories from evidence; "обзор памяти"
   lists them with confirm/skip buttons. Durable memory only after a yes; benign facts
-  learned from chat are stored as correctable "inferred" items.
+  learned from chat are stored as correctable "inferred" items — **but a fact that
+  contradicts something you already confirmed is proposed for confirmation, not
+  silently auto‑stored**.
+- **Memory provenance** (`memory_why`): "откуда ты это знаешь?" / "почему ты это
+  помнишь?" → she cites *how* she learned it, in character ("ты сам мне это сказал",
+  "ты меня поправил", "заметила из наших разговоров", with the date).
 - **Corrections that stick:** when you correct her behavior she **says** she learned
   it, **applies** it (injected into her prompt), and **reports** it in the review. If
   the same correction recurs she flags it as **needing a code fix** instead of
@@ -137,11 +142,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 ### Reporting & ops
 - **Weekly performance review:** runs on a fixed schedule (default **Monday 10:00
   local**); "когда следующий review?" tells you the date; "как ты поработала?" runs it
-  on demand. Markdown exports for VS Code: review, self, boss profile, working
-  history, memory candidates, trace summary.
+  on demand. Includes a **scorecard** — first‑guess category accuracy, unclear‑request
+  count, proactive nudges sent, and memory counts. Markdown exports for VS Code:
+  review, self, boss profile, working history, memory candidates, trace summary.
 - **Proactive heartbeat:** gentle, suggestion‑only nudges — overdue reminders, memory
   candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
   quiet‑hours‑aware (22:00–08:00), fully audited; never acts.
+- **Tune her proactivity** (`proactive_prefs`): "пиши только по выходным", "не беспокой
+  до 10", "отключи напоминания", "можно почаще" → stored overrides (on/off, days,
+  quiet window, frequency) the heartbeat honors.
 - **Issues report:** "какие были проблемы на этой неделе?" → a summary of logged
   communication issues (unclear/out‑of‑scope/STT/corrections…).
 - **VPS stats:** "как сервер?" → CPU/mem/disk/uptime + her own footprint.
@@ -315,8 +324,11 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   a content‑hash `VERSION` so Cara announces real code changes (not reboots).
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 240+ offline unit tests (no network; temp SQLite), run on the box as part
-  of every deploy.
+- **Tests:** 250 offline unit tests (no network; temp SQLite), run on the box as part
+  of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
+  scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
+  asserts replies, DB writes, and **no state change before confirmation**; an
+  un‑scripted LLM call fails the scenario.
 - **Observability:** journald (routing decisions with risk + confidence, per‑row
   lifecycle), `traces`/`trace_events`, `llm_usage` (spend), `issues` + `proactive_log`
   (behavior), weekly digest + trace‑summary export.
