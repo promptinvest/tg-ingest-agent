@@ -72,6 +72,7 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   character with "I'm an AI." This is safe because she's reachable only by you.
 - **Self‑knowledge** (`self_query`) and **about‑me/persona** answers come through her
   own voice; she never recites architecture or invents technical specifics.
+- **Adjust her tone** (`style_update`): "говори теплее", "будь покороче".
 - **Reactions (both ways):** she may react to your message with a fitting emoji
   (sparingly), and she *sees* your reactions — a 👍/❤️ is logged as positive, a 👎 as
   a negative signal, and the latest is surfaced into her next reply.
@@ -90,6 +91,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   #N" re‑sends it (free, no re‑upload).
 - **Browse & detail:** "покажи заметки" (a clean card list), "что в категории crypto",
   "найди про DeepSeek", "детали #2" (full card + re‑sends the attached photos/files).
+- **Overview & stats:** "что у тебя есть?" → a digest (counts, reminders, memory,
+  spend); per‑status/category **stats** (`stats`) and the **category list**
+  (`categories`).
 - **Re‑categorize** (`recategorize`): "поменяй категорию #2 на Документы", "переложи
   это в Чеки" (most recent), "переложи всё из crypto в news" (bulk). Logged as a
   correction so it feeds learning.
@@ -127,6 +131,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   pretending to fix it.
 - **Working history:** "как ты мне помогала?" → a grounded summary of real actions
   (saves, corrections, reminders, reviews, exports) — never fabricated.
+- **Settings memory** (`memory`): "запомни: отвечай по‑английски", "что ты помнишь из
+  настроек?" — language, timezone, auto‑calendar, named notes.
 
 ### Reporting & ops
 - **Weekly performance review:** runs on a fixed schedule (default **Monday 10:00
@@ -136,6 +142,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Proactive heartbeat:** gentle, suggestion‑only nudges — overdue reminders, memory
   candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
   quiet‑hours‑aware (22:00–08:00), fully audited; never acts.
+- **Issues report:** "какие были проблемы на этой неделе?" → a summary of logged
+  communication issues (unclear/out‑of‑scope/STT/corrections…).
 - **VPS stats:** "как сервер?" → CPU/mem/disk/uptime + her own footprint.
 - **Why did you do that** (`trace_query`): replays the last trace timeline.
 - **Deploy notice:** after a new build is installed she says "обновления установлены"
@@ -214,7 +222,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
 - DO has no transcription model, so Cara runs **whisper.cpp locally**: a warm
   `whisper-server` (`STT_MODE=local_server`, OpenBLAS, `ggml-small-q5_1`) keeps the
   model resident (~12 s/note on 1 vCPU). Language is **pinned to Russian**
-  (`STT_LANGUAGE=ru`) to avoid wrong‑language hallucinations; a non‑speech
+  (`STT_LANGUAGE=ru`) to avoid wrong‑language hallucinations. (These two are set in
+  the box env; the code defaults are `remote` / `auto`.) a non‑speech
   hallucination filter ("[Subscribe]", "[Music]", "Спасибо за просмотр"…) and a
   too‑big (>20 MB) message keep garbage out of dispatch.
 - Only the **boss's own voice notes** are transcribed (commands/questions); forwarded
@@ -282,8 +291,9 @@ Common optional (defaults): `BOT_LANGUAGE=ru` · `TIMEZONE_OFFSET_HOURS=3` ·
 `BUDGET_MONTHLY_USD=15.0` (runtime‑overridable) · `DO_CHAT_MODEL=anthropic-claude-haiku-4.5`
 · `ROUTER_MODEL` · `DO_EMBEDDING_MODEL=BGE-M3` · `ROUTER_CONFIDENCE_THRESHOLD=0.6`.
 
-STT: `STT_MODE=local_server` · `STT_LANGUAGE=ru` · `WHISPER_SERVER_URL` ·
-`WHISPER_MODEL` · `STT_ENABLED=true`.
+STT (code defaults shown; the box overrides the first two): `STT_MODE` (default
+`remote`, box `local_server`) · `STT_LANGUAGE` (default `auto`, box `ru`) ·
+`WHISPER_SERVER_URL` · `WHISPER_MODEL` · `STT_ENABLED=true`.
 
 Schedules & proactivity: `REVIEW_WEEKDAY=0` (Mon) / `REVIEW_HOUR=10` ·
 `PROACTIVE_ENABLED=true` · `QUIET_HOURS_START=22` / `QUIET_HOURS_END=8` ·
