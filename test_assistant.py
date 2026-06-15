@@ -1741,6 +1741,63 @@ class ReportFixesTests(unittest.TestCase):
         self.assertEqual(pdftext.extract_text(b"not a pdf"), "")
 
 
+class ForwardAttachmentTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "f.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_other_attachment_detects_media(self):
+        self.assertEqual(
+            self.agent.other_attachment({"voice": {"file_id": "V", "file_unique_id": "u"}})["file_id"], "V")
+        self.assertEqual(
+            self.agent.other_attachment({"video": {"file_id": "X", "file_unique_id": "u"}})["mime_type"],
+            "video/mp4")
+        self.assertIsNone(self.agent.other_attachment({"text": "hi"}))
+
+    def test_forwarded_voice_is_stored_not_transcribed(self):
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 7,
+               "forward_origin": {"type": "channel", "title": "Some Channel"},
+               "voice": {"file_id": "V", "file_unique_id": "vu", "duration": 15},
+               "text": "важный пост из канала"}
+        with mock.patch.object(self.agent, "transcribe_voice") as tv, \
+                mock.patch.object(self.agent, "finalize") as fin:
+            self.agent.handle_update({"message": msg})
+        tv.assert_not_called()        # forwarded voice is channel content, never transcribed
+        fin.assert_called_once()      # it goes to ingest (text parsed, voice stored)
+
+    def test_own_voice_note_is_transcribed_and_routed(self):
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 8,
+               "voice": {"file_id": "V", "file_unique_id": "vu", "duration": 5}}
+        with mock.patch.object(self.agent, "transcribe_voice", return_value="напомни завтра") as tv, \
+                mock.patch.object(self.agent, "dispatch") as disp, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.handle_update({"message": msg})
+        tv.assert_called_once()
+        disp.assert_called_once()     # the transcript is routed as a command
+
+    def test_finalize_parses_text_and_stores_voice(self):
+        msg = {"chat": {"id": 1}, "message_id": 9, "date": 1781200000, "from": {"id": 1},
+               "forward_origin": {"type": "channel", "title": "Chan"},
+               "voice": {"file_id": "VID", "file_unique_id": "vu", "duration": 15},
+               "text": "текст поста"}
+        with mock.patch.object(self.agent, "suggest_row", return_value=("News", [], "s")), \
+                mock.patch.object(self.agent, "present_suggestion"):
+            self.agent.finalize([msg])
+        row = self.conn.execute("SELECT id, raw_text FROM messages WHERE tg_message_id=9").fetchone()
+        self.assertEqual(row["raw_text"], "текст поста")     # the forward's TEXT is the content
+        files = store.message_files(self.conn, row["id"])
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["tg_file_id"], "VID")      # voice kept as a fetchable file
+
+
 class AccessControlTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent

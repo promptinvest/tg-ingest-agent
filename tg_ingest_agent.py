@@ -349,6 +349,29 @@ class Agent:
         allowed = self.cfg.allowed_chat_ids
         return chat_id in allowed and from_id in allowed
 
+    # Non-image, non-document attachments we store (but never parse): voice,
+    # audio, video, etc. -> a doc-like dict for the files table, fetchable later.
+    _ATTACHMENTS = (
+        ("voice", "voice.oga", "audio/ogg"),
+        ("audio", "audio", "audio/mpeg"),
+        ("video", "video.mp4", "video/mp4"),
+        ("video_note", "video_note.mp4", "video/mp4"),
+        ("animation", "animation.mp4", "video/mp4"),
+    )
+
+    def other_attachment(self, part):
+        for key, default_name, default_mime in self._ATTACHMENTS:
+            a = part.get(key)
+            if a and a.get("file_id"):
+                return {
+                    "file_id": a.get("file_id"),
+                    "file_unique_id": a.get("file_unique_id"),
+                    "file_name": a.get("file_name") or default_name,
+                    "mime_type": a.get("mime_type") or default_mime,
+                    "file_size": a.get("file_size"),
+                }
+        return None
+
     def react(self, chat_id, message_id, emoji):
         """React to one of the boss's messages with an emoji (best-effort)."""
         if not (message_id and emoji) or emoji not in common.REACTION_PALETTE:
@@ -404,9 +427,14 @@ class Agent:
                 store.pref_set(self.conn, "owner_name", first_name)
                 log(f"owner name captured: {first_name}")
 
-        voice = msg.get("voice") or msg.get("audio")
-        if voice:
-            transcript = self.transcribe_voice(chat_id, voice)
+        is_forward = bool(msg.get("forward_origin"))
+        # Only the boss's OWN voice NOTE is transcribed (it's a command/question).
+        # A voice/audio attached to a FORWARD is channel content — never
+        # transcribed; it's stored as a fetchable file and the forward's TEXT is
+        # what's parsed. (Music/`audio` is content too, not a command.)
+        own_voice = msg.get("voice") if not is_forward else None
+        if own_voice:
+            transcript = self.transcribe_voice(chat_id, own_voice)
             if transcript is None:
                 return
             msg = dict(msg)
@@ -414,13 +442,15 @@ class Agent:
             self.reply(chat_id, T(self.lang(), "voice_quote", transcript=transcript[:300]),
                        record=False)
 
-        text = (msg.get("text") or "").strip()
+        text = (msg.get("text") or msg.get("caption") or "").strip()
         # Reply in the language he wrote in (voice transcript counts); RU fallback.
         # Slash-commands carry no language signal — keep the stored preference.
         self.turn_lang = None if text.startswith("/") else common.detect_lang(text)
-        is_content = bool(
-            msg.get("forward_origin") or msg.get("photo") or msg.get("document")
-            or msg.get("media_group_id")
+        # A transcribed own-voice command is routed, not stored. Anything else with
+        # a forward origin or an attachment is content to store/parse.
+        is_content = (not own_voice) and bool(
+            is_forward or msg.get("photo") or msg.get("document")
+            or msg.get("media_group_id") or self.other_attachment(msg)
         )
         if text:
             store.convo_add(self.conn, chat_id, "user", text)
@@ -1952,14 +1982,22 @@ class Agent:
         reply_to = first.get("message_id")
         doc_text, doc_name = self.read_text_document(parts)
         raw_text = doc_text or ingest.first_text(parts)
-        # A file-only message (e.g. a forwarded PDF) has no text — fall back to
-        # the attachment names so the item is still categorizable and findable.
+        # A file-only message (a forwarded PDF, a voice clip, a video…) has no
+        # text — fall back to the attachment names so the item is still
+        # categorizable and findable, and the summary isn't "(no content)".
         if not raw_text:
-            doc_names = [(p.get("document") or {}).get("file_name") for p in parts
-                         if (p.get("document") or {}).get("file_id")]
-            doc_names = [n for n in doc_names if n]
-            if doc_names:
-                raw_text = ", ".join(doc_names)
+            names = []
+            for p in parts:
+                doc = p.get("document") or {}
+                if doc.get("file_id"):
+                    names.append(doc.get("file_name") or "file")
+                else:
+                    other = self.other_attachment(p)
+                    if other:
+                        names.append(other["file_name"])
+            names = [n for n in names if n]
+            if names:
+                raw_text = ", ".join(names)
         urls = ingest.collect_urls(parts)
         forward = ingest.parse_forward_origin(first.get("forward_origin"))
         title = forward.get("title") or (doc_name if doc_text else None)
@@ -2003,17 +2041,22 @@ class Agent:
                 image_count += 1
                 continue
             document = part.get("document") or {}
-            if not document.get("file_id"):
+            if document.get("file_id"):
+                if str(document.get("mime_type") or "").startswith("image/"):
+                    # uncompressed image sent as a document: keep it as an image
+                    # (metadata only — not sent to the vision LLM).
+                    log(f"image document stored metadata-only for message #{row_id}")
+                    store.insert_image(self.conn, row_id, part.get("message_id"), document, None)
+                else:
+                    # any other document (PDF, doc, sheet, text…): keep its file_id
+                    # so it can be re-sent on demand.
+                    store.insert_file(self.conn, row_id, part.get("message_id"), document)
+                    file_count += 1
                 continue
-            if str(document.get("mime_type") or "").startswith("image/"):
-                # uncompressed image sent as a document: keep it as an image
-                # (metadata only — not sent to the vision LLM).
-                log(f"image document stored metadata-only for message #{row_id}")
-                store.insert_image(self.conn, row_id, part.get("message_id"), document, None)
-            else:
-                # any other attachment (PDF, doc, sheet, text…): keep its file_id
-                # so it can be re-sent on demand.
-                store.insert_file(self.conn, row_id, part.get("message_id"), document)
+            # voice / audio / video etc. — stored (fetchable), never parsed.
+            other = self.other_attachment(part)
+            if other:
+                store.insert_file(self.conn, row_id, part.get("message_id"), other)
                 file_count += 1
         if image_count:
             storage.offload(self.cfg, self.conn, row_id)  # durable copy (dormant on local backend)
