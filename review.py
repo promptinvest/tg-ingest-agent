@@ -132,6 +132,17 @@ def collect(conn, period):
         "SELECT detail, COUNT(*) AS n FROM issues WHERE kind = 'correction_unresolved'"
         " GROUP BY detail ORDER BY n DESC LIMIT 10",
     ).fetchall()
+    # scorecard: how well she did, not just how much
+    status_counts = {r["status"]: r["n"] for r in data["messages"]}
+    data["confirmed_count"] = status_counts.get("confirmed", 0)
+    data["corrections_count"] = sum(r["n"] for r in data["corrections"])
+    data["unclear_count"] = sum(r["n"] for r in data["issue_counts"] if r["kind"] == "unclear_request")
+    data["proactive_sent"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM proactive_log WHERE sent_message = 1 AND ts >= ?", (since,),
+    ).fetchone()["n"]
+    data["mem_confirmed"] = len(store.boss_items(conn, "confirmed", limit=200))
+    data["mem_inferred"] = len(store.boss_items(conn, "inferred", limit=200))
+    data["mem_candidates"] = len(data["pending_candidates"])
     return data
 
 
@@ -218,6 +229,13 @@ def chat_text(conn, cfg, lang, period="week"):
             c += (f", нужен код-фикс {len(data['corrections_unresolved'])}" if ru
                   else f", need a code fix {len(data['corrections_unresolved'])}")
         lines.append(c)
+    lines.append((f"📊 Память: {data['mem_confirmed']} подтверждено, "
+                  f"{data['mem_inferred']} наблюдений; категорий с первого раза: "
+                  f"{data['confirmed_count'] - data['corrections_count']}/{data['confirmed_count']}"
+                  if ru else
+                  f"📊 Memory: {data['mem_confirmed']} confirmed, {data['mem_inferred']} sensed; "
+                  f"first-guess categories: "
+                  f"{data['confirmed_count'] - data['corrections_count']}/{data['confirmed_count']}"))
     if data["pending_candidates"]:
         n = len(data["pending_candidates"])
         lines.append((f"📋 Хочу уточнить ({n}) — скажите «обзор памяти»" if ru
@@ -352,6 +370,15 @@ def markdown(conn, cfg, period="week"):
         lines.append("- no traces this period")
     lines.append(f"- model fallbacks: {data['fallback_count']} · "
                  f"issues logged: {sum(r['n'] for r in data['issue_counts'])}")
+    lines.append("")
+    lines.append("## Scorecard")
+    kept = data["confirmed_count"] - data["corrections_count"]
+    lines.append(f"- categorizations: {data['confirmed_count']} confirmed "
+                 f"({kept} kept as suggested, {data['corrections_count']} corrected)")
+    lines.append(f"- unclear requests: {data['unclear_count']}")
+    lines.append(f"- proactive nudges sent: {data['proactive_sent']}")
+    lines.append(f"- memory: {data['mem_confirmed']} confirmed · {data['mem_inferred']} sensed · "
+                 f"{data['mem_candidates']} awaiting confirmation")
     lines.append("")
     lines.append("## System health")
     try:

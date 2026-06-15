@@ -1741,6 +1741,90 @@ class ReportFixesTests(unittest.TestCase):
         self.assertEqual(pdftext.extract_text(b"not a pdf"), "")
 
 
+class GoldenTranscriptTests(unittest.TestCase):
+    """Replayable end-to-end scenarios: feed updates through handle_update with
+    the LLM scripted per skill and Telegram captured, then assert the replies,
+    the DB writes, and — critically — no state change before confirmation."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "g.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def drive(self, update, responses=None):
+        """Run one update. `responses` maps an LLM skill -> scripted reply (a str,
+        or a list popped per call). Any un-scripted LLM call fails the scenario.
+        Returns the list of outbound message texts."""
+        responses = dict(responses or {})
+        sent = []
+
+        def fake_cp(cfg, conn, skill, messages, **kw):
+            if skill not in responses:
+                raise AssertionError(f"unexpected LLM call: skill={skill!r}")
+            v = responses[skill]
+            return v.pop(0) if isinstance(v, list) else v
+
+        def fake_tg(token, method, params=None, **kw):
+            if method == "sendMessage":
+                sent.append((params or {}).get("text", ""))
+            return {"message_id": 4242}
+
+        with mock.patch.object(llm, "chat_profile", side_effect=fake_cp), \
+                mock.patch.object(self.mod, "tg_call", side_effect=fake_tg), \
+                mock.patch.object(self.mod, "tg_set_reaction"), \
+                mock.patch.object(self.agent, "index_message"):
+            self.agent.handle_update(update)
+        return sent
+
+    def _msg(self, mid, text, **extra):
+        m = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": mid, "text": text}
+        m.update(extra)
+        return m
+
+    def test_no_state_change_before_confirmation(self):
+        fwd = self._msg(10, "Скидки на авиабилеты Москва–Тбилиси от 9800",
+                        forward_origin={"type": "channel", "title": "Chan"})
+        sent = self.drive({"message": fwd}, {
+            "ingest": '{"category":"Travel","alternatives":[],"summary":"Авиабилеты от 9800",'
+                      '"facts":["от 9800"]}'})
+        self.assertTrue(any("Travel" in s for s in sent))            # suggestion shown
+        row = self.conn.execute("SELECT id, status FROM messages WHERE tg_message_id=10").fetchone()
+        self.assertEqual(row["status"], "suggested")                 # NOT confirmed yet
+        self.assertIsNotNone(store.pending_get(self.conn, 1))        # awaiting the boss
+        # only "да" commits it
+        self.drive({"message": self._msg(11, "да")},
+                   {"router": '{"action":"confirm","params":{},"confidence":0.95}'})
+        self.assertEqual(store.get_message(self.conn, row["id"])["status"], "confirmed")
+
+    def test_memory_provenance_in_character(self):
+        store.boss_add(self.conn, "personal_fact", "Любит крепкий чёрный чай.",
+                       status="confirmed", source_table="explicit")
+        sent = self.drive({"message": self._msg(20, "откуда ты знаешь, что я люблю чай?")},
+                          {"router": '{"action":"memory_why","params":{},"confidence":0.9}'})
+        self.assertTrue(any("чай" in s.lower() and "сам" in s.lower() for s in sent))
+
+    def test_out_of_scope_is_warm_not_template(self):
+        sent = self.drive({"message": self._msg(30, "напиши мне эссе про Канта")}, {
+            "router": '{"action":"out_of_scope","params":{},"confidence":0.95}',
+            "converse": "Ой, эссе — это не совсем моё, но давай придумаем, как тебе помочь 🙂"})
+        self.assertIn("давай придумаем", " ".join(sent))             # warm reply, not a refusal template
+
+    def test_proactive_opt_out_via_language(self):
+        sent = self.drive({"message": self._msg(40, "не пиши мне без причины")},
+                          {"router": '{"action":"proactive_prefs","params":{"enabled":false},'
+                                     '"confidence":0.9}'})
+        self.assertEqual(store.pref_get(self.conn, "proactive_enabled"), "false")
+        self.assertEqual(sent[-1], texts.T("ru", "proactive_prefs_done"))
+
+
 class Tier1ResearchTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent
