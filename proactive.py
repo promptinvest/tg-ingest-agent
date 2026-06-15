@@ -32,16 +32,45 @@ def _tz_offset(conn, cfg):
         return cfg.timezone_offset
 
 
-def in_quiet_hours(cfg, conn, now):
+def settings(conn, cfg):
+    """Effective proactivity settings: a preference the boss set (in plain
+    language, via proactive_prefs) overrides the configured defaults."""
+    def _int(key, default):
+        try:
+            return int(store.pref_get(conn, key) or default)
+        except (TypeError, ValueError):
+            return default
+    enabled_pref = store.pref_get(conn, "proactive_enabled")
+    enabled = (enabled_pref.lower() == "true") if enabled_pref else cfg.proactive_enabled
+    return {
+        "enabled": enabled,
+        "quiet_start": _int("quiet_start", cfg.quiet_start),
+        "quiet_end": _int("quiet_end", cfg.quiet_end),
+        "max_per_day": _int("proactive_max_per_day", cfg.proactive_max_per_day),
+        "days": (store.pref_get(conn, "proactive_days") or "all").lower(),  # all|weekdays|weekends
+    }
+
+
+def in_quiet_hours(cfg, conn, now, cfg_settings=None):
     """True if the boss's local time is inside the quiet window (handles a
     window that wraps midnight, e.g. 22:00–08:00)."""
-    start, end = cfg.quiet_start, cfg.quiet_end
+    s = cfg_settings or settings(conn, cfg)
+    start, end = s["quiet_start"], s["quiet_end"]
     if start == end:
         return False
     hour = (now + timedelta(hours=_tz_offset(conn, cfg))).hour
     if start < end:
         return start <= hour < end
     return hour >= start or hour < end  # wraps midnight
+
+
+def _wrong_day(conn, cfg, now, days):
+    """True if today isn't an allowed day for non-urgent nudges."""
+    if days not in ("weekdays", "weekends"):
+        return False
+    weekday = (now + timedelta(hours=_tz_offset(conn, cfg))).weekday()  # 0=Mon..6=Sun
+    is_weekend = weekday >= 5
+    return (days == "weekdays" and is_weekend) or (days == "weekends" and not is_weekend)
 
 
 # -- checks: each returns (key, text, urgent) or None -------------------------
@@ -74,7 +103,8 @@ def run(conn, cfg, lang, reply_fn, now=None):
     """Evaluate the checks and send at most ONE nudge. Returns the sent check
     key, or None. Every outcome is logged to proactive_log."""
     skill_manifest.assert_proactive_allowed(CHECK_SKILL)  # gate (raises if misconfigured)
-    if not cfg.proactive_enabled:
+    s = settings(conn, cfg)
+    if not s["enabled"]:
         return None
     now = now or datetime.now(timezone.utc)
 
@@ -89,15 +119,17 @@ def run(conn, cfg, lang, reply_fn, now=None):
         return None
 
     key, text, urgent = hit
-    quiet = in_quiet_hours(cfg, conn, now)
+    quiet = in_quiet_hours(cfg, conn, now, s)
+    wrong_day = _wrong_day(conn, cfg, now, s["days"])
 
-    if quiet and (not urgent or not cfg.proactive_urgent_bypass_quiet):
-        store.proactive_log_add(conn, key, "suppressed", reason="quiet hours", day=day)
+    if (quiet or wrong_day) and (not urgent or not cfg.proactive_urgent_bypass_quiet):
+        store.proactive_log_add(conn, key, "suppressed",
+                                reason="quiet hours" if quiet else "off-day", day=day)
         return None
     if store.proactive_key_sent_today(conn, day, key):
         store.proactive_log_add(conn, key, "suppressed", reason="already sent today", day=day)
         return None
-    if not urgent and store.proactive_sent_count(conn, day) >= cfg.proactive_max_per_day:
+    if not urgent and store.proactive_sent_count(conn, day) >= s["max_per_day"]:
         store.proactive_log_add(conn, key, "suppressed", reason="daily cap", day=day)
         return None
 

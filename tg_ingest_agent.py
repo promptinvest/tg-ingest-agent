@@ -724,6 +724,10 @@ class Agent:
             self.do_converse(chat_id, lang, text, msg_id)
         elif action == "boss_query":
             self.do_boss_query(chat_id, lang)
+        elif action == "memory_why":
+            self.do_memory_why(chat_id, lang, text)
+        elif action == "proactive_prefs":
+            self.do_proactive_prefs(chat_id, lang, params)
         elif action == "boss_memory_update":
             self.do_boss_memory(chat_id, lang, params)
         elif action == "style_update":
@@ -1021,6 +1025,40 @@ class Agent:
                 f"{len(unresolved)} unresolved")
 
     # -- Memory skill
+
+    def do_memory_why(self, chat_id, lang, text):
+        """Why/how I remember something about you — cited in character (where it
+        came from, when), turning memory into trust. Falls back to warm chat when
+        nothing clearly matches the question."""
+        answer = boss_model.explain(self.conn, lang, text)
+        if answer:
+            self.reply(chat_id, answer)
+        else:
+            self.do_converse(chat_id, lang, text)
+
+    def do_proactive_prefs(self, chat_id, lang, params):
+        """Tune the proactive check-ins on request: on/off, which days, quiet
+        window, frequency. Stored as overrides the heartbeat honors."""
+        changed = False
+        if "enabled" in params:
+            on = params.get("enabled")
+            on = on if isinstance(on, bool) else str(on).strip().lower() in ("1", "true", "yes", "да", "on")
+            store.pref_set(self.conn, "proactive_enabled", "true" if on else "false")
+            changed = True
+        days = str(params.get("days") or "").strip().lower()
+        if days in ("all", "weekdays", "weekends"):
+            store.pref_set(self.conn, "proactive_days", days)
+            changed = True
+        for src, key in (("quiet_start", "quiet_start"), ("quiet_end", "quiet_end"),
+                         ("max_per_day", "proactive_max_per_day")):
+            if params.get(src) is not None:
+                try:
+                    val = max(0, min(int(params[src]), 23 if "quiet" in src else 10))
+                    store.pref_set(self.conn, key, val)
+                    changed = True
+                except (TypeError, ValueError):
+                    pass
+        self.reply(chat_id, T(lang, "proactive_prefs_done" if changed else "clarify"))
 
     def do_boss_query(self, chat_id, lang):
         """What I know about you — said warmly, in Cara's voice, not a database

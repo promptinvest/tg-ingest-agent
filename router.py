@@ -41,6 +41,8 @@ ACTIONS = {
     "self_query",        # what can you do / your limits / how are you built (technical)
     "persona",           # params: topic in character|relationship — who you are / how you relate
     "boss_query",        # what do you know about me
+    "memory_why",        # why/how do you know that about me (provenance)
+    "proactive_prefs",   # params: enabled/days/quiet_start/quiet_end/max_per_day — tune nudges
     "boss_memory_update", # params: op (remember|forget|confirm), value/id, kind
     "style_update",      # params: tone (warmer|neutral|concise) / intensity
     "trace_query",       # why did you do that / show last trace
@@ -110,6 +112,11 @@ ROUTER_EXAMPLES = """Examples:
 "ты человек?" / "ты настоящая?" / "ты бот?" / "are you real?" / "are you an AI?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "как меня зовут?" / "ты помнишь как меня зовут?" / "what's my name?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "что ты обо мне знаешь?" / "what do you know about me?" -> {"action": "boss_query", "params": {}, "confidence": 0.92}
+"откуда ты это знаешь?" / "почему ты это помнишь?" / "откуда у тебя это про меня?" / "where did you learn that?" -> {"action": "memory_why", "params": {}, "confidence": 0.9}
+"пиши только по выходным" / "не беспокой меня в будни" / "write to me only on weekends" -> {"action": "proactive_prefs", "params": {"days": "weekends"}, "confidence": 0.88}
+"не пиши без причины" / "отключи проактивные сообщения" / "stop the check-ins" -> {"action": "proactive_prefs", "params": {"enabled": false}, "confidence": 0.88}
+"не беспокой до 10 утра" / "тихо после 23" / "quiet until 9" -> {"action": "proactive_prefs", "params": {"quiet_end": 10}, "confidence": 0.82}
+"можно писать почаще" / "you can check in more often" -> {"action": "proactive_prefs", "params": {"max_per_day": 3}, "confidence": 0.82}
 "запомни про меня: я не люблю длинные ответы" / "remember about me: I prefer short answers" -> {"action": "boss_memory_update", "params": {"op": "remember", "value": "предпочитает короткие ответы", "kind": "tone"}, "confidence": 0.9}
 "забудь #3" / "forget what you know about my tone" -> {"action": "boss_memory_update", "params": {"op": "forget", "value": "#3"}, "confidence": 0.9}
 "подтверди #2" / "confirm #2" -> {"action": "boss_memory_update", "params": {"op": "confirm", "value": "#2"}, "confidence": 0.9}

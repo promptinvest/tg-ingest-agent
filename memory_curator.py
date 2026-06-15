@@ -147,15 +147,18 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
         if not text or boss_model.is_duplicate(conn, text):  # skip reworded repeats
             continue
         sens = boss_model.effective_sensitivity(kind, text)
-        if boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]:
-            # benign -> learn it as a correctable inferred item (shows in profile)
+        # Auto-learn only benign facts that don't clash with something he already
+        # confirmed. Sensitive OR contradicting facts are proposed for confirmation
+        # — never silently auto-stored (avoids "confidently wrong intimacy").
+        benign = boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]
+        if benign and not boss_model.conflicts_with_confirmed(conn, text):
             store.boss_add(conn, kind, text, status="inferred", confidence=0.7,
                            sensitivity=sens, source_table="conversation")
             boss_added += 1
         elif store.candidate_add(conn, kind, text, reason="from conversation",
                                  sensitivity=sens, confidence=0.7,
                                  source_table="conversation"):
-            boss_added += 1  # sensitive -> propose, never auto-store
+            boss_added += 1  # sensitive or conflicting -> propose, never auto-store
 
     # Behavioral corrections: store as standing guidance Cara honors next turn,
     # log each new one as an issue, and escalate ones that recur despite being

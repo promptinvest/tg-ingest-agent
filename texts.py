@@ -513,6 +513,10 @@ TEXTS = {
         "ru": "Голосовое слишком большое, босс — Telegram не даёт мне его скачать (лимит ~20 МБ). Пришли покороче или текстом.",
         "en": "That voice note is too big, boss — Telegram won't let me fetch it (~20 MB limit). Send a shorter one, or text.",
     },
+    "proactive_prefs_done": {
+        "ru": "Поняла, босс — настроила свои напоминания, как ты просишь 🙂",
+        "en": "Got it, boss — tuned my check-ins the way you asked 🙂",
+    },
     "boss_query_empty": {
         "ru": "Пока знаю про тебя совсем немного, босс 🙂 Расскажи о себе — буду потихоньку запоминать.",
         "en": "I still know only a little about you, boss 🙂 Tell me about yourself — I'll remember as we go.",

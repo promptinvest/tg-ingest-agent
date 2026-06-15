@@ -1741,6 +1741,74 @@ class ReportFixesTests(unittest.TestCase):
         self.assertEqual(pdftext.extract_text(b"not a pdf"), "")
 
 
+class Tier1ResearchTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "t1.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_memory_provenance_explain(self):
+        import boss_model
+        store.boss_add(self.conn, "personal_fact", "Любит крепкий чёрный чай.",
+                       status="confirmed", source_table="explicit")
+        ans = boss_model.explain(self.conn, "ru", "откуда ты знаешь, что я люблю чай?")
+        self.assertIsNotNone(ans)
+        self.assertIn("чай", ans.lower())
+        self.assertIn("сам", ans.lower())                     # "Ты сам мне это сказал" (explicit)
+        self.assertIsNone(boss_model.explain(self.conn, "ru", "откуда ты знаешь про слона?"))
+
+    def test_do_memory_why_falls_back_to_chat(self):
+        with mock.patch.object(self.agent, "do_converse") as conv:
+            self.agent.do_memory_why(1, "ru", "откуда ты знаешь про слона?")
+        conv.assert_called_once()                              # no match -> warm chat, in character
+
+    def test_conflicting_fact_is_proposed_not_autostored(self):
+        import boss_model
+        import memory_curator
+        store.boss_add(self.conn, "tone", "Любит короткие ответы.", status="confirmed")
+        self.assertTrue(boss_model.conflicts_with_confirmed(self.conn, "Любит длинные подробные ответы."))
+        store.convo_add(self.conn, 1, "user", "я люблю длинные подробные ответы")
+        store.convo_add(self.conn, 1, "bot", "ок")
+        payload = ('{"cara_life":[],"boss_facts":[{"kind":"tone",'
+                   '"text":"Любит длинные подробные ответы."}]}')
+        with mock.patch.object(llm, "chat_profile", return_value=payload):
+            memory_curator.curate_conversation(self.conn, self.agent.cfg, 1)
+        inferred = [r["value"] for r in store.boss_items(self.conn, "inferred")]
+        self.assertNotIn("Любит длинные подробные ответы.", inferred)   # not silently auto-stored
+        cand = [c["proposed_text"] for c in store.candidates_pending(self.conn)]
+        self.assertIn("Любит длинные подробные ответы.", cand)          # proposed for confirmation
+
+    def test_proactive_can_be_turned_off(self):
+        import proactive
+        from datetime import datetime, timezone
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_proactive_prefs(1, "ru", {"enabled": False})
+        self.assertEqual(store.pref_get(self.conn, "proactive_enabled"), "false")
+        store.candidate_add(self.conn, "workflow", "x", confidence=0.9)
+        key = proactive.run(self.conn, self.agent.cfg, "ru", lambda t: None,
+                            now=datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc))
+        self.assertIsNone(key)                                  # disabled -> no nudge
+
+    def test_proactive_weekends_only_suppresses_weekday(self):
+        import proactive
+        from datetime import datetime, timezone
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_proactive_prefs(1, "ru", {"days": "weekends"})
+        store.candidate_add(self.conn, "workflow", "y", confidence=0.9)
+        key = proactive.run(self.conn, self.agent.cfg, "ru", lambda t: None,
+                            now=datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc))  # Monday
+        self.assertIsNone(key)
+        self.assertTrue(skill_manifest.known("proactive_prefs"))
+        self.assertTrue(skill_manifest.known("memory_why"))
+
+
 class ForwardAttachmentTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent

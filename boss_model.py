@@ -5,6 +5,7 @@ the curator (Phase C) proposes inferred candidates. Sensitive/secret items
 are never surfaced casually.
 """
 import re
+from datetime import datetime
 
 import store
 from texts import T
@@ -126,6 +127,63 @@ def is_duplicate(conn, text, thresh=0.7):
     existing = [r["value"] for r in store.boss_items(conn, "confirmed", limit=60)] \
         + [r["value"] for r in store.boss_items(conn, "inferred", limit=60)]
     return any(_similar(text, e, thresh) for e in existing)
+
+
+# Provenance: when asked "откуда ты это знаешь?", Cara cites how she learned it —
+# in character (no DB/table jargon), drawn from the stored source.
+_STOP = {"и", "в", "на", "что", "ты", "я", "он", "она", "это", "эту", "этот", "меня",
+         "мне", "о", "про", "у", "тебя", "как", "знаешь", "помнишь", "откуда", "почему",
+         "the", "a", "an", "is", "to", "of", "that", "you", "i", "it", "do", "does",
+         "know", "why", "remember", "about", "where", "learn", "this", "from"}
+
+
+def _provenance(row, lang):
+    value = row["value"]
+    src = row["source_table"] or ""
+    when = (row["first_seen_at"] or row["created_at"] or "")[:10]
+    date = ""
+    if when:
+        try:
+            d = datetime.fromisoformat(when)
+            date = (f" (ещё {d:%d.%m})" if lang == "ru" else f" (since {d:%d.%m})")
+        except ValueError:
+            pass
+    if lang == "ru":
+        lead = {"explicit": "Ты сам мне это сказал",
+                "correction": "Ты меня на этом поправил",
+                "memory_candidate": "Ты подтвердил это, когда я предложила запомнить",
+                }.get(src, "Заметила из наших разговоров")
+        return f"{lead}: «{value}»{date}. Если что-то не так — поправь."
+    lead = {"explicit": "You told me yourself",
+            "correction": "You corrected me on it",
+            "memory_candidate": "You confirmed it when I offered to remember",
+            }.get(src, "I picked it up from our chats")
+    return f"{lead}: «{value}»{date}. Correct me if it's off."
+
+
+def explain(conn, lang, query):
+    """In-character provenance for the stored fact most related to the question,
+    or None when nothing clearly matches (caller falls back to warm chat)."""
+    qt = {t for t in _norm(query).split() if t not in _STOP and len(t) > 2}
+    if not qt:
+        return None
+    best, score = None, 0
+    for status in ("confirmed", "inferred"):
+        for row in store.boss_items(conn, status, limit=60):
+            vt = {t for t in _norm(row["value"]).split() if t not in _STOP and len(t) > 2}
+            overlap = len(qt & vt)
+            if overlap > score:
+                best, score = row, overlap
+    return _provenance(best, lang) if best and score >= 1 else None
+
+
+def conflicts_with_confirmed(conn, text, low=0.4):
+    """True if a CONFIRMED fact is on the same topic but says something different
+    — likely an update/contradiction, so it should be confirmed, not auto-stored."""
+    for row in store.boss_items(conn, "confirmed", limit=60):
+        if _similar(text, row["value"], low) and not _similar(text, row["value"], 0.75):
+            return True
+    return False
 
 
 def profile_facts(conn, lang):
