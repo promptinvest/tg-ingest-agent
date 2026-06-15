@@ -79,6 +79,15 @@ def reaction_sentiment(emoji):
     return "neutral"
 
 
+def scrub_secrets(text):
+    """Mask obvious secrets before a trace is shown or shared (defence in depth —
+    trace text is short stage messages, but never leak a token)."""
+    t = str(text or "")
+    t = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "Bearer ***", t)
+    t = re.sub(r"\b[A-Za-z0-9_\-]{32,}\b", "***", t)
+    return t
+
+
 def part_of_day(hour, lang="ru"):
     """Coarse part-of-day label for a local hour (0-23)."""
     if 5 <= hour < 12:
@@ -219,6 +228,9 @@ def load_config(env=None):
     # weekday/hour and can tell you when the next one is. 0=Monday … 6=Sunday.
     cfg.review_weekday = max(0, min(6, int(env.get("REVIEW_WEEKDAY") or "0")))
     cfg.review_hour = max(0, min(23, int(env.get("REVIEW_HOUR") or "10")))
+    # Morning brief: a daily warm digest, OFF by default (opt-in via "делай
+    # утреннюю сводку"); fires once a day at/after this local hour.
+    cfg.morning_brief_hour = max(0, min(23, int(env.get("MORNING_BRIEF_HOUR") or "9")))
     # Proactive heartbeat: gentle, suggestion-only nudges. Off-hours respected,
     # at most N non-urgent nudges/day; urgent (overdue) may bypass the cap.
     cfg.proactive_enabled = (env.get("PROACTIVE_ENABLED") or "true").strip().lower() == "true"

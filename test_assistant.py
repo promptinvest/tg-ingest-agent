@@ -1825,6 +1825,69 @@ class GoldenTranscriptTests(unittest.TestCase):
         self.assertEqual(sent[-1], texts.T("ru", "proactive_prefs_done"))
 
 
+class OperatingModelTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "om.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_operating_model_groups_facts(self):
+        import boss_model
+        store.boss_add(self.conn, "project", "Строит ассистента Cara.", status="confirmed")
+        store.boss_add(self.conn, "personal_fact", "Любит крепкий чай.", status="inferred")
+        groups = dict(boss_model.operating_model(self.conn, "ru"))
+        self.assertIn("Строит ассистента Cara.", groups.get("проекты", []))
+        self.assertIn("Любит крепкий чай.", groups.get("о нём", []))
+
+    def test_ongoing_threads_lists_open_loops(self):
+        import relationship
+        self.conn.execute("INSERT INTO messages (chat_id, tg_message_id, received_at, status,"
+                          " suggested_category) VALUES (1, 1, ?, 'suggested', 'news')",
+                          (store._now(),))
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        self.conn.commit()
+        threads = relationship.ongoing_threads(self.conn, "ru")
+        self.assertTrue(any("категори" in t for t in threads))
+        self.assertTrue(any("памят" in t for t in threads))
+
+    def test_morning_brief_opt_in_and_content(self):
+        import review
+        from datetime import datetime, timezone, timedelta
+        # nothing pending -> no brief
+        self.assertIsNone(review.morning_brief(self.conn, self.agent.cfg, "ru", 3, "Олег"))
+        past = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        store.reminder_add(self.conn, 1, "позвонить в банк", past)   # overdue
+        brief = review.morning_brief(self.conn, self.agent.cfg, "ru", 3, "Олег")
+        self.assertIsNotNone(brief)
+        self.assertIn("Доброе утро", brief)
+        self.assertIn("позвонить в банк", brief)
+        # toggle via proactive_prefs
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_proactive_prefs(1, "ru", {"morning_brief": True})
+        self.assertEqual(store.pref_get(self.conn, "morning_brief"), "on")
+
+    def test_trace_export_scrubs_and_renders(self):
+        import trace
+        import common
+        tid = trace.start(self.conn, "inbound", 1)
+        trace.event(self.conn, tid, trace.ROUTER_COMPLETED, "action=converse", skill="converse")
+        trace.event(self.conn, tid, trace.LLM_FALLBACK, "Bearer sk_supersecrettoken1234567890ABCDEF")
+        trace.finish(self.conn, tid, "finished")
+        fname, md = self.agent._last_trace_markdown(1)
+        self.assertIn(tid, fname)
+        self.assertIn("router.completed", md)
+        self.assertNotIn("supersecrettoken", md)                  # secret scrubbed
+        self.assertEqual(common.scrub_secrets("Bearer abcDEF1234567890abcDEF1234567890"),
+                         "Bearer ***")
+
+
 class Tier1ResearchTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent

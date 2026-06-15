@@ -117,6 +117,8 @@ ROUTER_EXAMPLES = """Examples:
 "не пиши без причины" / "отключи проактивные сообщения" / "stop the check-ins" -> {"action": "proactive_prefs", "params": {"enabled": false}, "confidence": 0.88}
 "не беспокой до 10 утра" / "тихо после 23" / "quiet until 9" -> {"action": "proactive_prefs", "params": {"quiet_end": 10}, "confidence": 0.82}
 "можно писать почаще" / "you can check in more often" -> {"action": "proactive_prefs", "params": {"max_per_day": 3}, "confidence": 0.82}
+"делай мне утреннюю сводку" / "присылай утренний бриф" / "give me a morning brief" -> {"action": "proactive_prefs", "params": {"morning_brief": true}, "confidence": 0.88}
+"не нужна утренняя сводка" / "stop the morning brief" -> {"action": "proactive_prefs", "params": {"morning_brief": false}, "confidence": 0.88}
 "запомни про меня: я не люблю длинные ответы" / "remember about me: I prefer short answers" -> {"action": "boss_memory_update", "params": {"op": "remember", "value": "предпочитает короткие ответы", "kind": "tone"}, "confidence": 0.9}
 "забудь #3" / "forget what you know about my tone" -> {"action": "boss_memory_update", "params": {"op": "forget", "value": "#3"}, "confidence": 0.9}
 "подтверди #2" / "confirm #2" -> {"action": "boss_memory_update", "params": {"op": "confirm", "value": "#2"}, "confidence": 0.9}
@@ -128,6 +130,7 @@ ROUTER_EXAMPLES = """Examples:
 "выгрузи профиль файлом" / "export what you know about me" -> {"action": "export", "params": {"what": "profile"}, "confidence": 0.9}
 "экспортируй себя / историю / кандидатов в md" / "export your self profile" -> {"action": "export", "params": {"what": "self"}, "confidence": 0.85}
 "выгрузи трейс-сводку" / "экспортируй сбои моделей / трейсы" / "export the trace summary" -> {"action": "export", "params": {"what": "trace"}, "confidence": 0.85}
+"выгрузи последний трейс файлом" / "пришли таймлайн последнего действия" / "export the last trace" -> {"action": "export", "params": {"what": "last_trace"}, "confidence": 0.85}
 "что ты помнишь из настроек?" -> {"action": "memory", "params": {}, "confidence": 0.9}
 "запомни: отвечай по-английски" -> {"action": "remember", "params": {"key": "language", "value": "en"}, "confidence": 0.9}
 "всегда добавляй напоминания в календарь" -> {"action": "remember", "params": {"key": "auto_calendar", "value": "true"}, "confidence": 0.9}

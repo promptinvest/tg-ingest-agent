@@ -92,7 +92,7 @@ def build_system(conn, lang, extra_context=None):
     name_en = store.pref_get(conn, "owner_name_en")
     name_any = store.pref_get(conn, "owner_name")
     life = [f"- {row['text']}" for row in store.life_facts(conn, limit=24)]
-    prefs = boss_model.confirmed_context(conn)
+    operating = boss_model.operating_model(conn, lang)
     guidance = boss_model.standing_guidance(conn)
 
     parts = [CHARACTER, ""]
@@ -123,11 +123,11 @@ def build_system(conn, lang, extra_context=None):
             "from his own instructions and corrections:\n" + "\n".join(guidance)
         )
 
-    if prefs:
-        parts.append(
-            "Things he's told you he prefers (honour them in how you talk, not as "
-            "facts to recite):\n" + "\n".join(f"- {p.lstrip('- ')}" for p in prefs)
-        )
+    if operating:
+        block = ["What you know about him (context — weave in naturally, don't recite):"]
+        for label, vals in operating:
+            block.append(f"  {label}: " + "; ".join(vals))
+        parts.append("\n".join(block))
 
     if life:
         parts.append("Your life right now (stay consistent with it; you may add to "

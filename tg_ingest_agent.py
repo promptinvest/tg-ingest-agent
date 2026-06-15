@@ -224,6 +224,7 @@ class Agent:
             self.fire_due_reminders()
             self.check_budget_notice()
             self.check_weekly_review()
+            self.check_morning_brief()
             self.check_daily_curator()
             self.check_proactive()
             if now - self.last_sweep >= self.cfg.retry_interval:
@@ -909,6 +910,9 @@ class Agent:
             parts.append(f"For you it's {cara_local.strftime('%H:%M')} "
                          f"({common.part_of_day(cara_local.hour, lang)}).")
         parts.append(self.review_schedule_text(lang))
+        threads = relationship.ongoing_threads(self.conn, lang)
+        if threads:
+            parts.append("Open threads right now (mention only if it fits): " + "; ".join(threads))
         reaction = store.kv_get(self.conn, "last_reaction")
         if reaction:
             store.kv_set(self.conn, "last_reaction", "")  # surface only once
@@ -1049,6 +1053,11 @@ class Agent:
         if days in ("all", "weekdays", "weekends"):
             store.pref_set(self.conn, "proactive_days", days)
             changed = True
+        if "morning_brief" in params:
+            mb = params.get("morning_brief")
+            mb = mb if isinstance(mb, bool) else str(mb).strip().lower() in ("1", "true", "yes", "да", "on")
+            store.pref_set(self.conn, "morning_brief", "on" if mb else "off")
+            changed = True
         for src, key in (("quiet_start", "quiet_start"), ("quiet_end", "quiet_end"),
                          ("max_per_day", "proactive_max_per_day")):
             if params.get(src) is not None:
@@ -1139,10 +1148,17 @@ class Agent:
 
     def do_export(self, chat_id, lang, params):
         what = str(params.get("what") or "review").strip().lower()
-        if what not in review.EXPORT_KINDS:
-            what = "review"
-        filename, md = review.export_document(self.conn, self.cfg, what, lang,
-                                              params.get("period") or "week")
+        if what in ("last_trace", "trace_timeline", "trace_steps"):
+            filename, md = self._last_trace_markdown(chat_id)
+            if not md:
+                self.reply(chat_id, T(lang, "trace_none"))
+                return
+        elif what not in review.EXPORT_KINDS:
+            filename, md = review.export_document(self.conn, self.cfg, "review", lang,
+                                                  params.get("period") or "week")
+        else:
+            filename, md = review.export_document(self.conn, self.cfg, what, lang,
+                                                  params.get("period") or "week")
         exports_dir = self.cfg.db_path.parent / "exports"
         exports_dir.mkdir(parents=True, exist_ok=True)
         (exports_dir / filename).write_text(md, encoding="utf-8")
@@ -1174,6 +1190,7 @@ class Agent:
         if not row:
             return T(lang, "trace_none")
         action, confidence = "?", "?"
+        steps = []
         for ev in store.trace_events(self.conn, row["trace_id"]):
             if ev["stage"] == trace.ROUTER_COMPLETED:
                 action = (ev["skill"] or "?")
@@ -1182,8 +1199,26 @@ class Agent:
                     confidence = round(float((_json.loads(ev["data"]) or {}).get("confidence", 0)), 2)
                 except Exception:
                     pass
-        return T(lang, "trace_explain", action=action, confidence=confidence,
+            msg = common.scrub_secrets((ev["message"] or "")[:120])
+            steps.append(f"  • {ev['stage']}" + (f" — {msg}" if msg else ""))
+        head = T(lang, "trace_explain", action=action, confidence=confidence,
                  trace_id=row["trace_id"])
+        return head + "\n" + "\n".join(steps)  # the replay timeline
+
+    def _last_trace_markdown(self, chat_id):
+        """Shareable markdown of the latest inbound trace (secret-scrubbed) for
+        debugging in VS Code. Returns (filename, text) or (None, '')."""
+        row = store.latest_trace(self.conn, chat_id, "inbound")
+        if not row:
+            return None, ""
+        lines = [f"# Trace {row['trace_id']}",
+                 f"kind: {row['kind']} · status: {row['status']} · started {row['started_at'][:19]}", ""]
+        for ev in store.trace_events(self.conn, row["trace_id"]):
+            msg = common.scrub_secrets(ev["message"] or "")
+            lines.append(f"- `{(ev['ts'] or '')[:19]}` **{ev['stage']}**"
+                         + (f" [{ev['skill']}]" if ev["skill"] else "")
+                         + (f" — {msg}" if msg else ""))
+        return f"cara-trace-{row['trace_id']}.md", "\n".join(lines) + "\n"
 
     def do_remember(self, chat_id, params, lang):
         value = str(params.get("value") or "").strip()
@@ -1758,6 +1793,28 @@ class Agent:
         except Exception as exc:  # a heartbeat hiccup must never crash the loop
             log(f"proactive check failed: {exc}")
             trace.finish(self.conn, tid, "failed", summary=str(exc)[:200])
+
+    def check_morning_brief(self):
+        """Opt-in daily brief (off unless the boss turned it on): once a day at/
+        after the morning hour, respecting proactive on/off and quiet hours."""
+        if (store.pref_get(self.conn, "morning_brief") or "off") != "on":
+            return
+        now = datetime.now(timezone.utc)
+        local = now + timedelta(hours=self.tz_offset())
+        if store.kv_get(self.conn, "morning_brief_day") == local.strftime("%Y-%m-%d"):
+            return
+        if local.hour < self.cfg.morning_brief_hour:
+            return  # not morning yet
+        s = proactive.settings(self.conn, self.cfg)
+        if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
+            return
+        store.kv_set(self.conn, "morning_brief_day", local.strftime("%Y-%m-%d"))  # once/day
+        self.turn_lang = None
+        lang = self.lang()
+        text = review.morning_brief(self.conn, self.cfg, lang, self.tz_offset(), self.owner_name())
+        if text:
+            for chat_id in self.cfg.allowed_chat_ids:
+                self.reply(chat_id, text)
 
     def check_weekly_review(self):
         """Hold the weekly performance review on its scheduled local weekday/hour

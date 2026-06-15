@@ -186,6 +186,31 @@ def conflicts_with_confirmed(conn, text, low=0.4):
     return False
 
 
+# A grouped "operating model" of the boss for prompt assembly — the descriptive
+# context (who he is, projects, routines, how he files), kept separate from the
+# behavioral rules in standing_guidance (tone/workflow/avoidance/quality_bar).
+_OPERATING_GROUPS = (
+    ("projects", ("проекты", "projects"), ("project",)),
+    ("about", ("о нём", "about him"), ("personal_fact", "identity", "relationship_note")),
+    ("routines", ("распорядок", "routines"), ("reminder_preference",)),
+    ("filing", ("как он раскладывает", "how he files"), ("category_preference",)),
+)
+
+
+def operating_model(conn, lang):
+    """Grouped, deduped, non-sensitive facts about the boss for the prompt:
+    list of (label, [values]). Confirmed + inferred."""
+    rows = []
+    for status in ("confirmed", "inferred"):
+        rows += store.boss_items(conn, status, sensitivities=("normal",), limit=80)
+    out = []
+    for _key, (ru, en), kinds in _OPERATING_GROUPS:
+        vals = _dedup([r["value"] for r in rows if r["kind"] in kinds])
+        if vals:
+            out.append((ru if lang == "ru" else en, vals[:6]))
+    return out
+
+
 def profile_facts(conn, lang):
     """Deduped (name, confirmed, inferred) for a warm spoken summary. Inferred
     items that merely restate a confirmed one are dropped."""

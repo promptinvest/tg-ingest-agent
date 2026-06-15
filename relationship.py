@@ -13,6 +13,29 @@ def log_event(conn, kind, summary, importance=1, source_table=None, source_id=No
     store.rel_add(conn, kind, summary, importance, source_table, source_id, title=title)
 
 
+def ongoing_threads(conn, lang):
+    """Open loops worth gentle continuity / a morning brief: items awaiting a
+    category, memory suggestions waiting, overdue reminders. Short strings."""
+    ru = lang == "ru"
+    out = []
+    unsorted = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE status = 'suggested'").fetchone()["n"]
+    if unsorted:
+        out.append(f"{unsorted} заметок ждут категорию" if ru
+                   else f"{unsorted} items awaiting a category")
+    cands = len(store.candidates_pending(conn, limit=20))
+    if cands:
+        out.append(f"{cands} предложений в память" if ru else f"{cands} memory suggestions")
+    now = datetime.now(timezone.utc).isoformat()
+    overdue = conn.execute(
+        "SELECT COUNT(*) AS n FROM reminders WHERE status = 'active' AND due_utc < ?",
+        (now,)).fetchone()["n"]
+    if overdue:
+        out.append(f"{overdue} просроченных напоминаний" if ru
+                   else f"{overdue} overdue reminders")
+    return out
+
+
 def render_working_history(conn, lang, days=30):
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     ru = lang == "ru"

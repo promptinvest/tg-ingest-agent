@@ -146,6 +146,42 @@ def collect(conn, period):
     return data
 
 
+def morning_brief(conn, cfg, lang, tz_offset, owner):
+    """A warm daily brief — today's reminders, overdue ones, open threads.
+    Returns None when there's genuinely nothing worth a ping."""
+    import relationship
+    ru = lang == "ru"
+    now = datetime.now(timezone.utc)
+    now_naive = now.replace(tzinfo=None)
+    today_local = (now + timedelta(hours=tz_offset)).date()
+    overdue, today = [], []
+    for r in conn.execute("SELECT title, due_utc FROM reminders WHERE status = 'active'"
+                          " ORDER BY due_utc LIMIT 50"):
+        try:
+            due = datetime.fromisoformat(r["due_utc"])
+        except (ValueError, TypeError):
+            continue
+        if due.tzinfo is not None:
+            due = due.astimezone(timezone.utc).replace(tzinfo=None)
+        if due < now_naive:
+            overdue.append(r["title"])
+        elif (due + timedelta(hours=tz_offset)).date() == today_local:
+            today.append(((due + timedelta(hours=tz_offset)).strftime("%H:%M"), r["title"]))
+    threads = relationship.ongoing_threads(conn, lang)
+    if not (overdue or today or threads):
+        return None
+    lines = [f"Доброе утро, {owner} ☀️" if ru else f"Good morning, {owner} ☀️"]
+    if today:
+        lines.append("Сегодня:" if ru else "Today:")
+        lines += [f"  • {t} — {title}" for t, title in today]
+    if overdue:
+        lines.append(("⏰ Просрочено: " if ru else "⏰ Overdue: ") + ", ".join(overdue[:5]))
+    if threads:
+        lines.append(("🗂 Ещё открыто: " if ru else "🗂 Still open: ") + "; ".join(threads))
+    lines.append("Чем помочь?" if ru else "Anything I can take off your plate?")
+    return "\n".join(lines)
+
+
 def corrections_report(conn, lang):
     """What Cara has corrected herself on, and what still needs a code fix."""
     ru = lang == "ru"
