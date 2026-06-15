@@ -19,6 +19,7 @@ ACTIONS = {
     "reminder_cancel",   # params: id or title_query
     "calendar_add",      # params: id/title_query of a reminder, OR title+due_utc directly
     "spend",             # params: period in day|week|month
+    "budget_set",        # params: period in day|month, amount (USD) — change the AI budget cap
     "stats",
     "categories",
     "help",              # what can you do?
@@ -61,6 +62,8 @@ ROUTER_EXAMPLES = """Examples:
 "напомни завтра в 10 позвонить в банк" -> {"action": "reminder_create", "params": {"title": "позвонить в банк", "due_utc": "<tomorrow 10:00 local converted to UTC>", "recurrence": "none"}, "confidence": 0.95}
 "remind me every Monday at 9 to file the report" -> {"action": "reminder_create", "params": {"title": "file the report", "due_utc": "<next Monday 09:00 local in UTC>", "recurrence": "weekly"}, "confidence": 0.95}
 "сколько потратили на AI в этом месяце?" -> {"action": "spend", "params": {"period": "month"}, "confidence": 0.95}
+"почему такие расходы?" / "почему нет расхода на эту модель?" / "why is this model free?" -> {"action": "spend", "params": {"period": "month"}, "confidence": 0.8}
+"подними дневной лимит до $3" / "поставь месячный бюджет 20" / "set the daily AI budget to 2" -> {"action": "budget_set", "params": {"period": "day", "amount": 3}, "confidence": 0.9}
 "сохрани: ссылка на статью https://..." -> {"action": "ingest", "params": {}, "confidence": 0.9}
 "прочитай и разбери https://example.com/article" / "read this link: https://..." -> {"action": "fetch", "params": {"url": "https://example.com/article"}, "confidence": 0.9}
 "что в этой статье https://example.com/x" / "summarize https://..." -> {"action": "fetch", "params": {"url": "https://example.com/x"}, "confidence": 0.9}
@@ -262,10 +265,12 @@ def route(cfg, conn, chat_id, text, pending):
     validated = validate_route(llm.parse_llm_json(reply), pending is not None)
     if validated is None:
         return {"action": "clarify", "params": {}, "confidence": 0.0}
-    # converse/smalltalk are the warm fallback — a low-confidence social read
-    # should still land as conversation, never as a cold "уточни, пожалуйста".
+    # When unsure, talk — don't interrogate. A low-confidence read drops to warm
+    # free-form chat (where Cara can answer or ask naturally) rather than the cold
+    # "уточни, пожалуйста" template. converse changes no state, so this never acts
+    # on a misread; a confidently-understood task still runs as itself.
     if validated["confidence"] < cfg.confidence_threshold and validated["action"] not in (
         "clarify", "out_of_scope", "converse", "smalltalk"
     ):
-        return {"action": "clarify", "params": {}, "confidence": validated["confidence"]}
+        return {"action": "converse", "params": {}, "confidence": validated["confidence"]}
     return validated

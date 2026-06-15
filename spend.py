@@ -39,12 +39,14 @@ def format_spend(conn, period, cfg, lang):
         lines.append(f"  {row['k']}: ${row['cost']:.3f}, {tokens} tok")
     day_total = store.usage_total(conn, "day")
     month_total = store.usage_total(conn, "month")
+    import llm
+    daily_cap, monthly_cap = llm.budget_limits(cfg, conn)  # honors a runtime override
     budget_line = (
-        f"Бюджет: день ${day_total:.2f}/{cfg.budget_daily_usd:.2f}, "
-        f"месяц ${month_total:.2f}/{cfg.budget_monthly_usd:.2f}"
+        f"Бюджет: день ${day_total:.2f}/{daily_cap:.2f}, "
+        f"месяц ${month_total:.2f}/{monthly_cap:.2f}"
         if lang == "ru" else
-        f"Budget: day ${day_total:.2f}/{cfg.budget_daily_usd:.2f}, "
-        f"month ${month_total:.2f}/{cfg.budget_monthly_usd:.2f}"
+        f"Budget: day ${day_total:.2f}/{daily_cap:.2f}, "
+        f"month ${month_total:.2f}/{monthly_cap:.2f}"
     )
     lines.append(budget_line)
     return "\n".join(lines)

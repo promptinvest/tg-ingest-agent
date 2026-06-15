@@ -141,16 +141,17 @@ class PromptTests(unittest.TestCase):
     def test_build_llm_messages_taxonomy_injection_and_feedback(self):
         cfg = make_config()
         with_known = ingest.build_llm_messages(cfg, ["news", "tools"], "text", [])
-        self.assertIn("Categories used so far: news, tools", with_known[0]["content"])
+        self.assertIn("USE ONE OF THESE", with_known[0]["content"])      # prefer existing
+        self.assertIn("news, tools", with_known[0]["content"])
         self.assertIn("<message>", with_known[1]["content"][0]["text"])
         corrections = [{"suggested": "news", "corrected": "крипта"}]
-        with_feedback = ingest.build_llm_messages(cfg, [], "text", [], corrections)
+        with_feedback = ingest.build_llm_messages(cfg, [], "text", [], corrections, "ru")
         self.assertIn("крипта", with_feedback[0]["content"])
-        self.assertIn("no categories yet", with_feedback[0]["content"])
-        # language policy: summaries stay in the source language, new
-        # categories are proposed in English (service metadata)
+        self.assertIn("No categories yet", with_feedback[0]["content"])
+        # summaries stay in the source language; a NEW category is named in the
+        # operator's language (Russian), not forced into English
         self.assertIn("STRICTLY in the language of the source", with_feedback[0]["content"])
-        self.assertIn("NEW categories in English", with_feedback[0]["content"])
+        self.assertIn("Russian", with_feedback[0]["content"])
 
     def test_build_llm_messages_image_cap_and_oversize(self):
         cfg = make_config(MAX_LLM_IMAGES="2")

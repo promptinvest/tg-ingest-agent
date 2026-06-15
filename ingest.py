@@ -118,23 +118,23 @@ def build_text_block(raw_text, forward_type, forward_title, urls):
 MAX_LLM_IMAGE_BYTES = 5 * 1024 * 1024
 
 
-def build_llm_messages(cfg, known, text_block, image_paths, corrections=None):
+def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, lang="ru"):
     import base64
     from pathlib import Path
 
+    new_lang = "Russian" if lang == "ru" else "the operator's language"
     if known:
         taxonomy = (
-            "Categories used so far: " + ", ".join(known) + "\n"
-            "Prefer one of these when it fits — match by MEANING even across languages"
-            " (a Russian post can belong to an English-named category and vice versa)."
-            " Propose a new short category only when none fits."
+            "Existing categories — USE ONE OF THESE whenever it reasonably fits, matching"
+            " by MEANING across languages: " + ", ".join(known) + ".\n"
+            "Only invent a NEW category when none of the above truly fits. Keep a new one"
+            " BROAD (not hyper-specific) and name it in " + new_lang + ", in the style of"
+            " the existing ones. Strongly prefer reusing an existing category — the"
+            " operator keeps re-filing over-specific new ones."
         )
     else:
-        taxonomy = "There are no categories yet; propose a short (1-3 word) category."
-    taxonomy += (
-        "\nCategory names are service metadata: propose NEW categories in English"
-        " (the operator may rename them)."
-    )
+        taxonomy = ("No categories yet; propose ONE short, broad (1-2 word) category in "
+                    + new_lang + ".")
     feedback_block = ""
     if corrections:
         lines = [
@@ -200,7 +200,7 @@ def parse_facts(parsed):
     return facts
 
 
-def suggest(cfg, conn, known, text_block, image_paths):
+def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
     """Ask the LLM for a category suggestion.
 
     Returns (category, alternatives, summary, facts); never raises on bad
@@ -208,7 +208,7 @@ def suggest(cfg, conn, known, text_block, image_paths):
     errors.
     """
     corrections = store.feedback_recent(conn, "ingest", limit=5)
-    messages = build_llm_messages(cfg, known, text_block, image_paths, corrections)
+    messages = build_llm_messages(cfg, known, text_block, image_paths, corrections, lang)
     reply = llm.chat_profile(cfg, conn, "ingest", messages, profile="ingest_balanced")
     parsed = llm.parse_llm_json(reply)
     category = llm.normalize_category((parsed or {}).get("category"))

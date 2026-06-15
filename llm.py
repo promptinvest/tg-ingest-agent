@@ -57,17 +57,30 @@ def chat_cost(model, tokens_in, tokens_out, table):
     return (tokens_in * price_in + tokens_out * price_out) / 1_000_000
 
 
+def budget_limits(cfg, conn):
+    """Effective (daily, monthly) caps: a runtime override the boss set, else the
+    configured defaults."""
+    def _eff(key, default):
+        try:
+            return float(store.pref_get(conn, key) or default)
+        except (TypeError, ValueError):
+            return default
+    return _eff("budget_daily_usd", cfg.budget_daily_usd), \
+        _eff("budget_monthly_usd", cfg.budget_monthly_usd)
+
+
 def budget_state(cfg, conn):
     """Returns (state, period, spent, limit); state in ok|warn|stop."""
-    for period, limit in (("day", cfg.budget_daily_usd), ("month", cfg.budget_monthly_usd)):
+    daily, monthly = budget_limits(cfg, conn)
+    for period, limit in (("day", daily), ("month", monthly)):
         spent = store.usage_total(conn, period)
         if limit > 0 and spent >= limit:
             return "stop", period, spent, limit
-    for period, limit in (("day", cfg.budget_daily_usd), ("month", cfg.budget_monthly_usd)):
+    for period, limit in (("day", daily), ("month", monthly)):
         spent = store.usage_total(conn, period)
         if limit > 0 and spent >= 0.8 * limit:
             return "warn", period, spent, limit
-    return "ok", "day", store.usage_total(conn, "day"), cfg.budget_daily_usd
+    return "ok", "day", store.usage_total(conn, "day"), daily
 
 
 def _check_budget(cfg, conn):

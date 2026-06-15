@@ -501,6 +501,18 @@ TEXTS = {
         "ru": "Готово, босс — переложила {n} в «{category}» ✅",
         "en": "Done, boss — moved {n} into «{category}» ✅",
     },
+    "budget_set_done": {
+        "ru": "Готово, босс — лимит AI на {period}: ${amount} ✅",
+        "en": "Done, boss — AI budget for the {period}: ${amount} ✅",
+    },
+    "budget_set_unclear": {
+        "ru": "Не разобрала сумму. Скажи, например: «дневной лимит $3» или «месячный бюджет 20».",
+        "en": "I couldn't read the amount. Try e.g. \"daily limit $3\" or \"monthly budget 20\".",
+    },
+    "stt_too_big": {
+        "ru": "Голосовое слишком большое, босс — Telegram не даёт мне его скачать (лимит ~20 МБ). Пришли покороче или текстом.",
+        "en": "That voice note is too big, boss — Telegram won't let me fetch it (~20 MB limit). Send a shorter one, or text.",
+    },
     "boss_query_empty": {
         "ru": "Пока знаю про тебя совсем немного, босс 🙂 Расскажи о себе — буду потихоньку запоминать.",
         "en": "I still know only a little about you, boss 🙂 Tell me about yourself — I'll remember as we go.",

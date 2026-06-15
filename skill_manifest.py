@@ -53,6 +53,8 @@ SKILLS = {
     # -- spend / stats / introspection
     "spend": {"risk": "read_only", "allowed_proactive": True,
               "title": {"en": "AI spend", "ru": "Расходы AI"}},
+    "budget_set": {"risk": "state_write", "writes_state": True, "persona_context": True,
+                   "title": {"en": "Set AI budget", "ru": "Изменить бюджет AI"}},
     "stats": {"risk": "read_only", "title": {"en": "Stats", "ru": "Статистика"}},
     "vps_stats": {"risk": "read_only", "allowed_proactive": True,
                   "title": {"en": "Server status", "ru": "Статус сервера"}},

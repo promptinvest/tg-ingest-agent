@@ -473,7 +473,10 @@ class Agent:
                 raise ShutdownInterrupt() from exc
             log(f"voice transcription failed: {exc}")
             store.issue_add(self.conn, chat_id, "stt_failed", str(exc)[:200])
-            self.reply(chat_id, T(lang, "stt_failed"))
+            # Telegram caps bot downloads at ~20 MB — say so plainly instead of a
+            # generic failure.
+            too_big = "too big" in str(exc).lower()
+            self.reply(chat_id, T(lang, "stt_too_big" if too_big else "stt_failed"))
             return None
         finally:
             # The voice note is a transient artifact — we keep only the
@@ -635,6 +638,8 @@ class Agent:
                     self.reply(chat_id, T(lang, "calendar_not_found"))
         elif action == "spend":
             self.reply(chat_id, spend.format_spend(self.conn, params.get("period"), self.cfg, lang))
+        elif action == "budget_set":
+            self.do_budget_set(chat_id, lang, params)
         elif action == "stats":
             self.reply(chat_id, self.stats_text(lang))
         elif action == "categories":
@@ -1748,6 +1753,28 @@ class Agent:
         lines.extend(f"  {row['name']}: {row['n']}" for row in rows)
         return "\n".join(lines)
 
+    def do_budget_set(self, chat_id, lang, params):
+        """Change the AI spend cap on the boss's explicit request — a runtime
+        override stored in preferences and enforced by the budget gateway."""
+        raw = str(params.get("amount") or "").replace("$", "").replace(",", ".").strip()
+        try:
+            amount = round(float(raw), 2)
+        except (TypeError, ValueError):
+            self.reply(chat_id, T(lang, "budget_set_unclear"))
+            return
+        if not 0 <= amount <= 1000:  # sane bounds; 0 disables the cap
+            self.reply(chat_id, T(lang, "budget_set_unclear"))
+            return
+        period = str(params.get("period") or "day").strip().lower()
+        if period in ("month", "monthly", "месяц", "месячный"):
+            store.pref_set(self.conn, "budget_monthly_usd", amount)
+            plabel = "месяц" if lang == "ru" else "month"
+        else:
+            store.pref_set(self.conn, "budget_daily_usd", amount)
+            plabel = "день" if lang == "ru" else "day"
+        log(f"budget override set: {period}=${amount}")
+        self.reply(chat_id, T(lang, "budget_set_done", period=plabel, amount=f"{amount:.2f}"))
+
     # -- Buttons (fallback confirmation path)
 
     def handle_memory_callback(self, callback_id, chat_id, msg, data):
@@ -1890,25 +1917,32 @@ class Agent:
     MAX_DOC_CHARS = 100_000
 
     def read_text_document(self, parts):
-        """Download & decode a text/markdown document part (a sent plan).
-        Returns (text, filename) or (None, None)."""
+        """Read a document's text: plain text/markdown directly, and a best-effort
+        text layer from PDFs. Returns (text, filename) or (None, None) — a scanned
+        or image-only PDF yields no text (needs OCR), handled honestly upstream."""
         for part in parts:
             doc = part.get("document") or {}
             fname = doc.get("file_name") or ""
             mime = str(doc.get("mime_type") or "")
             is_text = (mime.startswith("text/") or mime in ("application/markdown",)
                        or fname.lower().endswith(self.TEXT_DOC_EXTS))
-            if not (doc.get("file_id") and is_text):
+            is_pdf = mime == "application/pdf" or fname.lower().endswith(".pdf")
+            if not (doc.get("file_id") and (is_text or is_pdf)):
                 continue
             try:
                 path = self.download_file(doc["file_id"], doc["file_unique_id"],
-                                          Path(fname).suffix or ".txt")
-                text = Path(path).read_text(encoding="utf-8", errors="replace")[:self.MAX_DOC_CHARS]
+                                          Path(fname).suffix or (".pdf" if is_pdf else ".txt"))
+                if is_pdf:
+                    import pdftext
+                    text = pdftext.extract_text(Path(path).read_bytes(), self.MAX_DOC_CHARS)
+                else:
+                    text = Path(path).read_text(
+                        encoding="utf-8", errors="replace")[:self.MAX_DOC_CHARS]
                 Path(path).unlink(missing_ok=True)  # transient artifact
                 if text.strip():
                     return text, fname
             except (TelegramError, OSError) as exc:
-                log(f"text document read failed: {exc}")
+                log(f"document read failed: {exc}")
         return None, None
 
     def finalize(self, parts):
@@ -2045,7 +2079,7 @@ class Agent:
             )
             try:
                 category, alternatives, summary, facts = ingest.suggest(
-                    self.cfg, self.conn, known, text_block, image_paths
+                    self.cfg, self.conn, known, text_block, image_paths, self.lang()
                 )
             except llm.LLMError as exc:
                 attempts = store.bump_attempts(self.conn, row_id)

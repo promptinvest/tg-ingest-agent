@@ -263,11 +263,11 @@ class RouterTests(unittest.TestCase):
         with mock.patch.object(llm, "chat", return_value="I think you want..."):
             decision = router.route(self.cfg, self.conn, 1, "hmm", None)
         self.assertEqual(decision["action"], "clarify")
-        # low-confidence guesses are demoted to clarify
+        # low-confidence guesses now drop to warm converse (not a cold clarify)
         with mock.patch.object(llm, "chat",
                                return_value='{"action": "reminder_create", "params": {}, "confidence": 0.3}'):
             decision = router.route(self.cfg, self.conn, 1, "что-то", None)
-        self.assertEqual(decision["action"], "clarify")
+        self.assertEqual(decision["action"], "converse")
         # confirm without pending is invalid -> clarify
         with mock.patch.object(llm, "chat",
                                return_value='{"action": "confirm", "params": {}, "confidence": 0.9}'):
@@ -1672,6 +1672,73 @@ class ReactionAndContextTests(unittest.TestCase):
             router.route(self.agent.cfg, self.conn, 1, "переложи это в Документы", None)
         self.assertIn(f"#{mid}", captured["user"])             # item pointed out to the router
         self.assertIn("recently saved", captured["user"])
+
+
+class ReportFixesTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "x.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_low_confidence_routes_to_converse_not_clarify(self):
+        with mock.patch.object(llm, "chat_profile",
+                               return_value='{"action":"reminder_create","params":{},"confidence":0.3}'):
+            d = router.route(self.agent.cfg, self.conn, 1, "что-то невнятное", None)
+        self.assertEqual(d["action"], "converse")        # warm chat, not cold clarify
+
+    def test_budget_set_changes_limit(self):
+        import llm
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_budget_set(1, "ru", {"period": "day", "amount": 3})
+        self.assertEqual(store.pref_get(self.conn, "budget_daily_usd"), "3.0")
+        daily, _ = llm.budget_limits(self.agent.cfg, self.conn)
+        self.assertEqual(daily, 3.0)
+        self.assertIn("3.00", r.call_args[0][1])
+        self.assertTrue(skill_manifest.known("budget_set"))
+        self.assertEqual(router.validate_route(
+            {"action": "budget_set", "params": {"period": "day", "amount": 3}}, False)["action"],
+            "budget_set")
+
+    def test_budget_set_rejects_garbage(self):
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_budget_set(1, "ru", {"amount": "не число"})
+        self.assertIsNone(store.pref_get(self.conn, "budget_daily_usd"))
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "budget_set_unclear"))
+
+    def test_category_prompt_prefers_existing_and_language(self):
+        import ingest
+        sys = ingest.build_llm_messages(
+            self.agent.cfg, ["News", "Crypto"], "<text>", [], None, "ru")[0]["content"]
+        self.assertIn("USE ONE OF THESE", sys)
+        self.assertIn("Russian", sys)
+        self.assertNotIn("in English", sys)              # no longer forces English names
+
+    def test_voice_too_big_message(self):
+        from tg_api import TelegramError
+        with mock.patch.object(self.agent, "download_file", side_effect=TelegramError(
+                "getFile failed with HTTP 400: Bad Request: file is too big", status=400)), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply") as r:
+            out = self.agent.transcribe_voice(1, {"file_id": "f", "file_unique_id": "u",
+                                                  "duration": 120})
+        self.assertIsNone(out)
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "stt_too_big"))
+
+    def test_pdf_text_extraction_best_effort(self):
+        import pdftext
+        pdf = (b"%PDF-1.4\nstream\nBT (Hello world, this is a readable test document.) Tj ET\n"
+               b"endstream\n%%EOF")
+        self.assertIn("readable test document", pdftext.extract_text(pdf))
+        # no text layer (scanned/binary) or non-PDF -> empty, never garbage
+        self.assertEqual(pdftext.extract_text(b"%PDF-1.4\nstream\n\x01\x02\x03nope\nendstream"), "")
+        self.assertEqual(pdftext.extract_text(b"not a pdf"), "")
 
 
 class AccessControlTests(unittest.TestCase):
