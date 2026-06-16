@@ -647,6 +647,10 @@ class Agent:
                 self.reply(chat_id, T(lang, "reminder_cancelled", rid=row["id"], title=row["title"]))
             else:
                 self.reply(chat_id, T(lang, "reminder_not_found"))
+        elif action == "reminder_reschedule":
+            self.do_reschedule(chat_id, lang, params)
+        elif action == "list_files":
+            self.reply(chat_id, self.files_text(lang))
         elif action == "calendar_add":
             draft = reminders.validate_draft(params)
             if draft:
@@ -1869,6 +1873,38 @@ class Agent:
             log(f"review export send failed: {exc}")
             self.reply(chat_id, T(lang, "llm_error"))
         log(f"review exported: {reviews_dir / filename}")
+
+    def do_reschedule(self, chat_id, lang, params):
+        """Move an existing reminder to a new time (applied immediately, like
+        cancel). Targets by id/title, else the most recently created active one
+        ('перенеси это напоминание')."""
+        due = reminders.parse_iso_utc(params.get("due_utc"))
+        if due is None:
+            self.reply(chat_id, T(lang, "reschedule_when"))
+            return
+        rows = store.reminders_active(self.conn, chat_id)
+        row = reminders.find_by_query(rows, params)
+        if row is None and rows:
+            row = max(rows, key=lambda r: r["id"])  # "это/последнее" -> latest created
+        if row is None:
+            self.reply(chat_id, T(lang, "reminder_not_found"))
+            return
+        store.reminder_update_due(self.conn, row["id"], due.isoformat())
+        self.reply(chat_id, T(lang, "reminder_rescheduled", rid=row["id"], title=row["title"],
+                              when_local=reminders.fmt_local(due.isoformat(), self.tz_offset())))
+
+    def files_text(self, lang):
+        rows = store.recent_files(self.conn, limit=20)
+        if not rows:
+            return T(lang, "files_empty")
+        ru = lang == "ru"
+        lines = [T(lang, "files_header", n=len(rows))]
+        for r in rows:
+            cat = r["category"] or r["suggested_category"] or ("без категории" if ru else "uncategorized")
+            name = r["file_name"] or ("файл" if ru else "file")
+            lines.append(f"📎 {name} — #{r['message_id']} · {cat}")
+        lines.append(T(lang, "files_footer"))
+        return "\n".join(lines)
 
     def categories_text(self, lang):
         rows = store.category_counts(self.conn)

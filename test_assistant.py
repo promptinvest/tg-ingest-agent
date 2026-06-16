@@ -1825,6 +1825,54 @@ class GoldenTranscriptTests(unittest.TestCase):
         self.assertEqual(sent[-1], texts.T("ru", "proactive_prefs_done"))
 
 
+class ReminderRescheduleAndFilesTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "rr.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_reschedule_moves_latest_when_unspecified(self):
+        from datetime import datetime, timezone, timedelta
+        soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        rid = store.reminder_add(self.conn, 1, "позвонить в банк", soon)
+        new_due = (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat()
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_reschedule(1, "ru", {"due_utc": new_due})  # no id/title -> latest
+        moved = store.reminder_get(self.conn, rid)
+        self.assertEqual(moved["due_utc"], new_due)                  # time actually changed
+        self.assertIn("банк", r.call_args[0][1])
+        self.assertTrue(skill_manifest.known("reminder_reschedule"))
+
+    def test_reschedule_without_time_asks(self):
+        store.reminder_add(self.conn, 1, "x",
+                           (__import__("datetime").datetime.now(__import__("datetime").timezone.utc)).isoformat())
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_reschedule(1, "ru", {})  # no due_utc
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reschedule_when"))
+
+    def test_files_list_distinct_from_notes(self):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
+                                               "received_at": store._now(), "raw_text": "Расписка.pdf"})
+        store.set_suggestion(self.conn, mid, "Документы", "s", "m")
+        store.insert_file(self.conn, mid, 1, {"file_id": "F", "file_unique_id": "u",
+                                              "file_name": "Расписка.pdf", "mime_type": "application/pdf"})
+        text = self.agent.files_text("ru")
+        self.assertIn("📎 Файлы", text)
+        self.assertIn("Расписка.pdf", text)
+        self.assertIn(f"#{mid}", text)
+        self.assertTrue(skill_manifest.known("list_files"))
+
+    def test_files_list_empty(self):
+        self.assertEqual(self.agent.files_text("ru"), texts.T("ru", "files_empty"))
+
+
 class OperatingModelTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent

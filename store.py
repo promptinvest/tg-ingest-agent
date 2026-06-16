@@ -795,6 +795,16 @@ def message_files(conn, message_id):
     ).fetchall()
 
 
+def recent_files(conn, limit=20):
+    """All stored files (newest first) with their item's id/category, for the
+    'show my files' listing."""
+    return conn.execute(
+        "SELECT f.file_name, f.mime_type, f.message_id, m.category, m.suggested_category"
+        " FROM files f JOIN messages m ON m.id = f.message_id"
+        " ORDER BY f.id DESC LIMIT ?", (limit,),
+    ).fetchall()
+
+
 def set_chunks(conn, message_id, chunks):
     """Replace a message's embedding chunks (idempotent for re-indexing).
     chunks: list of (text, embedding_list_or_None)."""

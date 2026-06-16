@@ -48,6 +48,9 @@ SKILLS = {
     "reminder_list": {"risk": "read_only", "title": {"en": "List reminders", "ru": "Список напоминаний"}},
     "reminder_cancel": {"risk": "state_write", "writes_state": True,
                         "title": {"en": "Cancel reminder", "ru": "Отмена напоминания"}},
+    "reminder_reschedule": {"risk": "state_write", "writes_state": True,
+                            "title": {"en": "Reschedule reminder", "ru": "Перенести напоминание"}},
+    "list_files": {"risk": "read_only", "title": {"en": "List files", "ru": "Список файлов"}},
     "calendar_add": {"risk": "external_write", "external_network": True, "writes_state": True,
                      "requires_confirmation": True, "title": {"en": "Calendar", "ru": "Календарь"}},
     # -- spend / stats / introspection

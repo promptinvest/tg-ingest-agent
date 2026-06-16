@@ -497,6 +497,23 @@ TEXTS = {
         "ru": "Я это уже отмечала, но всё равно повторяется — сама не починю, нужна правка кода. Записала, чтобы поправили: {items} 🔧",
         "en": "I'd already noted this and it keeps happening — I can't fix it myself, it needs a code change. I've flagged it: {items} 🔧",
     },
+    "reminder_rescheduled": {
+        "ru": "Готово, босс — перенесла «{title}» (#{rid}) на {when_local} ✅",
+        "en": "Done, boss — moved «{title}» (#{rid}) to {when_local} ✅",
+    },
+    "reschedule_when": {
+        "ru": "На какое время перенести, босс?",
+        "en": "What time should I move it to, boss?",
+    },
+    "files_header": {"ru": "📎 Файлы · {n}", "en": "📎 Files · {n}"},
+    "files_footer": {
+        "ru": "Скажи «покажи файл #N», и я пришлю его.",
+        "en": "Say \"show file #N\" and I'll send it.",
+    },
+    "files_empty": {
+        "ru": "Пока нет сохранённых файлов, босс. Перешли мне документ — сохраню.",
+        "en": "No saved files yet, boss. Forward me a document and I'll keep it.",
+    },
     "recategorized_multi": {
         "ru": "Готово, босс — переложила {n} в «{category}» ✅",
         "en": "Done, boss — moved {n} into «{category}» ✅",
