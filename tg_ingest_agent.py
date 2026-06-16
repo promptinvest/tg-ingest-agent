@@ -623,12 +623,19 @@ class Agent:
                     skill=action, data={"confidence": decision["confidence"],
                                         "risk": policy["risk"]})
 
+        # Completing a half-specified reminder ("напомни в 17:00" -> "про что?"
+        # -> "Лящук"): stitch the answer into the partial draft. Returns False
+        # if the message is an unrelated intent (partial abandoned, fall through).
+        if pending and pending["kind"] == "reminder_partial":
+            if self.continue_partial_reminder(chat_id, lang, pending, action, params):
+                return
+
         if action == "ingest":
             self.finalize([msg])
         elif action == "reminder_create":
             draft = reminders.validate_draft(params)
             if not draft:
-                self.reply(chat_id, T(lang, "clarify"))
+                self.start_partial_reminder(chat_id, lang, params)
                 return
             store.pending_set(self.conn, chat_id, "reminder", draft)
             self.reply(chat_id, T(
@@ -1891,6 +1898,64 @@ class Agent:
         store.reminder_update_due(self.conn, row["id"], due.isoformat())
         self.reply(chat_id, T(lang, "reminder_rescheduled", rid=row["id"], title=row["title"],
                               when_local=reminders.fmt_local(due.isoformat(), self.tz_offset())))
+
+    def start_partial_reminder(self, chat_id, lang, params):
+        """A reminder_create missing the subject or the time: keep whatever the
+        boss gave and ask for the rest, instead of dropping it to a generic
+        clarify (which lost 'напомни в 17:00' entirely)."""
+        now = datetime.now(timezone.utc)
+        draft = {"recurrence": "none"}
+        title = str(params.get("title") or "").strip()
+        if title:
+            draft["title"] = title[:reminders.MAX_TITLE_CHARS]
+        due = reminders.parse_iso_utc(params.get("due_utc"))
+        if due is not None and due >= now - timedelta(minutes=1):
+            draft["due_utc"] = due.isoformat()
+        rec = str(params.get("recurrence") or "").strip().lower()
+        if rec in reminders.RECURRENCES:
+            draft["recurrence"] = rec
+        if not draft.get("title") and not draft.get("due_utc"):
+            self.reply(chat_id, T(lang, "clarify"))  # nothing to anchor on
+            return
+        need = "title" if not draft.get("title") else "time"
+        draft["need"] = need
+        store.pending_set(self.conn, chat_id, "reminder_partial", draft)
+        self.reply(chat_id, T(lang, "reminder_need_" + need))
+
+    def continue_partial_reminder(self, chat_id, lang, pending, action, params):
+        """Stitch a missing field into a half-specified reminder. Returns True if
+        the message completed/continued the draft (or cancelled it), False if it
+        is an unrelated intent (the partial is then abandoned and falls through)."""
+        if action == "cancel":
+            store.pending_clear(self.conn, chat_id)
+            self.reply(chat_id, T(lang, "reminder_partial_cancelled"))
+            return True
+        if action not in ("amend", "confirm"):
+            store.pending_clear(self.conn, chat_id)  # boss moved on to something else
+            return False
+        draft = {k: v for k, v in pending["payload"].items()
+                 if k in ("title", "due_utc", "recurrence")}
+        title = str(params.get("title") or "").strip()
+        if title and not draft.get("title"):
+            draft["title"] = title[:reminders.MAX_TITLE_CHARS]
+        due = reminders.parse_iso_utc(params.get("due_utc"))
+        if due is not None and not draft.get("due_utc"):
+            draft["due_utc"] = due.isoformat()
+        rec = str(params.get("recurrence") or "").strip().lower()
+        if rec in reminders.RECURRENCES:
+            draft["recurrence"] = rec
+        full = reminders.validate_draft(draft)
+        if full:
+            store.pending_set(self.conn, chat_id, "reminder", full)
+            self.reply(chat_id, T(lang, "reminder_draft", title=full["title"],
+                       when_local=reminders.fmt_local(full["due_utc"], self.tz_offset()),
+                       recurrence=T(lang, "recurrence_" + full["recurrence"])))
+        else:
+            need = "title" if not draft.get("title") else "time"
+            draft["need"] = need
+            store.pending_set(self.conn, chat_id, "reminder_partial", draft)
+            self.reply(chat_id, T(lang, "reminder_need_" + need))
+        return True
 
     def do_reminder_undo(self, chat_id, lang, params):
         """Undo the last reschedule ('верни предыдущее время', 'отмени перенос')

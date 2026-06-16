@@ -147,6 +147,8 @@ NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сд�
 "бюджет" / "budget" -> {"action": "spend", "params": {"period": "month"}, "confidence": 0.9}
 "статистика" (no period given) -> {"action": "stats", "params": {}, "confidence": 0.85}
 "да" (with a pending action) -> {"action": "confirm", "params": {}, "confidence": 0.95}
+"Лящук" / "позвонить в банк" / "про встречу с Иваном" (pending reminder_partial, need=title) -> {"action": "amend", "params": {"title": "встреча Лящук"}, "confidence": 0.9}
+"в 17:00" / "завтра в 9" / "в пятницу в 14" (pending reminder_partial, need=time) -> {"action": "amend", "params": {"due_utc": "<that time, local, converted to UTC>"}, "confidence": 0.9}
 "нет, лучше в 16:00" (pending reminder) -> {"action": "amend", "params": {"due_utc": "<same day 16:00 local in UTC>"}, "confidence": 0.9}
 "это скорее крипта" (pending category) -> {"action": "amend", "params": {"category": "крипта"}, "confidence": 0.9}
 "категория - Документы" / "категория: крипта" / "в категорию Документы" / "set category to Documents" (pending category) -> {"action": "amend", "params": {"category": "Документы"}, "confidence": 0.92}

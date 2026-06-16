@@ -505,6 +505,18 @@ TEXTS = {
         "ru": "На какое время перенести, босс?",
         "en": "What time should I move it to, boss?",
     },
+    "reminder_need_title": {
+        "ru": "Про что напомнить, босс?",
+        "en": "What should I remind you about, boss?",
+    },
+    "reminder_need_time": {
+        "ru": "На какое время поставить, босс?",
+        "en": "What time should I set it for, boss?",
+    },
+    "reminder_partial_cancelled": {
+        "ru": "Хорошо, не ставлю 👌",
+        "en": "Okay, skipping it 👌",
+    },
     "reschedule_which": {
         "ru": "Какое именно напоминание перенести, босс? Активные:",
         "en": "Which reminder should I move, boss? Active ones:",

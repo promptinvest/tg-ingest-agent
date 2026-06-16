@@ -1901,6 +1901,52 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_reminder_undo(1, "ru", {"id": rid})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_no_prev"))
 
+    def test_partial_reminder_missing_title_then_completes(self):
+        from datetime import datetime, timezone, timedelta
+        due = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        with mock.patch.object(self.agent, "reply") as r:      # "напомни в 17:00"
+            self.agent.start_partial_reminder(1, "ru", {"due_utc": due})
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_need_title"))
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "reminder_partial")
+        self.assertEqual(pending["payload"]["need"], "title")
+        with mock.patch.object(self.agent, "reply") as r:      # boss: "Лящук"
+            consumed = self.agent.continue_partial_reminder(
+                1, "ru", pending, "amend", {"title": "встреча Лящук"})
+        self.assertTrue(consumed)
+        promoted = store.pending_get(self.conn, 1)
+        self.assertEqual(promoted["kind"], "reminder")          # now a confirm draft
+        self.assertEqual(promoted["payload"]["title"], "встреча Лящук")
+        self.assertEqual(promoted["payload"]["due_utc"], reminders.parse_iso_utc(due).isoformat())
+        self.assertIn("Лящук", r.call_args[0][1])
+
+    def test_partial_reminder_missing_time_asks_time(self):
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.start_partial_reminder(1, "ru", {"title": "купить молоко"})
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_need_time"))
+        self.assertEqual(store.pending_get(self.conn, 1)["payload"]["need"], "time")
+
+    def test_partial_reminder_cancel(self):
+        from datetime import datetime, timezone, timedelta
+        due = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        self.agent.start_partial_reminder(1, "ru", {"due_utc": due})
+        pending = store.pending_get(self.conn, 1)
+        with mock.patch.object(self.agent, "reply") as r:
+            consumed = self.agent.continue_partial_reminder(1, "ru", pending, "cancel", {})
+        self.assertTrue(consumed)
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_partial_cancelled"))
+
+    def test_partial_reminder_unrelated_intent_abandons(self):
+        from datetime import datetime, timezone, timedelta
+        due = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        self.agent.start_partial_reminder(1, "ru", {"due_utc": due})
+        pending = store.pending_get(self.conn, 1)
+        with mock.patch.object(self.agent, "reply"):
+            consumed = self.agent.continue_partial_reminder(1, "ru", pending, "reminder_list", {})
+        self.assertFalse(consumed)                              # falls through to new intent
+        self.assertIsNone(store.pending_get(self.conn, 1))      # partial abandoned
+
     def test_files_list_distinct_from_notes(self):
         mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
                                                "received_at": store._now(), "raw_text": "Расписка.pdf"})
