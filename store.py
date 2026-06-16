@@ -149,7 +149,8 @@ CREATE TABLE IF NOT EXISTS reminders (
   recurrence TEXT NOT NULL DEFAULT 'none',
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL,
-  last_fired_at TEXT
+  last_fired_at TEXT,
+  prev_due_utc TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
@@ -647,6 +648,9 @@ def _migrate(conn):
         conn.execute("ALTER TABLE relationship_events ADD COLUMN title TEXT")
     if "trace_id" not in rel_columns:
         conn.execute("ALTER TABLE relationship_events ADD COLUMN trace_id TEXT")
+    rem_columns = {row["name"] for row in conn.execute("PRAGMA table_info(reminders)")}
+    if "prev_due_utc" not in rem_columns:
+        conn.execute("ALTER TABLE reminders ADD COLUMN prev_due_utc TEXT")
 
 
 # -- kv ----------------------------------------------------------------------
@@ -1264,11 +1268,29 @@ def reminders_due(conn, now_iso):
 
 
 def reminder_update_due(conn, rid, due_utc):
+    """Move a reminder, remembering its current time in prev_due_utc so a
+    reschedule can be undone ('верни предыдущее время')."""
     conn.execute(
-        "UPDATE reminders SET due_utc = ?, last_fired_at = ? WHERE id = ?",
-        (due_utc, _now(), rid),
+        "UPDATE reminders SET prev_due_utc = due_utc, due_utc = ? WHERE id = ?",
+        (due_utc, rid),
     )
     conn.commit()
+
+
+def reminder_restore_due(conn, rid):
+    """Swap due_utc with prev_due_utc (undo the last reschedule). Returns the
+    restored time, or None if there is no remembered previous time."""
+    cur = conn.execute(
+        "SELECT due_utc, prev_due_utc FROM reminders WHERE id = ?", (rid,)
+    ).fetchone()
+    if not cur or not cur["prev_due_utc"]:
+        return None
+    conn.execute(
+        "UPDATE reminders SET due_utc = ?, prev_due_utc = ? WHERE id = ?",
+        (cur["prev_due_utc"], cur["due_utc"], rid),
+    )
+    conn.commit()
+    return cur["prev_due_utc"]
 
 
 def reminder_close(conn, rid, status="done"):

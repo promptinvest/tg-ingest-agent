@@ -50,6 +50,8 @@ SKILLS = {
                         "title": {"en": "Cancel reminder", "ru": "Отмена напоминания"}},
     "reminder_reschedule": {"risk": "state_write", "writes_state": True,
                             "title": {"en": "Reschedule reminder", "ru": "Перенести напоминание"}},
+    "reminder_undo": {"risk": "state_write", "writes_state": True,
+                      "title": {"en": "Undo reschedule", "ru": "Вернуть прежнее время"}},
     "list_files": {"risk": "read_only", "title": {"en": "List files", "ru": "Список файлов"}},
     "calendar_add": {"risk": "external_write", "external_network": True, "writes_state": True,
                      "requires_confirmation": True, "title": {"en": "Calendar", "ru": "Календарь"}},

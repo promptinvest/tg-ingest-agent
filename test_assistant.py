@@ -1857,6 +1857,50 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_reschedule(1, "ru", {})  # no due_utc
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reschedule_when"))
 
+    def test_reschedule_unmatched_title_does_not_move_wrong_one(self):
+        # Regression: "перенеси Лящук" with no active reminder named Лящук must
+        # NOT silently move an unrelated active reminder (it moved «Расписка.pdf»).
+        from datetime import datetime, timezone, timedelta
+        soon = (datetime.now(timezone.utc) + timedelta(days=4)).isoformat()
+        rid = store.reminder_add(self.conn, 1, "Расписка.pdf", soon)
+        new_due = (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat()
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_reschedule(1, "ru", {"title_query": "Лящук", "due_utc": new_due})
+        unchanged = store.reminder_get(self.conn, rid)
+        self.assertEqual(unchanged["due_utc"], soon)          # NOT moved
+        self.assertIn(texts.T("ru", "reminder_not_found"), r.call_args[0][1])
+
+    def test_reschedule_ambiguous_bare_reference_asks_which(self):
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        store.reminder_add(self.conn, 1, "A", (now + timedelta(hours=1)).isoformat())
+        store.reminder_add(self.conn, 1, "B", (now + timedelta(hours=2)).isoformat())
+        new_due = (now + timedelta(hours=5)).isoformat()
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_reschedule(1, "ru", {"due_utc": new_due})  # which one?
+        self.assertIn(texts.T("ru", "reschedule_which"), r.call_args[0][1])
+
+    def test_undo_restores_previous_time(self):
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        original = (now + timedelta(days=4)).isoformat()
+        rid = store.reminder_add(self.conn, 1, "Расписка.pdf", original)
+        moved = (now + timedelta(hours=5)).isoformat()
+        self.agent.do_reschedule(1, "ru", {"id": rid, "due_utc": moved})
+        self.assertEqual(store.reminder_get(self.conn, rid)["due_utc"], moved)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_reminder_undo(1, "ru", {"id": rid})
+        self.assertEqual(store.reminder_get(self.conn, rid)["due_utc"], original)
+        self.assertIn("Расписка.pdf", r.call_args[0][1])
+        self.assertTrue(skill_manifest.known("reminder_undo"))
+
+    def test_undo_without_prior_reschedule(self):
+        from datetime import datetime, timezone
+        rid = store.reminder_add(self.conn, 1, "x", datetime.now(timezone.utc).isoformat())
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_reminder_undo(1, "ru", {"id": rid})
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_no_prev"))
+
     def test_files_list_distinct_from_notes(self):
         mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
                                                "received_at": store._now(), "raw_text": "Расписка.pdf"})

@@ -18,6 +18,7 @@ ACTIONS = {
     "reminder_list",
     "reminder_cancel",   # params: id or title_query
     "reminder_reschedule",  # params: id/title_query + due_utc — move an existing reminder
+    "reminder_undo",     # params: id/title_query (optional) — undo the last reschedule
     "list_files",        # list the documents/files stored across saved items
     "calendar_add",      # params: id/title_query of a reminder, OR title+due_utc directly
     "spend",             # params: period in day|week|month
@@ -73,6 +74,8 @@ ROUTER_EXAMPLES = """Examples:
 "что в этой статье https://example.com/x" / "summarize https://..." -> {"action": "fetch", "params": {"url": "https://example.com/x"}, "confidence": 0.9}
 "перенеси напоминание на 12" / "перенеси это напоминание на 12:00" / "сдвинь напоминание на завтра в 9" / "move the reminder to 12" -> {"action": "reminder_reschedule", "params": {"due_utc": "<today 12:00 local in UTC>"}, "confidence": 0.9}
 "перенеси напоминание про банк на пятницу 14:00" / "reschedule #3 to 18:00" -> {"action": "reminder_reschedule", "params": {"title_query": "банк", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
+"верни предыдущее время напоминания #9" / "отмени перенос" / "верни как было" / "undo the reschedule" -> {"action": "reminder_undo", "params": {"id": 9}, "confidence": 0.9}
+NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сдвинь/move/reschedule). A bare subject or a fresh "напомни/поставь напоминание про X в TIME" is reminder_create, NOT reschedule — never reschedule a reminder whose title the user did not name.
 "покажи файлы" / "какие у меня файлы?" / "список файлов" / "show my files" / "what files do I have" -> {"action": "list_files", "params": {}, "confidence": 0.92}
 "добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
 "поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}

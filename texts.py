@@ -505,6 +505,18 @@ TEXTS = {
         "ru": "На какое время перенести, босс?",
         "en": "What time should I move it to, boss?",
     },
+    "reschedule_which": {
+        "ru": "Какое именно напоминание перенести, босс? Активные:",
+        "en": "Which reminder should I move, boss? Active ones:",
+    },
+    "reminder_restored": {
+        "ru": "Вернула «{title}» (#{rid}) на прежнее время — {when_local} ↩️",
+        "en": "Restored «{title}» (#{rid}) to its previous time — {when_local} ↩️",
+    },
+    "reminder_no_prev": {
+        "ru": "Не помню прежнего времени для этого напоминания, босс — скажи, на какое поставить.",
+        "en": "I don't have a previous time saved for that reminder, boss — tell me what to set it to.",
+    },
     "files_header": {"ru": "📎 Файлы · {n}", "en": "📎 Files · {n}"},
     "files_footer": {
         "ru": "Скажи «покажи файл #N», и я пришлю его.",

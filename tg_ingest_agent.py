@@ -649,6 +649,8 @@ class Agent:
                 self.reply(chat_id, T(lang, "reminder_not_found"))
         elif action == "reminder_reschedule":
             self.do_reschedule(chat_id, lang, params)
+        elif action == "reminder_undo":
+            self.do_reminder_undo(chat_id, lang, params)
         elif action == "list_files":
             self.reply(chat_id, self.files_text(lang))
         elif action == "calendar_add":
@@ -1876,22 +1878,69 @@ class Agent:
 
     def do_reschedule(self, chat_id, lang, params):
         """Move an existing reminder to a new time (applied immediately, like
-        cancel). Targets by id/title, else the most recently created active one
-        ('перенеси это напоминание')."""
+        cancel). Targets by id/title; a bare 'это/последнее' reference uses the
+        sole active reminder, but never silently picks one when an explicit
+        id/title was given but matched nothing (that moved the wrong reminder)."""
         due = reminders.parse_iso_utc(params.get("due_utc"))
         if due is None:
             self.reply(chat_id, T(lang, "reschedule_when"))
             return
-        rows = store.reminders_active(self.conn, chat_id)
-        row = reminders.find_by_query(rows, params)
-        if row is None and rows:
-            row = max(rows, key=lambda r: r["id"])  # "это/последнее" -> latest created
+        row = self._resolve_reminder_target(chat_id, lang, params)
         if row is None:
-            self.reply(chat_id, T(lang, "reminder_not_found"))
-            return
+            return  # _resolve_reminder_target already replied (not found / which?)
         store.reminder_update_due(self.conn, row["id"], due.isoformat())
         self.reply(chat_id, T(lang, "reminder_rescheduled", rid=row["id"], title=row["title"],
                               when_local=reminders.fmt_local(due.isoformat(), self.tz_offset())))
+
+    def do_reminder_undo(self, chat_id, lang, params):
+        """Undo the last reschedule ('верни предыдущее время', 'отмени перенос')
+        by swapping due_utc back to the remembered previous time."""
+        rows = store.reminders_active(self.conn, chat_id)
+        if not rows:
+            self.reply(chat_id, T(lang, "reminder_not_found"))
+            return
+        row = reminders.find_by_query(rows, params)
+        if row is None:
+            moved = [r for r in rows if r["prev_due_utc"]]
+            if len(moved) == 1:
+                row = moved[0]
+            elif len(moved) > 1:
+                self.reply(chat_id, T(lang, "reschedule_which") + "\n"
+                           + reminders.format_list(moved, self.tz_offset(), lang))
+                return
+            else:
+                self.reply(chat_id, T(lang, "reminder_no_prev"))
+                return
+        prev = store.reminder_restore_due(self.conn, row["id"])
+        if prev is None:
+            self.reply(chat_id, T(lang, "reminder_no_prev"))
+            return
+        self.reply(chat_id, T(lang, "reminder_restored", rid=row["id"], title=row["title"],
+                              when_local=reminders.fmt_local(prev, self.tz_offset())))
+
+    def _resolve_reminder_target(self, chat_id, lang, params):
+        """Resolve which active reminder a reschedule/undo refers to. Returns the
+        row, or None after replying with not-found / a 'which one?' list."""
+        rows = store.reminders_active(self.conn, chat_id)
+        if not rows:
+            self.reply(chat_id, T(lang, "reminder_not_found"))
+            return None
+        has_target = params.get("id") is not None or (params.get("title_query")
+                                                       or params.get("title"))
+        row = reminders.find_by_query(rows, params)
+        if row is None and has_target:
+            # Explicit id/title given but nothing active matched — do NOT move an
+            # unrelated reminder; show what IS active so the boss can pick.
+            self.reply(chat_id, T(lang, "reminder_not_found") + "\n"
+                       + reminders.format_list(rows, self.tz_offset(), lang))
+            return None
+        if row is None:  # bare "это/последнее" reference
+            if len(rows) > 1:
+                self.reply(chat_id, T(lang, "reschedule_which") + "\n"
+                           + reminders.format_list(rows, self.tz_offset(), lang))
+                return None
+            row = rows[0]
+        return row
 
     def files_text(self, lang):
         rows = store.recent_files(self.conn, limit=20)
