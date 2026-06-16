@@ -7,8 +7,14 @@ when the result doesn't look like real text — so scanned/image PDFs (which nee
 OCR) and CID-font PDFs (common for Cyrillic) fall back to honest "couldn't read
 it" handling instead of feeding garbage to the summarizer. Never raises.
 """
+import io
 import re
 import zlib
+
+try:  # pdfminer.six (apt: python3-pdfminer) — handles real/ObjStm PDFs the
+    from pdfminer.high_level import extract_text as _pdfminer_extract  # regex can't.
+except Exception:  # not installed (e.g. local dev) -> regex fallback only
+    _pdfminer_extract = None
 
 _STREAM = re.compile(rb"stream\r?\n(.*?)\r?\n?endstream", re.DOTALL)
 _TJ = re.compile(r"\((?:\\.|[^()\\])*\)\s*Tj")
@@ -17,7 +23,17 @@ _PAREN = re.compile(r"\((?:\\.|[^()\\])*\)")
 
 
 def extract_text(data, max_chars=20000):
-    """Return extracted text, or "" if the PDF has no usable text layer."""
+    """Return extracted text, or "" if the PDF has no usable text layer.
+    Tries pdfminer first (real PDFs, compressed/object streams), then the
+    lightweight regex extractor; returns "" if neither yields readable text."""
+    if _pdfminer_extract is not None:
+        try:
+            text = _pdfminer_extract(io.BytesIO(data or b""), maxpages=20) or ""
+        except Exception:
+            text = ""
+        text = re.sub(r"[ \t]+", " ", text).strip()[:max_chars]
+        if _looks_like_text(text):
+            return text
     try:
         text = _extract(data or b"", max_chars)
     except Exception:

@@ -36,7 +36,9 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends python3 ca-certificates sqlite3
+# python3-pdfminer (pdfminer.six) — best-effort PDF text extraction beyond the
+# stdlib regex fallback; apt-managed so the nightly updater keeps it current.
+apt-get install -y --no-install-recommends python3 ca-certificates sqlite3 python3-pdfminer
 
 id "$APP_USER" >/dev/null 2>&1 || \
   useradd --system --home "$STATE_DIR" --shell /usr/sbin/nologin "$APP_USER"
