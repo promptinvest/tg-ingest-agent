@@ -92,8 +92,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   #N" re‑sends it (free, no re‑upload).
 - **Browse & detail:** "покажи заметки" (a clean card list), "что в категории crypto",
   "найди про DeepSeek", "детали #2" / "покажи заметку 11" (full card + re‑sends the
-  attached photos/files; a bare "заметка N" reference resolves by id regardless of
+  attached photos/files; a bare "заметка N" reference resolves by number regardless of
   phrasing).
+- **Note numbers** are a contiguous **1…N** position (oldest first) shown everywhere
+  the boss sees or types a note number; they **compact automatically on deletion** (no
+  gaps). The number is a display position, not the immutable internal id — so
+  attachments, embeddings and memory links never break, but a given number isn't
+  permanent (deleting an earlier note shifts the later ones down).
 - **Journals (long‑term areas):** mark a category as a journal — "веди Благодарности
   как дневник" / "сделай X журналом" — and it becomes append‑only: each note acks as a
   dated entry ("запись за 18.06, всего N"), "покажи дневник благодарности [за неделю/
@@ -295,7 +300,10 @@ Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
 `proactive_log`.
 
 Cascade deletes + purge scopes keep rows and media consistent. **`llm_usage` (spend
-history) and `preferences` (identity) are never purged.**
+history) and `preferences` (identity) are never purged.** The user-facing note number
+is a **contiguous 1…N display position** over visible notes (oldest first), computed
+from the stable `messages.id`; it compacts on deletion and never alters the id that
+attachments/embeddings/memory reference.
 
 ---
 

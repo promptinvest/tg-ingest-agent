@@ -166,7 +166,7 @@ class Agent:
                 {
                     "chat_id": chat_id,
                     "message_id": message_id,
-                    "text": f"{row['category']} ✅\n{summary}\n(#{row['id']})",
+                    "text": f"{row['category']} ✅\n{summary}\n(#{self.note_no(row['id'])})",
                 },
             )
         except TelegramError as exc:
@@ -708,13 +708,13 @@ class Agent:
                 row = rows[0]
                 store.pending_set(self.conn, chat_id, "delete", {"row_ids": [row["id"]]})
                 snippet = (row["summary"] or row["raw_text"] or "")[:60].replace("\n", " ")
-                self.reply(chat_id, T(lang, "delete_confirm", row_id=row["id"],
+                self.reply(chat_id, T(lang, "delete_confirm", row_id=self.note_no(row["id"]),
                                       category=row["category"] or row["suggested_category"] or "?",
                                       snippet=snippet))
             else:
                 ids = [r["id"] for r in rows]
                 store.pending_set(self.conn, chat_id, "delete", {"row_ids": ids})
-                listing = ", ".join(f"#{i}" for i in ids)
+                listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
                 self.reply(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
         elif action == "show_media":
             self.do_show_media(chat_id, lang, params)
@@ -870,15 +870,16 @@ class Agent:
                 return
             store.pending_clear(self.conn, chat_id)
             ids = payload.get("row_ids") or ([payload["row_id"]] if payload.get("row_id") else [])
-            deleted = []
+            deleted, labels = [], []
             for rid in ids:
                 if store.get_message(self.conn, rid) is not None:
+                    labels.append(self.note_no(rid))  # capture the number before it's gone
                     for path in store.delete_message(self.conn, rid):
                         Path(path).unlink(missing_ok=True)
                     deleted.append(rid)
             log(f"deleted {len(deleted)} message(s) by operator: {deleted}")
             if len(deleted) == 1:
-                self.reply(chat_id, T(lang, "deleted", row_id=deleted[0]))
+                self.reply(chat_id, T(lang, "deleted", row_id=labels[0]))
             elif deleted:
                 self.reply(chat_id, T(lang, "deleted_multi", n=len(deleted)))
             else:
@@ -1368,11 +1369,12 @@ class Agent:
         elif query:
             filter_part = T(lang, "items_filter_query", query=query)
         blocks = [T(lang, "items_header", filter=filter_part, n=len(rows))]
+        dmap = store.display_map(self.conn)
         for row in rows:
             row_category = row["category"] or row["suggested_category"] or (
                 "без категории" if ru else "uncategorized")
             pending = " ⏳" if row["status"] != "confirmed" else ""
-            item = [f"📄 #{row['id']} · {row_category}{pending}"]
+            item = [f"📄 #{dmap.get(row['id'], row['id'])} · {row_category}{pending}"]
             text = (row["summary"] or row["raw_text"] or "").replace("\n", " ").strip()[:110]
             if text:
                 item.append(f"   {text}")
@@ -1397,9 +1399,10 @@ class Agent:
         """Re-send everything stored with an item: photos first, then any file
         attachments (PDF, doc…) by file_id. Returns how many were sent."""
         rid = row["id"]
+        label = self.note_no(rid)
         sent = 0
         for img in store.message_images(self.conn, rid):
-            caption = f"#{rid}" if sent == 0 else None
+            caption = f"#{label}" if sent == 0 else None
             try:
                 if img["tg_file_id"]:
                     tg_send_photo(self.cfg.token, chat_id, img["tg_file_id"], caption=caption)
@@ -1414,7 +1417,7 @@ class Agent:
         for f in store.message_files(self.conn, rid):
             if not f["tg_file_id"]:
                 continue
-            caption = f["file_name"] or (f"#{rid}" if sent == 0 else None)
+            caption = f["file_name"] or (f"#{label}" if sent == 0 else None)
             try:
                 tg_send_document_file_id(self.cfg.token, chat_id, f["tg_file_id"], caption=caption)
                 sent += 1
@@ -1428,7 +1431,7 @@ class Agent:
             self.reply(chat_id, T(lang, "items_empty"))
             return
         if self.send_attachments(chat_id, row) == 0:
-            self.reply(chat_id, T(lang, "no_media", row_id=row["id"]))
+            self.reply(chat_id, T(lang, "no_media", row_id=self.note_no(row["id"])))
 
     def do_discard(self, chat_id, lang, pending):
         """Decline adding the just-suggested item: delete the fresh row."""
@@ -1533,10 +1536,10 @@ class Agent:
         store.insert_url(self.conn, row_id, url)
         suggestion = self.suggest_row(store.get_message(self.conn, row_id))
         if not suggestion:
-            self.reply(chat_id, T(lang, "stored_retry", row_id=row_id))
+            self.reply(chat_id, T(lang, "stored_retry", row_id=self.note_no(row_id)))
             return
         category, alternatives, summary = suggestion
-        counts = T(lang, "counts", row_id=row_id, images=0, files=0, urls=1)
+        counts = T(lang, "counts", row_id=self.note_no(row_id), images=0, files=0, urls=1)
         self.present_suggestion(row_id, chat_id, None, category, alternatives, summary, counts)
 
     def do_ask(self, chat_id, lang, params, text):
@@ -1615,10 +1618,7 @@ class Agent:
         if isinstance(ids, list) and ids:
             out = []
             for i in ids:
-                try:
-                    row = store.get_message(self.conn, int(i))
-                except (TypeError, ValueError):
-                    row = None
+                row = store.message_by_display_no(self.conn, i)  # user numbers are display 1..N
                 if row is not None:
                     out.append(row)
             if out:
@@ -1635,26 +1635,33 @@ class Agent:
         return [row] if row else []
 
     def resolve_item(self, params):
-        """Resolve an item by explicit id, query/category, or most recent."""
+        """Resolve an item by user-facing note number (display 1..N),
+        query/category, or most recent."""
         import re
         try:
-            rid = int(params.get("id")) if params.get("id") is not None else None
+            no = int(params.get("id")) if params.get("id") is not None else None
         except (TypeError, ValueError):
-            rid = None
-        if rid is None:
+            no = None
+        if no is None:
             # "покажи заметку 11" / "заметку #11" / "#11" — a bare note reference
-            # (only a kind word + number) resolves by id regardless of phrasing;
+            # (only a kind word + number) resolves by number regardless of phrasing;
             # a richer query ("про крипту 2024") still goes to text search.
             m = re.fullmatch(r"\s*(?:заметк\w*|запис\w*|пост\w*|note|item|#)?\s*#?(\d{1,7})\s*",
                              str(params.get("query") or ""), re.IGNORECASE)
             if m:
-                rid = int(m.group(1))
-        if rid is not None:
-            row = store.get_message(self.conn, rid)
+                no = int(m.group(1))
+        if no is not None:
+            row = store.message_by_display_no(self.conn, no)
             if row is not None:
                 return row
         rows = store.list_messages(self.conn, params.get("category"), params.get("query"), limit=1)
         return rows[0] if rows else None
+
+    def note_no(self, message_id):
+        """User-facing display number (1..N) for a note id; falls back to the id
+        for a not-yet-visible/transient row (e.g. a pending failed ingest)."""
+        n = store.display_no(self.conn, message_id)
+        return n if n is not None else message_id
 
     def _fmt_ts_local(self, ts):
         """Unix timestamp -> 'DD.MM.YYYY, HH:MM' in the boss's local time."""
@@ -1683,7 +1690,7 @@ class Agent:
             return r if ru else e
 
         category = row["category"] or row["suggested_category"] or L("без категории", "uncategorized")
-        blocks = [[f"📄 #{row['id']} · {category}"]]
+        blocks = [[f"📄 #{self.note_no(row['id'])} · {category}"]]
 
         meta = []
         post_date = row["forward_date"] or row["tg_date"]
@@ -2130,11 +2137,12 @@ class Agent:
         if not rows:
             return T(lang, "files_empty")
         ru = lang == "ru"
+        dmap = store.display_map(self.conn)
         lines = [T(lang, "files_header", n=len(rows))]
         for r in rows:
             cat = r["category"] or r["suggested_category"] or ("без категории" if ru else "uncategorized")
             name = r["file_name"] or ("файл" if ru else "file")
-            lines.append(f"📎 {name} — #{r['message_id']} · {cat}")
+            lines.append(f"📎 {name} — #{dmap.get(r['message_id'], r['message_id'])} · {cat}")
         lines.append(T(lang, "files_footer"))
         return "\n".join(lines)
 
@@ -2230,7 +2238,7 @@ class Agent:
     def handle_correction(self, row, chat_id, text, reply_to):
         lang = self.lang()
         if row["status"] == "confirmed":
-            self.reply(chat_id, T(lang, "already_confirmed", row_id=row["id"], category=row["category"]))
+            self.reply(chat_id, T(lang, "already_confirmed", row_id=self.note_no(row["id"]), category=row["category"]))
             return
         category = llm.normalize_category(text)
         if not category:
@@ -2277,7 +2285,7 @@ class Agent:
                                       n=store.journal_count(self.conn, canonical), date=day),
                            reply_to)
             else:
-                self.reply(chat_id, T(lang, "confirmed", category=canonical, row_id=row["id"]),
+                self.reply(chat_id, T(lang, "confirmed", category=canonical, row_id=self.note_no(row["id"])),
                            reply_to)
         self.maybe_propose_habit(chat_id, updated, lang)
 
@@ -2453,13 +2461,13 @@ class Agent:
                     detail = T(lang, "dup_suggested", category=original["suggested_category"])
                 else:
                     detail = T(lang, "dup_pending")
-                self.reply(chat_id, T(lang, "duplicate", original_id=original["id"], detail=detail),
+                self.reply(chat_id, T(lang, "duplicate", original_id=self.note_no(original["id"]), detail=detail),
                            reply_to)
                 return
         row = store.get_message(self.conn, row_id)
         suggestion = self.suggest_row(row)
         if not suggestion:
-            self.reply(chat_id, T(lang, "stored_retry", row_id=row_id), reply_to)
+            self.reply(chat_id, T(lang, "stored_retry", row_id=self.note_no(row_id)), reply_to)
             return
         category, alternatives, summary = suggestion
         # Learned habit: auto-confirm posts from sources you always file the same way.
@@ -2468,9 +2476,9 @@ class Agent:
         if auto_category:
             store.confirm_category(self.conn, row_id, store.ensure_category(self.conn, auto_category))
             self.reply(chat_id, T(lang, "auto_confirmed", category=auto_category,
-                                  row_id=row_id, summary=summary[:300]), reply_to)
+                                  row_id=self.note_no(row_id), summary=summary[:300]), reply_to)
             return
-        counts = T(lang, "counts", row_id=row_id, images=image_count, files=file_count,
+        counts = T(lang, "counts", row_id=self.note_no(row_id), images=image_count, files=file_count,
                    urls=len(urls))
         self.present_suggestion(row_id, chat_id, reply_to, category, alternatives, summary, counts)
 

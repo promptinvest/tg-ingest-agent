@@ -2108,6 +2108,63 @@ class JournalTests(unittest.TestCase):
         self.assertIn("Благодарности", line)
 
 
+class DisplayNumberTests(unittest.TestCase):
+    """User-facing note numbers are a contiguous 1..N position (oldest first)
+    that compacts on deletion; the immutable id stays the internal key."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "d.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _note(self, tg_id, text):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": tg_id,
+                                               "received_at": store._now(), "raw_text": text})
+        store.confirm_category(self.conn, mid, "Разное")
+        return mid
+
+    def test_numbers_contiguous_and_compact_on_delete(self):
+        a, b, c = self._note(1, "first"), self._note(2, "second"), self._note(3, "third")
+        self.assertEqual([store.display_no(self.conn, x) for x in (a, b, c)], [1, 2, 3])
+        self.assertEqual(store.message_by_display_no(self.conn, 2)["id"], b)
+        for _ in store.delete_message(self.conn, b):  # remove the middle note
+            pass
+        self.assertEqual(store.display_no(self.conn, a), 1)
+        self.assertEqual(store.display_no(self.conn, c), 2)        # was 3, compacted
+        self.assertIsNone(store.message_by_display_no(self.conn, 3))
+
+    def test_resolve_item_uses_display_number(self):
+        a, b = self._note(1, "alpha"), self._note(2, "bravo")
+        self.assertEqual(self.agent.resolve_item({"id": 2})["id"], b)
+        self.assertEqual(self.agent.resolve_item({"query": "заметку 1"})["id"], a)
+
+    def test_delete_by_display_number_then_renumbers(self):
+        a, b, c = self._note(1, "a"), self._note(2, "b"), self._note(3, "c")
+        rows = self.agent.resolve_items({"ids": [1]})            # user types "#1"
+        self.assertEqual(rows[0]["id"], a)
+        pending = {"kind": "delete", "payload": {"row_ids": [a]}}
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
+        self.assertIn("#1", r.call_args[0][1])                  # acked as the number shown
+        self.assertIsNone(store.get_message(self.conn, a))
+        self.assertEqual(store.display_no(self.conn, b), 1)      # remaining notes renumber
+        self.assertEqual(store.display_no(self.conn, c), 2)
+
+    def test_item_list_shows_sequential_numbers(self):
+        self._note(1, "a"); self._note(2, "b"); self._note(3, "c")
+        text = self.agent.items_text("ru", {})
+        self.assertIn("#1", text)
+        self.assertIn("#2", text)
+        self.assertIn("#3", text)
+
+
 class OperatingModelTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent

@@ -1024,6 +1024,39 @@ def status_counts(conn):
     ).fetchall()
 
 
+# -- display numbering -------------------------------------------------------
+# The user-facing note number is a contiguous 1..N position (oldest first) over
+# the *visible* notes — NOT the immutable `id` (which stays the stable key for
+# every attachment/embedding/memory FK). It compacts automatically on deletion,
+# so the numbers the boss sees always start at 1 with no gaps.
+
+def display_ids(conn):
+    """Visible-note ids in display order (oldest first); position = number."""
+    return [r["id"] for r in conn.execute(
+        "SELECT id FROM messages WHERE status IN ('confirmed', 'suggested') ORDER BY id ASC")]
+
+
+def display_map(conn):
+    """{message_id: display_no} for all visible notes."""
+    return {mid: i for i, mid in enumerate(display_ids(conn), start=1)}
+
+
+def display_no(conn, message_id):
+    """The note's 1..N display number, or None if it isn't a visible note."""
+    ids = display_ids(conn)
+    return ids.index(message_id) + 1 if message_id in ids else None
+
+
+def message_by_display_no(conn, n):
+    """Resolve a user-typed note number (1..N) to its row, or None."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return None
+    ids = display_ids(conn)
+    return get_message(conn, ids[n - 1]) if 1 <= n <= len(ids) else None
+
+
 def delete_message(conn, message_id):
     """Delete a message row (urls/images cascade); returns media paths to
     unlink. Other rows referencing it as duplicate_of keep their copy."""
