@@ -98,7 +98,7 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 | `router.py` | closed-world intent router (LLM, JSON-only, confidence gate, context recall) |
 | `converse.py` | **free-form warm conversation as Cara** — persona, her evolving life, boss facts, language matching |
 | `ingest.py` | message parsing, URL extraction (UTF-16-safe), category + facts + summary suggestion |
-| `pdftext.py` | best-effort PDF text-layer extraction (stdlib only) |
+| `pdftext.py` | best-effort PDF text-layer extraction (pdfminer.six, with a stdlib regex fallback) |
 | `knowledge.py` | document chunking, cosine retrieval, grounded-answer prompt (the `ask` skill) |
 | `reminders.py` | reminder drafts, recurrence, local-time rendering |
 | `gcal.py` | Google Calendar (service-account JWT) + .ics export |
@@ -122,6 +122,43 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 | `tg_api.py` | Telegram Bot API client (send message/photo/document, **reactions**, getFile) |
 | `texts.py` | bilingual (ru/en) reply templates with tone/intensity variants — Cara's transactional voice |
 | `common.py` | config loading, language detection, shared helpers |
+
+### Skill permission model
+
+`skill_manifest.py` is the canonical permission registry; startup fails if any router
+action lacks a policy (`assert_covers(router.ACTIONS)`). Each action declares its risk,
+whether it uses an LLM / writes state / is destructive / needs confirmation / may run
+proactively / wants persona context, and a bilingual title.
+
+Risk levels: `read_only` · `read_only_suggestion` · `draft_write` · `state_write` ·
+`network_read` · `external_write` · `destructive` · `meta`. Key policies: `purge` is
+`destructive` (typed-phrase confirm); `calendar_add` is `external_write` (confirm);
+`ingest` / `fetch` / `remember` / `reminder_create` / `boss_memory_update` /
+`style_update` are confirmation- or consent-gated; `set_journal`/`report_problem` are
+plain `state_write`; `memory_curator` / `proactive_heartbeat` are internal,
+suggestion-only; proactive execution is gated by `assert_proactive_allowed()`.
+
+### Core flows
+
+**Command lifecycle:** update via `getUpdates` → owner check (chat *and* sender id) →
+own voice transcribed if enabled → text stored → deterministic short-circuits (pending
+purge, explicit category, greetings → `converse`) → `router.route()` → output parsed as
+JSON, validated against the closed action set, confidence-gated → dispatcher consults
+`skill_manifest.get_policy()` → skill runs or stages a pending action for confirmation →
+reply sent; conversation, trace and issue tables updated.
+
+**Ingest lifecycle:** forwards / photos / documents / albums bypass the router to
+`finalize()` → albums buffered by `media_group_id` → text & markdown read as UTF-8, PDFs
+extracted (pdfminer.six → regex fallback; scanned / glyph-coded → no text, so the
+filename becomes the searchable text) → rows stored → duplicate channel posts detected
+by forward ids (no LLM) → `ingest.suggest()` proposes category / alternatives / summary /
+≤5 facts (existing categories preferred, confirmed corrections fed back) → facts stored,
+text chunked + embedded for `ask` → suggestion shown with buttons + conversational
+confirm → confirmation finalises the category (a journal category acks as a dated
+entry), logs any correction, and may propose an auto-confirm habit.
+
+Ask, reminders/calendar, memory/learning and the proactive heartbeat are detailed in
+§3–§7.
 
 ---
 
