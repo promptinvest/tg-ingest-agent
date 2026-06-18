@@ -633,6 +633,7 @@ class Agent:
         if action == "ingest":
             self.finalize([msg])
         elif action == "reminder_create":
+            params = self._note_reminder_title(params)  # "напомни по заметке N"
             draft = reminders.validate_draft(params)
             if not draft:
                 self.start_partial_reminder(chat_id, lang, params)
@@ -730,6 +731,11 @@ class Agent:
             self.do_ask(chat_id, lang, params, text)
         elif action == "issues_report":
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
+        elif action == "report_problem":
+            self.do_report_problem(chat_id, lang, params, text)
+        elif action == "multi_action":
+            # Two+ distinct commands in one message: she does one at a time.
+            self.reply(chat_id, T(lang, "one_at_a_time"))
         elif action == "review":
             self.do_review(chat_id, lang, params)
         elif action in ("converse", "persona", "smalltalk", "out_of_scope", "self_query"):
@@ -1626,10 +1632,19 @@ class Agent:
 
     def resolve_item(self, params):
         """Resolve an item by explicit id, query/category, or most recent."""
+        import re
         try:
             rid = int(params.get("id")) if params.get("id") is not None else None
         except (TypeError, ValueError):
             rid = None
+        if rid is None:
+            # "покажи заметку 11" / "заметку #11" / "#11" — a bare note reference
+            # (only a kind word + number) resolves by id regardless of phrasing;
+            # a richer query ("про крипту 2024") still goes to text search.
+            m = re.fullmatch(r"\s*(?:заметк\w*|запис\w*|пост\w*|note|item|#)?\s*#?(\d{1,7})\s*",
+                             str(params.get("query") or ""), re.IGNORECASE)
+            if m:
+                rid = int(m.group(1))
         if rid is not None:
             row = store.get_message(self.conn, rid)
             if row is not None:
@@ -1963,6 +1978,37 @@ class Agent:
             store.pending_set(self.conn, chat_id, "reminder_partial", draft)
             self.reply(chat_id, T(lang, "reminder_need_" + need))
         return True
+
+    def do_report_problem(self, chat_id, lang, params, text):
+        """Record a boss-reported problem ('запиши в проблемы', 'добавь в
+        ошибки') in the issues log so it surfaces in the weekly review —
+        distinct from issues_report, which only shows the report."""
+        detail = str(params.get("detail") or "").strip() or (text or "").strip()
+        store.issue_add(self.conn, chat_id, "boss_reported", detail)
+        self.reply(chat_id, T(lang, "problem_logged"))
+
+    def _note_reminder_title(self, params):
+        """'поставь напоминание по заметке N' arrives with note_id and no real
+        subject (the router otherwise titles it literally 'Заметка N'); use the
+        note's actual subject instead. The boss's own title always wins."""
+        import re
+        note_id = params.get("note_id")
+        if note_id is None:
+            return params
+        title = str(params.get("title") or "").strip()
+        if title and not re.fullmatch(r"(?:заметк\w*|запис\w*|note|item|#)?\s*#?\d{1,7}",
+                                      title, re.IGNORECASE):
+            return params  # a meaningful subject was given — keep it
+        note = self.resolve_item({"id": note_id})
+        if note is None:
+            return params
+        subject = (note["summary"] or note["raw_text"] or note["category"]
+                   or note["suggested_category"] or "").strip()
+        subject = subject.splitlines()[0][:80].strip() if subject else ""
+        if subject:
+            params = dict(params)
+            params["title"] = subject
+        return params
 
     def do_reminder_undo(self, chat_id, lang, params):
         """Undo the last reschedule ('верни предыдущее время', 'отмени перенос')

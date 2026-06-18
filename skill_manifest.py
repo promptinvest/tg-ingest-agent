@@ -67,6 +67,9 @@ SKILLS = {
                  "title": {"en": "Overview", "ru": "Обзор"}},
     "help": {"risk": "meta", "persona_context": True, "title": {"en": "Help", "ru": "Помощь"}},
     "issues_report": {"risk": "read_only", "title": {"en": "Issues report", "ru": "Отчёт о проблемах"}},
+    "report_problem": {"risk": "state_write", "writes_state": True,
+                       "title": {"en": "Report a problem", "ru": "Записать проблему"}},
+    "multi_action": {"risk": "meta", "title": {"en": "One at a time", "ru": "По одному"}},
     "review": {"risk": "read_only", "uses_llm": False, "allowed_proactive": True,
                "persona_context": True, "title": {"en": "Performance review", "ru": "Сводка работы"}},
     # -- memory / personality

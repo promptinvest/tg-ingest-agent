@@ -1190,6 +1190,27 @@ class ConversationDispatchTests(unittest.TestCase):
         cp.assert_not_called()
         r.assert_not_called()
 
+    def test_multi_action_asks_one_at_a_time(self):
+        with mock.patch.object(router, "route",
+                               return_value={"action": "multi_action", "params": {}, "confidence": 0.85}), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {}, "первое закрой, второе - напомни в 14:00")
+        self.assertEqual(r.call_args[0][1], texts.T(self.agent.lang(), "one_at_a_time"))
+        self.assertTrue(skill_manifest.known("multi_action"))
+
+    def test_report_problem_logs_boss_reported_issue(self):
+        with mock.patch.object(router, "route",
+                               return_value={"action": "report_problem",
+                                             "params": {"detail": "не нашла заметку 11"}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {}, "запиши в проблемы: не нашла заметку 11")
+        self.assertEqual(r.call_args[0][1], texts.T(self.agent.lang(), "problem_logged"))
+        rows = self.agent.conn.execute(
+            "SELECT kind, detail FROM issues WHERE kind = 'boss_reported'").fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertIn("заметку 11", rows[0]["detail"])
+        self.assertTrue(skill_manifest.known("report_problem"))
+
     def test_out_of_scope_is_warm_not_template(self):
         with mock.patch.object(router, "route",
                                return_value={"action": "out_of_scope", "params": {}, "confidence": 0.95}), \
@@ -1976,6 +1997,27 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_done"))
         self.assertEqual(len(store.reminders_active(self.conn, 1)), 0)  # not snoozed
+
+    def test_resolve_item_by_inflected_note_reference(self):
+        # "покажи заметку N" (inflected, no #) must resolve note N by id, not
+        # fail as a text search — the recorded "ничего не нашла" bug.
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
+                                               "received_at": store._now(), "raw_text": "Благодарность"})
+        store.set_suggestion(self.conn, mid, "Благодарность", "Личная заметка", "m")
+        self.assertEqual(self.agent.resolve_item({"query": f"заметку {mid}"})["id"], mid)
+        self.assertEqual(self.agent.resolve_item({"query": f"#{mid}"})["id"], mid)
+        # a richer query is NOT hijacked into an id lookup
+        self.assertIsNone(self.agent.resolve_item({"query": "про крипту 2024"}))
+
+    def test_note_reminder_title_uses_note_subject(self):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 2,
+                                               "received_at": store._now(), "raw_text": "x"})
+        store.set_suggestion(self.conn, mid, "Благодарность", "Поблагодарить команду", "m")
+        params = self.agent._note_reminder_title({"note_id": mid, "due_utc": "2026-06-20T10:00:00+00:00"})
+        self.assertEqual(params["title"], "Поблагодарить команду")     # not "Заметка N"
+        # a real subject the boss gave wins over the note lookup
+        kept = self.agent._note_reminder_title({"note_id": mid, "title": "позвонить Диме"})
+        self.assertEqual(kept["title"], "позвонить Диме")
 
     def test_files_list_distinct_from_notes(self):
         mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,

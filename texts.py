@@ -505,6 +505,14 @@ TEXTS = {
         "ru": "На какое время перенести, босс?",
         "en": "What time should I move it to, boss?",
     },
+    "problem_logged": {
+        "ru": "Записала в проблемы, босс — разберёмся 📝",
+        "en": "Logged it as a problem, boss — we'll sort it out 📝",
+    },
+    "one_at_a_time": {
+        "ru": "Давай по одному, босс — что сделать первым?",
+        "en": "Let's do one at a time, boss — which first?",
+    },
     "reminder_need_title": {
         "ru": "Про что напомнить, босс?",
         "en": "What should I remind you about, boss?",
