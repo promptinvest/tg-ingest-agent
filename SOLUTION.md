@@ -131,10 +131,11 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 |---|---|---|
 | **Conversation** | Greetings, smalltalk, anything personal/emotional or not a concrete task → a warm, free-form reply in Cara's own voice (`converse`), in the boss's language. Reads recent context; never changes state. | — (read-only) |
 | **Ingest** | Stores forwarded posts and notes (text, URLs, photos; an album = one message) with forward origin, **t.me source link**, and post date. A vision-capable LLM suggests a category from the confirmed taxonomy (matched by meaning across RU/EN), a summary, and up to 5 **key facts** in the source language. Re-forwarded posts are deduplicated. | Category confirmed by reply or button; corrections logged as feedback. |
-| **Files & forward rules** | For a forward, the **text is parsed first**; only **images** (vision) and **PDFs** (text extraction) are analyzed; **every other attachment** (voice, audio, video, documents…) is **stored** by `file_id`, fetchable later — never parsed. Only the boss's *own* voice notes are transcribed (commands); forwarded voice is stored, not transcribed. "покажи детали"/"покажи файл" re-sends the actual file. | — |
+| **Files & forward rules** | For a forward, the **text is parsed first**; only **images** (vision) and **PDFs** (text extraction — pdfminer.six with a stdlib regex fallback) are analyzed; **every other attachment** (voice, audio, video, documents…) is **stored** by `file_id`, fetchable later — never parsed. Only the boss's *own* voice notes are transcribed (commands); forwarded voice is stored, not transcribed. "покажи детали"/"покажи файл" re-sends the actual file. | — |
 | **Re-categorize** | "поменяй категорию #2 на Документы", "переложи это в Чеки" (most recent), "переложи всё из crypto в news" (bulk). Logged as a correction → feeds learning. | — |
+| **Journals (long-term areas)** | A category can be marked a **journal** ("веди Благодарности как дневник") — append-only, recalled as a **dated day-grouped series** ("покажи дневник благодарности за месяц"), summarised by a "📔 Дневники" digest in the review/brief, and **spared by a 'clear all notes' purge**. Entries reuse `messages`; the only new state is `categories.kind` (`inbox`\|`journal`). One-time notes are unchanged. | Mark/unmark explicit; entries acked as dated. |
 | **Ask (KB Q&A)** | "когда мой рейс?", "что у нас по плану?" → semantic retrieval (BGE-M3) over stored notes, then a **grounded** answer in the question's language citing `(#id)`; refuses if it isn't in the notes. | — (read-only) |
-| **Reminders** | NL time parsing (RU/EN), one-shot / daily / weekly, fired from the poll loop (~1 min precision), snooze by natural reply; survives restart & nightly reboot. | Draft echoed before scheduling. |
+| **Reminders** | NL time parsing (RU/EN), one-shot / daily / weekly, fired from the poll loop (~1 min precision); survives restart & nightly reboot. **Snooze** a fired one by minutes/hours/absolute ("отложи на час", "до завтра в 9"). **Reschedule** by id/title (an unmatched explicit title is reported, never silently moves another); **undo** the last move ("верни предыдущее время", via `reminders.prev_due_utc`). A **half-specified** create ("напомни в 17:00") asks the missing piece and stitches it in. "напоминание по заметке N" uses note N's real subject. | Draft echoed before scheduling. |
 | **Calendar** | "добавь в календарь…" → .ics file (no setup) or direct Google Calendar via a service account; `auto_calendar` syncs every confirmed reminder. | Uses confirmed reminders / explicit times. |
 | **Spend** | "сколько потратили за месяц?" → totals + breakdown by skill & model + budget status. | — |
 | **Budget control** | "подними дневной лимит до $3" / "set the monthly AI budget to 20" → changes the cap at runtime (stored override, enforced by the gateway). | — (explicit request) |
@@ -145,13 +146,15 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 | **Corrections that stick** | When the boss corrects her behavior she **says** she learned it, **applies** it (injected into her prompt), and **reports** it in the review; a *recurring* correction is flagged as **needing a code fix** rather than pretended-fixed. | — |
 | **Memory review** | Cara proposes durable-memory **candidates** from evidence; "обзор памяти" lists them with confirm/skip buttons. A learned fact that **contradicts a confirmed one** is proposed, not auto-stored. | Durable memory only after a yes. |
 | **Working history** | "как ты мне помогала?" → a grounded summary of real confirmed actions (saves, reminders, corrections, reviews, exports). | — |
-| **Review** | "как ты поработала за неделю?" → digest with a **scorecard** (first-guess category accuracy, unclear-request count, proactive nudges, memory counts); "когда следующий performance review?" → next scheduled date; weekly review runs on a fixed schedule. Markdown exports for VS Code. | — |
+| **Review** | "как ты поработала за неделю?" → digest with a **scorecard** (first-guess category accuracy, unclear-request count, proactive nudges, memory counts) and a **📔 Дневники** journal-activity rollup; "когда следующий performance review?" → next scheduled date; weekly review runs on a fixed schedule. Markdown exports for VS Code. | — |
 | **Show media** | "покажи фото/файл из #2" → re-sends stored photos and documents by `file_id` (no re-upload). | — |
 | **Fetch** | "прочитай https://…" → fetches a public page (or public t.me web view), extracts text, ingests it. SSRF-guarded. | As ingest. |
 | **VPS stats** | "как сервер?" → CPU load, memory, disk, uptime, Cara's own footprint. | — |
 | **Discard / delete / purge** | Decline a fresh suggestion (`discard`); delete stored items by id/ids/count (`item_delete`); **bulk purge** by scope (all / category / stats / reminders / messages / issues) with a **typed confirmation phrase**. | Discard immediate; delete & purge confirmed (purge requires the exact phrase). |
 | **Proactive nudges** | Gentle, suggestion-only heads-up (overdue reminders, memory candidates waiting, items needing a category) — throttled and quiet-hours-aware (§6). Tunable in plain language ("пиши только по выходным", "не беспокой до 10", "отключи напоминания", "можно почаще"). | Suggestion-only; never acts. |
 | **Trace / why** | "почему ты так решила?" → the last trace timeline. Issues are logged; weekly digest + trace-summary export. | — |
+| **Report a problem** | "запиши в проблемы" / "добавь в ошибки" logs a boss-reported issue (`boss_reported`, surfaces in the review) — distinct from the issues report, which only shows them. | — |
+| **One at a time** | A message bundling two+ distinct commands ("первое закрой, второе напомни…") is recognised (`multi_action`) and Cara asks to take them one at a time. Full multi-step execution is intentionally out of scope for the single-action router. | — |
 
 ---
 
@@ -257,8 +260,9 @@ Core: `messages` (lifecycle `pending → suggested → confirmed`, plus `failed`
 `duplicate`; unique per chat+message id; forward origin, username, dates) ·
 `urls` · `images` (`local_path`, `object_key`) · `files` (forwarded documents by
 `file_id`) · `facts` · `chunks` (BGE-M3 embeddings) · `categories` (Cyrillic-safe
-dedup) · `reminders` · `feedback` · `preferences` (identity/config) ·
-`pending_actions` (per-chat, TTL) · `conversation` (recent turns) · `kv`.
+dedup; `kind` = `inbox`|`journal`) · `reminders` (`prev_due_utc` enables reschedule
+undo) · `feedback` · `preferences` (identity/config) · `pending_actions` (per-chat,
+TTL) · `conversation` (recent turns) · `kv`.
 
 Spend & reliability: `llm_usage` (ts/skill/kind/model/tokens/cost/trace) ·
 `model_cooldowns` (failover).
@@ -347,9 +351,15 @@ Cascade deletes and the `purge` scopes keep related rows and media consistent;
 - A Telegram bot cannot read arbitrary chat history or private-channel links by
   URL — forwarding remains the path for those.
 - Recurrence limited to daily/weekly; remote fetch is HTML/text + public t.me only.
-- **PDFs:** text-layer PDFs are extracted; **scanned/image or Cyrillic CID-font
-  PDFs yield no text** (would need OCR, out of scope) — they're stored and
-  re-sendable. Image-as-document files are kept metadata-only as images.
+- **PDFs:** extracted via pdfminer.six (apt `python3-pdfminer`, nightly-updated) with
+  a stdlib regex fallback; **scanned / no-ToUnicode (glyph-coded) PDFs still yield no
+  text** (would need OCR, out of scope) — they're stored and re-sendable.
+  Image-as-document files are kept metadata-only as images.
+- **Compound commands** (two+ distinct actions in one message) are recognised and
+  declined gracefully ("one at a time"), not executed as a batch — a deliberate limit
+  of the single-action router.
+- **Journals:** deferred for now — an optional daily "record today's entry?" nudge and
+  per-journal markdown export (both straightforward follow-ons).
 - **TTS** (Cara replying with voice) is the one researched-but-unbuilt item —
   parked pending a decision (a real engine install on a small box).
 - Deferred by design (single-user posture): multi-channel adapters, any web

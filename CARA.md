@@ -85,12 +85,21 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   A vision LLM suggests a **category** (from your taxonomy), a **summary**, and up to
   5 **key facts** — strictly in the source language. Duplicates are detected.
 - **Forwarded‑message rules:** **text is parsed first**; only **images** (vision) and
-  **PDFs** (text extraction) are analyzed; **every other file** (voice, audio, video,
-  documents…) is **stored**, fetchable later — not parsed.
+  **PDFs** (text extraction — pdfminer.six, with a stdlib regex fallback) are analyzed;
+  **every other file** (voice, audio, video, documents…) is **stored**, fetchable later
+  — not parsed.
 - **Files:** any attached document/media is kept by Telegram `file_id`; "покажи файл
   #N" re‑sends it (free, no re‑upload).
 - **Browse & detail:** "покажи заметки" (a clean card list), "что в категории crypto",
-  "найди про DeepSeek", "детали #2" (full card + re‑sends the attached photos/files).
+  "найди про DeepSeek", "детали #2" / "покажи заметку 11" (full card + re‑sends the
+  attached photos/files; a bare "заметка N" reference resolves by id regardless of
+  phrasing).
+- **Journals (long‑term areas):** mark a category as a journal — "веди Благодарности
+  как дневник" / "сделай X журналом" — and it becomes append‑only: each note acks as a
+  dated entry ("запись за 18.06, всего N"), "покажи дневник благодарности [за неделю/
+  месяц]" replays it as a **day‑grouped series**, a "📔 Дневники" digest appears in the
+  weekly review and morning brief, and a "clear all notes" purge **spares it**. Turn it
+  back off with "X больше не дневник". One‑time notes behave exactly as before.
 - **Overview & stats:** "что у тебя есть?" → a digest (counts, reminders, memory,
   spend); per‑status/category **stats** (`stats`) and the **category list**
   (`categories`).
@@ -110,7 +119,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 
 ### Time & money
 - **Reminders:** natural‑language times (RU/EN), one‑shot / daily / weekly, fired from
-  the poll loop (~1 min precision), snooze by reply, survive restarts/reboots.
+  the poll loop (~1 min precision), survive restarts/reboots.
+  - **Snooze a fired reminder** by minutes, hours, or an absolute time ("через
+    полчаса", "отложи на час", "до завтра в 9").
+  - **Reschedule / undo:** "перенеси напоминание про банк на пятницу" moves it; an
+    explicit title that matches nothing active is reported (never silently moves a
+    different one); "верни предыдущее время" / "отмени перенос" undoes the last move.
+  - **Complete a half‑specified reminder:** "напомни в 17:00" → she asks the subject,
+    stitches your answer in, then confirms — the partial isn't lost.
+  - **From a note:** "поставь напоминание по заметке N" uses note N's real subject as
+    the title (not a literal "Заметка N").
 - **Calendar:** "добавь в календарь" → `.ics` file (no setup) or Google Calendar via a
   service account; `auto_calendar` syncs every confirmed reminder.
 - **Spend report:** "сколько потратили за месяц?" → totals by skill & model + budget
@@ -143,7 +161,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Weekly performance review:** runs on a fixed schedule (default **Monday 10:00
   local**); "когда следующий review?" tells you the date; "как ты поработала?" runs it
   on demand. Includes a **scorecard** — first‑guess category accuracy, unclear‑request
-  count, proactive nudges sent, and memory counts. Markdown exports for VS Code:
+  count, proactive nudges sent, and memory counts — plus a **📔 Дневники** journal‑
+  activity rollup. Markdown exports for VS Code:
   review, self, boss profile, working history, memory candidates, trace summary.
 - **Proactive heartbeat:** gentle, suggestion‑only nudges — overdue reminders, memory
   candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
@@ -153,6 +172,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   quiet window, frequency) the heartbeat honors.
 - **Issues report:** "какие были проблемы на этой неделе?" → a summary of logged
   communication issues (unclear/out‑of‑scope/STT/corrections…).
+- **Report a problem** (`report_problem`): "запиши в проблемы" / "добавь в ошибки" logs
+  a boss‑reported issue (surfaces in the review) — distinct from the issues report,
+  which only *shows* them.
+- **One at a time** (`multi_action`): a message bundling two+ distinct commands ("первое
+  закрой, второе напомни…") is recognised and she asks to take them one at a time,
+  rather than silently misfiring (full multi‑step execution is intentionally out of
+  scope for the single‑action router).
 - **VPS stats:** "как сервер?" → CPU/mem/disk/uptime + her own footprint.
 - **Why did you do that** (`trace_query`): replays the last trace timeline.
 - **Deploy notice:** after a new build is installed she says "обновления установлены"
@@ -255,9 +281,10 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
 
 Core inbox: `messages` (lifecycle `pending → suggested → confirmed`, `failed`/
 `duplicate`; forward origin, dates) · `urls` · `images` · `files` (any attachment by
-file_id) · `facts` · `chunks` (BGE‑M3 embeddings) · `categories` (Cyrillic‑safe) ·
-`reminders` · `feedback` · `preferences` (identity/config + budget overrides) ·
-`pending_actions` (TTL) · `conversation` (recent turns) · `kv`.
+file_id) · `facts` · `chunks` (BGE‑M3 embeddings) · `categories` (Cyrillic‑safe;
+`kind` = `inbox`|`journal`) · `reminders` (incl. `prev_due_utc` for undo) · `feedback` ·
+`preferences` (identity/config + budget overrides) · `pending_actions` (TTL) ·
+`conversation` (recent turns) · `kv`.
 
 Spend & reliability: `llm_usage` · `model_cooldowns`.
 
@@ -324,7 +351,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   a content‑hash `VERSION` so Cara announces real code changes (not reboots).
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 250 offline unit tests (no network; temp SQLite), run on the box as part
+- **Tests:** 278 offline unit tests (no network; temp SQLite), run on the box as part
   of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an
@@ -338,8 +365,12 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 
 ## 10. Known limits & roadmap
 
-- **Scanned/CID‑font PDFs** have no extractable text layer — reading them needs **OCR**,
-  which is out of scope for the stdlib‑only setup; such files are stored and re‑sendable.
+- **PDF text** uses pdfminer.six (apt `python3-pdfminer`, kept current by the nightly
+  updater) with a stdlib regex fallback. **Scanned / no‑ToUnicode (glyph‑coded) PDFs**
+  still yield no text layer — reading them needs **OCR**, out of scope here; such files
+  are stored and re‑sendable.
+- **Compound commands** (two+ distinct actions in one message) are recognised but not
+  executed as a batch — she asks to take them one at a time.
 - A Telegram bot can't read arbitrary chat history or private‑channel links by URL —
   **forwarding** remains the path; bot file downloads are capped at **~20 MB**.
 - Reminders are daily/weekly; remote fetch is HTML/text + public t.me only.

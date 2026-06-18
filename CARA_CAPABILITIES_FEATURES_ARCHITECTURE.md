@@ -112,6 +112,8 @@ User-facing actions:
 - `reminder_create`
 - `reminder_list`
 - `reminder_cancel`
+- `reminder_reschedule`
+- `reminder_undo`
 - `calendar_add`
 - `spend`
 - `budget_set`
@@ -123,6 +125,9 @@ User-facing actions:
 - `item_detail`
 - `item_delete`
 - `recategorize`
+- `list_files`
+- `set_journal`
+- `journal_show`
 - `show_media`
 - `discard`
 - `vps_stats`
@@ -130,12 +135,15 @@ User-facing actions:
 - `fetch`
 - `ask`
 - `issues_report`
+- `report_problem`
+- `proactive_prefs`
 - `memory`
 - `remember`
 - `forget`
 - `self_query`
 - `persona`
 - `boss_query`
+- `memory_why`
 - `boss_memory_update`
 - `style_update`
 - `trace_query`
@@ -152,6 +160,7 @@ Pending/conversational glue:
 - `cancel`
 - `smalltalk`
 - `clarify`
+- `multi_action`
 - `out_of_scope`
 
 Internal/manifest-only actions:
