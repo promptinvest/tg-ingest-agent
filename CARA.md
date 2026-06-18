@@ -84,6 +84,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   an album = one item) are saved with forward origin, t.me source link, post date.
   A vision LLM suggests a **category** (from your taxonomy), a **summary**, and up to
   5 **key facts** — strictly in the source language. Duplicates are detected.
+  A **referential save** ("сохрани заметку про этот фильм") with no subject of its
+  own resolves the subject from the recent conversation — so the note captures the
+  actual film/topic discussed, not the bare command.
 - **Forwarded‑message rules:** **text is parsed first**; only **images** (vision) and
   **PDFs** (text extraction — pdfminer.six, with a stdlib regex fallback) are analyzed;
   **every other file** (voice, audio, video, documents…) is **stored**, fetchable later

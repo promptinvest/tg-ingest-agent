@@ -1211,6 +1211,39 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertIn("заметку 11", rows[0]["detail"])
         self.assertTrue(skill_manifest.known("report_problem"))
 
+    def test_referential_save_pulls_conversation_subject(self):
+        # "Сохрани заметку про этот фильм" must capture the film named earlier
+        # (the recorded bug: the saved note lost the movie name).
+        import ingest
+        conn = self.agent.conn
+        store.convo_add(conn, 1, "user", "Добавь заметку, посмотри фильм Не смотрите наверх с ДиКаприо")
+        store.convo_add(conn, 1, "bot", "Уточню: заметку про фильм «Не смотрите наверх» с Ди Каприо?")
+        mid = store.insert_message(conn, {"chat_id": 1, "tg_message_id": 1,
+                                          "received_at": store._now(),
+                                          "raw_text": "Сохрани заметку про этот фильм, да"})
+        row = store.get_message(conn, mid)
+        captured = {}
+
+        def fake_suggest(cfg, c, known, text_block, image_paths, lang="ru"):
+            captured["tb"] = text_block
+            return ("Фильмы", [], "Фильм «Не смотрите наверх» с Ди Каприо — посмотреть", [])
+
+        with mock.patch.object(ingest, "suggest", side_effect=fake_suggest), \
+                mock.patch.object(self.agent, "index_message"):
+            cat, _alts, _summ = self.agent.suggest_row(row)
+        self.assertIn("Не смотрите наверх", captured["tb"])   # conversation context injected
+        self.assertIn("этот фильм", captured["tb"])           # the note itself still present
+        self.assertEqual(cat, "Фильмы")
+
+    def test_referential_save_detection(self):
+        ref = {"raw_text": "Сохрани заметку про этот фильм, да", "forward_origin_type": None}
+        plain = {"raw_text": "купить молоко", "forward_origin_type": None}
+        fwd = {"raw_text": "сохрани это", "forward_origin_type": "channel"}
+        self.assertTrue(self.agent._is_referential_save(ref, [], []))
+        self.assertFalse(self.agent._is_referential_save(plain, [], []))      # no reference
+        self.assertFalse(self.agent._is_referential_save(fwd, [], []))        # forwards excluded
+        self.assertFalse(self.agent._is_referential_save(ref, ["http://x"], []))  # real content
+
     def test_out_of_scope_is_warm_not_template(self):
         with mock.patch.object(router, "route",
                                return_value={"action": "out_of_scope", "params": {}, "confidence": 0.95}), \

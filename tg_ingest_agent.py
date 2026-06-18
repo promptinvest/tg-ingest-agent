@@ -2501,6 +2501,7 @@ class Agent:
         image_paths = [r["local_path"] for r in store.message_images(self.conn, row_id)
                        if r["local_path"]]
         known = store.known_categories(self.conn)
+        referential = False
         if not (row["raw_text"] or urls or image_paths):
             category, alternatives, summary, facts = (
                 self.cfg.fallback_category, [], "(no analyzable content)", []
@@ -2509,6 +2510,12 @@ class Agent:
             text_block = ingest.build_text_block(
                 row["raw_text"], row["forward_origin_type"], row["forward_origin_title"], urls
             )
+            # "Сохрани заметку про ЭТОТ фильм" carries no subject of its own — give
+            # the LLM the recent conversation so it resolves the reference and saves
+            # the real subject (the named film/topic), not the literal command.
+            referential = self._is_referential_save(row, urls, image_paths)
+            if referential:
+                text_block = self._with_conversation_context(row, text_block)
             try:
                 category, alternatives, summary, facts = ingest.suggest(
                     self.cfg, self.conn, known, text_block, image_paths, self.lang()
@@ -2526,13 +2533,42 @@ class Agent:
         store.set_suggestion(self.conn, row_id, category, summary, self.cfg.do_model)
         store.set_facts(self.conn, row_id, facts)
         # Index for semantic recall: full text for documents, else summary+facts.
-        index_text = row["raw_text"] or summary
+        # For a referential save the thin command isn't worth indexing — the
+        # resolved summary is the real content for `ask`.
+        index_text = summary if referential else (row["raw_text"] or summary)
         if facts:
             index_text = (index_text or "") + "\n" + "\n".join(facts)
         if index_text:
             self.index_message(row_id, index_text)
         log(f"suggested {category} for message #{row_id} ({len(facts)} facts)")
         return category, alternatives, summary
+
+    _REFERENTIAL_MARKERS = ("это", "эту", "эти", " this", " that", "об этом", "про это")
+
+    def _is_referential_save(self, row, urls, image_paths):
+        """A typed, thin note that points at the conversation ("сохрани заметку
+        про ЭТОТ фильм") rather than carrying its own content."""
+        if row["forward_origin_type"] or urls or image_paths:
+            return False
+        text = (row["raw_text"] or "").strip()
+        if not text or len(text) > 200:
+            return False
+        low = text.casefold()
+        return any(m in low for m in self._REFERENTIAL_MARKERS)
+
+    def _with_conversation_context(self, row, text_block):
+        """Prepend recent conversation so the ingest LLM can resolve a reference
+        (это/этот/this) to its real subject when summarizing the note."""
+        convo = store.convo_recent(self.conn, row["chat_id"], limit=8)
+        ctx = "\n".join(f"{r['role']}: {r['text']}" for r in convo
+                        if r["text"] and r["text"] != row["raw_text"])
+        if not ctx:
+            return text_block
+        return ('Recent conversation (use it to resolve references like '
+                '"это"/"этот"/"this"):\n' + ctx + "\n\n" + text_block +
+                "\n\n(This note points to the conversation above. Resolve the reference "
+                "and summarize the ACTUAL subject — the specific film/topic/person/thing "
+                "— not the literal save command.)")
 
     def present_suggestion(self, row_id, chat_id, reply_to, category, alternatives, summary, counts):
         lang = self.lang()
