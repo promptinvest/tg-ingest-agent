@@ -2035,6 +2035,63 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertEqual(self.agent.files_text("ru"), texts.T("ru", "files_empty"))
 
 
+class ReminderDisplayNumberTests(unittest.TestCase):
+    """Reminder numbers are a contiguous 1..N position in the boss-facing
+    (due-ordered) active list, compacting as reminders fire/cancel."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "rn.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _rem(self, title, hours):
+        from datetime import datetime, timezone, timedelta
+        due = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+        return store.reminder_add(self.conn, 1, title, due)
+
+    def test_numbers_follow_due_order_and_compact(self):
+        b = self._rem("later", 5)      # inserted out of due order
+        a = self._rem("soon", 1)
+        c = self._rem("latest", 10)
+        self.assertEqual(store.reminder_display_no(self.conn, 1, a), 1)   # soonest first
+        self.assertEqual(store.reminder_display_no(self.conn, 1, b), 2)
+        self.assertEqual(store.reminder_display_no(self.conn, 1, c), 3)
+        store.reminder_close(self.conn, b, "cancelled")
+        self.assertEqual(store.reminder_display_no(self.conn, 1, a), 1)
+        self.assertEqual(store.reminder_display_no(self.conn, 1, c), 2)   # compacted
+
+    def test_find_by_query_resolves_display_position(self):
+        a = self._rem("soon", 1)
+        b = self._rem("later", 5)
+        rows = store.reminders_active(self.conn, 1)
+        self.assertEqual(reminders.find_by_query(rows, {"id": 1})["id"], a)
+        self.assertEqual(reminders.find_by_query(rows, {"id": 2})["id"], b)
+        self.assertIsNone(reminders.find_by_query(rows, {"id": 9}))       # out of range
+
+    def test_format_list_shows_sequential_numbers(self):
+        self._rem("soon", 1)
+        self._rem("later", 5)
+        text = reminders.format_list(store.reminders_active(self.conn, 1), 3, "ru")
+        self.assertIn("#1", text)
+        self.assertIn("#2", text)
+
+    def test_cancel_by_number_renumbers(self):
+        a = self._rem("soon", 1)
+        b = self._rem("later", 5)
+        rows = store.reminders_active(self.conn, 1)
+        row = reminders.find_by_query(rows, {"id": 1})  # user types "отмени #1"
+        self.assertEqual(row["id"], a)
+        store.reminder_close(self.conn, a, "cancelled")
+        self.assertEqual(store.reminder_display_no(self.conn, 1, b), 1)   # b becomes #1
+
+
 class JournalTests(unittest.TestCase):
     """Long-term journal areas (e.g. daily Благодарности): a category marked
     'journal' accumulates entries, recalled as a dated series and spared by a

@@ -98,7 +98,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   the boss sees or types a note number; they **compact automatically on deletion** (no
   gaps). The number is a display position, not the immutable internal id — so
   attachments, embeddings and memory links never break, but a given number isn't
-  permanent (deleting an earlier note shifts the later ones down).
+  permanent (deleting an earlier note shifts the later ones down). **Reminder numbers
+  work the same way** — a contiguous 1…N position in the active list (soonest-due
+  first) that compacts as reminders fire/cancel; "#N" in reschedule/cancel/undo
+  resolves to that position.
 - **Journals (long‑term areas):** mark a category as a journal — "веди Благодарности
   как дневник" / "сделай X журналом" — and it becomes append‑only: each note acks as a
   dated entry ("запись за 18.06, всего N"), "покажи дневник благодарности [за неделю/
@@ -303,7 +306,8 @@ Cascade deletes + purge scopes keep rows and media consistent. **`llm_usage` (sp
 history) and `preferences` (identity) are never purged.** The user-facing note number
 is a **contiguous 1…N display position** over visible notes (oldest first), computed
 from the stable `messages.id`; it compacts on deletion and never alters the id that
-attachments/embeddings/memory reference.
+attachments/embeddings/memory reference. **Reminder numbers** are the analogous 1…N
+position in the active list (due order), computed from the stable `reminders.id`.
 
 ---
 

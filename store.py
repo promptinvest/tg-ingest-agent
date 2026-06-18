@@ -1375,9 +1375,20 @@ def reminder_get(conn, rid):
 
 def reminders_active(conn, chat_id):
     return conn.execute(
-        "SELECT * FROM reminders WHERE chat_id = ? AND status = 'active' ORDER BY due_utc",
+        "SELECT * FROM reminders WHERE chat_id = ? AND status = 'active'"
+        " ORDER BY due_utc, id",  # id tiebreak keeps display numbering deterministic
         (chat_id,),
     ).fetchall()
+
+
+def reminder_display_no(conn, chat_id, rid):
+    """1..N position of an active reminder in the boss-facing (due-ordered) list,
+    or None if it isn't active. The number compacts as reminders fire/cancel; the
+    immutable id stays the key for fired-pending payloads, calendar, and history."""
+    for i, row in enumerate(reminders_active(conn, chat_id), start=1):
+        if row["id"] == rid:
+            return i
+    return None
 
 
 def reminders_due(conn, now_iso):

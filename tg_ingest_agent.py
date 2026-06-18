@@ -651,8 +651,9 @@ class Agent:
             rows = store.reminders_active(self.conn, chat_id)
             row = reminders.find_by_query(rows, params)
             if row:
+                disp = self.reminder_no(chat_id, row["id"])  # capture before it leaves the active list
                 store.reminder_close(self.conn, row["id"], "cancelled")
-                self.reply(chat_id, T(lang, "reminder_cancelled", rid=row["id"], title=row["title"]))
+                self.reply(chat_id, T(lang, "reminder_cancelled", rid=disp, title=row["title"]))
             else:
                 self.reply(chat_id, T(lang, "reminder_not_found"))
         elif action == "reminder_reschedule":
@@ -834,7 +835,7 @@ class Agent:
                                    title=payload["title"])
             store.pending_clear(self.conn, chat_id)
             self.reply(chat_id, T(
-                lang, "reminder_set", rid=rid, title=payload["title"],
+                lang, "reminder_set", rid=self.reminder_no(chat_id, rid), title=payload["title"],
                 when_local=reminders.fmt_local(payload["due_utc"], self.tz_offset()),
             ))
             if (store.pref_get(self.conn, "auto_calendar") or "").casefold() in ("1", "true", "yes", "да"):
@@ -1663,6 +1664,12 @@ class Agent:
         n = store.display_no(self.conn, message_id)
         return n if n is not None else message_id
 
+    def reminder_no(self, chat_id, rid):
+        """User-facing display number (1..N) for an active reminder; falls back
+        to the id if it isn't active (already fired/cancelled)."""
+        n = store.reminder_display_no(self.conn, chat_id, rid)
+        return n if n is not None else rid
+
     def _fmt_ts_local(self, ts):
         """Unix timestamp -> 'DD.MM.YYYY, HH:MM' in the boss's local time."""
         local = datetime.fromtimestamp(int(ts), tz=timezone.utc) + timedelta(hours=self.tz_offset())
@@ -1929,7 +1936,8 @@ class Agent:
         if row is None:
             return  # _resolve_reminder_target already replied (not found / which?)
         store.reminder_update_due(self.conn, row["id"], due.isoformat())
-        self.reply(chat_id, T(lang, "reminder_rescheduled", rid=row["id"], title=row["title"],
+        self.reply(chat_id, T(lang, "reminder_rescheduled",
+                              rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
                               when_local=reminders.fmt_local(due.isoformat(), self.tz_offset())))
 
     def start_partial_reminder(self, chat_id, lang, params):
@@ -2095,8 +2103,10 @@ class Agent:
             if len(moved) == 1:
                 row = moved[0]
             elif len(moved) > 1:
+                # Show the full active list so the numbers match how a typed "#N"
+                # resolves (position in the active list, not within the subset).
                 self.reply(chat_id, T(lang, "reschedule_which") + "\n"
-                           + reminders.format_list(moved, self.tz_offset(), lang))
+                           + reminders.format_list(rows, self.tz_offset(), lang))
                 return
             else:
                 self.reply(chat_id, T(lang, "reminder_no_prev"))
@@ -2105,7 +2115,8 @@ class Agent:
         if prev is None:
             self.reply(chat_id, T(lang, "reminder_no_prev"))
             return
-        self.reply(chat_id, T(lang, "reminder_restored", rid=row["id"], title=row["title"],
+        self.reply(chat_id, T(lang, "reminder_restored",
+                              rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
                               when_local=reminders.fmt_local(prev, self.tz_offset())))
 
     def _resolve_reminder_target(self, chat_id, lang, params):

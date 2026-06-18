@@ -170,7 +170,7 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Ingest** | Stores forwarded posts and notes (text, URLs, photos; an album = one message) with forward origin, **t.me source link**, and post date. A vision-capable LLM suggests a category from the confirmed taxonomy (matched by meaning across RU/EN), a summary, and up to 5 **key facts** in the source language. Re-forwarded posts are deduplicated. | Category confirmed by reply or button; corrections logged as feedback. |
 | **Files & forward rules** | For a forward, the **text is parsed first**; only **images** (vision) and **PDFs** (text extraction — pdfminer.six with a stdlib regex fallback) are analyzed; **every other attachment** (voice, audio, video, documents…) is **stored** by `file_id`, fetchable later — never parsed. Only the boss's *own* voice notes are transcribed (commands); forwarded voice is stored, not transcribed. "покажи детали"/"покажи файл" re-sends the actual file. | — |
 | **Re-categorize** | "поменяй категорию #2 на Документы", "переложи это в Чеки" (most recent), "переложи всё из crypto в news" (bulk). Logged as a correction → feeds learning. | — |
-| **Note numbering** | The number the boss sees/types (`#N`) is a contiguous **1..N display position** (oldest first) over visible notes, derived from the immutable `messages.id`. It **compacts on deletion** (no gaps) and is used for both display and resolution everywhere; the stable id keeps every attachment/embedding/memory FK intact. Trade-off: a number isn't permanent — deleting an earlier note shifts the later ones down. | — |
+| **Note & reminder numbering** | The number the boss sees/types (`#N`) is a contiguous **1..N display position** — over visible notes (oldest first, from the immutable `messages.id`) and, analogously, over active reminders (soonest-due first, from `reminders.id`). It **compacts** on deletion / fire / cancel (no gaps) and is used for both display and resolution everywhere (`find_by_query` maps a reminder `#N` to its position in the active list); the stable ids keep every attachment/embedding/memory/calendar/fired-pending reference intact. Trade-off: a number isn't permanent — removing an earlier item shifts later ones down. | — |
 | **Journals (long-term areas)** | A category can be marked a **journal** ("веди Благодарности как дневник") — append-only, recalled as a **dated day-grouped series** ("покажи дневник благодарности за месяц"), summarised by a "📔 Дневники" digest in the review/brief, and **spared by a 'clear all notes' purge**. Entries reuse `messages`; the only new state is `categories.kind` (`inbox`\|`journal`). One-time notes are unchanged. | Mark/unmark explicit; entries acked as dated. |
 | **Ask (KB Q&A)** | "когда мой рейс?", "что у нас по плану?" → semantic retrieval (BGE-M3) over stored notes, then a **grounded** answer in the question's language citing `(#id)`; refuses if it isn't in the notes. | — (read-only) |
 | **Reminders** | NL time parsing (RU/EN), one-shot / daily / weekly, fired from the poll loop (~1 min precision); survives restart & nightly reboot. **Snooze** a fired one by minutes/hours/absolute ("отложи на час", "до завтра в 9"). **Reschedule** by id/title (an unmatched explicit title is reported, never silently moves another); **undo** the last move ("верни предыдущее время", via `reminders.prev_due_utc`). A **half-specified** create ("напомни в 17:00") asks the missing piece and stitches it in. "напоминание по заметке N" uses note N's real subject. | Draft echoed before scheduling. |
@@ -314,9 +314,10 @@ Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
 Cascade deletes and the `purge` scopes keep related rows and media consistent;
 **`llm_usage` (spend history) and `preferences` (identity) are never purged.** The
 user-facing note number is a contiguous **1..N display position** over visible notes
-(oldest first), computed from the stable `messages.id` — it compacts on deletion and
-never changes the id that attachments/embeddings/memory reference (see Capabilities →
-Note numbering).
+(oldest first), computed from the stable `messages.id`; **reminder numbers** are the
+analogous position over active reminders (due order, from `reminders.id`). Both compact
+automatically and never change the ids that attachments/embeddings/memory/calendar/
+fired-pending references rely on (see Capabilities → Note & reminder numbering).
 
 ---
 

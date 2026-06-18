@@ -54,25 +54,24 @@ def format_list(rows, offset_hours, lang):
     if not rows:
         return T(lang, "reminder_list_empty")
     lines = [T(lang, "reminder_list_header")]
-    for row in rows:
+    for i, row in enumerate(rows, start=1):  # contiguous 1..N display numbers
         suffix = "" if row["recurrence"] == "none" else f" ({T(lang, 'recurrence_' + row['recurrence'])})"
-        lines.append(f"  #{row['id']} {fmt_local(row['due_utc'], offset_hours)} — {row['title']}{suffix}")
+        lines.append(f"  #{i} {fmt_local(row['due_utc'], offset_hours)} — {row['title']}{suffix}")
     return "\n".join(lines)
 
 
 def find_by_query(rows, params):
-    """Find a reminder by explicit id or title substring."""
-    rid = params.get("id")
-    if rid is not None:
+    """Find a reminder by its display number (1..N position in `rows`, the
+    boss-facing active list) or title substring. `rows` MUST be in display order
+    (store.reminders_active) so the position matches what the boss sees."""
+    pos = params.get("id")
+    if pos is not None:
         try:
-            rid = int(rid)
+            pos = int(pos)
         except (TypeError, ValueError):
-            rid = None
-    if rid is not None:
-        for row in rows:
-            if row["id"] == rid:
-                return row
-        return None
+            pos = None
+    if pos is not None:
+        return rows[pos - 1] if 1 <= pos <= len(rows) else None
     query = str(params.get("title_query") or params.get("title") or "").strip().casefold()
     if not query:
         return None
