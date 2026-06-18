@@ -7,3 +7,6 @@ __pycache__/
 !*.env.example
 *.db
 media/
+
+# Cara migration staging (transiently holds DB + env secrets)
+.migrate-stage/
