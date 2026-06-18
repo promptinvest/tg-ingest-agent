@@ -58,7 +58,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$WHISPER_DIR/build/bin/whisper-server -m $WHISPER_DIR/models/$MODEL_NAME --host 127.0.0.1 --port $PORT --convert --tmp-dir /tmp -t 1
+ExecStart=$WHISPER_DIR/build/bin/whisper-server -m $WHISPER_DIR/models/$MODEL_NAME --host 127.0.0.1 --port $PORT --convert --tmp-dir /tmp -t $(nproc)
 Restart=always
 RestartSec=5
 Nice=5
