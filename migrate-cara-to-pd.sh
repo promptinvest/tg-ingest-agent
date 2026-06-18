@@ -91,12 +91,22 @@ snapshot_source(){
 }
 
 install_app(){
-  log "Installing app code on target via deploy.sh (runs the test suite on the box)…"
-  DEPLOY_HOST="$TGT_HOST" DEPLOY_PORT="$TGT_PORT" DEPLOY_KEY="$TGT_KEY" DEPLOY_KH="$TGT_KH" \
-    ./deploy.sh   # installer creates user/dirs/unit + apt deps incl. python3-pdfminer; won't start (no env yet)
-  log "Building whisper.cpp STT server on target…"
+  # Runs while the SOURCE is still live (no token here yet) -> no downtime, no 409.
+  # The installer creates user/dirs/unit + apt deps (incl. python3-pdfminer) and,
+  # because the env still has REPLACE_ME, ENABLES but leaves the service STOPPED.
+  log "Installing app on target (tests + installer; stays stopped until env is placed)…"
+  tar czf - *.py install-tg-ingest-agent-pilot-remote.sh tg-ingest-agent.env.example \
+    | "${SSH_TGT[@]}" "$TGT_HOST" "
+        set -e
+        rm -rf /root/tg-ingest-agent-stage; mkdir -p /root/tg-ingest-agent-stage
+        tar xzf - -C /root/tg-ingest-agent-stage
+        cd /root/tg-ingest-agent-stage
+        sed -i 's/\r\$//' *.py *.sh
+        echo '--- tests ---'; python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -3
+        echo '--- install ---'; bash install-tg-ingest-agent-pilot-remote.sh 2>&1 | tail -3"
+  log "Building whisper.cpp STT server on target (several minutes)…"
   "${SCP_TGT[@]}" install-whisper-pilot-remote.sh "$TGT_HOST:/root/install-whisper.sh"
-  "${SSH_TGT[@]}" "$TGT_HOST" "bash /root/install-whisper.sh"
+  "${SSH_TGT[@]}" "$TGT_HOST" "bash /root/install-whisper.sh 2>&1 | tail -6"
 }
 
 restore_state(){
@@ -139,26 +149,36 @@ cleanup(){
   rm -rf "$STAGE"
 }
 
+confirm_gate(){
+  # Non-interactive friendly: CONFIRM=MIGRATE env skips the prompt.
+  if [ "${CONFIRM:-}" != "MIGRATE" ]; then
+    read -r -p 'Type MIGRATE to proceed with the cutover: ' CONFIRM || true
+  fi
+  [ "${CONFIRM:-}" = "MIGRATE" ] || die "aborted — no destructive change made"
+}
+
+do_cutover(){
+  echo "CUTOVER: stop Cara on $SRC_HOST -> copy state -> start Cara on $TGT_HOST with"
+  echo "the SAME bot token -> disable (NOT delete) the source. Short ingest/voice gap."
+  confirm_gate
+  snapshot_source
+  restore_state
+  start_and_verify
+  retire_source
+  cleanup
+  log "CUTOVER DONE. Test @cara_assist_bot: a note; 'покажи заметки' (migrated notes,"
+  log "1..N numbers); a reminder that fires; a voice note. Source kept installed+disabled."
+  log "Rollback (ONLY before the target takes new traffic):"
+  log "  ${SSH_SRC[*]} $SRC_HOST 'systemctl enable --now $SERVICE'  + stop the target"
+  log "  (after the target has handled messages, copy its DB back to source first)."
+}
+
 case "${1:-check}" in
-  check) preflight ;;
-  --go)
-    preflight
-    echo
-    echo "This will STOP Cara on $SRC_HOST, copy all state to $TGT_HOST, install"
-    echo "the app + whisper there, start Cara on the target, and disable the source."
-    echo "There will be a short ingest/voice gap during the copy."
-    read -r -p 'Type MIGRATE to proceed: ' ans
-    [ "$ans" = "MIGRATE" ] || die "aborted (no changes made beyond the read-only pre-flight)"
-    snapshot_source
-    install_app
-    restore_state
-    start_and_verify
-    retire_source
-    cleanup
-    log "DONE. Verify on Telegram (send a note; 'покажи заметки'; reminders; a voice note)."
-    log "Rollback window: if the target misbehaves BEFORE it receives new messages,"
-    log "  re-enable the source:  ${SSH_SRC[*]} $SRC_HOST 'systemctl enable --now $SERVICE'"
-    log "  (after the target has taken traffic, copy its DB back to the source first)."
-    ;;
-  *) die "usage: $0 [check|--go]" ;;
+  check)   preflight ;;
+  prepare) preflight; install_app
+           log "PREPARE DONE: app + whisper on target; SOURCE STILL LIVE (no downtime)."
+           log "Next:  CONFIRM=MIGRATE $0 cutover" ;;
+  cutover) do_cutover ;;
+  --go)    preflight; install_app; do_cutover ;;
+  *) die "usage: $0 [check|prepare|cutover|--go]   (cutover/--go need CONFIRM=MIGRATE or a typed MIGRATE)" ;;
 esac
