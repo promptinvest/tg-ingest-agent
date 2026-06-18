@@ -1947,6 +1947,36 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertFalse(consumed)                              # falls through to new intent
         self.assertIsNone(store.pending_get(self.conn, 1))      # partial abandoned
 
+    def test_fired_reminder_snooze_by_hours(self):
+        from datetime import datetime, timezone, timedelta
+        pending = {"kind": "reminder_fired", "payload": {"title": "позвонить", "reminder_id": 1}}
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_pending(1, "amend", {"snooze_minutes": 60}, pending, "ru")
+        rows = store.reminders_active(self.conn, 1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "позвонить")
+        due = reminders.parse_iso_utc(rows[0]["due_utc"])
+        expect = datetime.now(timezone.utc) + timedelta(minutes=60)
+        self.assertLess(abs((due - expect).total_seconds()), 120)  # ~1h out
+
+    def test_fired_reminder_snooze_until_absolute_time(self):
+        from datetime import datetime, timezone, timedelta
+        target = (datetime.now(timezone.utc) + timedelta(hours=20)).replace(microsecond=0).isoformat()
+        pending = {"kind": "reminder_fired", "payload": {"title": "встреча", "reminder_id": 2}}
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_pending(1, "amend", {"due_utc": target}, pending, "ru")
+        rows = store.reminders_active(self.conn, 1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(reminders.parse_iso_utc(rows[0]["due_utc"]),
+                         reminders.parse_iso_utc(target))
+
+    def test_fired_reminder_done_no_snooze(self):
+        pending = {"kind": "reminder_fired", "payload": {"title": "x", "reminder_id": 3}}
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_done"))
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), 0)  # not snoozed
+
     def test_files_list_distinct_from_notes(self):
         mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
                                                "received_at": store._now(), "raw_text": "Расписка.pdf"})

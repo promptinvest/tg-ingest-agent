@@ -834,12 +834,19 @@ class Agent:
         elif kind == "reminder_fired":
             store.pending_clear(self.conn, chat_id)
             snooze = params.get("snooze_minutes") if action == "amend" else None
-            if snooze:
-                try:
-                    minutes = max(1, int(snooze))
-                except (TypeError, ValueError):
-                    minutes = 30
-                due = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+            # Snooze by an absolute time too ("отложи до завтра в 9"), not only by
+            # minutes ("через полчаса") — "отложи на час"/"до завтра" used to fall
+            # through to reschedule and dead-end.
+            due_at = reminders.parse_iso_utc(params.get("due_utc")) if action == "amend" else None
+            if snooze or due_at is not None:
+                if due_at is not None:
+                    due = due_at.isoformat()
+                else:
+                    try:
+                        minutes = max(1, int(snooze))
+                    except (TypeError, ValueError):
+                        minutes = 30
+                    due = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
                 rid = store.reminder_add(self.conn, chat_id, payload["title"], due)
                 self.reply(chat_id, T(lang, "reminder_snoozed",
                                       when_local=reminders.fmt_local(due, self.tz_offset())))

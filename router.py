@@ -154,6 +154,9 @@ NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сд�
 "категория - Документы" / "категория: крипта" / "в категорию Документы" / "set category to Documents" (pending category) -> {"action": "amend", "params": {"category": "Документы"}, "confidence": 0.92}
 "готово" (pending fired reminder) -> {"action": "amend", "params": {"done": true}, "confidence": 0.9}
 "через полчаса" (pending fired reminder) -> {"action": "amend", "params": {"snooze_minutes": 30}, "confidence": 0.9}
+"отложи на час" / "ещё часок" / "на 2 часа" / "snooze an hour" (pending fired reminder) -> {"action": "amend", "params": {"snooze_minutes": 60}, "confidence": 0.9}
+"отложи до завтра" / "напомни завтра утром" / "remind me tomorrow at 9" (pending fired reminder) -> {"action": "amend", "params": {"due_utc": "<tomorrow 09:00 local in UTC>"}, "confidence": 0.9}
+NOTE: while a fired reminder is pending, "отложи"/"перенеси"/"попозже"/"snooze" is an amend (snooze), NOT reminder_reschedule.
 "привет, как ты?" / "приветик" / "доброе утро" -> {"action": "converse", "params": {}, "confidence": 0.95}
 "спасибо большое!" / "ты лучшая" / "ха-ха" -> {"action": "converse", "params": {}, "confidence": 0.92}
 "напиши эссе про Канта" / "сделай мою домашку" -> {"action": "out_of_scope", "params": {}, "confidence": 0.95}
