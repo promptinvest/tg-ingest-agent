@@ -2035,6 +2035,79 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertEqual(self.agent.files_text("ru"), texts.T("ru", "files_empty"))
 
 
+class JournalTests(unittest.TestCase):
+    """Long-term journal areas (e.g. daily Благодарности): a category marked
+    'journal' accumulates entries, recalled as a dated series and spared by a
+    'clear all notes' purge — while one-time notes behave as before."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "j.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _entry(self, tg_id, text, category):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": tg_id,
+                                               "received_at": store._now(), "raw_text": text})
+        store.confirm_category(self.conn, mid, category)
+        return mid
+
+    def test_mark_and_unmark_journal_casefold(self):
+        canonical = store.set_category_kind(self.conn, "Благодарности", "journal")
+        self.assertEqual(canonical, "Благодарности")
+        self.assertTrue(store.is_journal(self.conn, "благодарности"))   # Cyrillic casefold
+        self.assertIn("Благодарности", store.journal_categories(self.conn))
+        store.set_category_kind(self.conn, "Благодарности", "inbox")
+        self.assertFalse(store.is_journal(self.conn, "Благодарности"))
+
+    def test_journal_save_ack_differs_from_one_time(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
+                                               "received_at": store._now(), "raw_text": "спасибо за день"})
+        store.set_suggestion(self.conn, mid, "Благодарности", "благодарность", "m")
+        row = store.get_message(self.conn, mid)
+        with mock.patch.object(self.agent, "edit_suggestion_message"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.apply_category_confirm(1, row, "Благодарности", None)
+        self.assertIn("дневник", r.call_args[0][1].lower())
+        self.assertIn("Благодарности", r.call_args[0][1])
+
+    def test_journal_show_lists_dated_entries(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        self._entry(1, "спасибо номер один", "Благодарности")
+        self._entry(2, "спасибо номер два", "Благодарности")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_journal_show(1, "ru", {"category": "Благодарности", "period": "all"})
+        out = r.call_args[0][1]
+        self.assertIn("Дневник", out)
+        self.assertIn("спасибо номер один", out)
+        self.assertIn("спасибо номер два", out)
+        self.assertTrue(skill_manifest.known("journal_show"))
+
+    def test_clear_all_notes_spares_journal(self):
+        j = self._entry(1, "спасибо", "Благодарности")
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        n = self._entry(2, "разовая заметка", "Разное")
+        info, _ = store.purge_execute(self.conn, "messages")
+        self.assertEqual(info["messages"], 1)                       # only the inbox note
+        self.assertEqual(info.get("kept_journal"), 1)
+        self.assertIsNotNone(store.get_message(self.conn, j))       # journal kept
+        self.assertIsNone(store.get_message(self.conn, n))          # one-time cleared
+
+    def test_journal_digest_line(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        self._entry(1, "спасибо", "Благодарности")
+        line = review.journal_digest(self.conn, "ru")
+        self.assertIsNotNone(line)
+        self.assertIn("Благодарности", line)
+
+
 class OperatingModelTests(unittest.TestCase):
     def setUp(self):
         import tg_ingest_agent

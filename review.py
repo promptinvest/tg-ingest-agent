@@ -16,6 +16,25 @@ from texts import TEXTS
 PERIOD_DAYS = {"day": 1, "week": 7, "month": 30}
 
 
+def journal_digest(conn, lang, days=7):
+    """One-line rollup of journal activity over the last `days`, or None when
+    there are no journals / no entries. Shared by the weekly review and the
+    morning brief."""
+    journals = store.journal_categories(conn)
+    if not journals:
+        return None
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    parts = []
+    for name in journals:
+        n = len(store.journal_entries(conn, name, since))
+        if n:
+            parts.append(f"{name} — {n}")
+    if not parts:
+        return None
+    ru = lang == "ru"
+    return ("📔 Дневники: " if ru else "📔 Journals: ") + "; ".join(parts)
+
+
 # Weekday names in the form that reads naturally after Russian "в …" / English
 # "on …" (Russian uses the accusative: в понедельник / в среду / в пятницу).
 WEEKDAY_NAMES = {
@@ -178,6 +197,9 @@ def morning_brief(conn, cfg, lang, tz_offset, owner):
         lines.append(("⏰ Просрочено: " if ru else "⏰ Overdue: ") + ", ".join(overdue[:5]))
     if threads:
         lines.append(("🗂 Ещё открыто: " if ru else "🗂 Still open: ") + "; ".join(threads))
+    digest = journal_digest(conn, lang)
+    if digest:
+        lines.append(digest)
     lines.append("Чем помочь?" if ru else "Anything I can take off your plate?")
     return "\n".join(lines)
 
@@ -251,6 +273,9 @@ def chat_text(conn, cfg, lang, period="week"):
         lines.append(("⚠️ Проблемы: " if ru else "⚠️ Issues: ") + issues)
     else:
         lines.append("✅ " + ("Проблем не было" if ru else "No issues"))
+    digest = journal_digest(conn, lang, days=PERIOD_DAYS.get(data["period"], 7))
+    if digest:
+        lines.append(digest)
     spend = sum(r["cost"] for r in data["spend_by_skill"])
     calls = sum(r["calls"] for r in data["spend_by_skill"])
     lines.append((f"💸 Расходы AI: ${spend:.3f} ({calls} вызовов)" if ru

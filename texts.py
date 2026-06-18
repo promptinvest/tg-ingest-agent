@@ -505,6 +505,30 @@ TEXTS = {
         "ru": "На какое время перенести, босс?",
         "en": "What time should I move it to, boss?",
     },
+    "journal_marked": {
+        "ru": "Готово — веду «{category}» как дневник 📔 Записи буду копить и показывать по датам; при чистке заметок не трону.",
+        "en": "Done — I'll keep «{category}» as a journal 📔 Entries accumulate by date and survive a notes cleanup.",
+    },
+    "journal_unmarked": {
+        "ru": "Хорошо — «{category}» снова обычная категория (разовые заметки).",
+        "en": "Okay — «{category}» is a regular one-time category again.",
+    },
+    "journal_which": {
+        "ru": "Какую категорию вести как дневник, босс?",
+        "en": "Which category should I keep as a journal, boss?",
+    },
+    "journal_saved": {
+        "ru": "Записала в дневник «{category}» — запись за {date} ✅ (всего {n})",
+        "en": "Added to the «{category}» journal — entry for {date} ✅ ({n} total)",
+    },
+    "journal_header": {
+        "ru": "📔 Дневник «{category}» — {n} записей {period} (всего {total}):",
+        "en": "📔 «{category}» journal — {n} entries {period} ({total} total):",
+    },
+    "journal_empty": {
+        "ru": "В дневнике «{category}» пока нет записей за этот период.",
+        "en": "No «{category}» journal entries for that period yet.",
+    },
     "problem_logged": {
         "ru": "Записала в проблемы, босс — разберёмся 📝",
         "en": "Logged it as a problem, boss — we'll sort it out 📝",

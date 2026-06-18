@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
   norm_key TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'inbox'  -- 'inbox' (one-time) | 'journal' (long-term, append-only)
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -651,6 +652,9 @@ def _migrate(conn):
     rem_columns = {row["name"] for row in conn.execute("PRAGMA table_info(reminders)")}
     if "prev_due_utc" not in rem_columns:
         conn.execute("ALTER TABLE reminders ADD COLUMN prev_due_utc TEXT")
+    cat_columns = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
+    if "kind" not in cat_columns:
+        conn.execute("ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'inbox'")
 
 
 # -- kv ----------------------------------------------------------------------
@@ -695,10 +699,69 @@ def known_categories(conn, limit=50):
 
 def category_counts(conn):
     return conn.execute(
-        "SELECT c.name AS name,"
+        "SELECT c.name AS name, c.kind AS kind,"
         " (SELECT COUNT(*) FROM messages m WHERE m.category = c.name AND m.status = 'confirmed') AS n"
         " FROM categories c ORDER BY n DESC, c.name",
     ).fetchall()
+
+
+# -- journals (categories marked long-term / append-only) --------------------
+
+def set_category_kind(conn, name, kind):
+    """Mark a category 'journal' (long-term, append-only) or 'inbox' (one-time).
+    Creates the category if new; returns the canonical name."""
+    canonical = ensure_category(conn, name)
+    conn.execute("UPDATE categories SET kind = ? WHERE norm_key = ?",
+                 (kind, canonical.casefold()))
+    conn.commit()
+    return canonical
+
+
+def category_kind(conn, name):
+    row = conn.execute("SELECT kind FROM categories WHERE norm_key = ?",
+                       (str(name or "").casefold(),)).fetchone()
+    return (row["kind"] if row and row["kind"] else "inbox")
+
+
+def is_journal(conn, name):
+    return category_kind(conn, name) == "journal"
+
+
+def journal_categories(conn):
+    """Canonical names of all journal categories (casefold-keyed set is the
+    source of truth for retention/recall decisions)."""
+    return [r["name"] for r in conn.execute(
+        "SELECT name FROM categories WHERE kind = 'journal' ORDER BY name")]
+
+
+def journal_entries(conn, category, since_iso=None, limit=200):
+    """Confirmed entries in a journal category, oldest→newest (a diary reads
+    forward), optionally only those received since since_iso. Filtered in
+    Python because category matching must be Cyrillic-casefold-aware."""
+    target = str(category or "").casefold()
+    entries = []
+    for row in conn.execute(
+        "SELECT id, received_at, tg_date, forward_date, raw_text, summary, category"
+        " FROM messages WHERE status = 'confirmed' AND category IS NOT NULL ORDER BY id ASC"
+    ):
+        if row["category"].casefold() != target:
+            continue
+        if since_iso and (row["received_at"] or "") < since_iso:
+            continue
+        entries.append(row)
+        if len(entries) >= limit:
+            break
+    return entries
+
+
+def journal_count(conn, category):
+    target = str(category or "").casefold()
+    n = 0
+    for row in conn.execute(
+        "SELECT category FROM messages WHERE status = 'confirmed' AND category IS NOT NULL"):
+        if row["category"].casefold() == target:
+            n += 1
+    return n
 
 
 # -- messages ----------------------------------------------------------------
@@ -987,6 +1050,20 @@ def _messages_in_category(conn, category):
     return ids
 
 
+def _non_journal_message_ids(conn):
+    """Message ids whose category is NOT a journal — the set a 'clear all notes'
+    purge may delete (journals are long-term and protected)."""
+    journals = {n.casefold() for n in journal_categories(conn)}
+    if not journals:
+        return None  # nothing protected -> caller can use the fast whole-table path
+    ids = []
+    for row in conn.execute("SELECT id, category, suggested_category FROM messages"):
+        name = (row["category"] or row["suggested_category"] or "").casefold()
+        if name not in journals:
+            ids.append(row["id"])
+    return ids
+
+
 def purge_preview(conn, scope, category=None):
     """Count what a purge would remove, without deleting. llm_usage (spend
     history) and preferences (identity/config) are NEVER purged."""
@@ -1008,7 +1085,12 @@ def purge_preview(conn, scope, category=None):
     elif scope == "reminders":
         info["reminders"] = count("SELECT COUNT(*) FROM reminders WHERE status='active'")
     elif scope == "messages":  # all saved notes/messages, keep categories/reminders/settings
-        info["messages"] = count("SELECT COUNT(*) FROM messages")
+        protected = _non_journal_message_ids(conn)  # journals are spared
+        info["messages"] = (count("SELECT COUNT(*) FROM messages")
+                            if protected is None else len(protected))
+        kept = count("SELECT COUNT(*) FROM messages") - info["messages"]
+        if kept:
+            info["kept_journal"] = kept
     elif scope == "issues":  # only the failure/issue log
         info["issues"] = count("SELECT COUNT(*) FROM issues")
     return info
@@ -1039,10 +1121,15 @@ def purge_execute(conn, scope, category=None):
     elif scope == "reminders":
         conn.execute("DELETE FROM reminders WHERE status='active'")
     elif scope == "messages":
-        paths = [r["local_path"] for r in
-                 conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
-        for table in ("facts", "chunks", "urls", "images", "messages"):
-            conn.execute(f"DELETE FROM {table}")
+        protected = _non_journal_message_ids(conn)  # journals are spared
+        if protected is None:  # no journals -> fast whole-table clear
+            paths = [r["local_path"] for r in
+                     conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
+            for table in ("facts", "chunks", "urls", "images", "messages"):
+                conn.execute(f"DELETE FROM {table}")
+        else:
+            for mid in protected:
+                paths.extend(delete_message(conn, mid))
     elif scope == "issues":  # only the issue/failure log; nothing else
         conn.execute("DELETE FROM issues")
     conn.commit()

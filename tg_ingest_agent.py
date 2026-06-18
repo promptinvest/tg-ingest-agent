@@ -733,6 +733,10 @@ class Agent:
             self.reply(chat_id, self.issues_text(lang, params.get("period")))
         elif action == "report_problem":
             self.do_report_problem(chat_id, lang, params, text)
+        elif action == "set_journal":
+            self.do_set_journal(chat_id, lang, params)
+        elif action == "journal_show":
+            self.do_journal_show(chat_id, lang, params)
         elif action == "multi_action":
             # Two+ distinct commands in one message: she does one at a time.
             self.reply(chat_id, T(lang, "one_at_a_time"))
@@ -1987,6 +1991,67 @@ class Agent:
         store.issue_add(self.conn, chat_id, "boss_reported", detail)
         self.reply(chat_id, T(lang, "problem_logged"))
 
+    def do_set_journal(self, chat_id, lang, params):
+        """Mark a category as a long-term journal (append-only, recalled as a
+        dated series, spared by 'clear all notes') or back to a one-time one."""
+        name = str(params.get("category") or "").strip()
+        if not name:
+            self.reply(chat_id, T(lang, "journal_which"))
+            return
+        on = params.get("on")
+        on = True if on is None else bool(on)
+        canonical = store.set_category_kind(self.conn, name, "journal" if on else "inbox")
+        self.reply(chat_id, T(lang, "journal_marked" if on else "journal_unmarked",
+                              category=canonical))
+
+    def _journal_since(self, period):
+        """ISO-UTC lower bound for a journal recall period; None = all time."""
+        now = datetime.now(timezone.utc)
+        if period == "day":
+            d = (now + timedelta(hours=self.tz_offset())).date()
+            start_local = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+            return (start_local - timedelta(hours=self.tz_offset())).isoformat()
+        if period == "week":
+            return (now - timedelta(days=7)).isoformat()
+        if period == "month":
+            return (now - timedelta(days=30)).isoformat()
+        return None
+
+    def do_journal_show(self, chat_id, lang, params):
+        """Recall a journal as a dated series (entries grouped by day)."""
+        ru = lang == "ru"
+        name = str(params.get("category") or "").strip()
+        journals = store.journal_categories(self.conn)
+        if not name and len(journals) == 1:
+            name = journals[0]
+        if not name:
+            hint = ("\n" + ", ".join(journals)) if journals else ""
+            self.reply(chat_id, T(lang, "journal_which") + hint)
+            return
+        canonical = store.ensure_category(self.conn, name)
+        period = str(params.get("period") or "").strip().lower() or "month"
+        if period not in ("day", "week", "month", "all"):
+            period = "month"
+        entries = store.journal_entries(self.conn, canonical, self._journal_since(period))
+        if not entries:
+            self.reply(chat_id, T(lang, "journal_empty", category=canonical))
+            return
+        plabel = {"day": ("за сегодня", "today"), "week": ("за неделю", "this week"),
+                  "month": ("за месяц", "this month"),
+                  "all": ("за всё время", "all time")}[period][0 if ru else 1]
+        lines = [T(lang, "journal_header", category=canonical, n=len(entries),
+                   period=plabel, total=store.journal_count(self.conn, canonical))]
+        last_day = None
+        for e in entries:
+            day = self._fmt_iso_local(e["received_at"]).split(",")[0]
+            if day != last_day:
+                lines.append(f"\n📅 {day}")
+                last_day = day
+            body = (e["summary"] or e["raw_text"] or "").strip()
+            snippet = body.splitlines()[0][:120] if body else "—"
+            lines.append(f"  • {snippet}")
+        self.reply(chat_id, "\n".join(lines))
+
     def _note_reminder_title(self, params):
         """'поставь напоминание по заметке N' arrives with note_id and no real
         subject (the router otherwise titles it literally 'Заметка N'); use the
@@ -2206,7 +2271,14 @@ class Agent:
             chat_id, edit_message_id or row["suggestion_message_id"], updated
         )
         if not quiet:
-            self.reply(chat_id, T(lang, "confirmed", category=canonical, row_id=row["id"]), reply_to)
+            if store.is_journal(self.conn, canonical):
+                day = self._fmt_iso_local(store._now()).split(",")[0]
+                self.reply(chat_id, T(lang, "journal_saved", category=canonical,
+                                      n=store.journal_count(self.conn, canonical), date=day),
+                           reply_to)
+            else:
+                self.reply(chat_id, T(lang, "confirmed", category=canonical, row_id=row["id"]),
+                           reply_to)
         self.maybe_propose_habit(chat_id, updated, lang)
 
     def maybe_propose_habit(self, chat_id, row, lang):

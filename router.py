@@ -40,6 +40,8 @@ ACTIONS = {
     "issues_report",     # params: period in day|week|month — communication problems summary
     "report_problem",    # params: detail — log a boss-reported problem to the issues journal
     "multi_action",      # the message bundles 2+ distinct commands; ask to do them one at a time
+    "set_journal",       # params: category, on(bool) — mark a category long-term journal / one-time
+    "journal_show",      # params: category, period(day|week|month|all) — recall a journal as a dated series
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
     "forget",            # params: value (entry text or key to forget)
@@ -80,6 +82,9 @@ ROUTER_EXAMPLES = """Examples:
 "верни предыдущее время напоминания #9" / "отмени перенос" / "верни как было" / "undo the reschedule" -> {"action": "reminder_undo", "params": {"id": 9}, "confidence": 0.9}
 NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сдвинь/move/reschedule). A bare subject or a fresh "напомни/поставь напоминание про X в TIME" is reminder_create, NOT reschedule — never reschedule a reminder whose title the user did not name.
 "покажи файлы" / "какие у меня файлы?" / "список файлов" / "show my files" / "what files do I have" -> {"action": "list_files", "params": {}, "confidence": 0.92}
+"веди Благодарности как дневник" / "сделай X журналом" / "храни эту категорию долгосрочно" / "keep Gratitude as a journal" -> {"action": "set_journal", "params": {"category": "Благодарности", "on": true}, "confidence": 0.9}
+"Благодарности больше не дневник" / "сделай X обычной категорией" / "stop journaling X" -> {"action": "set_journal", "params": {"category": "Благодарности", "on": false}, "confidence": 0.9}
+"покажи дневник благодарности" / "благодарности за неделю" / "мой журнал благодарностей за месяц" / "show my gratitude journal" -> {"action": "journal_show", "params": {"category": "Благодарности", "period": "month"}, "confidence": 0.9}
 "добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
 "поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
 "что ты умеешь?" / "what can you do?" -> {"action": "help", "params": {}, "confidence": 0.95}
@@ -272,6 +277,12 @@ def route(cfg, conn, chat_id, text, pending):
     user_content = ""
     if context_lines:
         user_content += "Recent conversation:\n" + "\n".join(context_lines) + "\n\n"
+    # Journal categories: recalling one of these as a series is journal_show
+    # (dated diary), not list_items; filing into one is still ingest.
+    journals = store.journal_categories(conn)
+    if journals:
+        user_content += ("Journal categories (recall via journal_show, not list_items): "
+                         + ", ".join(journals) + "\n\n")
     # Forward + a follow-up comment: when he refers to "это/this" (or a suggestion
     # is pending), point the router at the item he just sent so the instruction
     # acts on it (categorize / remind / re-file / delete / details).

@@ -70,6 +70,10 @@ SKILLS = {
     "report_problem": {"risk": "state_write", "writes_state": True,
                        "title": {"en": "Report a problem", "ru": "Записать проблему"}},
     "multi_action": {"risk": "meta", "title": {"en": "One at a time", "ru": "По одному"}},
+    "set_journal": {"risk": "state_write", "writes_state": True,
+                    "title": {"en": "Set journal", "ru": "Сделать дневником"}},
+    "journal_show": {"risk": "read_only", "persona_context": True,
+                     "title": {"en": "Show journal", "ru": "Показать дневник"}},
     "review": {"risk": "read_only", "uses_llm": False, "allowed_proactive": True,
                "persona_context": True, "title": {"en": "Performance review", "ru": "Сводка работы"}},
     # -- memory / personality
