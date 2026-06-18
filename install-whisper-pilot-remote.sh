@@ -46,7 +46,10 @@ ffmpeg -y -f lavfi -i anullsrc=r=16000:cl=mono -t 1 /tmp/whisper-smoke.wav 2>/de
 rm -f /tmp/whisper-smoke.wav
 
 # Warm whisper-server: keeps the model loaded between calls (no per-voice-note
-# reload). --convert lets it ffmpeg the uploaded OGG itself. Bound to loopback.
+# reload). --convert lets it ffmpeg the uploaded OGG itself. --tmp-dir /tmp is
+# REQUIRED: newer whisper.cpp defaults the convert tmp dir to "." (CWD), which
+# is read-only under ProtectSystem=strict -> "FFmpeg conversion failed"; /tmp is
+# writable via PrivateTmp. Bound to loopback.
 cat >/etc/systemd/system/whisper-server.service <<UNIT
 [Unit]
 Description=whisper.cpp warm transcription server (loopback)
@@ -55,7 +58,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$WHISPER_DIR/build/bin/whisper-server -m $WHISPER_DIR/models/$MODEL_NAME --host 127.0.0.1 --port $PORT --convert -t 1
+ExecStart=$WHISPER_DIR/build/bin/whisper-server -m $WHISPER_DIR/models/$MODEL_NAME --host 127.0.0.1 --port $PORT --convert --tmp-dir /tmp -t 1
 Restart=always
 RestartSec=5
 Nice=5
