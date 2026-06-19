@@ -193,6 +193,8 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Trace / why** | "почему ты так решила?" → the last trace timeline. Issues are logged; weekly digest + trace-summary export. | — |
 | **Report a problem** | "запиши в проблемы" / "добавь в ошибки" logs a boss-reported issue (`boss_reported`, surfaces in the review) — distinct from the issues report, which only shows them. | — |
 | **One at a time** | A message bundling two+ distinct commands ("первое закрой, второе напомни…") is recognised (`multi_action`) and Cara asks to take them one at a time. Full multi-step execution is intentionally out of scope for the single-action router. | — |
+| **Model-health monitor** | A scheduler tick (`MODEL_HEALTH_INTERVAL_SECONDS`, default 30 min) verifies Cara's models (chat/converse/vision) are reachable via a tiny call; on a **state change** it messages the boss the moment a model becomes inaccessible (e.g. a provider/tier 403) or recovers — alerts only on transitions, recorded in `kv` (`mh:<model>`). | — (proactive) |
+| **Photo vision (when configured)** | When the chat model isn't vision-capable, a `VISION_MODEL` (e.g. `nemotron-3-nano-omni`) **describes** a forwarded photo and the description is folded into the ingest text; with no vision model, photos categorize text-only from the caption (never stuck). | — |
 
 ---
 

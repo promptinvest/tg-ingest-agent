@@ -90,9 +90,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Forwarded‑message rules:** **text is parsed first**; only **images** (vision) and
   **PDFs** (text extraction — pdfminer.six, with a stdlib regex fallback) are analyzed;
   **every other file** (voice, audio, video, documents…) is **stored**, fetchable later
-  — not parsed. If the configured chat model isn't **vision‑capable** (e.g. the
-  open‑weight models), a photo post is categorized **text‑only** (from its caption) with
-  a note that the image couldn't be analyzed — it never gets stuck on an image.
+  — not parsed. When the chat model isn't **vision‑capable** (e.g. open‑weight models),
+  a forwarded **photo** is handled by a configured **`VISION_MODEL`** (e.g.
+  `nemotron-3-nano-omni`): it *describes* the image and that description is folded into
+  the text for categorization. With no vision model it falls back to **text‑only** (the
+  caption) — either way a photo post never gets stuck.
 - **Files:** any attached document/media is kept by Telegram `file_id`; "покажи файл
   #N" re‑sends it (free, no re‑upload).
 - **Browse & detail:** "покажи заметки" (a clean card list), "что в категории crypto",
@@ -196,6 +198,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Why did you do that** (`trace_query`): replays the last trace timeline.
 - **Deploy notice:** after a new build is installed she says "обновления установлены"
   once (quiet on plain reboots).
+- **Model‑health monitor:** every `MODEL_HEALTH_INTERVAL_SECONDS` (default 30 min) she
+  checks her models (chat, conversation, vision) are reachable and **messages the boss the
+  moment one becomes inaccessible** (e.g. a provider/tier 403) — and again when it
+  recovers. Alerts only on a state change, so it never spams.
 
 ---
 
