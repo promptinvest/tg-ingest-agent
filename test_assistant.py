@@ -1269,6 +1269,57 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertEqual(result[0], "Путешествия")
         self.assertEqual([bool(c) for c in calls], [True, False])  # image attempt, then text-only
 
+    def test_image_ingest_uses_vision_describe(self):
+        # With a vision model configured, the photo is DESCRIBED and folded into
+        # the text; no raw image goes to the (non-vision) text model.
+        import ingest, llm
+        self.agent.cfg.vision_model = "nemotron-3-nano-omni"
+        conn = self.agent.conn
+        mid = store.insert_message(conn, {"chat_id": 1, "tg_message_id": 1,
+                                          "received_at": store._now(), "raw_text": "подпись"})
+        store.insert_image(conn, mid, 1, {"file_id": "F", "file_unique_id": "u"}, "/tmp/x.jpg")
+        row = store.get_message(conn, mid)
+        cap = {}
+
+        def fake_describe(cfg, c, skill, model, path, lang="ru"):
+            cap["model"] = model
+            return "скриншот про бюджетные путешествия"
+
+        def fake_suggest(cfg, c, known, text_block, image_paths, lang="ru"):
+            cap["tb"] = text_block
+            cap["imgs"] = list(image_paths)
+            return ("Путешествия", [], "s", [])
+
+        with mock.patch.object(llm, "describe_image", side_effect=fake_describe), \
+                mock.patch.object(ingest, "suggest", side_effect=fake_suggest), \
+                mock.patch.object(self.agent, "index_message"):
+            result = self.agent.suggest_row(row)
+        self.assertEqual(cap["model"], "nemotron-3-nano-omni")
+        self.assertIn("бюджетные путешествия", cap["tb"])   # description folded into text
+        self.assertEqual(cap["imgs"], [])                   # no raw image to the text model
+        self.assertEqual(result[0], "Путешествия")
+
+    def test_model_health_alerts_on_transition(self):
+        import llm
+        self.agent.cfg.model_health_interval = 1
+        self.agent.cfg.do_model = "deepseek-4-flash"
+        self.agent.cfg.vision_model = ""
+
+        def run(ok, reason=""):
+            self.agent.last_model_health = 0  # force the interval gate open
+            with mock.patch.object(llm, "model_ok", return_value=(ok, reason)), \
+                    mock.patch.object(self.agent, "reply") as r:
+                self.agent.check_model_health()
+            return r
+
+        r = run(False, "403 tier")              # first check: down -> alert
+        self.assertTrue(r.called)
+        self.assertIn("deepseek-4-flash", r.call_args[0][1])
+        r = run(True)                           # recovered -> alert
+        self.assertTrue(r.called)
+        r = run(True)                           # still up -> no alert
+        self.assertFalse(r.called)
+
     def test_out_of_scope_is_warm_not_template(self):
         with mock.patch.object(router, "route",
                                return_value={"action": "out_of_scope", "params": {}, "confidence": 0.95}), \

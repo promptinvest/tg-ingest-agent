@@ -243,6 +243,12 @@ def load_config(env=None):
     # Model profiles / failover (llm.chat_profile)
     cfg.llm_profiles_json = (env.get("LLM_PROFILES_JSON") or "").strip()
     cfg.llm_fallback_cooldown = int(env.get("LLM_FALLBACK_COOLDOWN_SECONDS") or "300")
+    # Vision model for describing photos when the chat model isn't vision-capable
+    # (open-weight models). Empty -> photos categorized text-only from the caption.
+    cfg.vision_model = (env.get("VISION_MODEL") or "").strip()
+    # Model-health monitor: how often to check Cara's models are reachable and
+    # alert the boss the moment one becomes inaccessible (0 disables).
+    cfg.model_health_interval = int(env.get("MODEL_HEALTH_INTERVAL_SECONDS") or "1800")
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
     # Personality intensity (0 neutral .. 3 max; selects template variants only)

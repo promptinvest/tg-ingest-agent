@@ -529,6 +529,14 @@ TEXTS = {
         "ru": "В дневнике «{category}» пока нет записей за этот период.",
         "en": "No «{category}» journal entries for that period yet.",
     },
+    "model_down": {
+        "ru": "⚠️ Босс, модель «{model}» сейчас недоступна ({reason}). Держусь на запасной, но загляни в доступ к моделям, когда сможешь.",
+        "en": "⚠️ Boss, the «{model}» model just became unavailable ({reason}). I'm holding on a backup, but check the model access when you can.",
+    },
+    "model_back": {
+        "ru": "✓ Модель «{model}» снова на связи, босс.",
+        "en": "✓ The «{model}» model is reachable again, boss.",
+    },
     "problem_logged": {
         "ru": "Записала в проблемы, босс — разберёмся 📝",
         "en": "Logged it as a problem, boss — we'll sort it out 📝",

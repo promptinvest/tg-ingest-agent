@@ -5,6 +5,7 @@ Single control point for ALL model calls: every chat/STT request is priced
 and logged to llm_usage, and refused when the daily/monthly budget is
 exhausted. Skills never talk to the API directly.
 """
+import base64
 import json
 import re
 from pathlib import Path
@@ -150,6 +151,39 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
         cost_usd=chat_cost(model, tokens_in, tokens_out, pricing_table(cfg)),
     )
     return str((choices[0].get("message") or {}).get("content") or "")
+
+
+def model_ok(cfg, conn, model):
+    """Lightweight reachability check for a chat model: (True, '') if a tiny
+    call succeeds, else (False, short_reason). Used by the model-health monitor."""
+    try:
+        chat(cfg, conn, "healthcheck", [{"role": "user", "content": "ping"}],
+             max_tokens=5, model=model, temperature=0)
+        return True, ""
+    except LLMError as exc:
+        return False, str(exc)[:140]
+
+
+def describe_image(cfg, conn, skill, model, image_path, lang="ru"):
+    """Use a vision-capable model to produce a short text description of an image,
+    so a non-vision text model can still categorize a photo post. '' on failure."""
+    try:
+        data = Path(image_path).read_bytes()
+    except OSError:
+        return ""
+    b64 = base64.b64encode(data).decode("ascii")
+    prompt = ("Опиши коротко, что на изображении: текст, объекты, суть."
+              if lang == "ru" else
+              "Briefly describe this image: any text, objects, and the gist.")
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+    ]}]
+    try:
+        return (chat(cfg, conn, skill, messages, max_tokens=400, model=model) or "").strip()
+    except LLMError as exc:
+        log(f"image describe ({model}) failed: {exc}")
+        return ""
 
 
 def default_profiles(cfg):

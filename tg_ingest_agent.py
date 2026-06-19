@@ -80,6 +80,7 @@ class Agent:
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0
+        self.last_model_health = 0.0  # check model reachability soon after start
         # Don't nudge the instant the service (re)starts — wait one interval.
         self.last_proactive = time.time()
         # Reply language for the current turn: set from the incoming message so
@@ -227,6 +228,7 @@ class Agent:
             self.check_morning_brief()
             self.check_daily_curator()
             self.check_proactive()
+            self.check_model_health()
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
                 self.enqueue_maintenance_jobs()
@@ -1847,6 +1849,45 @@ class Agent:
             log(f"proactive check failed: {exc}")
             trace.finish(self.conn, tid, "failed", summary=str(exc)[:200])
 
+    def check_model_health(self):
+        """Periodically verify Cara's models are reachable and tell the boss the
+        moment one becomes inaccessible (or recovers) — e.g. a provider/tier 403
+        like the one that took her down. Alerts only on a state CHANGE, so it
+        never spams; healthy-on-first-check is recorded silently."""
+        if self.cfg.model_health_interval <= 0:
+            return
+        now = time.time()
+        if now - self.last_model_health < self.cfg.model_health_interval:
+            return
+        self.last_model_health = now
+        prof = llm.profiles(self.cfg)
+        models = []
+        for m in (self.cfg.do_model, (prof.get("converse_warm") or {}).get("primary"),
+                  self.cfg.vision_model):
+            if m and not str(m).startswith("router:") and m not in models:
+                models.append(m)
+        self.turn_lang = None
+        lang = self.lang()
+        for model in models:
+            try:
+                ok, reason = llm.model_ok(self.cfg, self.conn, model)
+            except Exception as exc:  # never crash the loop on a health check
+                log(f"model health check error for {model}: {exc}")
+                continue
+            state = "ok" if ok else "down"
+            prev = store.kv_get(self.conn, f"mh:{model}")
+            if prev == state:
+                continue
+            store.kv_set(self.conn, f"mh:{model}", state)
+            if prev is None and ok:
+                continue  # first sighting, healthy -> record quietly
+            log(f"model health: {model} {prev or '?'} -> {state} ({reason})")
+            for chat_id in self.cfg.allowed_chat_ids:
+                if ok:
+                    self.reply(chat_id, T(lang, "model_back", model=model))
+                else:
+                    self.reply(chat_id, T(lang, "model_down", model=model, reason=reason))
+
     def check_morning_brief(self):
         """Opt-in daily brief (off unless the boss turned it on): once a day at/
         after the morning hour, respecting proactive on/off and quiet hours."""
@@ -2516,6 +2557,19 @@ class Agent:
             referential = self._is_referential_save(row, urls, image_paths)
             if referential:
                 text_block = self._with_conversation_context(row, text_block)
+            # Photos + a non-vision chat model: have the vision model DESCRIBE the
+            # image, fold that into the text, and don't send the raw image to the
+            # text model (which would 400). Each model does what it's good at.
+            if image_paths and self.cfg.vision_model:
+                descs = []
+                for p in image_paths[:2]:
+                    d = llm.describe_image(self.cfg, self.conn, "ingest",
+                                           self.cfg.vision_model, p, self.lang())
+                    if d:
+                        descs.append(d)
+                if descs:
+                    text_block += "\n\nImage content (auto-described):\n" + "\n".join(descs)
+                image_paths = []
             try:
                 category, alternatives, summary, facts = ingest.suggest(
                     self.cfg, self.conn, known, text_block, image_paths, self.lang()
