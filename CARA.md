@@ -90,7 +90,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Forwarded‑message rules:** **text is parsed first**; only **images** (vision) and
   **PDFs** (text extraction — pdfminer.six, with a stdlib regex fallback) are analyzed;
   **every other file** (voice, audio, video, documents…) is **stored**, fetchable later
-  — not parsed.
+  — not parsed. If the configured chat model isn't **vision‑capable** (e.g. the
+  open‑weight models), a photo post is categorized **text‑only** (from its caption) with
+  a note that the image couldn't be analyzed — it never gets stuck on an image.
 - **Files:** any attached document/media is kept by Telegram `file_id`; "покажи файл
   #N" re‑sends it (free, no re‑upload).
 - **Browse & detail:** "покажи заметки" (a clean card list), "что в категории crypto",
