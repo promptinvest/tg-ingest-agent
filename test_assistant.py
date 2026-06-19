@@ -1244,6 +1244,31 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertFalse(self.agent._is_referential_save(fwd, [], []))        # forwards excluded
         self.assertFalse(self.agent._is_referential_save(ref, ["http://x"], []))  # real content
 
+    def test_image_ingest_falls_back_to_text_only(self):
+        # Forwarded photo + a non-vision model must NOT get stuck (issue #18):
+        # re-ingest text-only so the caption still categorizes.
+        import ingest, llm
+        conn = self.agent.conn
+        mid = store.insert_message(conn, {"chat_id": 1, "tg_message_id": 1,
+                                          "received_at": store._now(),
+                                          "raw_text": "Промпты для путешествий"})
+        store.insert_image(conn, mid, 1, {"file_id": "F", "file_unique_id": "u"}, "/tmp/x.jpg")
+        row = store.get_message(conn, mid)
+        calls = []
+
+        def fake_suggest(cfg, c, known, text_block, image_paths, lang="ru"):
+            calls.append(list(image_paths))
+            if image_paths:
+                raise llm.LLMError("HTTP 400: model does not support image input")
+            return ("Путешествия", [], "Промпты для путешествий", [])
+
+        with mock.patch.object(ingest, "suggest", side_effect=fake_suggest), \
+                mock.patch.object(self.agent, "index_message"):
+            result = self.agent.suggest_row(row)
+        self.assertIsNotNone(result)                              # recovered, not stuck
+        self.assertEqual(result[0], "Путешествия")
+        self.assertEqual([bool(c) for c in calls], [True, False])  # image attempt, then text-only
+
     def test_out_of_scope_is_warm_not_template(self):
         with mock.patch.object(router, "route",
                                return_value={"action": "out_of_scope", "params": {}, "confidence": 0.95}), \

@@ -2521,15 +2521,21 @@ class Agent:
                     self.cfg, self.conn, known, text_block, image_paths, self.lang()
                 )
             except llm.LLMError as exc:
-                attempts = store.bump_attempts(self.conn, row_id)
-                if attempts >= self.cfg.llm_max_attempts:
-                    store.mark_failed(self.conn, row_id)
-                    store.issue_add(self.conn, row["chat_id"], "ingest_failed",
-                                    f"#{row_id}: {exc}")
-                    log(f"message #{row_id} marked failed after {attempts} attempts: {exc}")
+                # The model may not accept image input (open-weight models aren't
+                # vision-capable). Don't get stuck on a forwarded photo — re-ingest
+                # TEXT-ONLY so the caption/text still gets categorized.
+                if image_paths and "image" in str(exc).lower():
+                    try:
+                        category, alternatives, summary, facts = ingest.suggest(
+                            self.cfg, self.conn, known,
+                            text_block + "\n(An attached image could not be analyzed by the current model.)",
+                            [], self.lang()
+                        )
+                        log(f"message #{row_id}: model lacks vision; categorized text-only")
+                    except llm.LLMError as exc:
+                        return self._ingest_failed(row_id, row["chat_id"], exc)
                 else:
-                    log(f"suggestion failed for message #{row_id} (attempt {attempts}): {exc}")
-                return None
+                    return self._ingest_failed(row_id, row["chat_id"], exc)
         store.set_suggestion(self.conn, row_id, category, summary, self.cfg.do_model)
         store.set_facts(self.conn, row_id, facts)
         # Index for semantic recall: full text for documents, else summary+facts.
@@ -2542,6 +2548,18 @@ class Agent:
             self.index_message(row_id, index_text)
         log(f"suggested {category} for message #{row_id} ({len(facts)} facts)")
         return category, alternatives, summary
+
+    def _ingest_failed(self, row_id, chat_id, exc):
+        """Shared failure handling for a failed ingest suggestion: count the
+        attempt, mark failed after the cap, log. Returns None (caller bails)."""
+        attempts = store.bump_attempts(self.conn, row_id)
+        if attempts >= self.cfg.llm_max_attempts:
+            store.mark_failed(self.conn, row_id)
+            store.issue_add(self.conn, chat_id, "ingest_failed", f"#{row_id}: {exc}")
+            log(f"message #{row_id} marked failed after {attempts} attempts: {exc}")
+        else:
+            log(f"suggestion failed for message #{row_id} (attempt {attempts}): {exc}")
+        return None
 
     _REFERENTIAL_MARKERS = ("это", "эту", "эти", " this", " that", "об этом", "про это")
 
