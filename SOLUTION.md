@@ -22,7 +22,12 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
    cleanup) runs as durable jobs in the same process.
 2. **Store first, think second.** Every inbound message is persisted to SQLite
    before any model call. LLM outages, budget stops, and restarts never lose
-   data — pending work is retried on a sweep.
+   data — pending work is retried on a sweep. Every model call funnels through
+   one gateway (`llm.py`) that converts *all* transport faults — HTTP errors,
+   unreachable hosts, **and bare socket read-timeouts** (`response.read()` raises
+   a raw `TimeoutError`, not a `URLError`) — into a single `LLMError` type, so a
+   slow embedding/vision call can never escape a skill's `except LLMError` and
+   crash the whole update handler (which would leave the boss with no reply).
 3. **Suggest, then confirm.** The model proposes (a category, a parsed reminder,
    a learned fact, a bulk delete); nothing enters the taxonomy, the schedule, the
    calendar, or durable memory without confirmation — by natural reply («да»,

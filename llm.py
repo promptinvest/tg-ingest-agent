@@ -138,6 +138,10 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
         raise LLMError(_redacted_http_error(exc, cfg.do_key)) from exc
     except URLError as exc:
         raise LLMError(f"inference request failed: {exc.reason}") from exc
+    except OSError as exc:
+        # A read-timeout during response.read() raises a bare socket.timeout/
+        # TimeoutError (NOT a URLError) — wrap it so callers' except LLMError sees it.
+        raise LLMError(f"inference request failed: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise LLMError("inference response was not valid JSON") from exc
     choices = data.get("choices") or []
@@ -283,6 +287,10 @@ def embed(cfg, conn, skill, texts):
         raise LLMError(_redacted_http_error(exc, cfg.do_key)) from exc
     except URLError as exc:
         raise LLMError(f"embeddings request failed: {exc.reason}") from exc
+    except OSError as exc:
+        # Bare socket read-timeout (not a URLError) — wrap so index_message's
+        # except LLMError catches it instead of crashing the update handler.
+        raise LLMError(f"embeddings request failed: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise LLMError("embeddings response was not valid JSON") from exc
     rows = sorted(data.get("data") or [], key=lambda r: r.get("index", 0))
@@ -337,6 +345,8 @@ def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
         raise LLMError(f"whisper-server HTTP {exc.code}") from exc
     except URLError as exc:
         raise LLMError(f"whisper-server unreachable: {exc.reason}") from exc
+    except OSError as exc:
+        raise LLMError(f"whisper-server timed out: {exc}") from exc
     try:
         text = str((json.loads(raw) or {}).get("text") or "").strip()
     except (ValueError, AttributeError):
@@ -407,6 +417,8 @@ def _transcribe_remote(cfg, conn, skill, audio_path, duration_seconds):
         raise LLMError(_redacted_http_error(exc, cfg.do_key)) from exc
     except URLError as exc:
         raise LLMError(f"transcription request failed: {exc.reason}") from exc
+    except OSError as exc:
+        raise LLMError(f"transcription request failed: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise LLMError("transcription response was not valid JSON") from exc
     text = str(data.get("text") or "").strip()

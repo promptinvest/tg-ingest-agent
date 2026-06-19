@@ -3026,6 +3026,37 @@ class KnowledgeTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_embed_wraps_bare_socket_timeout_as_llmerror(self):
+        # A read-timeout during response.read() raises a bare socket.timeout/
+        # TimeoutError (NOT a URLError). It must be wrapped as LLMError so
+        # index_message's `except LLMError` catches it instead of crashing the
+        # whole update handler and leaving the user with no reply.
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_db(Path(tmp) / "e.db")
+            cfg = make_config()
+            try:
+                with mock.patch.object(
+                    llm, "urlopen",
+                    side_effect=TimeoutError("The read operation timed out")):
+                    with self.assertRaises(llm.LLMError):
+                        llm.embed(cfg, conn, "ask", ["a"])
+            finally:
+                conn.close()
+
+    def test_chat_wraps_bare_socket_timeout_as_llmerror(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_db(Path(tmp) / "c.db")
+            cfg = make_config()
+            try:
+                with mock.patch.object(
+                    llm, "urlopen",
+                    side_effect=TimeoutError("The read operation timed out")):
+                    with self.assertRaises(llm.LLMError):
+                        llm.chat(cfg, conn, "ingest",
+                                 [{"role": "user", "content": "hi"}])
+            finally:
+                conn.close()
+
     def test_router_accepts_ask(self):
         ok = router.validate_route({"action": "ask", "params": {"question": "q"}}, False)
         self.assertEqual(ok["action"], "ask")

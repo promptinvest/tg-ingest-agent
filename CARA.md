@@ -94,7 +94,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   a forwarded **photo** is handled by a configured **`VISION_MODEL`** (e.g.
   `nemotron-3-nano-omni`): it *describes* the image and that description is folded into
   the text for categorization. With no vision model it falls back to **text‑only** (the
-  caption) — either way a photo post never gets stuck.
+  caption) — either way a photo post never gets stuck. A slow vision/embedding call
+  can't sink the reply: every transport fault (including a bare socket **read‑timeout**)
+  is wrapped as `LLMError`, so indexing stays best‑effort and the suggestion card is
+  still delivered.
 - **Files:** any attached document/media is kept by Telegram `file_id`; "покажи файл
   #N" re‑sends it (free, no re‑upload).
 - **Browse & detail:** "покажи заметки" (a clean card list), "что в категории crypto",
