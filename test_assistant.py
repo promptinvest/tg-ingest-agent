@@ -1351,6 +1351,21 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertFalse(ok.called)   # never probed
         self.assertFalse(r.called)    # never alerted
 
+    def test_unwrap_converse_array(self):
+        # deepseek-v4-pro sometimes returns ["emoji", "text"] instead of a plain
+        # string — salvage it into (reaction, clean text) so the raw literal never
+        # reaches the boss (the "strange message formatting" report).
+        import tg_ingest_agent
+        u = tg_ingest_agent.Agent._unwrap_converse_array
+        self.assertEqual(u('["👍", "Всегда пожалуйста."]'), ("👍", "Всегда пожалуйста."))
+        self.assertEqual(u('["🥰", "Так даже лучше."]'), ("🥰", "Так даже лучше."))
+        self.assertEqual(u("просто текст"), (None, "просто текст"))      # plain string
+        self.assertEqual(u('["только текст"]'), (None, "только текст"))  # no reaction
+        # first element not a real reaction emoji -> not treated as a reaction
+        self.assertEqual(u('["hmm", "text"]')[0], None)
+        # malformed array passes through untouched
+        self.assertEqual(u('[broken'), (None, "[broken"))
+
     def test_out_of_scope_is_warm_not_template(self):
         with mock.patch.object(router, "route",
                                return_value={"action": "out_of_scope", "params": {}, "confidence": 0.95}), \

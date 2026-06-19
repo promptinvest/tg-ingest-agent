@@ -9,6 +9,8 @@ llm.py. No inbound ports; stdlib only.
 
 Deployed on Pilot-VPS as /opt/tg-ingest-agent/agent.py.
 """
+import ast
+import json
 import signal
 import time
 from datetime import datetime, timedelta, timezone
@@ -978,6 +980,13 @@ class Agent:
             self.reply(chat_id, T(lang, "llm_error"))
             return
         reply = (reply or "").strip()
+        # Some models (deepseek-v4-pro) ignore the [[react:emoji]] instruction and
+        # instead return a JSON array like ["👍", "text…"] — a [reaction, message]
+        # pair. Salvage that shape so we react + send clean text rather than
+        # shipping the raw literal to the boss.
+        reaction, reply = self._unwrap_converse_array(reply)
+        if reaction:
+            self.react(chat_id, message_id, reaction)
         # Pull an optional leading/anywhere reaction tag and apply it.
         m = re.search(r"\[\[react:\s*(\S+?)\s*\]\]", reply)
         if m:
@@ -990,6 +999,33 @@ class Agent:
         # Learn immediately when he's correcting me; otherwise on the usual cadence.
         self.maybe_curate_conversation(chat_id, lang=lang,
                                        force=self.looks_like_correction(text))
+
+    @staticmethod
+    def _unwrap_converse_array(reply):
+        """A model may return a JSON/py array `["👍", "text"]` (a [reaction, text]
+        pair) or `["text"]` instead of a plain string. Return (reaction|None, text);
+        a non-array reply passes through unchanged. The first element is treated as
+        a reaction only when it's a real Telegram reaction emoji and text follows."""
+        if not (reply.startswith("[") and reply.endswith("]")):
+            return None, reply
+        arr = None
+        for loader in (json.loads, ast.literal_eval):  # JSON first, then py-literal
+            try:
+                arr = loader(reply)
+                break
+            except (ValueError, SyntaxError, TypeError):
+                continue
+        if not isinstance(arr, list) or not arr:
+            return None, reply
+        items = [str(x).strip() for x in arr if isinstance(x, (str, int, float))]
+        items = [s for s in items if s]
+        if not items:
+            return None, reply
+        reaction = None
+        if len(items) >= 2 and items[0] in common.REACTION_PALETTE:
+            reaction, items = items[0], items[1:]
+        text = "\n".join(items).strip()
+        return reaction, (text or reply)
 
     # How many conversational turns between background memory passes (cost vs.
     # freshness): her life and what she learns about you fill in every few turns.

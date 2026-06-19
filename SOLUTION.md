@@ -106,7 +106,7 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 |---|---|
 | `tg_ingest_agent.py` | entry point: poll loop, dispatch, pending-action resolution, scheduler ticks, maintenance jobs (installed as `agent.py`) |
 | `router.py` | closed-world intent router (LLM, JSON-only, confidence gate, context recall) |
-| `converse.py` | **free-form warm conversation as Cara** — persona, her evolving life, boss facts, language matching |
+| `converse.py` | **free-form warm conversation as Cara** — persona, her evolving life, boss facts, language matching. A reply may open with a `[[react:emoji]]` tag → a Telegram reaction; the handler also tolerates models that instead return a `["emoji", "text"]` array, unwrapping it to a reaction + clean text so the raw literal never reaches the boss. |
 | `ingest.py` | message parsing, URL extraction (UTF-16-safe), category + facts + summary suggestion |
 | `pdftext.py` | best-effort PDF text-layer extraction (pdfminer.six, with a stdlib regex fallback) |
 | `knowledge.py` | document chunking, cosine retrieval, grounded-answer prompt (the `ask` skill) |
