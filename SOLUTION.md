@@ -49,6 +49,11 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 7. **Every token is metered.** All chat / STT / embedding calls pass through one
    budget-guarded gateway that prices and logs them, with model profiles and
    failover; daily and monthly budgets warn at 80 % and hard-stop at 100 %.
+   Per-model prices (DO Gradient rates) live in `llm.DEFAULT_PRICING`, overridable
+   per-deploy via `PRICING_JSON`; **a model slug missing from the table is billed
+   at the conservative $3/$15 default**, which over-counts cheap open-weight models
+   3-10× and trips the budget on phantom dollars — so every model Cara runs must
+   be listed (regression-tested).
 8. **Zero inbound surface.** Long polling only: the host firewall stays SSH-only,
    no webhooks, no reverse proxy, no Docker, no pip dependencies.
 9. **Auditable.** Every inbound update and scheduler tick runs under a trace id

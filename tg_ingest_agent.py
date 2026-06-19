@@ -1860,6 +1860,12 @@ class Agent:
         if now - self.last_model_health < self.cfg.model_health_interval:
             return
         self.last_model_health = now
+        # A budget stop blocks every model call before it leaves the box, so the
+        # probes below would all "fail" — but that's a SPEND condition, not a
+        # model outage. Don't masquerade it as "model down" (the budget guard has
+        # its own warn/stop notice). Skip the health sweep while budget-stopped.
+        if llm.budget_state(self.cfg, self.conn)[0] == "stop":
+            return
         prof = llm.profiles(self.cfg)
         models = []
         for m in (self.cfg.do_model, (prof.get("converse_warm") or {}).get("primary"),

@@ -30,12 +30,31 @@ class BudgetExceeded(LLMError):
 
 # USD per 1M tokens (input, output); STT priced per audio minute.
 # Override via PRICING_JSON env, e.g. {"openai-gpt-4o": [2.5, 10.0]}.
+# (USD per 1M input, per 1M output). DO Gradient serverless rates, 2026-06
+# (docs.digitalocean.com/products/inference/details/pricing). Keep slugs in sync
+# with DO_CHAT_MODEL / VISION_MODEL / LLM_PROFILES_JSON — a model MISSING here is
+# billed at DEFAULT_CHAT_PRICE ($3/$15), which silently 3-10x's the meter and
+# trips the daily budget on phantom dollars (see the 2026-06-19 spike).
 DEFAULT_PRICING = {
+    # Anthropic (most EOL'd on DO; kept for historical rows)
     "anthropic-claude-haiku-4.5": (1.0, 5.0),
     "anthropic-claude-4.6-sonnet": (3.0, 15.0),
     "anthropic-claude-4.5-sonnet": (3.0, 15.0),
     "openai-gpt-4o": (2.5, 10.0),
     "openai-gpt-4o-mini": (0.15, 0.6),
+    # Open-weight models Cara actually runs today
+    "deepseek-v4-pro": (1.74, 3.48),
+    "deepseek-4-flash": (0.14, 0.28),
+    "deepseek-3.2": (0.50, 1.60),
+    "nemotron-3-nano-omni": (0.50, 0.90),
+    "nemotron-nano-12b-v2-vl": (0.20, 0.60),
+    "openai-gpt-oss-20b": (0.05, 0.45),
+    "openai-gpt-oss-120b": (0.10, 0.70),
+    "kimi-k2.6": (0.95, 4.0),
+    "kimi-k2.5": (0.50, 2.70),
+    # router:cara was a DO Inference Router (meta-endpoint) that dispatched to a
+    # cheap open-weight model; price it at the deepseek-flash rate it targeted.
+    "router:cara": (0.14, 0.28),
 }
 DEFAULT_CHAT_PRICE = (3.0, 15.0)  # unknown models priced conservatively
 STT_PRICE_PER_MINUTE = 0.006

@@ -88,6 +88,21 @@ class GatewayTests(unittest.TestCase):
             llm.chat_cost("mystery", 1_000_000, 0, table), llm.DEFAULT_CHAT_PRICE[0]
         )
 
+    def test_live_models_are_priced_not_defaulted(self):
+        # Every model Cara actually runs MUST be in the price table — a missing
+        # slug falls through to DEFAULT_CHAT_PRICE ($3/$15) and silently inflates
+        # the meter (the 2026-06-19 budget spike). Lock the real DO rates in.
+        table = llm.pricing_table(make_config())
+        for slug, pair in {
+            "deepseek-4-flash": (0.14, 0.28),
+            "deepseek-v4-pro": (1.74, 3.48),
+            "nemotron-3-nano-omni": (0.50, 0.90),
+            "openai-gpt-oss-20b": (0.05, 0.45),
+            "kimi-k2.6": (0.95, 4.0),
+        }.items():
+            self.assertEqual(table.get(slug), pair, slug)
+            self.assertNotEqual(table.get(slug), llm.DEFAULT_CHAT_PRICE, slug)
+
     def test_budget_states(self):
         cfg = make_config(BUDGET_DAILY_USD="1.0", BUDGET_MONTHLY_USD="100")
         self.assertEqual(llm.budget_state(cfg, self.conn)[0], "ok")
@@ -1319,6 +1334,22 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertTrue(r.called)
         r = run(True)                           # still up -> no alert
         self.assertFalse(r.called)
+
+    def test_model_health_skips_when_budget_stopped(self):
+        # A budget stop blocks every model call before it leaves the box, so the
+        # probes would all "fail" — but that's spend, not a model outage. The
+        # monitor must NOT probe or alert "model down" in that state.
+        import llm
+        self.agent.cfg.model_health_interval = 1
+        self.agent.cfg.do_model = "deepseek-4-flash"
+        self.agent.last_model_health = 0
+        with mock.patch.object(llm, "budget_state",
+                               return_value=("stop", "day", 2.01, 2.0)), \
+                mock.patch.object(llm, "model_ok") as ok, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.check_model_health()
+        self.assertFalse(ok.called)   # never probed
+        self.assertFalse(r.called)    # never alerted
 
     def test_out_of_scope_is_warm_not_template(self):
         with mock.patch.object(router, "route",
