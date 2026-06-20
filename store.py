@@ -908,7 +908,7 @@ def all_embedded_chunks(conn):
     return conn.execute(
         "SELECT c.message_id AS message_id, c.text AS text, c.embedding AS embedding,"
         " m.category AS category, m.suggested_category AS suggested_category,"
-        " m.forward_origin_title AS title"
+        " m.forward_origin_title AS title, m.received_at AS received_at"
         " FROM chunks c JOIN messages m ON m.id = c.message_id"
         " WHERE c.embedding IS NOT NULL"
     ).fetchall()

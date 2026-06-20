@@ -75,6 +75,7 @@ def rank_chunks(query_vec, rows, top_k, context_chars):
             "text": text,
             "category": row["category"] or row["suggested_category"] or "?",
             "title": row["title"],
+            "date": (row["received_at"] or "")[:10] if "received_at" in row.keys() else "",
             "score": score,
         })
         used += len(text)

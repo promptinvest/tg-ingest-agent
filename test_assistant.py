@@ -1375,6 +1375,28 @@ class ConversationDispatchTests(unittest.TestCase):
         # weekend mood is its own directive
         self.assertIn("weekend", tg_ingest_agent.Agent._weekend_mood("en").lower())
 
+    def test_is_reminder_ack(self):
+        import tg_ingest_agent
+        f = tg_ingest_agent.Agent._is_reminder_ack
+        self.assertTrue(f("готово"))
+        self.assertTrue(f("через 30 минут"))
+        self.assertTrue(f("✅"))
+        self.assertTrue(f(""))
+        # content the reminder asked for is NOT an ack
+        self.assertFalse(f("запиши благодарность сегодня. классное общение с родными"))
+        self.assertFalse(f("классное общение с родственниками и с тобой, день был тёплый"))
+
+    def test_fired_reminder_content_is_saved_not_acked(self):
+        import router
+        c = self.agent.conn
+        store.pending_set(c, 1, "reminder_fired", {"reminder_id": 5, "title": "благодарности"})
+        with mock.patch.object(router, "route",
+                               return_value={"action": "ingest", "params": {}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "finalize") as fin, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 9}, "запиши благодарность: классное общение")
+        self.assertTrue(fin.called)  # saved as a journal entry, not eaten as the reminder ack
+
     def test_sticker_store_and_pick(self):
         c = self.agent.conn
         store.stickers_add(c, "pack1", [

@@ -616,6 +616,23 @@ class Agent:
 
     # -- Router dispatch
 
+    @staticmethod
+    def _is_reminder_ack(text):
+        """True only when a message replying to a just-fired reminder is an actual
+        ack ('готово'/'done') or snooze ('через 30 минут') — NOT substantive content
+        (e.g. dictating the gratitude the reminder asked for), which must be saved."""
+        t = (text or "").strip().casefold()
+        if not t:
+            return True
+        if any(w in t for w in ("запиш", "сохран", "добав", "заметк", "запис", "note", "save")):
+            return False  # explicit save command -> real content, not an ack
+        if any(w in t for w in ("через", "отлож", "позже", "потом", "напомни", "snooze",
+                                "later", "remind", "минут", "завтра", "час")):
+            return True   # snooze
+        acks = ("готов", "сделал", "сделано", "выполн", "done", "ок", "okay", "okey",
+                "ok", "окей", "да", "yes", "yep", "ага", "+", "✅", "👍", "закры")
+        return len(t) <= 25 and any(w in t for w in acks)
+
     def dispatch(self, chat_id, msg, text):
         lang = self.lang()
         self.mark_contact_day()  # he reached out -> she isn't his first contact today
@@ -635,6 +652,15 @@ class Agent:
             if explicit:
                 self.resolve_pending(chat_id, "amend", {"category": explicit}, pending, lang)
                 return
+        # A fired reminder leaves a 30-min 'reminder_fired' pending so 'готово' / 'через
+        # 30 минут' resolve it. But the boss often answers by DOING the task — a gratitude
+        # reminder -> he dictates the gratitude. That content must be SAVED, not eaten as
+        # the ack. Unless the message is a bare ack/snooze, drop the pending and route it
+        # normally so 'запиши благодарность …' ingests into the journal.
+        if (pending and pending["kind"] == "reminder_fired"
+                and not self._is_reminder_ack(text)):
+            store.pending_clear(self.conn, chat_id)
+            pending = None
         # Obvious greetings / "how are you" / identity pings go straight to warm
         # free-form Cara, skipping the router (one chat call, no template). A bare
         # "ок"/"👍" needs no reply, like a human. With a pending action, short acks
@@ -1146,12 +1172,14 @@ class Agent:
         for c in ctx:
             snippet = " ".join((c.get("text") or "").split())[:300]
             if snippet:
-                lines.append(f"  [{c.get('category') or '?'}] {snippet}")
+                date = c.get("date") or "?"
+                lines.append(f"  [{date}] [{c.get('category') or '?'}] {snippet}")
         if not lines:
             return ""
-        return ("His OWN saved entries that may be relevant — these are FACTS. Use them only "
-                "as written; do NOT invent, rename, or embellish his data. If his question "
-                "isn't answered here, say you'll look it up rather than guess:\n"
+        return ("His OWN saved entries that may be relevant — these are FACTS, each with its "
+                "real date. Use them only as written; do NOT invent, rename, embellish, or "
+                "MISDATE them (never call an old entry 'today'). If his question isn't "
+                "answered here, say you'll look it up rather than guess:\n"
                 + "\n".join(lines))
 
     def do_converse(self, chat_id, lang, text, message_id=None):
