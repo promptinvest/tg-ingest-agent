@@ -162,8 +162,17 @@ JSON, validated against the closed action set, confidence-gated → dispatcher c
 `skill_manifest.get_policy()` → skill runs or stages a pending action for confirmation →
 reply sent; conversation, trace and issue tables updated.
 
+**What's a note vs a conversation:** only **forwards** (channel/people content) and bare
+typed notes auto-ingest. The boss's **own** photos/files are conversation — `handle_own_media()`
+vision-describes them and routes his caption (context) so "одобряешь?" + a photo gets an
+opinion in her voice, a bare photo a warm reaction, and an explicit "сохрани это" still
+files it; nothing of his own is silently stored. He's also given what he's **replying to /
+quoting** (`turn_extra`) so "this" resolves. A **specific question** about a journal goes to
+grounded `ask` (answers it), not `journal_show` (which lists the diary).
+
 **Ingest lifecycle:** forwards / photos / documents / albums bypass the router to
-`finalize()` → albums buffered by `media_group_id` → text & markdown read as UTF-8, PDFs
+`finalize()` → albums buffered by `media_group_id` (a `store` flag separates his own-media
+albums, which converse) → text & markdown read as UTF-8, PDFs
 extracted (pdfminer.six → regex fallback; scanned / glyph-coded → no text, so the
 filename becomes the searchable text) → rows stored → duplicate channel posts detected
 by forward ids (no LLM) → `ingest.suggest()` proposes category / alternatives / summary /
