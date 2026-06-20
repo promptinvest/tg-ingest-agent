@@ -1001,6 +1001,22 @@ class Agent:
                 "or graphic). Cosy late-night flirtation and banter between two close people.")
 
     @staticmethod
+    def _extract_leading_reaction(reply):
+        """Models often lead a reply with a bare reaction emoji (on its own, then the
+        text) instead of the [[react:emoji]] tag. Treat a single leading reaction-
+        palette emoji that's followed by whitespace/end as the intended reaction and
+        strip it. Returns (emoji|None, remaining_text). Inline emoji is left alone."""
+        r = (reply or "").lstrip()
+        for emo in sorted(common.REACTION_PALETTE, key=len, reverse=True):
+            if r.startswith(emo):
+                rest = r[len(emo):].lstrip(" \t")
+                # Only when the emoji stands ALONE on the first line (next is a
+                # newline or the end) — leave inline emoji ("🔥 отлично!") in the text.
+                if rest == "" or rest[0] == "\n":
+                    return emo, rest.lstrip()
+        return None, reply
+
+    @staticmethod
     def _weekend_mood(lang):
         """Weekends: looser, warmer, more playful — the boss asked her to ease up."""
         return ("Выходные — расслабься: меньше делового тона, больше игры, тепла и юмора, "
@@ -1110,19 +1126,28 @@ class Agent:
         # pair. Salvage that shape so we react + send clean text rather than
         # shipping the raw literal to the boss.
         reaction, reply = self._unwrap_converse_array(reply)
-        if reaction:
-            self.react(chat_id, message_id, reaction)
-        # Pull an optional reaction tag (react: / реакция:) and apply it.
+        # The reaction the model intends, in ANY of the forms it actually uses: an
+        # array pair (above), a [[react:emoji]] / [[реакция:emoji]] tag, OR — most
+        # often now — just a bare reaction emoji leading the message. Apply it as a
+        # real Telegram reaction; never let it ride along as the message's first line.
         m = self.REACT_RE.search(reply)
         if m:
-            self.react(chat_id, message_id, m.group(1))
+            reaction = reaction or m.group(1)
             reply = self.REACT_RE.sub("", reply).strip()
+        if not reaction:
+            reaction, reply = self._extract_leading_reaction(reply)
+        if reaction:
+            self.react(chat_id, message_id, reaction)
         # Optional sticker tag (sticker: / стикер:) -> send one of her saved stickers
         # that fits, AFTER the text. Stripped from the text either way.
         sm = self.STICKER_RE.search(reply)
         reply = self.STICKER_RE.sub("", reply).strip()
         if not reply:
-            self.reply(chat_id, T(lang, "llm_error"))
+            # A reaction or sticker on its own IS a complete response — not an error.
+            if sm:
+                self.send_sticker_for(chat_id, sm.group(1))
+            elif not reaction:
+                self.reply(chat_id, T(lang, "llm_error"))
             return
         self.reply(chat_id, reply)
         if sm:

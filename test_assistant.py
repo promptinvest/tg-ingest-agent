@@ -2119,6 +2119,25 @@ class GoldenTranscriptTests(unittest.TestCase):
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) c FROM messages WHERE tg_message_id=52").fetchone()["c"], 1)
 
+    def test_extract_leading_reaction(self):
+        import tg_ingest_agent
+        f = tg_ingest_agent.Agent._extract_leading_reaction
+        # bare emoji alone on the first line -> it's the reaction, stripped from text
+        self.assertEqual(f("🥰\n\nЗначит, скоро."), ("🥰", "Значит, скоро."))
+        self.assertEqual(f("🔥"), ("🔥", ""))
+        # inline emoji on the same line as text is part of the message, left alone
+        self.assertEqual(f("🔥 отлично!")[0], None)
+        self.assertEqual(f("ну ты даёшь 🥰")[0], None)
+        self.assertEqual(f("привет"), (None, "привет"))
+
+    def test_bare_leading_emoji_becomes_reaction(self):
+        sent = self.drive({"message": self._msg(61, "до скорого")}, {
+            "router": '{"action":"converse","params":{},"confidence":0.95}',
+            "converse": "🥰\n\nДо скорого, Олег."})
+        text = " ".join(sent)
+        self.assertIn("До скорого", text)
+        self.assertNotIn("🥰", text)  # applied as a reaction, not shipped in the text
+
     def test_russian_reaction_tag_applied_not_shipped(self):
         # The model sometimes writes the Russian word: "[[реакция: 🥰]]". It must be
         # applied as a reaction and stripped, never shipped as literal text.
