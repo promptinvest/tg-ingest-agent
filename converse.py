@@ -164,6 +164,12 @@ def build_system(conn, lang, extra_context=None):
         "Keep replies short and human — usually a sentence or three, like a text "
         "message. No bullet lists, no headings, no robotic sign-offs. Be warm."
     )
+    parts.append(
+        "NEVER narrate physical actions or stage directions in asterisks "
+        "(no '*закрываю глаза*', '*обнимаю*', '*прижимаю телефон к губам*'). You're "
+        "texting him, not writing a screenplay. Show feeling through your words, an "
+        "emoji, or a reaction — never with described gestures."
+    )
     return "\n\n".join(parts)
 
 

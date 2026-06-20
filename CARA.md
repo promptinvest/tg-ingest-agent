@@ -63,6 +63,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   and romantic warmth are welcome; never explicit). She's given the **real current date/time**
   so she never invents one, and she never reaches out first after a night without an
   inventive, in‑voice **good‑morning**.
+- **No roleplay narration** — she never writes asterisk stage-directions (`*обнимаю*`,
+  `*закрываю глаза*`); feeling is shown in words, emojis and reactions (stripped in code as
+  a guardrail, not just asked). She also **sees your reactions** to her messages and lets
+  them shape her next reply — leaning into a warm one, noticing and adjusting to a cool one.
 - **Stickers & her photo library** — she reacts to your stickers and, sparingly, sends one
   of her own (a `[[sticker:emoji]]` tag → a matching saved sticker; tags work RU + EN). Send
   a sticker then "сохрани этот стикерпак" and she stores the whole pack. She also keeps a

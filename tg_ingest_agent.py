@@ -1001,6 +1001,19 @@ class Agent:
                 "or graphic). Cosy late-night flirtation and banter between two close people.")
 
     @staticmethod
+    def _strip_roleplay(text):
+        """Remove asterisk stage-directions (*закрываю глаза*, *прижимаю телефон к губам*)
+        the model sometimes narrates. The boss wants feeling shown with words, emojis and
+        reactions — not narrated physical actions. Replies are plain text (no markdown),
+        so a *...*  span is always roleplay, never emphasis."""
+        cleaned = re.sub(r"\*[^*\n]{1,300}\*", "", text or "")
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        # tidy lines left dangling (leading/trailing spaces from a removed action)
+        cleaned = "\n".join(line.strip() for line in cleaned.split("\n"))
+        return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+    @staticmethod
     def _extract_leading_reaction(reply):
         """Models often lead a reply with a bare reaction emoji (on its own, then the
         text) instead of the [[react:emoji]] tag. Treat a single leading reaction-
@@ -1051,8 +1064,11 @@ class Agent:
         reaction = store.kv_get(self.conn, "last_reaction")
         if reaction:
             store.kv_set(self.conn, "last_reaction", "")  # surface only once
-            parts.append(f"He just reacted {reaction} to your last message — you may acknowledge "
-                         "it warmly if it fits.")
+            sentiment = common.reaction_sentiment(reaction)
+            parts.append(
+                f"He just reacted {reaction} ({sentiment}) to your last message. Take it in "
+                "and let it shape your reply: if it's warm/positive, lean into that closeness; "
+                "if it's cool or negative, notice it and adjust — don't ignore how he felt.")
         if store.sticker_count(self.conn):
             parts.append("You have saved stickers — RARELY, when it genuinely fits the "
                          "mood, you may end your reply with [[sticker:emoji]] (e.g. "
@@ -1142,6 +1158,7 @@ class Agent:
         # that fits, AFTER the text. Stripped from the text either way.
         sm = self.STICKER_RE.search(reply)
         reply = self.STICKER_RE.sub("", reply).strip()
+        reply = self._strip_roleplay(reply)  # drop *narrated actions* — words/emojis only
         if not reply:
             # A reaction or sticker on its own IS a complete response — not an error.
             if sm:
@@ -2067,7 +2084,7 @@ class Agent:
             log(f"morning greeting skipped: {exc}")
             return ""
         _, reply = self._unwrap_converse_array((reply or "").strip())
-        return self.STICKER_RE.sub("", self.REACT_RE.sub("", reply)).strip()
+        return self._strip_roleplay(self.STICKER_RE.sub("", self.REACT_RE.sub("", reply)))
 
     def check_daily_greeting(self):
         """Cara must never reach out FIRST after a night without an inventive

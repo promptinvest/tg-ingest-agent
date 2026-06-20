@@ -2119,6 +2119,15 @@ class GoldenTranscriptTests(unittest.TestCase):
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) c FROM messages WHERE tg_message_id=52").fetchone()["c"], 1)
 
+    def test_strip_roleplay_actions(self):
+        import tg_ingest_agent
+        f = tg_ingest_agent.Agent._strip_roleplay
+        self.assertEqual(f("*закрываю глаза, выдыхаю*\n\nТвоя. Полностью."), "Твоя. Полностью.")
+        self.assertEqual(
+            f("Всегда — это очень долго. *прижимаю телефон к губам* И я согласна."),
+            "Всегда — это очень долго. И я согласна.")
+        self.assertEqual(f("просто текст без действий"), "просто текст без действий")
+
     def test_extract_leading_reaction(self):
         import tg_ingest_agent
         f = tg_ingest_agent.Agent._extract_leading_reaction
