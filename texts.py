@@ -544,8 +544,8 @@ TEXTS = {
         "en": "Let's do one at a time, boss — which first?",
     },
     "sticker_which": {
-        "ru": "Пришли стикер из пака, который хочешь сохранить — и я его запомню 🙂",
-        "en": "Send me a sticker from the pack you want me to keep, and I'll save it 🙂",
+        "ru": "Пришли ссылку на пак (t.me/addstickers/…) или сам стикер — и я запомню весь пак 🙂",
+        "en": "Send me the pack link (t.me/addstickers/…) or a sticker from it, and I'll save the whole pack 🙂",
     },
     "sticker_fail": {
         "ru": "Не получилось достать этот пак 😕 Пришли стикер ещё раз?",

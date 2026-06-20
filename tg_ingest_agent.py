@@ -519,6 +519,13 @@ class Agent:
             self.handle_command(chat_id, COMMAND_ALIASES[text])
             return
 
+        # A sticker-pack link (t.me/addstickers/NAME) means "learn this pack" — save it
+        # directly so it isn't mis-routed to fetch/ingest as a generic URL.
+        link = self.STICKER_LINK_RE.search(text)
+        if link:
+            self.do_save_sticker_pack(chat_id, self.lang(), set_name=link.group(1))
+            return
+
         self.dispatch(chat_id, msg, text)
 
     def transcribe_voice(self, chat_id, voice):
@@ -1110,6 +1117,9 @@ class Agent:
     # applied as a reaction only if Telegram allows it. (Sticker tags are removed first.)
     BRACKET_RE = re.compile(r"\[\[\s*(?:react\w*|реакц\w*)?\s*:?\s*([^\[\]]*?)\s*\]\]",
                             re.IGNORECASE)
+    # A shared sticker-pack link — the boss's main way to give Cara a pack to learn.
+    STICKER_LINK_RE = re.compile(r"(?:t\.me/addstickers/|addstickers\?set=)([A-Za-z0-9_]+)",
+                                 re.IGNORECASE)
 
     def _converse_grounding(self, text):
         """Pull the boss's OWN saved entries most relevant to what he just said, so
@@ -2727,9 +2737,10 @@ class Agent:
             self.turn_extra = []
             self._turn_media_parts = None
 
-    def do_save_sticker_pack(self, chat_id, lang):
-        """Save the pack of the last sticker he sent, so Cara can use it later."""
-        set_name = store.kv_get(self.conn, "last_sticker_set")
+    def do_save_sticker_pack(self, chat_id, lang, set_name=None):
+        """Learn a sticker pack so Cara can use it later. `set_name` comes from a
+        shared t.me/addstickers link; otherwise fall back to the last sticker he sent."""
+        set_name = set_name or store.kv_get(self.conn, "last_sticker_set")
         if not set_name:
             self.reply(chat_id, T(lang, "sticker_which"))
             return
@@ -2739,8 +2750,10 @@ class Agent:
             log(f"getStickerSet failed for {set_name}: {exc}")
             self.reply(chat_id, T(lang, "sticker_fail"))
             return
+        store.kv_set(self.conn, "last_sticker_set", set_name)
+        title = res.get("title") or set_name
         n = store.stickers_add(self.conn, set_name, res.get("stickers") or [])
-        self.reply(chat_id, T(lang, "sticker_saved", name=set_name, n=n))
+        self.reply(chat_id, T(lang, "sticker_saved", name=title, n=n))
 
     def do_save_cara_photo(self, chat_id, lang, msg):
         """Add the photo(s) he just sent to Cara's own photo library."""

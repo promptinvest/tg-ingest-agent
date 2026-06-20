@@ -1396,6 +1396,19 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertEqual(store.sticker_count(self.agent.conn), 2)
         self.assertIn("MyPack", r.call_args[0][1])
 
+    def test_sticker_pack_link_saves_pack(self):
+        import tg_ingest_agent
+        m = tg_ingest_agent.Agent.STICKER_LINK_RE.search("https://t.me/addstickers/CutieMadeline")
+        self.assertEqual(m.group(1), "CutieMadeline")
+        packed = {"title": "Cutie Madeline",
+                  "stickers": [{"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"}]}
+        with mock.patch.object(tg_ingest_agent, "tg_call", return_value=packed), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_save_sticker_pack(1, "ru", set_name="CutieMadeline")
+        self.assertEqual(store.sticker_count(self.agent.conn), 1)
+        self.assertEqual(store.kv_get(self.agent.conn, "last_sticker_set"), "CutieMadeline")
+        self.assertIn("Cutie Madeline", r.call_args[0][1])
+
     def test_cara_photo_library_save_and_selfie(self):
         import tg_ingest_agent
         with mock.patch.object(self.agent, "reply"):
