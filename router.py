@@ -63,6 +63,7 @@ ACTIONS = {
     "converse",          # free-form warm conversation as Cara (greetings, personal, chit-chat)
     "review",            # params: period in day|week|month, export (bool) — performance review
     "save_sticker_pack", # save the pack of the sticker he just sent, for Cara to use
+    "send_sticker",      # he asked her to send/show/use a sticker now
     "save_cara_photo",   # add the photo(s) he sent to Cara's own photo library
     "cara_selfie",       # send one of Cara's saved photos (he asked to see her)
     "clarify",           # params: question
@@ -92,6 +93,8 @@ NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сд�
 "сохрани этот стикерпак" / "запомни этот пак стикеров" / "save this sticker pack" -> {"action": "save_sticker_pack", "params": {}, "confidence": 0.9}
 "добавь это фото в свою галерею" / "это твои фотографии, сохрани" / "add this to your photos" -> {"action": "save_cara_photo", "params": {}, "confidence": 0.85}
 "пришли своё фото" / "покажи себя" / "send me a selfie" / "как ты сегодня выглядишь?" -> {"action": "cara_selfie", "params": {}, "confidence": 0.85}
+"ты используешь это?" / "будешь пользоваться стикерами?" / "тебе нравится?" / "do you use it?" -> {"action": "converse", "params": {}, "confidence": 0.9}
+"пришли стикер" / "кинь стикерок" / "покажи стикеры" / "покажи использование стикеров" / "send me a sticker" / "use a sticker" -> {"action": "send_sticker", "params": {}, "confidence": 0.9}
 "добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
 "поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
 "что ты умеешь?" / "what can you do?" -> {"action": "help", "params": {}, "confidence": 0.95}
@@ -225,6 +228,9 @@ def build_system_prompt(cfg, pending, now_utc=None):
         f"Allowed actions (closed set): {actions}.\n"
         "A question about the user's OWN saved notes, plans or documents"
         " (e.g. 'when is my flight?', 'what's the plan for today?') is the 'ask' action.\n"
+        "But a question about CARA herself — her behaviour, feelings, or whether SHE will"
+        " do/use something ('ты используешь это?', 'тебе нравится?', 'будешь пользоваться?',"
+        " 'do you like it?') — is NOT 'ask'; it's 'converse' (she answers warmly herself).\n"
         "If the message is a greeting, smalltalk, something personal or emotional,"
         " about Cara's own life/feelings or the user's life, an opinion, banter, or just"
         " anything that isn't a concrete task, use 'converse' (free-form warm chat in"

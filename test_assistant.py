@@ -1431,6 +1431,21 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertEqual(store.kv_get(self.agent.conn, "last_sticker_set"), "CutieMadeline")
         self.assertIn("Cutie Madeline", r.call_args[0][1])
 
+    def test_send_sticker_action(self):
+        import tg_ingest_agent
+        store.stickers_add(self.agent.conn, "p", [{"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"}])
+        with mock.patch.object(tg_ingest_agent, "tg_send_sticker") as ss, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.do_send_sticker(1, "ru")
+        self.assertEqual(ss.call_args[0][2], "F1")
+        self.agent.conn.execute("DELETE FROM stickers")
+        self.agent.conn.commit()
+        with mock.patch.object(tg_ingest_agent, "tg_send_sticker") as ss2, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_send_sticker(1, "ru")
+        self.assertFalse(ss2.called)  # nothing to send
+        self.assertTrue(r.called)     # warm 'none yet' reply
+
     def test_cara_photo_library_save_and_selfie(self):
         import tg_ingest_agent
         with mock.patch.object(self.agent, "reply"):
@@ -1440,6 +1455,16 @@ class ConversationDispatchTests(unittest.TestCase):
                 mock.patch.object(self.agent, "reply"):
             self.agent.do_cara_selfie(1, "ru")
         self.assertEqual(sp.call_args[0][2], "P1")  # sent the saved file_id
+
+    def test_ask_prompt_is_in_persona_not_assistant(self):
+        import knowledge
+        msgs = knowledge.build_ask_messages(
+            "когда рейс?", [{"message_id": 1, "text": "рейс в 10:00", "category": "Travel",
+                            "title": None}])
+        sys = msgs[0]["content"]
+        self.assertNotIn("personal assistant", sys.lower())
+        self.assertIn("NEVER an AI", sys)
+        self.assertIn("рейс в 10:00", sys)  # grounding still present
 
     def test_converse_grounding_uses_stored_facts(self):
         # The guardrail: converse is GIVEN the boss's real saved entries so it can use

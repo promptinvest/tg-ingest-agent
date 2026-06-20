@@ -114,6 +114,8 @@ SKILLS = {
                  "title": {"en": "Conversation", "ru": "Общение"}},
     "save_sticker_pack": {"risk": "state_write", "writes_state": True,
                           "title": {"en": "Save sticker pack", "ru": "Сохранить стикерпак"}},
+    "send_sticker": {"risk": "read_only", "title": {"en": "Send a sticker",
+                                                    "ru": "Прислать стикер"}},
     "save_cara_photo": {"risk": "state_write", "writes_state": True,
                         "title": {"en": "Save Cara photo", "ru": "Сохранить фото Кары"}},
     "cara_selfie": {"risk": "read_only", "title": {"en": "Send a photo of herself",

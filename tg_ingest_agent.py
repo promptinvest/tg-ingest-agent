@@ -849,6 +849,8 @@ class Agent:
             self.resolve_pending(chat_id, action, params, pending, lang)
         elif action == "save_sticker_pack":
             self.do_save_sticker_pack(chat_id, lang)
+        elif action == "send_sticker":
+            self.do_send_sticker(chat_id, lang)
         elif action == "save_cara_photo":
             self.do_save_cara_photo(chat_id, lang, msg)
         elif action == "cara_selfie":
@@ -2786,6 +2788,18 @@ class Agent:
         title = res.get("title") or set_name
         n = store.stickers_add(self.conn, set_name, res.get("stickers") or [])
         self.reply(chat_id, T(lang, "sticker_saved", name=title, n=n))
+
+    def do_send_sticker(self, chat_id, lang):
+        """He asked to see her use a sticker — send one of her saved ones now."""
+        fid = store.sticker_random(self.conn)
+        if not fid:
+            self.reply(chat_id, T(lang, "sticker_none"))
+            return
+        try:
+            tg_send_sticker(self.cfg.token, chat_id, fid)
+        except TelegramError as exc:
+            log(f"send sticker failed: {exc}")
+            self.reply(chat_id, T(lang, "sticker_fail"))
 
     def do_save_cara_photo(self, chat_id, lang, msg):
         """Add the photo(s) he just sent to Cara's own photo library."""

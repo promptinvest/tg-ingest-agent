@@ -1472,6 +1472,11 @@ def sticker_count(conn):
     return conn.execute("SELECT COUNT(*) FROM stickers").fetchone()[0]
 
 
+def sticker_random(conn):
+    row = conn.execute("SELECT file_id FROM stickers ORDER BY RANDOM() LIMIT 1").fetchone()
+    return row["file_id"] if row else None
+
+
 def sticker_for_emoji(conn, emoji):
     """A saved sticker file_id whose emoji matches `emoji` (exact first, then any
     that contains it); None if none saved match."""

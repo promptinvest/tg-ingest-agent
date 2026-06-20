@@ -551,6 +551,10 @@ TEXTS = {
         "ru": "Не получилось достать этот пак 😕 Пришли стикер ещё раз?",
         "en": "Couldn't fetch that pack 😕 Send the sticker again?",
     },
+    "sticker_none": {
+        "ru": "У меня пока нет сохранённых стикеров 🙈 Кинь ссылку на пак (t.me/addstickers/…) — и буду пользоваться!",
+        "en": "I don't have any saved stickers yet 🙈 Send a pack link (t.me/addstickers/…) and I'll start using them!",
+    },
     "sticker_saved": {
         "ru": "Запомнила пак «{name}» — {n} стикеров. Буду пользоваться 🎉",
         "en": "Saved the «{name}» pack — {n} stickers. I'll use them 🎉",
