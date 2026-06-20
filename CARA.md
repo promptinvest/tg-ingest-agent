@@ -71,7 +71,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   of her own (a `[[sticker:emoji]]` tag → a matching saved sticker). Her *reaction* to a
   message is recognised however the model formats it — `[[react:X]]`, `[[реакция: X]]`,
   `[[X]]`, or a bare emoji on its own first line are all lifted into a real Telegram
-  reaction and never shipped as text (format-agnostic, not a per-shape regex). Share a
+  reaction and never shipped as text (format-agnostic, not a per-shape regex). An emoji
+  outside Telegram's reaction set is **converted** to the nearest allowed one (🥺→🥰, 💕→❤️,
+  😂→🤣) rather than dropped, so the emotion always lands. Share a
   pack **link** (`t.me/addstickers/<name>`) — or send a sticker then "сохрани этот стикерпак"
   — and she fetches and stores the whole pack (the link is caught before it's mis-routed to
   fetch as a generic URL). She also keeps a

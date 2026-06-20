@@ -70,6 +70,25 @@ _POSITIVE_REACTIONS = {"👍", "❤️", "❤", "🔥", "🥰", "👏", "😁", 
                        "👌", "💯", "🤣", "🤝", "😍", "😎", "🤗"}
 _NEGATIVE_REACTIONS = {"👎", "😢", "😭", "💔", "🤬", "😡", "🤨", "😐", "🥱", "💩"}
 
+# Common emoji that AREN'T in Telegram's reaction palette -> the nearest allowed
+# one, so an out-of-palette emotion is converted rather than dropped.
+REACTION_ALIASES = {
+    "😊": "😁", "🙂": "😁", "😄": "😁", "😃": "😁", "😀": "😁", "😅": "😁", "😆": "😁",
+    "😉": "😁", "🙃": "😁", "😂": "🤣",
+    "💕": "❤️", "💖": "❤️", "💗": "❤️", "💓": "❤️", "💞": "❤️", "💘": "❤️", "💝": "❤️",
+    "❤": "❤️", "♥": "❤️", "🧡": "❤️", "💛": "❤️", "💚": "❤️", "💙": "❤️", "💜": "❤️",
+    "🤍": "❤️", "🤎": "❤️", "🩷": "❤️", "🫶": "❤️",
+    "🥺": "🥰", "🥹": "🥰", "😌": "🥰", "🥲": "🥰",
+    "😘": "😍", "😗": "😍", "😚": "😍", "😙": "😍", "😻": "😍", "🤤": "😍",
+    "🙌": "👏", "🤲": "🙏", "🥳": "🎉", "🎊": "🎉",
+    "✨": "🔥", "⭐": "🔥", "🌟": "🔥", "💫": "🔥", "💪": "🔥", "⚡": "🔥",
+    "😭": "😢", "😔": "😢", "😞": "😢", "🙁": "😢", "☹": "😢",
+    "😱": "🤯", "😮": "🤯", "😲": "🤯", "🤩": "🤩",
+    "🤭": "🙈", "🫣": "🙈", "😬": "🙈",
+    "😏": "😎", "🫡": "🫡", "✅": "👍", "☑": "👍", "👌🏻": "👌",
+    "🥱": "👎", "😒": "👎", "🙄": "👎",
+}
+
 
 def reaction_sentiment(emoji):
     if emoji in _POSITIVE_REACTIONS:
@@ -77,6 +96,26 @@ def reaction_sentiment(emoji):
     if emoji in _NEGATIVE_REACTIONS:
         return "negative"
     return "neutral"
+
+
+def to_reaction(s):
+    """Map `s` (an emoji, possibly outside Telegram's reaction palette, optionally
+    wrapped in surrounding text) to a TG-allowed reaction emoji: the palette emoji
+    itself, the nearest mapped equivalent, or None if nothing matches. Tolerates a
+    missing/extra VS16 (❤ vs ❤️) and trailing skin-tone modifiers (👍 in 👍🏻)."""
+    if not s:
+        return None
+    for emo in REACTION_PALETTE:
+        if emo in s:
+            return emo
+    bare = s.replace("️", "")
+    for emo in REACTION_PALETTE:
+        if emo.replace("️", "") in bare:
+            return emo
+    for src, dst in REACTION_ALIASES.items():
+        if src in s or src.replace("️", "") in bare:
+            return dst
+    return None
 
 
 def scrub_secrets(text):

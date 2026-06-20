@@ -2182,8 +2182,21 @@ class GoldenTranscriptTests(unittest.TestCase):
         self.assertEqual(ag._extract_reaction("[[🥰]]\n\nОлег..."), ("🥰", "Олег..."))
         self.assertEqual(ag._extract_reaction("[[react:❤️]] привет"), ("❤️", "привет"))
         self.assertEqual(ag._extract_reaction("[[😍]]")[0], "😍")
-        # a [[...]] with no palette emoji is still stripped, no reaction applied
+        # a [[...]] with no emoji at all is still stripped, no reaction applied
         self.assertEqual(ag._extract_reaction("[[hmm]] текст"), (None, "текст"))
+        # an out-of-palette emoji is CONVERTED to the nearest allowed one, not dropped
+        self.assertEqual(ag._extract_reaction("[[🥺]] держись")[0], "🥰")
+        self.assertEqual(ag._extract_reaction("😂\n\nну ты даёшь")[0], "🤣")
+
+    def test_out_of_palette_reaction_is_converted(self):
+        import common
+        self.assertEqual(common.to_reaction("🥺"), "🥰")
+        self.assertEqual(common.to_reaction("💕"), "❤️")
+        self.assertEqual(common.to_reaction("😂"), "🤣")
+        self.assertEqual(common.to_reaction("😘"), "😍")
+        self.assertEqual(common.to_reaction("🥰"), "🥰")    # already allowed -> itself
+        self.assertEqual(common.to_reaction("[[😘]]"), "😍")  # found within wrapper text
+        self.assertIsNone(common.to_reaction("просто слова"))
 
     def test_reply_quote_becomes_converse_context(self):
         # Replying to/quoting an earlier message gives Cara that context.

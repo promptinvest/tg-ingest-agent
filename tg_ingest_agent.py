@@ -386,8 +386,11 @@ class Agent:
         return None
 
     def react(self, chat_id, message_id, emoji):
-        """React to one of the boss's messages with an emoji (best-effort)."""
-        if not (message_id and emoji) or emoji not in common.REACTION_PALETTE:
+        """React to one of the boss's messages. An emoji outside Telegram's reaction
+        palette is CONVERTED to the nearest allowed one (common.to_reaction) so the
+        emotion still lands instead of being dropped. Best-effort."""
+        emoji = common.to_reaction(emoji)
+        if not (message_id and emoji):
             return
         try:
             tg_set_reaction(self.cfg.token, chat_id, message_id, emoji)
@@ -1022,11 +1025,10 @@ class Agent:
 
     @staticmethod
     def _first_palette_emoji(s):
-        """The first Telegram-reaction emoji found anywhere in `s`, else None."""
-        for emo in sorted(common.REACTION_PALETTE, key=len, reverse=True):
-            if emo in (s or ""):
-                return emo
-        return None
+        """A TG-allowed reaction emoji for `s` — palette emoji or a converted nearest
+        equivalent (🥺→🥰, 💕→❤️, …), so an out-of-palette pick isn't lost. None if
+        nothing emoji-like is found."""
+        return common.to_reaction(s)
 
     def _extract_reaction(self, reply):
         """Pull the reaction the model intended in ANY form it uses — [[react:X]],
@@ -1050,13 +1052,15 @@ class Agent:
         palette emoji that's followed by whitespace/end as the intended reaction and
         strip it. Returns (emoji|None, remaining_text). Inline emoji is left alone."""
         r = (reply or "").lstrip()
-        for emo in sorted(common.REACTION_PALETTE, key=len, reverse=True):
+        known = sorted(set(common.REACTION_PALETTE) | set(common.REACTION_ALIASES),
+                       key=len, reverse=True)
+        for emo in known:
             if r.startswith(emo):
                 rest = r[len(emo):].lstrip(" \t")
                 # Only when the emoji stands ALONE on the first line (next is a
                 # newline or the end) — leave inline emoji ("🔥 отлично!") in the text.
                 if rest == "" or rest[0] == "\n":
-                    return emo, rest.lstrip()
+                    return common.to_reaction(emo), rest.lstrip()
         return None, reply
 
     @staticmethod
