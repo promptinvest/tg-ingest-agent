@@ -63,9 +63,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   and romantic warmth are welcome; never explicit). She's given the **real current date/time**
   so she never invents one, and she never reaches out first after a night without an
   inventive, in‑voice **good‑morning**.
-- **Faithful recall** — when reading back the boss's saved notes/journal/reminders she stays
-  strictly to what's stored (never embellishes or blends in her own fictional life); if she
-  doesn't have the entry in hand she offers to pull it up rather than confabulate.
+- **Never fabricates a stored fact (guardrail)** — creativity is free in her *voice* and her
+  own fictional life, but any fact about the boss (notes, journal, reminders, names, dates,
+  counts, spend) must be real. Every `converse` turn is **grounded**: his most relevant saved
+  entries are retrieved (embedding match) and handed to the model as FACTS to use verbatim;
+  if the answer isn't there she offers to look rather than confabulate. Reinforced by an
+  absolute rule in her persona prompt.
 
 ---
 

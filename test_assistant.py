@@ -1375,6 +1375,22 @@ class ConversationDispatchTests(unittest.TestCase):
         # weekend mood is its own directive
         self.assertIn("weekend", tg_ingest_agent.Agent._weekend_mood("en").lower())
 
+    def test_converse_grounding_uses_stored_facts(self):
+        # The guardrail: converse is GIVEN the boss's real saved entries so it can use
+        # facts instead of inventing them. No index -> no grounding; with a match it's
+        # surfaced verbatim and labelled as FACTS.
+        import knowledge
+        with mock.patch.object(store, "all_embedded_chunks", return_value=[]):
+            self.assertEqual(self.agent._converse_grounding("за что я был благодарен?"), "")
+        with mock.patch.object(store, "all_embedded_chunks", return_value=[{"x": 1}]), \
+                mock.patch.object(llm, "embed", return_value=[[0.1, 0.2]]), \
+                mock.patch.object(knowledge, "rank_chunks",
+                                  return_value=[{"category": "Благодарность",
+                                                 "text": "созвон с Димой из Дубаев"}]):
+            g = self.agent._converse_grounding("за что я был благодарен?")
+        self.assertIn("Димой", g)        # the real fact, verbatim
+        self.assertIn("FACTS", g)        # labelled so the model treats it as ground truth
+
     def test_clarify_stays_in_voice_not_template(self):
         # A low-confidence/clarify route must NOT snap into the formal template
         # mid-conversation — it stays in Cara's warm voice (do_converse).

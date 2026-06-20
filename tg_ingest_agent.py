@@ -1003,14 +1003,46 @@ class Agent:
 
     _REACT_TAG = None  # compiled lazily
 
+    def _converse_grounding(self, text):
+        """Pull the boss's OWN saved entries most relevant to what he just said, so
+        converse answers FROM real facts instead of inventing them — the guardrail that
+        she may be creative in voice but must use real facts in any dialog. Best-effort
+        and cheap (one tiny embed + in-memory ranking); '' when nothing's indexed/fails."""
+        text = (text or "").strip()
+        if len(text) < 3:
+            return ""
+        try:
+            rows = store.all_embedded_chunks(self.conn)
+            if not rows:
+                return ""
+            qvec = llm.embed(self.cfg, self.conn, "converse", [text])[0]
+            ctx = knowledge.rank_chunks(qvec, rows, self.cfg.ask_top_k,
+                                        self.cfg.ask_context_chars)
+        except llm.LLMError:
+            return ""
+        lines = []
+        for c in ctx:
+            snippet = " ".join((c.get("text") or "").split())[:300]
+            if snippet:
+                lines.append(f"  [{c.get('category') or '?'}] {snippet}")
+        if not lines:
+            return ""
+        return ("His OWN saved entries that may be relevant — these are FACTS. Use them only "
+                "as written; do NOT invent, rename, or embellish his data. If his question "
+                "isn't answered here, say you'll look it up rather than guess:\n"
+                + "\n".join(lines))
+
     def do_converse(self, chat_id, lang, text, message_id=None):
         """Reply in Cara's own voice — warm, human, language-matched. May open with
         an optional [[react:emoji]] tag, which becomes a Telegram reaction on his
         message. No state changes here; real tasks go through the skills."""
         import re
         self.send_chat_action(chat_id, "typing")
-        messages = converse.build_messages(self.conn, chat_id, lang,
-                                           extra_context=self.converse_context(lang))
+        extra = self.converse_context(lang)
+        grounding = self._converse_grounding(text)
+        if grounding:
+            extra += "\n\n" + grounding
+        messages = converse.build_messages(self.conn, chat_id, lang, extra_context=extra)
         try:
             reply = llm.chat_profile(self.cfg, self.conn, "converse", messages,
                                      profile="converse_warm")

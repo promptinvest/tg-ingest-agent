@@ -38,7 +38,12 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
    gates what each skill may do; forwarded/quoted content is untrusted; budgets
    hard-stop; and she truthfully never claims a real task was done when it
    wasn't. Conversation and grounded Q&A are LLM-generated; **transactional and
-   system messages stay deterministic templates.**
+   system messages stay deterministic templates.** **She never fabricates a stored
+   fact** — creativity is free in her voice and fictional life, but any fact about
+   the boss must be real: every `converse` turn is grounded with his most relevant
+   saved entries (embedding retrieval) handed to the model as verbatim facts, and an
+   absolute persona rule forbids inventing/embellishing his data (she offers to look
+   it up instead).
 5. **Owner-only.** Cara answers exactly one person: a message is acted on only
    when **both** the chat and the sender's account are on the allowlist. A
    stranger sharing a chat can't reach her, and the owner's account isn't acted
