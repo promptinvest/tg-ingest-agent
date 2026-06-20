@@ -68,7 +68,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   a guardrail, not just asked). She also **sees your reactions** to her messages and lets
   them shape her next reply — leaning into a warm one, noticing and adjusting to a cool one.
 - **Stickers & her photo library** — she reacts to your stickers and, sparingly, sends one
-  of her own (a `[[sticker:emoji]]` tag → a matching saved sticker; tags work RU + EN). Send
+  of her own (a `[[sticker:emoji]]` tag → a matching saved sticker). Her *reaction* to a
+  message is recognised however the model formats it — `[[react:X]]`, `[[реакция: X]]`,
+  `[[X]]`, or a bare emoji on its own first line are all lifted into a real Telegram
+  reaction and never shipped as text (format-agnostic, not a per-shape regex). Send
   a sticker then "сохрани этот стикерпак" and she stores the whole pack. She also keeps a
   **photo library** of herself — "это твои фото" adds them, "пришли своё фото"/"send a selfie"
   sends one. (Her bot **profile avatar** can only be set via @BotFather — the Bot API can't.)

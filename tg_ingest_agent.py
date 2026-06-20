@@ -1014,6 +1014,29 @@ class Agent:
         return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
     @staticmethod
+    def _first_palette_emoji(s):
+        """The first Telegram-reaction emoji found anywhere in `s`, else None."""
+        for emo in sorted(common.REACTION_PALETTE, key=len, reverse=True):
+            if emo in (s or ""):
+                return emo
+        return None
+
+    def _extract_reaction(self, reply):
+        """Pull the reaction the model intended in ANY form it uses — [[react:X]],
+        [[реакция: X]], [[X]], or a bare emoji alone on the first line — and return
+        (emoji|None, cleaned_text). Every [[...]] block is stripped (it's never real
+        text); the emoji is applied as a reaction only when it's in Telegram's palette.
+        Sticker tags must be removed BEFORE calling this so they aren't swallowed."""
+        found = []
+        reply = self.BRACKET_RE.sub(
+            lambda m: found.append(self._first_palette_emoji(m.group(1))) or "", reply
+        ).strip()
+        reaction = next((e for e in found if e), None)
+        if not reaction:
+            reaction, reply = self._extract_leading_reaction(reply)
+        return reaction, reply
+
+    @staticmethod
     def _extract_leading_reaction(reply):
         """Models often lead a reply with a bare reaction emoji (on its own, then the
         text) instead of the [[react:emoji]] tag. Treat a single leading reaction-
@@ -1080,8 +1103,13 @@ class Agent:
     # Tags Cara may emit in a converse reply. Bilingual: some models write the
     # Russian word ("реакция"/"стикер") instead of the English token, so accept both
     # — otherwise the raw "[[реакция: 🥰]]" ships as literal text (it did).
-    REACT_RE = re.compile(r"\[\[\s*(?:react|реакц\w*)\s*:\s*([^\]\s]+)\s*\]\]", re.IGNORECASE)
     STICKER_RE = re.compile(r"\[\[\s*(?:sticker|стикер\w*)\s*:\s*([^\]\s]+)\s*\]\]", re.IGNORECASE)
+    # Any [[ ... ]] block is the model's reaction marker — it mangles the exact token
+    # endlessly ([[react:X]], [[реакция: X]], [[X]], …). Match the block in ANY of those
+    # forms (optional react/реакция label) and strip it wholesale; the emoji inside is
+    # applied as a reaction only if Telegram allows it. (Sticker tags are removed first.)
+    BRACKET_RE = re.compile(r"\[\[\s*(?:react\w*|реакц\w*)?\s*:?\s*([^\[\]]*?)\s*\]\]",
+                            re.IGNORECASE)
 
     def _converse_grounding(self, text):
         """Pull the boss's OWN saved entries most relevant to what he just said, so
@@ -1142,22 +1170,17 @@ class Agent:
         # pair. Salvage that shape so we react + send clean text rather than
         # shipping the raw literal to the boss.
         reaction, reply = self._unwrap_converse_array(reply)
-        # The reaction the model intends, in ANY of the forms it actually uses: an
-        # array pair (above), a [[react:emoji]] / [[реакция:emoji]] tag, OR — most
-        # often now — just a bare reaction emoji leading the message. Apply it as a
-        # real Telegram reaction; never let it ride along as the message's first line.
-        m = self.REACT_RE.search(reply)
-        if m:
-            reaction = reaction or m.group(1)
-            reply = self.REACT_RE.sub("", reply).strip()
-        if not reaction:
-            reaction, reply = self._extract_leading_reaction(reply)
-        if reaction:
-            self.react(chat_id, message_id, reaction)
-        # Optional sticker tag (sticker: / стикер:) -> send one of her saved stickers
-        # that fits, AFTER the text. Stripped from the text either way.
+        # Sticker tag FIRST (specific prefix) so the format-agnostic reaction extractor
+        # below doesn't swallow a [[sticker:emoji]] as a reaction.
         sm = self.STICKER_RE.search(reply)
         reply = self.STICKER_RE.sub("", reply).strip()
+        # The reaction the model intends, in ANY form it uses: an array pair (above), a
+        # [[…]] block (labelled or bare — [[react:X]] / [[реакция: X]] / [[X]]), or a bare
+        # emoji leading the message. Apply it as a real reaction; never ship it as text.
+        tag_reaction, reply = self._extract_reaction(reply)
+        reaction = reaction or tag_reaction
+        if reaction:
+            self.react(chat_id, message_id, reaction)
         reply = self._strip_roleplay(reply)  # drop *narrated actions* — words/emojis only
         if not reply:
             # A reaction or sticker on its own IS a complete response — not an error.
@@ -2084,7 +2107,8 @@ class Agent:
             log(f"morning greeting skipped: {exc}")
             return ""
         _, reply = self._unwrap_converse_array((reply or "").strip())
-        return self._strip_roleplay(self.STICKER_RE.sub("", self.REACT_RE.sub("", reply)))
+        _, reply = self._extract_reaction(self.STICKER_RE.sub("", reply))
+        return self._strip_roleplay(reply)
 
     def check_daily_greeting(self):
         """Cara must never reach out FIRST after a night without an inventive

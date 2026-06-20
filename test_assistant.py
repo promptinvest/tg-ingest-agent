@@ -2147,16 +2147,30 @@ class GoldenTranscriptTests(unittest.TestCase):
         self.assertIn("До скорого", text)
         self.assertNotIn("🥰", text)  # applied as a reaction, not shipped in the text
 
-    def test_russian_reaction_tag_applied_not_shipped(self):
-        # The model sometimes writes the Russian word: "[[реакция: 🥰]]". It must be
-        # applied as a reaction and stripped, never shipped as literal text.
-        sent = self.drive({"message": self._msg(60, "спасибо!")}, {
-            "router": '{"action":"converse","params":{},"confidence":0.95}',
-            "converse": "[[реакция: 🥰]] Да не за что, рада помочь!"})
-        text = " ".join(sent)
-        self.assertIn("рада помочь", text)
-        self.assertNotIn("реакц", text)
-        self.assertNotIn("[[", text)
+    def test_reaction_in_any_bracket_form_is_stripped(self):
+        # The model mangles the token endlessly; ANY [[...]] form must be lifted into a
+        # reaction and removed from the text — labelled or not, RU or EN.
+        for raw in ("[[реакция: 🥰]] Да не за что!",
+                    "[[react:🥰]]\n\nДа не за что!",
+                    "[[🥰]]\n\nДа не за что!",
+                    "[[ 🥰 ]] Да не за что!"):
+            sent = self.drive({"message": self._msg(60, "спасибо!")}, {
+                "router": '{"action":"converse","params":{},"confidence":0.95}',
+                "converse": raw})
+            text = " ".join(sent)
+            self.assertIn("Да не за что", text, raw)
+            self.assertNotIn("[[", text, raw)
+            self.assertNotIn("🥰", text, raw)
+            self.assertNotIn("реакц", text, raw)
+
+    def test_extract_reaction_unit(self):
+        import tg_ingest_agent
+        ag = tg_ingest_agent.Agent.__new__(tg_ingest_agent.Agent)  # no __init__ needed
+        self.assertEqual(ag._extract_reaction("[[🥰]]\n\nОлег..."), ("🥰", "Олег..."))
+        self.assertEqual(ag._extract_reaction("[[react:❤️]] привет"), ("❤️", "привет"))
+        self.assertEqual(ag._extract_reaction("[[😍]]")[0], "😍")
+        # a [[...]] with no palette emoji is still stripped, no reaction applied
+        self.assertEqual(ag._extract_reaction("[[hmm]] текст"), (None, "текст"))
 
     def test_reply_quote_becomes_converse_context(self):
         # Replying to/quoting an earlier message gives Cara that context.
