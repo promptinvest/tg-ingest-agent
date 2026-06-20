@@ -1369,9 +1369,11 @@ class ConversationDispatchTests(unittest.TestCase):
     def test_time_mood_tracks_clock(self):
         import tg_ingest_agent
         m = tg_ingest_agent.Agent._time_mood
-        self.assertIn("flirty", m(1, "en").lower())    # 01:00 -> night, playful
+        self.assertIn("flirt", m(1, "en").lower())     # 01:00 -> night, flirty
         self.assertIn("morning", m(8, "en").lower())   # 08:00 -> morning
         self.assertIn("флирт", m(2, "ru"))             # night mood in Russian
+        # weekend mood is its own directive
+        self.assertIn("weekend", tg_ingest_agent.Agent._weekend_mood("en").lower())
 
     def test_clarify_stays_in_voice_not_template(self):
         # A low-confidence/clarify route must NOT snap into the formal template

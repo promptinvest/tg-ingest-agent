@@ -58,9 +58,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   "через полчаса") or via inline buttons. Bulk **purge** needs an exact typed phrase.
 - **When unsure, she talks** — a low‑confidence read (and the `clarify` route) drops to
   warm `converse` where she answers or asks naturally in «ты», never a cold formal template.
-- **Her voice tracks the clock** — fresh mornings, breezy days, unwinding evenings, and
-  playful/intimate nights (warm, witty, a wink of flirty humour; never crude). She never
-  reaches out first after a night without an inventive, in‑voice **good‑morning**.
+- **Her voice tracks the clock and the week** — fresh mornings, breezy days, unwinding
+  evenings, playful/flirty nights, and looser/more‑playful **weekends** (tasteful flirtation
+  and romantic warmth are welcome; never explicit). She's given the **real current date/time**
+  so she never invents one, and she never reaches out first after a night without an
+  inventive, in‑voice **good‑morning**.
+- **Faithful recall** — when reading back the boss's saved notes/journal/reminders she stays
+  strictly to what's stored (never embellishes or blends in her own fictional life); if she
+  doesn't have the entry in hand she offers to pull it up rather than confabulate.
 
 ---
 

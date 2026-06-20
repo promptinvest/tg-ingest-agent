@@ -954,13 +954,21 @@ class Agent:
             return ("Вечер — расслабленная и тёплая, можно пошутить, поделиться, помочь "
                     "сбросить день." if lang == "ru" else
                     "Evening — relaxed and warm; tease a little, share, help him unwind.")
-        return ("Ночь — ваше самое близкое время: будь нежной, игривой и остроумной, с "
-                "лёгким поддразниванием и намёком на флирт — тепло и по-человечески, "
-                "никогда не пошло и не навязчиво. Уютный ночной юмор близких людей."
-                if lang == "ru" else
-                "Night — your closest time together: be soft, playful and witty, with "
-                "gentle teasing and a hint of flirty humour — warm and human, never "
-                "crude or pushy. Cosy late-night banter between two close people.")
+        return ("Ночь — ваше самое близкое время: будь нежной, игривой и остроумной, можно "
+                "открыто пофлиртовать и пококетничать, поддразнить — тепло, со вкусом и "
+                "по-человечески (без пошлости и грубости). Уютный ночной флирт и юмор "
+                "близких людей." if lang == "ru" else
+                "Night — your closest time together: soft, playful and witty; you can flirt "
+                "and be openly charming and teasing — warm, tasteful and human (nothing crude "
+                "or graphic). Cosy late-night flirtation and banter between two close people.")
+
+    @staticmethod
+    def _weekend_mood(lang):
+        """Weekends: looser, warmer, more playful — the boss asked her to ease up."""
+        return ("Выходные — расслабься: меньше делового тона, больше игры, тепла и юмора, "
+                "можно поболтать не по делу, в своё удовольствие." if lang == "ru" else
+                "It's the weekend — loosen up: less business, more play, warmth and humour; "
+                "easy off-topic banter is welcome.")
 
     def converse_context(self, lang):
         """Live context for the conversation prompt: time of day (boss's, and
@@ -968,9 +976,16 @@ class Agent:
         the boss just left (surfaced once)."""
         parts = []
         boss_local = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
-        parts.append(f"Right now it's {boss_local.strftime('%H:%M')} for the boss — "
-                     f"{common.part_of_day(boss_local.hour, lang)}. Let your tone track the "
-                     f"time of day. {self._time_mood(boss_local.hour, lang)}")
+        is_weekend = boss_local.weekday() >= 5
+        parts.append(
+            f"Right now it's {boss_local.strftime('%H:%M')} on "
+            f"{boss_local.strftime('%A, %Y-%m-%d')} for the boss — "
+            f"{common.part_of_day(boss_local.hour, lang)}"
+            f"{', a weekend' if is_weekend else ''}. That is the REAL current date and time "
+            f"— use it if a date/time comes up, and NEVER invent one. Let your tone track "
+            f"the time of day. {self._time_mood(boss_local.hour, lang)}")
+        if is_weekend:
+            parts.append(self._weekend_mood(lang))
         if self.cfg.cara_tz_offset != self.tz_offset():
             cara_local = datetime.now(timezone.utc) + timedelta(hours=self.cfg.cara_tz_offset)
             parts.append(f"For you it's {cara_local.strftime('%H:%M')} "
@@ -1912,12 +1927,15 @@ class Agent:
         import re
         instr = ("Доброе утро — ты впервые пишешь боссу за день, ночь прошла. Поздоровайся "
                  "с ним утром: коротко, тепло, изобретательно, в своём живом стиле — без "
-                 "шаблонов и формальностей. Одно-два предложения." if lang == "ru" else
+                 "шаблонов и формальностей. Одно-два предложения. НЕ приписывай дату или "
+                 "время в скобках — просто живое приветствие." if lang == "ru" else
                  "Good morning — you're reaching out to the boss for the first time today; "
                  "the night has passed. Greet him with the morning: short, inventive, in "
-                 "your own alive voice — no templates, nothing formal. One or two sentences.")
+                 "your own alive voice — no templates, nothing formal. One or two sentences. "
+                 "Do NOT tack on a date or time stamp — just a living greeting.")
         messages = [
-            {"role": "system", "content": converse.build_system(self.conn, lang)},
+            {"role": "system", "content": converse.build_system(
+                self.conn, lang, extra_context=self.converse_context(lang))},
             {"role": "user", "content": instr},
         ]
         try:
