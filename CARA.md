@@ -21,7 +21,7 @@ the exhaustive feature + architecture map.
 | **Runtime** | one systemd service, stdlib‑only Python 3, long polling (no webhooks/ports) |
 | **Inference** | DigitalOcean Gradient (chat `anthropic-claude-haiku-4.5`, fallback `openai-gpt-4o`, embeddings `BGE‑M3`); STT local `whisper.cpp` |
 | **Storage** | SQLite (WAL) + local media dir; optional DO Spaces (dormant) |
-| **Persona** | a warm, loyal human companion with her own (fictional) life; never breaks character; matches the boss's language |
+| **Persona** | a warm, loyal human companion with her own (fictional) life; **open and personal by the boss's wish** — shares her inner life and talks frankly about any personal matter, no "professional distance"; never breaks character; matches the boss's language |
 | **Safety spine** | owner‑only access · permission manifest · confirm‑before‑state‑change · budget caps · SSRF guard · action‑truth · full tracing |
 
 ---
