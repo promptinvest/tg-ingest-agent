@@ -62,6 +62,9 @@ ACTIONS = {
     "smalltalk",         # params: kind in hello|thanks|how_are_you|ack|who_are_you
     "converse",          # free-form warm conversation as Cara (greetings, personal, chit-chat)
     "review",            # params: period in day|week|month, export (bool) — performance review
+    "save_sticker_pack", # save the pack of the sticker he just sent, for Cara to use
+    "save_cara_photo",   # add the photo(s) he sent to Cara's own photo library
+    "cara_selfie",       # send one of Cara's saved photos (he asked to see her)
     "clarify",           # params: question
     "out_of_scope",
 }
@@ -86,6 +89,9 @@ NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сд�
 "Благодарности больше не дневник" / "сделай X обычной категорией" / "stop journaling X" -> {"action": "set_journal", "params": {"category": "Благодарности", "on": false}, "confidence": 0.9}
 "покажи дневник благодарности" / "благодарности за неделю" / "мой журнал благодарностей за месяц" / "show my gratitude journal" -> {"action": "journal_show", "params": {"category": "Благодарности", "period": "month"}, "confidence": 0.9}
 "за что я был благодарен 17 июня?" / "what was I grateful for on June 17?" / "что я записал в благодарности вчера?" -> {"action": "ask", "params": {"question": "за что я был благодарен 17 июня?"}, "confidence": 0.85}
+"сохрани этот стикерпак" / "запомни этот пак стикеров" / "save this sticker pack" -> {"action": "save_sticker_pack", "params": {}, "confidence": 0.9}
+"добавь это фото в свою галерею" / "это твои фотографии, сохрани" / "add this to your photos" -> {"action": "save_cara_photo", "params": {}, "confidence": 0.85}
+"пришли своё фото" / "покажи себя" / "send me a selfie" / "как ты сегодня выглядишь?" -> {"action": "cara_selfie", "params": {}, "confidence": 0.85}
 "добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
 "поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
 "что ты умеешь?" / "what can you do?" -> {"action": "help", "params": {}, "confidence": 0.95}

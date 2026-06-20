@@ -63,6 +63,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   and romantic warmth are welcome; never explicit). She's given the **real current date/time**
   so she never invents one, and she never reaches out first after a night without an
   inventive, in‑voice **good‑morning**.
+- **Stickers & her photo library** — she reacts to your stickers and, sparingly, sends one
+  of her own (a `[[sticker:emoji]]` tag → a matching saved sticker; tags work RU + EN). Send
+  a sticker then "сохрани этот стикерпак" and she stores the whole pack. She also keeps a
+  **photo library** of herself — "это твои фото" adds them, "пришли своё фото"/"send a selfie"
+  sends one. (Her bot **profile avatar** can only be set via @BotFather — the Bot API can't.)
 - **Never fabricates a stored fact (guardrail)** — creativity is free in her *voice* and her
   own fictional life, but any fact about the boss (notes, journal, reminders, names, dates,
   counts, spend) must be real. Every `converse` turn is **grounded**: his most relevant saved

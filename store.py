@@ -330,6 +330,22 @@ CREATE TABLE IF NOT EXISTS proactive_log (
   sent_message INTEGER NOT NULL DEFAULT 0,
   reason TEXT
 );
+
+CREATE TABLE IF NOT EXISTS stickers (
+  id INTEGER PRIMARY KEY,
+  set_name TEXT,
+  file_id TEXT NOT NULL,
+  file_unique_id TEXT UNIQUE,
+  emoji TEXT,
+  added_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cara_photos (
+  id INTEGER PRIMARY KEY,
+  file_id TEXT NOT NULL,
+  file_unique_id TEXT UNIQUE,
+  added_at TEXT NOT NULL
+);
 """
 
 
@@ -1430,3 +1446,73 @@ def reminder_close(conn, rid, status="done"):
         (status, _now(), rid),
     )
     conn.commit()
+
+
+# -- Stickers (packs Cara may use in conversation) ---------------------------
+
+def stickers_add(conn, set_name, stickers):
+    """Insert each sticker of a set (dicts with file_id/file_unique_id/emoji).
+    Idempotent via UNIQUE(file_unique_id). Returns how many are now saved for it."""
+    for s in stickers:
+        fid = s.get("file_id")
+        if not fid:
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO stickers (set_name, file_id, file_unique_id, emoji,"
+            " added_at) VALUES (?, ?, ?, ?, ?)",
+            (set_name, fid, s.get("file_unique_id"), s.get("emoji"), _now()),
+        )
+    conn.commit()
+    return conn.execute(
+        "SELECT COUNT(*) FROM stickers WHERE set_name = ?", (set_name,)
+    ).fetchone()[0]
+
+
+def sticker_count(conn):
+    return conn.execute("SELECT COUNT(*) FROM stickers").fetchone()[0]
+
+
+def sticker_for_emoji(conn, emoji):
+    """A saved sticker file_id whose emoji matches `emoji` (exact first, then any
+    that contains it); None if none saved match."""
+    emoji = (emoji or "").strip()
+    if not emoji:
+        return None
+    row = conn.execute(
+        "SELECT file_id FROM stickers WHERE emoji = ? ORDER BY RANDOM() LIMIT 1", (emoji,)
+    ).fetchone()
+    if not row:
+        row = conn.execute(
+            "SELECT file_id FROM stickers WHERE emoji LIKE ? ORDER BY RANDOM() LIMIT 1",
+            (f"%{emoji}%",),
+        ).fetchone()
+    return row["file_id"] if row else None
+
+
+# -- Cara's photo library (her own pictures to send in chat) -----------------
+
+def cara_photo_add(conn, photos):
+    """Store photos (dicts with file_id/file_unique_id) as Cara's own gallery.
+    Idempotent via UNIQUE(file_unique_id). Returns total saved now."""
+    for p in photos:
+        fid = p.get("file_id")
+        if not fid:
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO cara_photos (file_id, file_unique_id, added_at)"
+            " VALUES (?, ?, ?)",
+            (fid, p.get("file_unique_id"), _now()),
+        )
+    conn.commit()
+    return conn.execute("SELECT COUNT(*) FROM cara_photos").fetchone()[0]
+
+
+def cara_photo_count(conn):
+    return conn.execute("SELECT COUNT(*) FROM cara_photos").fetchone()[0]
+
+
+def cara_photo_random(conn):
+    row = conn.execute(
+        "SELECT file_id FROM cara_photos ORDER BY RANDOM() LIMIT 1"
+    ).fetchone()
+    return row["file_id"] if row else None

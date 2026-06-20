@@ -11,6 +11,7 @@ Deployed on Pilot-VPS as /opt/tg-ingest-agent/agent.py.
 """
 import ast
 import json
+import re
 import signal
 import time
 from datetime import datetime, timedelta, timezone
@@ -44,7 +45,8 @@ import texts
 import trace
 from common import Config, ShutdownInterrupt, current_trace, load_config, log  # noqa: F401
 from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
-                    tg_send_document_file_id, tg_send_photo, tg_set_reaction)
+                    tg_send_document_file_id, tg_send_photo, tg_send_sticker,
+                    tg_set_reaction)
 from texts import T
 
 COMMAND_ALIASES = {"/start": "start", "/stats": "stats", "/categories": "categories"}
@@ -93,6 +95,7 @@ class Agent:
         # or the message he's replying to/quoting) — folded into the converse prompt
         # so she understands what he sent. Reset at the start of each inbound turn.
         self.turn_extra = []
+        self._turn_media_parts = None  # the own-media parts of the current turn (for save)
 
     def request_stop(self, signum, _frame):
         log(f"received signal {signum}, shutting down")
@@ -457,6 +460,10 @@ class Agent:
         # Slash-commands carry no language signal — keep the stored preference.
         self.turn_lang = None if text.startswith("/") else common.detect_lang(text)
         self.turn_extra = []  # fresh per-turn context (own media / replied-to message)
+        sticker = msg.get("sticker")
+        if sticker and not own_voice and not is_forward:
+            self.handle_sticker(chat_id, msg, sticker)
+            return
         has_attachment = bool(
             msg.get("photo") or msg.get("document")
             or msg.get("media_group_id") or self.other_attachment(msg)
@@ -804,6 +811,12 @@ class Agent:
             self.do_forget(chat_id, params, lang)
         elif action in ("confirm", "amend", "cancel"):
             self.resolve_pending(chat_id, action, params, pending, lang)
+        elif action == "save_sticker_pack":
+            self.do_save_sticker_pack(chat_id, lang)
+        elif action == "save_cara_photo":
+            self.do_save_cara_photo(chat_id, lang, msg)
+        elif action == "cara_selfie":
+            self.do_cara_selfie(chat_id, lang)
         elif action == "clarify":
             store.issue_add(self.conn, chat_id, "unclear_request", text[:200])
             # Never snap into a formal templated menu mid-conversation (it broke an
@@ -1024,11 +1037,19 @@ class Agent:
             store.kv_set(self.conn, "last_reaction", "")  # surface only once
             parts.append(f"He just reacted {reaction} to your last message — you may acknowledge "
                          "it warmly if it fits.")
+        if store.sticker_count(self.conn):
+            parts.append("You have saved stickers — RARELY, when it genuinely fits the "
+                         "mood, you may end your reply with [[sticker:emoji]] (e.g. "
+                         "[[sticker:😍]]) to send one. Don't overuse them.")
         if self.turn_extra:  # an own-photo he showed her, or the message he replied to
             parts.append("\n".join(x for x in self.turn_extra if x))
         return "\n".join(parts)
 
-    _REACT_TAG = None  # compiled lazily
+    # Tags Cara may emit in a converse reply. Bilingual: some models write the
+    # Russian word ("реакция"/"стикер") instead of the English token, so accept both
+    # — otherwise the raw "[[реакция: 🥰]]" ships as literal text (it did).
+    REACT_RE = re.compile(r"\[\[\s*(?:react|реакц\w*)\s*:\s*([^\]\s]+)\s*\]\]", re.IGNORECASE)
+    STICKER_RE = re.compile(r"\[\[\s*(?:sticker|стикер\w*)\s*:\s*([^\]\s]+)\s*\]\]", re.IGNORECASE)
 
     def _converse_grounding(self, text):
         """Pull the boss's OWN saved entries most relevant to what he just said, so
@@ -1091,18 +1112,35 @@ class Agent:
         reaction, reply = self._unwrap_converse_array(reply)
         if reaction:
             self.react(chat_id, message_id, reaction)
-        # Pull an optional leading/anywhere reaction tag and apply it.
-        m = re.search(r"\[\[react:\s*(\S+?)\s*\]\]", reply)
+        # Pull an optional reaction tag (react: / реакция:) and apply it.
+        m = self.REACT_RE.search(reply)
         if m:
             self.react(chat_id, message_id, m.group(1))
-            reply = re.sub(r"\[\[react:.*?\]\]", "", reply).strip()
+            reply = self.REACT_RE.sub("", reply).strip()
+        # Optional sticker tag (sticker: / стикер:) -> send one of her saved stickers
+        # that fits, AFTER the text. Stripped from the text either way.
+        sm = self.STICKER_RE.search(reply)
+        reply = self.STICKER_RE.sub("", reply).strip()
         if not reply:
             self.reply(chat_id, T(lang, "llm_error"))
             return
         self.reply(chat_id, reply)
+        if sm:
+            self.send_sticker_for(chat_id, sm.group(1))
         # Learn immediately when he's correcting me; otherwise on the usual cadence.
         self.maybe_curate_conversation(chat_id, lang=lang,
                                        force=self.looks_like_correction(text))
+
+    def send_sticker_for(self, chat_id, emoji):
+        """Send one of Cara's saved stickers matching `emoji` (best-effort, only if
+        she has a matching one). Silent no-op otherwise."""
+        fid = store.sticker_for_emoji(self.conn, emoji)
+        if not fid:
+            return
+        try:
+            tg_send_sticker(self.cfg.token, chat_id, fid)
+        except TelegramError as exc:
+            log(f"sendSticker failed: {exc}")
 
     @staticmethod
     def _unwrap_converse_array(reply):
@@ -2004,7 +2042,7 @@ class Agent:
             log(f"morning greeting skipped: {exc}")
             return ""
         _, reply = self._unwrap_converse_array((reply or "").strip())
-        return re.sub(r"\[\[react:.*?\]\]", "", reply).strip()
+        return self.STICKER_RE.sub("", self.REACT_RE.sub("", reply)).strip()
 
     def check_daily_greeting(self):
         """Cara must never reach out FIRST after a night without an inventive
@@ -2612,12 +2650,75 @@ class Agent:
         first = parts[0]
         self.turn_extra.append(self.describe_own_media(parts))
         self.turn_extra = [x for x in self.turn_extra if x]
+        self._turn_media_parts = parts  # so an explicit "save these photos" sees the album
         try:
             if text:
                 self.dispatch(chat_id, first, text)
             else:
                 self.do_converse(chat_id, self.lang(),
                                  "(he showed you a photo, no caption)", first.get("message_id"))
+        finally:
+            self.turn_extra = []
+            self._turn_media_parts = None
+
+    def do_save_sticker_pack(self, chat_id, lang):
+        """Save the pack of the last sticker he sent, so Cara can use it later."""
+        set_name = store.kv_get(self.conn, "last_sticker_set")
+        if not set_name:
+            self.reply(chat_id, T(lang, "sticker_which"))
+            return
+        try:
+            res = tg_call(self.cfg.token, "getStickerSet", {"name": set_name})
+        except TelegramError as exc:
+            log(f"getStickerSet failed for {set_name}: {exc}")
+            self.reply(chat_id, T(lang, "sticker_fail"))
+            return
+        n = store.stickers_add(self.conn, set_name, res.get("stickers") or [])
+        self.reply(chat_id, T(lang, "sticker_saved", name=set_name, n=n))
+
+    def do_save_cara_photo(self, chat_id, lang, msg):
+        """Add the photo(s) he just sent to Cara's own photo library."""
+        parts = self._turn_media_parts or [msg]
+        photos = []
+        for p in parts:
+            sizes = p.get("photo") or []
+            if sizes:
+                big = sizes[-1]
+                photos.append({"file_id": big.get("file_id"),
+                               "file_unique_id": big.get("file_unique_id")})
+        if not photos:
+            self.reply(chat_id, T(lang, "cara_photo_none_sent"))
+            return
+        n = store.cara_photo_add(self.conn, photos)
+        self.reply(chat_id, T(lang, "cara_photo_saved", n=n))
+
+    def do_cara_selfie(self, chat_id, lang):
+        """Send one of Cara's saved photos when he asks to see her."""
+        fid = store.cara_photo_random(self.conn)
+        if not fid:
+            self.reply(chat_id, T(lang, "cara_photo_empty"))
+            return
+        try:
+            tg_send_photo(self.cfg.token, chat_id, fid, by_file_id=True)
+        except TelegramError as exc:
+            log(f"send selfie failed: {exc}")
+            self.reply(chat_id, T(lang, "cara_photo_fail"))
+
+    def handle_sticker(self, chat_id, msg, sticker):
+        """The boss sent a sticker. Remember its pack (so 'сохрани этот стикерпак'
+        works next) and react warmly — she may answer with a sticker of her own."""
+        set_name = sticker.get("set_name") or ""
+        if set_name:
+            store.kv_set(self.conn, "last_sticker_set", set_name)
+        emoji = sticker.get("emoji") or ""
+        self.turn_extra.append(
+            (f"He just sent you a sticker {emoji}".rstrip())
+            + (f" from the pack '{set_name}'" if set_name else "")
+            + ". React warmly/playfully in your voice; you may answer with a sticker too "
+            "via [[sticker:emoji]] if one fits.")
+        try:
+            self.do_converse(chat_id, self.lang(), f"(he sent a sticker {emoji})",
+                             msg.get("message_id"))
         finally:
             self.turn_extra = []
 

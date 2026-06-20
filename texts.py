@@ -543,6 +543,34 @@ TEXTS = {
         "ru": "Давай по одному, босс — что сделать первым?",
         "en": "Let's do one at a time, boss — which first?",
     },
+    "sticker_which": {
+        "ru": "Пришли стикер из пака, который хочешь сохранить — и я его запомню 🙂",
+        "en": "Send me a sticker from the pack you want me to keep, and I'll save it 🙂",
+    },
+    "sticker_fail": {
+        "ru": "Не получилось достать этот пак 😕 Пришли стикер ещё раз?",
+        "en": "Couldn't fetch that pack 😕 Send the sticker again?",
+    },
+    "sticker_saved": {
+        "ru": "Запомнила пак «{name}» — {n} стикеров. Буду пользоваться 🎉",
+        "en": "Saved the «{name}» pack — {n} stickers. I'll use them 🎉",
+    },
+    "cara_photo_saved": {
+        "ru": "Добавила в свою галерею 📸 Теперь у меня {n} фото.",
+        "en": "Added to my gallery 📸 I now have {n} photo(s).",
+    },
+    "cara_photo_none_sent": {
+        "ru": "Пришли фото вместе с просьбой — и я добавлю его в галерею.",
+        "en": "Send the photo along with the request and I'll add it to my gallery.",
+    },
+    "cara_photo_empty": {
+        "ru": "У меня пока нет своих фото — добавишь? Пришли и скажи «это твои фото».",
+        "en": "I don't have any photos of myself yet — add some? Send them and say \"these are your photos\".",
+    },
+    "cara_photo_fail": {
+        "ru": "Ой, не вышло отправить фото 😕",
+        "en": "Oops, couldn't send the photo 😕",
+    },
     "reminder_need_title": {
         "ru": "Про что напомнить, босс?",
         "en": "What should I remind you about, boss?",

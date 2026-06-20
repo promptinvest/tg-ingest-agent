@@ -1375,6 +1375,37 @@ class ConversationDispatchTests(unittest.TestCase):
         # weekend mood is its own directive
         self.assertIn("weekend", tg_ingest_agent.Agent._weekend_mood("en").lower())
 
+    def test_sticker_store_and_pick(self):
+        c = self.agent.conn
+        store.stickers_add(c, "pack1", [
+            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"},
+            {"file_id": "F2", "file_unique_id": "u2", "emoji": "🔥"}])
+        store.stickers_add(c, "pack1", [{"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"}])  # dedup
+        self.assertEqual(store.sticker_count(c), 2)
+        self.assertEqual(store.sticker_for_emoji(c, "😍"), "F1")
+        self.assertIsNone(store.sticker_for_emoji(c, "👽"))
+
+    def test_save_sticker_pack_action(self):
+        import tg_ingest_agent
+        store.kv_set(self.agent.conn, "last_sticker_set", "MyPack")
+        packed = {"stickers": [{"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"},
+                               {"file_id": "F2", "file_unique_id": "u2", "emoji": "🔥"}]}
+        with mock.patch.object(tg_ingest_agent, "tg_call", return_value=packed), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_save_sticker_pack(1, "ru")
+        self.assertEqual(store.sticker_count(self.agent.conn), 2)
+        self.assertIn("MyPack", r.call_args[0][1])
+
+    def test_cara_photo_library_save_and_selfie(self):
+        import tg_ingest_agent
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_save_cara_photo(1, "ru", {"photo": [{"file_id": "P1", "file_unique_id": "pu1"}]})
+        self.assertEqual(store.cara_photo_count(self.agent.conn), 1)
+        with mock.patch.object(tg_ingest_agent, "tg_send_photo") as sp, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.do_cara_selfie(1, "ru")
+        self.assertEqual(sp.call_args[0][2], "P1")  # sent the saved file_id
+
     def test_converse_grounding_uses_stored_facts(self):
         # The guardrail: converse is GIVEN the boss's real saved entries so it can use
         # facts instead of inventing them. No index -> no grounding; with a match it's
@@ -2087,6 +2118,17 @@ class GoldenTranscriptTests(unittest.TestCase):
             "ingest": '{"category":"Разное","alternatives":[],"summary":"про вино","facts":[]}'})
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) c FROM messages WHERE tg_message_id=52").fetchone()["c"], 1)
+
+    def test_russian_reaction_tag_applied_not_shipped(self):
+        # The model sometimes writes the Russian word: "[[реакция: 🥰]]". It must be
+        # applied as a reaction and stripped, never shipped as literal text.
+        sent = self.drive({"message": self._msg(60, "спасибо!")}, {
+            "router": '{"action":"converse","params":{},"confidence":0.95}',
+            "converse": "[[реакция: 🥰]] Да не за что, рада помочь!"})
+        text = " ".join(sent)
+        self.assertIn("рада помочь", text)
+        self.assertNotIn("реакц", text)
+        self.assertNotIn("[[", text)
 
     def test_reply_quote_becomes_converse_context(self):
         # Replying to/quoting an earlier message gives Cara that context.

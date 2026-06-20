@@ -112,6 +112,12 @@ SKILLS = {
     # -- free-form conversation as Cara (warm chat; reads context, never writes state)
     "converse": {"risk": "read_only", "uses_llm": True, "persona_context": True,
                  "title": {"en": "Conversation", "ru": "Общение"}},
+    "save_sticker_pack": {"risk": "state_write", "writes_state": True,
+                          "title": {"en": "Save sticker pack", "ru": "Сохранить стикерпак"}},
+    "save_cara_photo": {"risk": "state_write", "writes_state": True,
+                        "title": {"en": "Save Cara photo", "ru": "Сохранить фото Кары"}},
+    "cara_selfie": {"risk": "read_only", "title": {"en": "Send a photo of herself",
+                                                   "ru": "Прислать своё фото"}},
     # -- conversational glue (no capability surface)
     "smalltalk": {"risk": "meta"}, "confirm": {"risk": "meta"}, "amend": {"risk": "meta"},
     "cancel": {"risk": "meta"}, "clarify": {"risk": "meta"}, "out_of_scope": {"risk": "meta"},
