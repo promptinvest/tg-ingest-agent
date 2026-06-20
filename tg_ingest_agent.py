@@ -227,6 +227,7 @@ class Agent:
             self.fire_due_reminders()
             self.check_budget_notice()
             self.check_weekly_review()
+            self.check_daily_greeting()  # greet good-morning before any proactive contact
             self.check_morning_brief()
             self.check_daily_curator()
             self.check_proactive()
@@ -575,6 +576,7 @@ class Agent:
 
     def dispatch(self, chat_id, msg, text):
         lang = self.lang()
+        self.mark_contact_day()  # he reached out -> she isn't his first contact today
         msg_id = msg.get("message_id")
         pending = store.pending_get(self.conn, chat_id)
         # A pending purge is confirmed ONLY by typing the exact phrase —
@@ -779,8 +781,10 @@ class Agent:
             self.resolve_pending(chat_id, action, params, pending, lang)
         elif action == "clarify":
             store.issue_add(self.conn, chat_id, "unclear_request", text[:200])
-            question = str(params.get("question") or "").strip()
-            self.reply(chat_id, question[:300] if question else T(lang, "clarify"))
+            # Never snap into a formal templated menu mid-conversation (it broke an
+            # intimate chat into cold «вы»). Stay in Cara's warm voice — she has the
+            # recent dialogue, so she asks (or just answers) naturally, in "ты".
+            self.do_converse(chat_id, lang, text, msg_id)
         else:
             # Unknown action -> never a cold rejection; talk to him.
             self.do_converse(chat_id, lang, text, msg_id)
@@ -933,6 +937,31 @@ class Agent:
 
     # -- Free-form conversation (Cara as a person)
 
+    @staticmethod
+    def _time_mood(hour, lang):
+        """Tone directive that tracks the clock — the boss wants her voice to fit the
+        time of day, and to get playful & intimate (warm, witty, a hint of flirty
+        humour — never crude) late at night, like the goodnight he loved."""
+        if 5 <= hour < 12:
+            return ("Утро — будь свежей, тёплой и ободряющей, мягко вводи его в день."
+                    if lang == "ru" else
+                    "Morning — be fresh, warm and encouraging; ease him into the day.")
+        if 12 <= hour < 18:
+            return ("День — собранная и лёгкая, по-доброму деловая, но живая и личная."
+                    if lang == "ru" else
+                    "Daytime — focused and breezy, supportive, still alive and personal.")
+        if 18 <= hour < 23:
+            return ("Вечер — расслабленная и тёплая, можно пошутить, поделиться, помочь "
+                    "сбросить день." if lang == "ru" else
+                    "Evening — relaxed and warm; tease a little, share, help him unwind.")
+        return ("Ночь — ваше самое близкое время: будь нежной, игривой и остроумной, с "
+                "лёгким поддразниванием и намёком на флирт — тепло и по-человечески, "
+                "никогда не пошло и не навязчиво. Уютный ночной юмор близких людей."
+                if lang == "ru" else
+                "Night — your closest time together: be soft, playful and witty, with "
+                "gentle teasing and a hint of flirty humour — warm and human, never "
+                "crude or pushy. Cosy late-night banter between two close people.")
+
     def converse_context(self, lang):
         """Live context for the conversation prompt: time of day (boss's, and
         Cara's own if her timezone differs), the review schedule, and any reaction
@@ -940,7 +969,8 @@ class Agent:
         parts = []
         boss_local = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
         parts.append(f"Right now it's {boss_local.strftime('%H:%M')} for the boss — "
-                     f"{common.part_of_day(boss_local.hour, lang)}. Fit the time of day if relevant.")
+                     f"{common.part_of_day(boss_local.hour, lang)}. Let your tone track the "
+                     f"time of day. {self._time_mood(boss_local.hour, lang)}")
         if self.cfg.cara_tz_offset != self.tz_offset():
             cara_local = datetime.now(timezone.utc) + timedelta(hours=self.cfg.cara_tz_offset)
             parts.append(f"For you it's {cara_local.strftime('%H:%M')} "
@@ -1864,6 +1894,64 @@ class Agent:
         return T(lang, "review_schedule",
                  weekday=review.weekday_name(lang, self.cfg.review_weekday),
                  date=local.strftime("%d.%m"), time=local.strftime("%H:%M"))
+
+    def _boss_today(self):
+        return (datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())).strftime("%Y-%m-%d")
+
+    def mark_contact_day(self):
+        """Record that Cara and the boss have connected today (boss-local), so the
+        daily good-morning fires only when SHE would be his first contact of a new
+        day — not when he already reached out (she greets him in-voice then)."""
+        today = self._boss_today()
+        if store.kv_get(self.conn, "greeted_day") != today:
+            store.kv_set(self.conn, "greeted_day", today)
+
+    def compose_morning_greeting(self, lang):
+        """An inventive, in-voice good-morning — never a template. '' on LLM failure
+        (the greeting is then skipped, never faked)."""
+        import re
+        instr = ("Доброе утро — ты впервые пишешь боссу за день, ночь прошла. Поздоровайся "
+                 "с ним утром: коротко, тепло, изобретательно, в своём живом стиле — без "
+                 "шаблонов и формальностей. Одно-два предложения." if lang == "ru" else
+                 "Good morning — you're reaching out to the boss for the first time today; "
+                 "the night has passed. Greet him with the morning: short, inventive, in "
+                 "your own alive voice — no templates, nothing formal. One or two sentences.")
+        messages = [
+            {"role": "system", "content": converse.build_system(self.conn, lang)},
+            {"role": "user", "content": instr},
+        ]
+        try:
+            reply = llm.chat_profile(self.cfg, self.conn, "converse", messages,
+                                     profile="converse_warm")
+        except llm.LLMError as exc:
+            log(f"morning greeting skipped: {exc}")
+            return ""
+        _, reply = self._unwrap_converse_array((reply or "").strip())
+        return re.sub(r"\[\[react:.*?\]\]", "", reply).strip()
+
+    def check_daily_greeting(self):
+        """Cara must never reach out FIRST after a night without an inventive
+        good-morning. If the boss hasn't connected yet today and it's past the morning
+        hour (the night has passed), her first proactive contact of the day leads with
+        a warm, invented greeting — before any brief or nudge."""
+        today = self._boss_today()
+        if store.kv_get(self.conn, "greeted_day") == today:
+            return  # already connected/greeted today
+        now = datetime.now(timezone.utc)
+        local = now + timedelta(hours=self.tz_offset())
+        if local.hour < self.cfg.morning_brief_hour:
+            return  # still early / night — wait for a civil hour
+        s = proactive.settings(self.conn, self.cfg)
+        if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
+            return  # proactivity off, or quiet hours
+        self.turn_lang = None
+        lang = self.lang()
+        greeting = self.compose_morning_greeting(lang)
+        if not greeting:
+            return
+        store.kv_set(self.conn, "greeted_day", today)
+        for chat_id in self.cfg.allowed_chat_ids:
+            self.reply(chat_id, greeting)
 
     def check_proactive(self):
         """Evaluate the proactive heartbeat at most once per interval; it sends

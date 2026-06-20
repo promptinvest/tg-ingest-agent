@@ -56,8 +56,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   other chat (e.g. a group), are ignored.
 - **State changes are confirmed** conversationally ("да", "нет, лучше крипта",
   "через полчаса") or via inline buttons. Bulk **purge** needs an exact typed phrase.
-- **When unsure, she talks** — a low‑confidence read drops to warm `converse` (where
-  she can answer or ask naturally), never the old cold clarify template.
+- **When unsure, she talks** — a low‑confidence read (and the `clarify` route) drops to
+  warm `converse` where she answers or asks naturally in «ты», never a cold formal template.
+- **Her voice tracks the clock** — fresh mornings, breezy days, unwinding evenings, and
+  playful/intimate nights (warm, witty, a wink of flirty humour; never crude). She never
+  reaches out first after a night without an inventive, in‑voice **good‑morning**.
 
 ---
 

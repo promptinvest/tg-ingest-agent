@@ -92,10 +92,8 @@ TEXTS = {
                "messages, reminders, calendar, AI spend, and remembering your preferences."),
     },
     "clarify": {
-        "ru": ("Я не совсем поняла 🤔 Подскажите, что нужно: сохранить, найти/показать "
-               "сохранённое, удалить, напоминание, календарь, расходы или статистику?"),
-        "en": ("I didn't quite get that 🤔 Tell me what you need: save, find/show saved, "
-               "delete, a reminder, calendar, spend, or stats?"),
+        "ru": "Хм, не совсем уловила 🤔 Скажи чуть конкретнее — и я подхвачу.",
+        "en": "Hmm, I didn't quite catch that 🤔 Tell me a touch more and I've got it.",
     },
     # Variant family (pre-confirmation, state=suggested → no final verbs).
     "suggestion": {

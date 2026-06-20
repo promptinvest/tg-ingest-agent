@@ -1366,6 +1366,48 @@ class ConversationDispatchTests(unittest.TestCase):
         # malformed array passes through untouched
         self.assertEqual(u('[broken'), (None, "[broken"))
 
+    def test_time_mood_tracks_clock(self):
+        import tg_ingest_agent
+        m = tg_ingest_agent.Agent._time_mood
+        self.assertIn("flirty", m(1, "en").lower())    # 01:00 -> night, playful
+        self.assertIn("morning", m(8, "en").lower())   # 08:00 -> morning
+        self.assertIn("флирт", m(2, "ru"))             # night mood in Russian
+
+    def test_clarify_stays_in_voice_not_template(self):
+        # A low-confidence/clarify route must NOT snap into the formal template
+        # mid-conversation — it stays in Cara's warm voice (do_converse).
+        with mock.patch.object(router, "route",
+                               return_value={"action": "clarify", "params": {}, "confidence": 0.75}), \
+                mock.patch.object(self.agent, "do_converse") as dc:
+            self.agent.dispatch(1, {}, "давай во вторник")
+        dc.assert_called_once()
+
+    def test_daily_greeting_fires_once_and_respects_prior_contact(self):
+        import proactive
+        self.agent.cfg.morning_brief_hour = 0   # any hour qualifies as "morning enough"
+        store.pref_set(self.agent.conn, "proactive_enabled", "true")
+        with mock.patch.object(proactive, "in_quiet_hours", return_value=False), \
+                mock.patch.object(self.agent, "compose_morning_greeting", return_value="Доброе утро, солнце ☀️"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.check_daily_greeting()        # due -> greets
+            fired = r.called
+            r.reset_mock()
+            self.agent.check_daily_greeting()        # same day -> silent
+            again = r.called
+        self.assertTrue(fired)
+        self.assertFalse(again)
+
+    def test_daily_greeting_skipped_when_boss_contacted_first(self):
+        import proactive
+        self.agent.cfg.morning_brief_hour = 0
+        store.pref_set(self.agent.conn, "proactive_enabled", "true")
+        self.agent.mark_contact_day()   # boss already connected today
+        with mock.patch.object(proactive, "in_quiet_hours", return_value=False), \
+                mock.patch.object(self.agent, "compose_morning_greeting", return_value="x"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.check_daily_greeting()
+        self.assertFalse(r.called)
+
     def test_out_of_scope_is_warm_not_template(self):
         with mock.patch.object(router, "route",
                                return_value={"action": "out_of_scope", "params": {}, "confidence": 0.95}), \
