@@ -2060,6 +2060,52 @@ class GoldenTranscriptTests(unittest.TestCase):
         self.assertEqual(store.pref_get(self.conn, "proactive_enabled"), "false")
         self.assertEqual(sent[-1], texts.T("ru", "proactive_prefs_done"))
 
+    def test_own_photo_with_comment_converses_not_stored(self):
+        # His OWN photo + a comment is conversation, not a note: route the comment,
+        # never silently file it. (vision off here -> we test routing, not the describe.)
+        self.agent.cfg.vision_model = ""
+        msg = self._msg(50, "Одобряешь мой выбор? 😄",
+                        photo=[{"file_id": "P", "file_unique_id": "pu", "width": 90, "height": 90}])
+        del msg["text"]; msg["caption"] = "Одобряешь мой выбор? 😄"
+        sent = self.drive({"message": msg}, {
+            "router": '{"action":"converse","params":{},"confidence":0.95}',
+            "converse": "О, отличный выбор — самое то под стейк 🍷"})
+        self.assertIn("отличный выбор", " ".join(sent))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"], 0)
+
+    def test_own_photo_no_caption_converses_not_stored(self):
+        self.agent.cfg.vision_model = ""
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 51,
+               "photo": [{"file_id": "P2", "file_unique_id": "pu2", "width": 90, "height": 90}]}
+        sent = self.drive({"message": msg}, {"converse": "Ого, что это у тебя там? 👀"})
+        self.assertTrue(sent)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"], 0)
+
+    def test_forward_still_stored_as_note(self):
+        msg = self._msg(52, "статья про вино", forward_origin={"type": "channel", "title": "WineMag"})
+        self.drive({"message": msg}, {
+            "ingest": '{"category":"Разное","alternatives":[],"summary":"про вино","facts":[]}'})
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) c FROM messages WHERE tg_message_id=52").fetchone()["c"], 1)
+
+    def test_reply_quote_becomes_converse_context(self):
+        # Replying to/quoting an earlier message gives Cara that context.
+        msg = self._msg(53, "а это подойдёт?",
+                        reply_to_message={"message_id": 1, "text": "ищу вино к стейку"})
+        captured = {}
+
+        def cp(cfg, conn, skill, messages, **kw):
+            if skill == "router":
+                return '{"action":"converse","params":{},"confidence":0.9}'
+            captured["sys"] = messages[0]["content"]
+            return "Да, вполне 🙂"
+        with mock.patch.object(llm, "chat_profile", side_effect=cp), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 1}), \
+                mock.patch.object(self.mod, "tg_set_reaction"), \
+                mock.patch.object(self.agent, "index_message"):
+            self.agent.handle_update({"message": msg})
+        self.assertIn("ищу вино к стейку", captured.get("sys", ""))
+
 
 class ReminderRescheduleAndFilesTests(unittest.TestCase):
     def setUp(self):

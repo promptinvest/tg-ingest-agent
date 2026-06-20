@@ -91,6 +91,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   her timezone is set different) and adapts ("так поздно?", "доброе утро").
 
 ### Inbox: ingest, files, retrieval
+- **What gets filed vs talked about:** only **forwards** (content from other channels/
+  people) and bare typed notes are auto‑saved as inbox items. Your **own** photos/files
+  are **conversation**, not notes — a caption is *context* (she reads + reacts to the
+  photo via vision, e.g. "одобряешь мой выбор?" → an opinion in her voice), and an
+  explicit "сохрани это" still files it. She also understands what you're **replying to
+  or quoting** (TG reply/quote) as context for "this".
 - **Ingest forwards/notes:** forwarded posts and typed notes (text, URLs, photos;
   an album = one item) are saved with forward origin, t.me source link, post date.
   A vision LLM suggests a **category** (from your taxonomy), a **summary**, and up to

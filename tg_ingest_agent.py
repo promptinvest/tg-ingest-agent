@@ -89,6 +89,10 @@ class Agent:
         # Cara answers in the language the boss just wrote in. None outside a
         # turn (e.g. scheduler ticks) -> lang() falls back to the stored pref.
         self.turn_lang = None
+        # Extra context for THIS turn only (a described own-photo he's showing her,
+        # or the message he's replying to/quoting) — folded into the converse prompt
+        # so she understands what he sent. Reset at the start of each inbound turn.
+        self.turn_extra = []
 
     def request_stop(self, signum, _frame):
         log(f"received signal {signum}, shutting down")
@@ -452,23 +456,54 @@ class Agent:
         # Reply in the language he wrote in (voice transcript counts); RU fallback.
         # Slash-commands carry no language signal — keep the stored preference.
         self.turn_lang = None if text.startswith("/") else common.detect_lang(text)
-        # A transcribed own-voice command is routed, not stored. Anything else with
-        # a forward origin or an attachment is content to store/parse.
-        is_content = (not own_voice) and bool(
-            is_forward or msg.get("photo") or msg.get("document")
+        self.turn_extra = []  # fresh per-turn context (own media / replied-to message)
+        has_attachment = bool(
+            msg.get("photo") or msg.get("document")
             or msg.get("media_group_id") or self.other_attachment(msg)
         )
+        # Storage rule: only FORWARDS (content from channels/people) are filed as
+        # notes. The boss's OWN media is conversation — his caption is context, and
+        # even a bare photo is something he's SHOWING her, not a note. An explicit
+        # "сохрани это" on his own photo still routes to ingest (it's stored then).
+        auto_store = (not own_voice) and is_forward
+        own_media = (not own_voice) and (not is_forward) and has_attachment
+
         if text:
             store.convo_add(self.conn, chat_id, "user", text)
 
-        if is_content:
+        # What he's replying to / quoting is context for understanding "this".
+        reply_to_msg = msg.get("reply_to_message")
+        if reply_to_msg:
+            row = store.find_by_suggestion_message(
+                self.conn, chat_id, reply_to_msg.get("message_id"))
+            if row and text and not (auto_store or own_media):
+                self.handle_correction(row, chat_id, text, msg.get("message_id"))
+                return
+            quoted = ((msg.get("quote") or {}).get("text")
+                      or reply_to_msg.get("text") or reply_to_msg.get("caption") or "").strip()
+            if quoted:
+                self.turn_extra.append(
+                    f"He's replying to / quoting an earlier message: «{quoted[:300]}» "
+                    "— read what he says as being about THAT.")
+
+        if auto_store:
             group_id = msg.get("media_group_id")
             if group_id:
-                buffer = self.albums.setdefault(str(group_id), {"parts": []})
+                buffer = self.albums.setdefault(str(group_id), {"parts": [], "store": True})
                 buffer["parts"].append(msg)
                 buffer["deadline"] = time.time() + self.cfg.album_settle
                 return
             self.finalize([msg])
+            return
+
+        if own_media:
+            group_id = msg.get("media_group_id")
+            if group_id:
+                buffer = self.albums.setdefault(str(group_id), {"parts": [], "store": False})
+                buffer["parts"].append(msg)
+                buffer["deadline"] = time.time() + self.cfg.album_settle
+                return
+            self.handle_own_media([msg], chat_id, text)
             return
 
         if not text:
@@ -476,16 +511,6 @@ class Agent:
         if text in COMMAND_ALIASES:
             self.handle_command(chat_id, COMMAND_ALIASES[text])
             return
-
-        # Correction by replying to a suggestion message still works.
-        reply_to_msg = msg.get("reply_to_message")
-        if reply_to_msg:
-            row = store.find_by_suggestion_message(
-                self.conn, chat_id, reply_to_msg.get("message_id")
-            )
-            if row:
-                self.handle_correction(row, chat_id, text, msg.get("message_id"))
-                return
 
         self.dispatch(chat_id, msg, text)
 
@@ -999,6 +1024,8 @@ class Agent:
             store.kv_set(self.conn, "last_reaction", "")  # surface only once
             parts.append(f"He just reacted {reaction} to your last message — you may acknowledge "
                          "it warmly if it fits.")
+        if self.turn_extra:  # an own-photo he showed her, or the message he replied to
+            parts.append("\n".join(x for x in self.turn_extra if x))
         return "\n".join(parts)
 
     _REACT_TAG = None  # compiled lazily
@@ -1995,6 +2022,7 @@ class Agent:
         if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
             return  # proactivity off, or quiet hours
         self.turn_lang = None
+        self.turn_extra = []  # scheduler context: no inbound media/reply to carry
         lang = self.lang()
         greeting = self.compose_morning_greeting(lang)
         if not greeting:
@@ -2542,6 +2570,57 @@ class Agent:
                                   source=row["forward_origin_title"] or source,
                                   category=category))
 
+    def describe_own_media(self, parts):
+        """For the boss's OWN photos/files sent as conversation (not a forward):
+        vision-describe images and note documents so converse can respond ABOUT
+        them. Returns a context string (or '')."""
+        descs, files = [], []
+        for p in parts:
+            photos = p.get("photo") or []
+            if photos and self.cfg.vision_model and len(descs) < 2:
+                largest = photos[-1]
+                try:
+                    path = self.download_file(largest.get("file_id"),
+                                              largest.get("file_unique_id"), ".jpg")
+                    d = llm.describe_image(self.cfg, self.conn, "ingest",
+                                           self.cfg.vision_model, path, self.lang())
+                    if d:
+                        descs.append(d)
+                except (TelegramError, llm.LLMError) as exc:
+                    log(f"own-media describe failed: {exc}")
+            doc = p.get("document") or {}
+            if doc.get("file_id"):
+                files.append(doc.get("file_name") or "file")
+            else:
+                other = self.other_attachment(p)
+                if other:
+                    files.append(other.get("file_name"))
+        bits = []
+        if descs:
+            bits.append("The boss just SHOWED you a photo (he's sharing it with you, not "
+                        "filing it) — here's what's in it; react naturally and personally, "
+                        "using your shared context: " + " | ".join(descs))
+        files = [f for f in files if f]
+        if files:
+            bits.append("He sent you a file: " + ", ".join(files))
+        return "\n".join(bits)
+
+    def handle_own_media(self, parts, chat_id, text):
+        """The boss's own photo/file as conversation. His caption (if any) is the
+        instruction (routed normally — an explicit 'save this' still files it); a
+        bare photo gets a warm, in-context reaction. Never silently stored."""
+        first = parts[0]
+        self.turn_extra.append(self.describe_own_media(parts))
+        self.turn_extra = [x for x in self.turn_extra if x]
+        try:
+            if text:
+                self.dispatch(chat_id, first, text)
+            else:
+                self.do_converse(chat_id, self.lang(),
+                                 "(he showed you a photo, no caption)", first.get("message_id"))
+        finally:
+            self.turn_extra = []
+
     def flush_albums(self, now, force=False):
         for group_id in list(self.albums):
             buffer = self.albums[group_id]
@@ -2549,7 +2628,12 @@ class Agent:
                 del self.albums[group_id]
                 parts = sorted(buffer["parts"], key=lambda m: m.get("message_id", 0))
                 try:
-                    self.finalize(parts)
+                    if buffer.get("store", True):
+                        self.finalize(parts)
+                    else:  # the boss's own media album -> conversation, not a note
+                        cap = next((p.get("caption", "").strip() for p in parts
+                                    if (p.get("caption") or "").strip()), "")
+                        self.handle_own_media(parts, parts[0]["chat"]["id"], cap)
                 except Exception as exc:
                     log(f"error finalizing album {group_id}: {exc!r}")
 

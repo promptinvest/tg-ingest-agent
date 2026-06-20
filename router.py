@@ -85,6 +85,7 @@ NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сд�
 "веди Благодарности как дневник" / "сделай X журналом" / "храни эту категорию долгосрочно" / "keep Gratitude as a journal" -> {"action": "set_journal", "params": {"category": "Благодарности", "on": true}, "confidence": 0.9}
 "Благодарности больше не дневник" / "сделай X обычной категорией" / "stop journaling X" -> {"action": "set_journal", "params": {"category": "Благодарности", "on": false}, "confidence": 0.9}
 "покажи дневник благодарности" / "благодарности за неделю" / "мой журнал благодарностей за месяц" / "show my gratitude journal" -> {"action": "journal_show", "params": {"category": "Благодарности", "period": "month"}, "confidence": 0.9}
+"за что я был благодарен 17 июня?" / "what was I grateful for on June 17?" / "что я записал в благодарности вчера?" -> {"action": "ask", "params": {"question": "за что я был благодарен 17 июня?"}, "confidence": 0.85}
 "добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
 "поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
 "что ты умеешь?" / "what can you do?" -> {"action": "help", "params": {}, "confidence": 0.95}
@@ -281,8 +282,12 @@ def route(cfg, conn, chat_id, text, pending):
     # (dated diary), not list_items; filing into one is still ingest.
     journals = store.journal_categories(conn)
     if journals:
-        user_content += ("Journal categories (recall via journal_show, not list_items): "
-                         + ", ".join(journals) + "\n\n")
+        user_content += (
+            "Journal categories: " + ", ".join(journals) + ". 'Show/list the whole "
+            "journal' -> journal_show (dated series, not list_items); but a SPECIFIC "
+            "question about its content ('за что я был благодарен 17-го?', 'what was I "
+            "grateful for on the 17th?') -> ask (it answers the question); filing INTO "
+            "one -> ingest.\n\n")
     # Forward + a follow-up comment: when he refers to "это/this" (or a suggestion
     # is pending), point the router at the item he just sent so the instruction
     # acts on it (categorize / remind / re-file / delete / details).
