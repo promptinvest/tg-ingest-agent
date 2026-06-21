@@ -1203,6 +1203,7 @@ class Agent:
         meeting_rows = store.all_meeting_chunks(self.conn)
         if not rows and not meeting_rows:
             return ""
+        t0 = time.perf_counter()
         try:
             qvec = llm.embed(self.cfg, self.conn, "converse", [text])[0]
         except llm.LLMError:
@@ -1231,6 +1232,14 @@ class Agent:
             block = meeting.context_block(items, self.lang(), proactive=True)
             if block:
                 blocks.append(block)
+        # Instrument retrieval cost so the decision to upgrade the index later is
+        # data-driven (corpus size + grounding latency on this turn).
+        ms = (time.perf_counter() - t0) * 1000
+        trace.event(self.conn, current_trace(), "grounding.ranked",
+                    f"grounded over {len(rows)} note + {len(meeting_rows)} meeting chunks "
+                    f"in {ms:.0f}ms",
+                    data={"note_chunks": len(rows), "meeting_chunks": len(meeting_rows),
+                          "ms": round(ms, 1)})
         return "\n\n".join(blocks)
 
     def do_converse(self, chat_id, lang, text, message_id=None):

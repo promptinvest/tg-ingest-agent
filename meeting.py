@@ -159,9 +159,10 @@ def _rank(query_vec, rows, top_k, context_chars):
     meeting columns). Returns picked items best-first within the char budget."""
     scored = []
     for row in rows:
-        try:
-            vec = json.loads(row["embedding"])
-        except (TypeError, ValueError):
+        vec = row.get("vec") if isinstance(row, dict) else None
+        if vec is None:
+            vec = store.unpack_embedding(row["embedding"])
+        if vec is None:
             continue
         scored.append((knowledge.cosine(query_vec, vec), row))
     scored.sort(key=lambda s: s[0], reverse=True)

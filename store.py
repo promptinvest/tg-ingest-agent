@@ -10,6 +10,7 @@ messages.status lifecycle:
 """
 import json
 import sqlite3
+from array import array
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -414,6 +415,84 @@ def _trace_id():
         return None
 
 
+# -- embeddings: packed float32 (compact + fast to load) ---------------------
+# Stored as a BLOB of little-endian float32 (4 bytes/dim) instead of JSON text
+# (~5x smaller than the old JSON-array form and far cheaper to decode). The
+# unpacker also accepts the legacy JSON-text form so old rows and hand-built
+# test rows still decode; legacy rows are migrated to BLOB in `_migrate`.
+
+def pack_embedding(vec):
+    """list[float] -> float32 BLOB (None stays None)."""
+    if vec is None:
+        return None
+    return array("f", (float(x) for x in vec)).tobytes()
+
+
+def unpack_embedding(value):
+    """float32 BLOB | legacy JSON text | None -> list[float] | None.
+    Returns None on anything undecodable (caller skips it)."""
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        a = array("f")
+        try:
+            a.frombytes(bytes(value))
+        except ValueError:
+            return None
+        return a.tolist()
+    if isinstance(value, str):  # legacy JSON text (and test rows)
+        try:
+            out = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+        return out if isinstance(out, list) else None
+    return None
+
+
+# -- decoded-vector cache ----------------------------------------------------
+# The retrieval hot path (converse grounding, ask, meeting recall) ranks every
+# embedded chunk on each turn. Re-reading + re-decoding all embeddings every
+# time is the part that grows with the corpus, so we cache the DECODED vectors
+# per connection and reuse them until the underlying table changes. The cache
+# key is a cheap (count, max_id, sum_id) fingerprint over the id column — it
+# changes on any insert/delete/re-index, so the cache is never stale. Keyed by
+# id(conn) so multiple test DBs in one process never collide.
+_VEC_CACHE = {}
+
+
+def _fingerprint(conn, table):
+    row = conn.execute(
+        f"SELECT COUNT(*), COALESCE(MAX(id),0), COALESCE(SUM(id),0)"
+        f" FROM {table} WHERE embedding IS NOT NULL").fetchone()
+    return (table, row[0], row[1], row[2])
+
+
+def _cached_vectors(conn, table, load_sql, meta_keys):
+    fp = _fingerprint(conn, table)
+    slot = _VEC_CACHE.setdefault(id(conn), {})
+    cached = slot.get(table)
+    if cached is not None and cached[0] == fp:
+        return cached[1]
+    rows = []
+    for r in conn.execute(load_sql):
+        d = {k: r[k] for k in meta_keys}
+        d["vec"] = unpack_embedding(r["embedding"])
+        if d["vec"] is None:
+            continue  # corrupt/undecodable — skip rather than poison the cache
+        rows.append(d)
+    slot[table] = (fp, rows)
+    return rows
+
+
+def invalidate_vector_cache(conn=None):
+    """Drop cached decoded vectors (all, or one connection). The fingerprint
+    already keeps the cache honest; this is a belt-and-suspenders hook."""
+    if conn is None:
+        _VEC_CACHE.clear()
+    else:
+        _VEC_CACHE.pop(id(conn), None)
+
+
 # -- traces ------------------------------------------------------------------
 
 def trace_start(conn, trace_id, kind, chat_id=None):
@@ -733,30 +812,39 @@ def meetings_idle(conn, cutoff_iso):
 
 
 def set_meeting_chunks(conn, meeting_id, chunks):
-    """Replace a meeting's embedding chunks. chunks: list of (text, vec_or_None)."""
-    import json as _json
+    """Replace a meeting's embedding chunks. chunks: list of (text, vec_or_None).
+    Embeddings stored as packed float32 BLOBs."""
     conn.execute("DELETE FROM meeting_chunks WHERE meeting_id = ?", (meeting_id,))
     for i, (text, embedding) in enumerate(chunks):
         conn.execute(
             "INSERT INTO meeting_chunks (meeting_id, chunk_index, text, embedding)"
             " VALUES (?, ?, ?, ?)",
-            (meeting_id, i, text, _json.dumps(embedding) if embedding is not None else None),
+            (meeting_id, i, text, pack_embedding(embedding)),
         )
     conn.commit()
 
 
+_MEETING_CHUNK_SQL = (
+    "SELECT mc.meeting_id AS meeting_id, mc.text AS text, mc.embedding AS embedding,"
+    " m.kind AS kind, m.setting AS setting, m.title AS title, m.started_at AS started_at"
+    " FROM meeting_chunks mc JOIN meetings m ON m.id = mc.meeting_id"
+    " WHERE mc.embedding IS NOT NULL")
+_MEETING_CHUNK_KEYS = ("meeting_id", "text", "kind", "setting", "title", "started_at")
+
+
 def all_meeting_chunks(conn, chat_id=None):
-    """Every embedded meeting chunk (optionally for one chat), with its meeting's
-    kind/setting/title/date for warm grounded recall."""
-    q = ("SELECT mc.meeting_id AS meeting_id, mc.text AS text, mc.embedding AS embedding,"
-         " m.kind AS kind, m.setting AS setting, m.title AS title, m.started_at AS started_at"
-         " FROM meeting_chunks mc JOIN meetings m ON m.id = mc.meeting_id"
-         " WHERE mc.embedding IS NOT NULL")
-    params = ()
-    if chat_id is not None:
-        q += " AND m.chat_id = ?"
-        params = (chat_id,)
-    return conn.execute(q, params).fetchall()
+    """Every embedded meeting chunk with its meeting's kind/setting/title/date,
+    DECODED (vector in `vec`). The common (whole-corpus) path is cached; the rare
+    per-chat path decodes directly."""
+    if chat_id is None:
+        return _cached_vectors(conn, "meeting_chunks", _MEETING_CHUNK_SQL, _MEETING_CHUNK_KEYS)
+    rows = []
+    for r in conn.execute(_MEETING_CHUNK_SQL + " AND m.chat_id = ?", (chat_id,)):
+        d = {k: r[k] for k in _MEETING_CHUNK_KEYS}
+        d["vec"] = unpack_embedding(r["embedding"])
+        if d["vec"] is not None:
+            rows.append(d)
+    return rows
 
 
 # -- relationship storyline arc (versioned; latest row = current) ------------
@@ -872,6 +960,22 @@ def _migrate(conn):
     cat_columns = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
     if "kind" not in cat_columns:
         conn.execute("ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'inbox'")
+    # Convert legacy JSON-text embeddings to packed float32 BLOBs (one-time;
+    # idempotent — after conversion typeof()='blob' so the scan finds nothing).
+    for tbl in ("chunks", "meeting_chunks"):
+        try:
+            legacy = conn.execute(
+                f"SELECT id, embedding FROM {tbl}"
+                f" WHERE embedding IS NOT NULL AND typeof(embedding) = 'text'").fetchall()
+        except sqlite3.OperationalError:
+            continue  # table not present on a very old db (SCHEMA creates it anyway)
+        for r in legacy:
+            try:
+                vec = json.loads(r["embedding"])
+            except (TypeError, ValueError):
+                continue
+            conn.execute(f"UPDATE {tbl} SET embedding = ? WHERE id = ?",
+                         (pack_embedding(vec), r["id"]))
 
 
 # -- kv ----------------------------------------------------------------------
@@ -1091,28 +1195,31 @@ def recent_files(conn, limit=20):
 
 def set_chunks(conn, message_id, chunks):
     """Replace a message's embedding chunks (idempotent for re-indexing).
-    chunks: list of (text, embedding_list_or_None)."""
-    import json as _json
+    chunks: list of (text, embedding_list_or_None). Embeddings are stored as
+    packed float32 BLOBs."""
     conn.execute("DELETE FROM chunks WHERE message_id = ?", (message_id,))
     for i, (text, embedding) in enumerate(chunks):
         conn.execute(
             "INSERT INTO chunks (message_id, chunk_index, text, embedding) VALUES (?, ?, ?, ?)",
-            (message_id, i, text, _json.dumps(embedding) if embedding is not None else None),
+            (message_id, i, text, pack_embedding(embedding)),
         )
     conn.commit()
 
 
+_NOTE_CHUNK_SQL = (
+    "SELECT c.message_id AS message_id, c.text AS text, c.embedding AS embedding,"
+    " m.category AS category, m.suggested_category AS suggested_category,"
+    " m.forward_origin_title AS title, m.received_at AS received_at"
+    " FROM chunks c JOIN messages m ON m.id = c.message_id"
+    " WHERE c.embedding IS NOT NULL")
+
+
 def all_embedded_chunks(conn):
-    """Every chunk that has an embedding, with its message's category/title
-    for grounding. Returns rows: message_id, text, embedding(JSON), category,
-    suggested_category, forward_origin_title."""
-    return conn.execute(
-        "SELECT c.message_id AS message_id, c.text AS text, c.embedding AS embedding,"
-        " m.category AS category, m.suggested_category AS suggested_category,"
-        " m.forward_origin_title AS title, m.received_at AS received_at"
-        " FROM chunks c JOIN messages m ON m.id = c.message_id"
-        " WHERE c.embedding IS NOT NULL"
-    ).fetchall()
+    """Every embedded note chunk with its message's category/title, DECODED and
+    CACHED (the vector is in `vec`; re-decoded only when the table changes)."""
+    return _cached_vectors(conn, "chunks", _NOTE_CHUNK_SQL,
+                           ("message_id", "text", "category", "suggested_category",
+                            "title", "received_at"))
 
 
 def find_forward_duplicate(conn, fwd_chat_id, fwd_message_id, exclude_id):

@@ -9,6 +9,8 @@ import json
 import math
 import re
 
+import store
+
 
 def chunk_text(text, max_chars=800):
     """Split text into ~max_chars chunks on paragraph/line boundaries so a
@@ -56,9 +58,12 @@ def rank_chunks(query_vec, rows, top_k, context_chars):
     similar chunks (parsed) within the character budget, best first."""
     scored = []
     for row in rows:
-        try:
-            vec = json.loads(row["embedding"])
-        except (TypeError, ValueError):
+        # Cached rows carry the decoded vector in `vec`; legacy/test rows carry a
+        # raw `embedding` (BLOB or JSON text) decoded tolerantly.
+        vec = row.get("vec") if isinstance(row, dict) else None
+        if vec is None:
+            vec = store.unpack_embedding(row["embedding"])
+        if vec is None:
             continue
         scored.append((cosine(query_vec, vec), row))
     scored.sort(key=lambda s: s[0], reverse=True)
