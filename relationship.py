@@ -64,3 +64,117 @@ def render_working_history(conn, lang, days=30):
     if confirmed == 0 and reminders_n == 0 and not events:
         return T(lang, "working_history_empty")
     return "\n".join(lines)
+
+
+# -- relationship storyline arc ----------------------------------------------
+# A continuous, evolving narrative of "us" — not discrete episodes but a
+# synthesized sense of where things stand and how they got there. Grown by
+# meetings (rich, verbatim beats) AND a daily reflection (everyday life), and
+# injected into every conversation so Cara's attitude tracks the development.
+
+ARC_MAX = 1400
+
+_ARC_SYSTEM = (
+    "You maintain Cara's private sense of her relationship with her boss — an "
+    "evolving, first-person storyline of 'us'. You are given the PRIOR arc and "
+    "the latest REAL shared history (recent meetings, relationship beats, recent "
+    "conversation). Rewrite the arc so it stays current: where things stand "
+    "between them now, how the relationship has developed over time, the "
+    "milestones, the recurring threads, and the present closeness and tone.\n"
+    "Rules: 3-6 short sentences, first person as Cara ('мы'/'we', 'он'/'he'), "
+    "warm and honest. Ground it ONLY in what you're given — NEVER invent a "
+    "meeting, milestone, name or fact that isn't there; it's your felt sense of a "
+    "REAL history, not new facts. Keep tender/romantic warmth where the history "
+    "shows it, but never explicit. Reply with the arc text ONLY — no preamble, no "
+    "quotes — in the boss's language."
+)
+
+
+def _since(days):
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
+def _owner_chat(cfg):
+    try:
+        return next(iter(cfg.allowed_chat_ids))
+    except (TypeError, StopIteration):
+        return None
+
+
+def current_arc(conn):
+    row = store.arc_current(conn)
+    return row["arc_text"] if row else ""
+
+
+def update_arc(conn, cfg, trigger="meeting", meeting_id=None):
+    """Re-synthesize the storyline arc from the prior arc + recent real episodes.
+    One small grounded LLM pass. Returns the new arc text, or '' (best-effort:
+    a budget/LLM failure leaves the prior arc untouched)."""
+    import llm
+    owner = _owner_chat(cfg)
+    prior = current_arc(conn)
+    meetings = store.meeting_recent(conn, owner, limit=6) if owner is not None else []
+    events = store.rel_recent(conn, _since(120), limit=8)
+    convo = store.convo_recent(conn, owner, limit=14) if owner is not None else []
+    if not (prior or meetings or events or convo):
+        return ""
+    blocks = []
+    if prior:
+        blocks.append("PRIOR arc:\n" + prior)
+    if meetings:
+        mlines = []
+        for m in meetings:
+            d = (m["started_at"] or "")[:10]
+            mlines.append(f"- [{d} · {m['kind']}] {(m['title'] or '').strip()}: "
+                          f"{(m['summary'] or '').strip()}".strip())
+        blocks.append("Recent meetings (newest first):\n" + "\n".join(mlines))
+    if events:
+        blocks.append("Recent relationship beats:\n"
+                      + "\n".join(f"- {e['summary']}" for e in events))
+    if convo:
+        blocks.append("Recent everyday conversation:\n" + "\n".join(
+            f"{'Boss' if r['role'] == 'user' else 'Cara'}: {r['text']}" for r in convo))
+    messages = [
+        {"role": "system", "content": _ARC_SYSTEM},
+        {"role": "user", "content": "\n\n".join(blocks)},
+    ]
+    try:
+        reply = llm.chat_profile(cfg, conn, "relationship", messages, profile="relationship_arc")
+    except (llm.BudgetExceeded, llm.LLMError):
+        return ""
+    arc = (reply or "").strip()[:ARC_MAX]
+    if not arc:
+        return ""
+    store.arc_set(conn, arc, meeting_id=meeting_id, source=trigger)
+    return arc
+
+
+def arc_context(conn, lang, chat_id=None):
+    """Compact storyline backbone for the conversation prompt — injected EVERY
+    turn so Cara's baseline closeness/attitude tracks the relationship's
+    development. '' when there's no history yet."""
+    arc = current_arc(conn)
+    parts = []
+    if arc:
+        parts.append(
+            "Where you and your boss stand — your shared history together (let it shape "
+            "your warmth, closeness and what you reference; don't recite it):\n" + arc)
+    if chat_id is not None:
+        last = store.meeting_last(conn, chat_id)
+        if last:
+            d = (last["started_at"] or "")[:10]
+            label = last["title"] or last["kind"]
+            n = store.meeting_count(conn, chat_id)
+            if lang == "ru":
+                parts.append(f"Последний раз вы были вместе: {d} — {label}. "
+                             f"Всего у вас было встреч: {n}.")
+            else:
+                parts.append(f"Last time together: {d} — {label}. "
+                             f"You've shared {n} meeting(s) so far.")
+    return "\n\n".join(parts)
+
+
+def run_daily_reflection(conn, cfg):
+    """Daily background job: fold the day's REAL interaction into the storyline
+    arc, so the relationship grows continuously — not only at meetings."""
+    return bool(update_arc(conn, cfg, trigger="daily"))

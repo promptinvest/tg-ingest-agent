@@ -208,6 +208,40 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Settings memory** (`memory`): "запомни: отвечай по‑английски", "что ты помнишь из
   настроек?" — language, timezone, auto‑calendar, named notes.
 
+### Shared‑time meetings & the relationship storyline
+- **Spend real time together** (`meeting_start`): a working sit‑down OR a social/
+  personal one — **dinner, a walk, the movies, or visiting her at her place**. "давай
+  проведём встречу", "пойдём поужинаем", "погуляем?", "сходим в кино", "можно я зайду к
+  тебе?" begin a live session with an inferred **kind** (+optional setting). A *future*
+  plan ("в пятницу в кино") is **not** a meeting — she reacts warmly and may offer a
+  reminder. One meeting at a time; re‑opening just says "мы же уже вместе".
+- **She's present and records it** — while a meeting is open every turn (his and hers,
+  voice included) is captured **verbatim**. Routing is unchanged: ordinary talk is warm
+  `converse`, and a **real command raised mid‑meeting still confirms and fires** (the
+  safety spine is intact). Only an explicit "давай закончим" ends it (`meeting_end`);
+  a forgotten‑open meeting **idle‑auto‑ends** after `MEETING_IDLE_HOURS`.
+- **Attunement** — in a meeting she reads the conversation's register and the setting and
+  **follows his lead**: business stays focused; a personal/social one unlocks an open,
+  candid, lively, lead‑following register that warms and deepens as he does. Ceiling kept:
+  tender/sensual but **never explicit/graphic**; always her **texting voice** (no asterisk
+  stage‑directions — stripped in code); owner‑only.
+- **Separate episodic memory** — on end she **summarizes** it (kind‑aware: business →
+  decisions/action‑items; social → a warm episodic memory + highlights), embeds it into a
+  **dedicated meeting memory** (`meeting_chunks`, never the notes inbox / `ask` KB), and a
+  **social** meeting also grows her **life** (`cara_life`) and your **relationship**
+  (`relationship_events`).
+- **Recall** — on demand (`meeting_recall` "помнишь наш ужин?", `meeting_list` "наши
+  встречи") and **proactively**: the most relevant past meeting is surfaced into ordinary
+  conversation grounding so she brings it up naturally when the moment fits.
+- **The relationship storyline** — an evolving, synthesized **arc of "us"** (in
+  `relationship_arc`, versioned) is **injected into every conversation**, so her baseline
+  warmth and what she references **track how the relationship actually developed**. It
+  grows continuously: meetings are the rich, verbatim beats, plus a **daily reflection**
+  folds everyday interaction into the arc. Grounded only in real history — never invented.
+- **Day‑after afterglow** — the morning after a *personal* meeting she may, **occasionally**,
+  reach out first with genuine warmth ("было так хорошо, уже скучаю") — one‑shot per
+  meeting, quiet‑hours / proactivity‑prefs aware, **never** clingy or reproachful.
+
 ### Reporting & ops
 - **Weekly performance review:** runs on a fixed schedule (default **Monday 10:00
   local**); "когда следующий review?" tells you the date; "как ты поработала?" runs it
@@ -272,6 +306,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ ingest.py        parsing, UTF-16-safe URL extraction, category+facts+summary
    ├─ pdftext.py       best-effort PDF text-layer extraction (stdlib only)
    ├─ knowledge.py     chunking + cosine retrieval + grounded-answer prompt (ask)
+   ├─ meeting.py       shared-time meetings: capture, kind-aware summary, embed,
+   │                   recall (SEPARATE episodic memory), idle auto-end, afterglow
    ├─ reminders.py     NL time parsing, recurrence, local rendering
    ├─ gcal.py          Google Calendar (SA JWT) + .ics export
    ├─ spend.py         usage aggregation + budget status
@@ -279,7 +315,7 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ self_model.py    deterministic self-knowledge (never invented)
    ├─ boss_model.py    boss profile (confirmed/inferred, sensitivity floors, dedup, address)
    ├─ memory_curator.py memory candidates + conversation learning + corrections
-   ├─ relationship.py  grounded working history
+   ├─ relationship.py  grounded working history + the living relationship-storyline arc
    ├─ persona.py       prompt-layer ordering (persona below rules)
    ├─ proactive.py     suggestion-only heartbeat (throttle, quiet hours, gating)
    ├─ skill_manifest.py permission registry (risk · confirmation · proactive)
@@ -345,6 +381,11 @@ Spend & reliability: `llm_usage` · `model_cooldowns`.
 
 Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity) ·
 `memory_candidates` · `relationship_events` (title + trace) · `cara_life`.
+
+Meetings & storyline: `meetings` (kind · setting · status · summary · decisions) ·
+`meeting_turns` (verbatim transcript) · `meeting_chunks` (SEPARATE episodic embedding
+index — never mixed into notes `chunks`/`ask`) · `relationship_arc` (versioned storyline
+narrative; latest row = current, injected into every conversation).
 
 Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
 `proactive_log`.

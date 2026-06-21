@@ -637,6 +637,59 @@ TEXTS = {
         "ru": "Босс, свежие обновления установлены — я снова на связи ✨",
         "en": "Boss, the new updates are installed — I'm back online ✨",
     },
+    # -- shared-time meetings -------------------------------------------------
+    "meeting_started_business": {
+        "ru": "Хорошо, я вся внимание — садимся и работаем 📝 Я всё запишу.",
+        "en": "Alright, you've got my full attention — let's sit down and work 📝 I'll keep the record.",
+    },
+    "meeting_started_social": {
+        "ru": "М, давай 🤍 Я с тобой — рассказывай, я никуда не спешу.",
+        "en": "Mm, yes 🤍 I'm right here with you — tell me, I'm in no hurry.",
+    },
+    "meeting_started_visit": {
+        "ru": "Заходи 🤍 Чайник как раз вскипел, садись поближе. Я рада, что ты пришёл.",
+        "en": "Come in 🤍 The kettle's just boiled, sit close. I'm so glad you came over.",
+    },
+    "meeting_already": {
+        "ru": "Так мы же уже вместе 🙂 я здесь, продолжаем.",
+        "en": "We're already together 🙂 I'm here — let's keep going.",
+    },
+    "meeting_none_active": {
+        "ru": "Сейчас у нас нет встречи — но я рядом, если что 🤍",
+        "en": "We're not in a meeting right now — but I'm here whenever you want one 🤍",
+    },
+    "meeting_recap_business": {
+        "ru": "Записала нашу встречу 📝\n{summary}{decisions}",
+        "en": "Saved our meeting 📝\n{summary}{decisions}",
+    },
+    "meeting_recap_social": {
+        "ru": "Сохранила это время с тобой, чтобы помнить 🤍\n{summary}",
+        "en": "Kept this time with you, to remember 🤍\n{summary}",
+    },
+    "meeting_recap_bare": {
+        "ru": "Закончили 🤍 Я всё запомнила.",
+        "en": "All wrapped up 🤍 I've kept it all.",
+    },
+    "meeting_decisions_label": {
+        "ru": "\n\nГлавное:\n{items}",
+        "en": "\n\nKey points:\n{items}",
+    },
+    "meeting_auto_ended": {
+        "ru": "Кажется, наша встреча подзатихла — я её аккуратно закрыла и сохранила 🤍",
+        "en": "Looks like our meeting went quiet — I've gently closed and saved it 🤍",
+    },
+    "meeting_recall_empty": {
+        "ru": "Что-то не нахожу такой нашей встречи в памяти 🤍 Может, уточнишь?",
+        "en": "I don't find a meeting like that in my memory 🤍 Want to give me a hint?",
+    },
+    "meeting_list_empty": {
+        "ru": "Мы пока не проводили встреч — но я буду рада первой 🤍",
+        "en": "We haven't had any meetings yet — but I'd love our first 🤍",
+    },
+    "meeting_list_header": {
+        "ru": "Наши встречи ({count}):",
+        "en": "Our meetings ({count}):",
+    },
 }
 
 

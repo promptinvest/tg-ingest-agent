@@ -346,6 +346,57 @@ CREATE TABLE IF NOT EXISTS cara_photos (
   file_unique_id TEXT UNIQUE,
   added_at TEXT NOT NULL
 );
+
+-- Shared-time meetings (business OR social/personal) + their separate episodic
+-- memory. A meeting is a stateful session: while active, every turn is captured
+-- verbatim in meeting_turns; on end it is summarized and embedded into
+-- meeting_chunks (a SEPARATE recall index, never mixed into notes/`chunks`).
+CREATE TABLE IF NOT EXISTS meetings (
+  id INTEGER PRIMARY KEY,
+  chat_id INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'other',   -- business|dinner|walk|movies|visit|call|other
+  setting TEXT,                         -- the scene/place (grounds recall)
+  title TEXT,
+  status TEXT NOT NULL DEFAULT 'active', -- active|ended
+  started_at TEXT NOT NULL,
+  last_turn_at TEXT,                    -- for idle auto-end
+  ended_at TEXT,
+  summary TEXT,                         -- recap written at end
+  decisions TEXT,                       -- JSON: action items (business) / highlights (social)
+  trace_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS meeting_turns (
+  id INTEGER PRIMARY KEY,
+  meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  ts TEXT NOT NULL,
+  role TEXT NOT NULL,                   -- boss|cara
+  text TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meeting_chunks (
+  id INTEGER PRIMARY KEY,
+  meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  embedding TEXT
+);
+
+-- The relationship storyline: an evolving, synthesized narrative of "us",
+-- versioned so Cara can speak to how things changed. The latest row is the
+-- current arc, injected into every conversation so her attitude tracks the
+-- relationship's development. Grown by meetings + a daily reflection.
+CREATE TABLE IF NOT EXISTS relationship_arc (
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  arc_text TEXT NOT NULL,
+  meeting_id INTEGER,
+  source TEXT                           -- meeting|daily
+);
+
+CREATE INDEX IF NOT EXISTS idx_meetings_active ON meetings(chat_id, status, id);
+CREATE INDEX IF NOT EXISTS idx_meeting_turns_m ON meeting_turns(meeting_id, id);
+CREATE INDEX IF NOT EXISTS idx_meeting_chunks_m ON meeting_chunks(meeting_id);
 """
 
 
@@ -582,6 +633,156 @@ def life_facts(conn, limit=40):
 
 def life_count(conn):
     return conn.execute("SELECT COUNT(*) AS n FROM cara_life").fetchone()["n"]
+
+
+# -- meetings (shared-time sessions) + episodic memory -----------------------
+
+def meeting_active(conn, chat_id):
+    """The open meeting for this chat, or None. One active meeting at a time."""
+    return conn.execute(
+        "SELECT * FROM meetings WHERE chat_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
+        (chat_id,),
+    ).fetchone()
+
+
+def meeting_start(conn, chat_id, kind="other", setting=None, title=None):
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO meetings (chat_id, kind, setting, title, status, started_at,"
+        " last_turn_at, trace_id) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)",
+        (chat_id, kind, setting, title, now, now, _trace_id()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def meeting_get(conn, meeting_id):
+    return conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
+
+
+def meeting_turn_add(conn, meeting_id, role, text):
+    text = str(text or "").strip()
+    if not text:
+        return
+    now = _now()
+    conn.execute(
+        "INSERT INTO meeting_turns (meeting_id, ts, role, text) VALUES (?, ?, ?, ?)",
+        (meeting_id, now, role, text[:2000]),
+    )
+    conn.execute("UPDATE meetings SET last_turn_at = ? WHERE id = ?", (now, meeting_id))
+    conn.commit()
+
+
+def meeting_turns(conn, meeting_id, limit=500):
+    return conn.execute(
+        "SELECT role, text, ts FROM meeting_turns WHERE meeting_id = ? ORDER BY id LIMIT ?",
+        (meeting_id, limit),
+    ).fetchall()
+
+
+def meeting_turn_count(conn, meeting_id):
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM meeting_turns WHERE meeting_id = ?", (meeting_id,)
+    ).fetchone()["n"]
+
+
+def meeting_end(conn, meeting_id, summary=None, decisions=None, title=None):
+    conn.execute(
+        "UPDATE meetings SET status = 'ended', ended_at = ?,"
+        " summary = COALESCE(?, summary), decisions = COALESCE(?, decisions),"
+        " title = COALESCE(?, title) WHERE id = ?",
+        (_now(), summary, decisions, title, meeting_id),
+    )
+    conn.commit()
+
+
+def meeting_recent(conn, chat_id, limit=10, status="ended"):
+    return conn.execute(
+        "SELECT * FROM meetings WHERE chat_id = ? AND status = ? ORDER BY id DESC LIMIT ?",
+        (chat_id, status, limit),
+    ).fetchall()
+
+
+def meeting_count(conn, chat_id, status="ended"):
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM meetings WHERE chat_id = ? AND status = ?",
+        (chat_id, status),
+    ).fetchone()["n"]
+
+
+def meeting_first(conn, chat_id):
+    return conn.execute(
+        "SELECT * FROM meetings WHERE chat_id = ? AND status = 'ended' ORDER BY id LIMIT 1",
+        (chat_id,),
+    ).fetchone()
+
+
+def meeting_last(conn, chat_id):
+    return conn.execute(
+        "SELECT * FROM meetings WHERE chat_id = ? AND status = 'ended' ORDER BY id DESC LIMIT 1",
+        (chat_id,),
+    ).fetchone()
+
+
+def meetings_idle(conn, cutoff_iso):
+    """Active meetings whose last turn is older than cutoff (idle auto-end)."""
+    return conn.execute(
+        "SELECT * FROM meetings WHERE status = 'active' AND COALESCE(last_turn_at, started_at) < ?",
+        (cutoff_iso,),
+    ).fetchall()
+
+
+def set_meeting_chunks(conn, meeting_id, chunks):
+    """Replace a meeting's embedding chunks. chunks: list of (text, vec_or_None)."""
+    import json as _json
+    conn.execute("DELETE FROM meeting_chunks WHERE meeting_id = ?", (meeting_id,))
+    for i, (text, embedding) in enumerate(chunks):
+        conn.execute(
+            "INSERT INTO meeting_chunks (meeting_id, chunk_index, text, embedding)"
+            " VALUES (?, ?, ?, ?)",
+            (meeting_id, i, text, _json.dumps(embedding) if embedding is not None else None),
+        )
+    conn.commit()
+
+
+def all_meeting_chunks(conn, chat_id=None):
+    """Every embedded meeting chunk (optionally for one chat), with its meeting's
+    kind/setting/title/date for warm grounded recall."""
+    q = ("SELECT mc.meeting_id AS meeting_id, mc.text AS text, mc.embedding AS embedding,"
+         " m.kind AS kind, m.setting AS setting, m.title AS title, m.started_at AS started_at"
+         " FROM meeting_chunks mc JOIN meetings m ON m.id = mc.meeting_id"
+         " WHERE mc.embedding IS NOT NULL")
+    params = ()
+    if chat_id is not None:
+        q += " AND m.chat_id = ?"
+        params = (chat_id,)
+    return conn.execute(q, params).fetchall()
+
+
+# -- relationship storyline arc (versioned; latest row = current) ------------
+
+def arc_set(conn, arc_text, meeting_id=None, source=None):
+    arc_text = str(arc_text or "").strip()
+    if not arc_text:
+        return None
+    cur = conn.execute(
+        "INSERT INTO relationship_arc (ts, arc_text, meeting_id, source) VALUES (?, ?, ?, ?)",
+        (_now(), arc_text[:4000], meeting_id, source),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def arc_current(conn):
+    return conn.execute(
+        "SELECT * FROM relationship_arc ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+
+def arc_history(conn, limit=10):
+    return conn.execute(
+        "SELECT * FROM relationship_arc ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
 
 
 # -- proactive heartbeat audit log -------------------------------------------

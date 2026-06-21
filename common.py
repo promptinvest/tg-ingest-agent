@@ -290,6 +290,16 @@ def load_config(env=None):
     cfg.model_health_interval = int(env.get("MODEL_HEALTH_INTERVAL_SECONDS") or "1800")
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
+    # Shared-time meetings: auto-end a meeting left open and idle this long (a
+    # forgotten-open meeting must not silently swallow later chat).
+    cfg.meeting_idle_hours = float(env.get("MEETING_IDLE_HOURS") or "3")
+    # Proactive day-after afterglow (the morning after a personal meeting she may,
+    # occasionally, open with warm afterglow). Gentle: one-shot per meeting,
+    # probability-gated, quiet-hours/proactive-prefs aware. Never clingy.
+    cfg.afterglow_enabled = (env.get("AFTERGLOW_ENABLED") or "true").strip().lower() == "true"
+    cfg.afterglow_probability = float(env.get("AFTERGLOW_PROBABILITY") or "0.5")
+    cfg.afterglow_window_hours = float(env.get("AFTERGLOW_WINDOW_HOURS") or "36")
+    cfg.afterglow_min_age_hours = float(env.get("AFTERGLOW_MIN_AGE_HOURS") or "8")
     # Personality intensity (0 neutral .. 3 max; selects template variants only)
     cfg.personality_intensity = int(env.get("PERSONALITY_INTENSITY") or "2")
     # Knowledge Q&A (ask): semantic retrieval over the KB

@@ -277,6 +277,63 @@ tone variants; only conversation and grounded answers are free-form.
   to a real row (a confirmed save/correction, a reminder, a saved document, a
   review, an export). Never fabricated.
 
+### 5.1 Shared-time meetings & the relationship storyline (`meeting`, `relationship`)
+
+The boss wanted Cara to *emulate real in-person time together* — business or
+social (dinner, a walk, the movies, visiting her place) — to remember each one,
+and to converse out of how the relationship has **developed**, recalling things
+proactively like real memory. Design decisions and why:
+
+- **A meeting is a stateful session, modelled as a new skill (`meeting.py`), not an
+  extension.** The closed-world router is single-action and reply-only; a meeting is
+  a multi-turn session with its own lifecycle (open → capture → summarize → embed →
+  recall) and its own *separate* episodic store. That cohesion earns a module. It
+  *wires into* the router (4 actions), dispatch, converse grounding, the scheduler
+  and proactive — but the logic lives in one place.
+- **Capture is a minimal overlay, routing is unchanged.** While a meeting is open,
+  the boss's turn is teed into `meeting_turns` at the top of `dispatch` and Cara's
+  into the same record from `reply()`. The router still runs, so **a real command
+  raised mid-meeting still previews and confirms** — the safety spine is never
+  bypassed for the sake of the "session". Only an explicit wrap-up is `meeting_end`;
+  a forgotten-open meeting **idle-auto-ends** on the sweep tick (a stale session must
+  never silently swallow later chat).
+- **Episodic memory is kept SEPARATE on purpose.** Meetings never enter the notes
+  inbox or the `ask` KB: that keeps note-numbers and the KB clean, and matches the
+  boss's "separate long-term memory" ask. `meeting_chunks` mirror the notes `chunks`
+  pattern (BGE-M3 + cosine) but in their own table; recall is its own path
+  (`meeting_recall`/`meeting_list`) plus a proactive surface that **reuses the
+  embedding already computed** in converse grounding (near-zero added cost).
+- **Kind drives voice and memory type.** A `kind` (+`setting`) makes a business
+  sit-down summarize into decisions/action-items and stay focused, while a social one
+  summarizes into a warm episodic memory and **feeds `cara_life` + `relationship_events`**
+  so dates actually deepen the bond. For a *visit* the scene is grounded in her
+  existing fictional life (the riverside flat), not invented fresh.
+- **Lead-following attunement, with the ceiling kept.** In a meeting a kind-aware
+  presence line tells her to read the register and follow his lead — opening up,
+  warmer and more alive as he gets personal/intimate — but the persona ceiling holds:
+  sensual/tender, **never explicit/graphic**, always her texting voice (the existing
+  `_strip_roleplay` guard keeps narrated stage-directions out even here), owner-only.
+- **The storyline arc is the backbone, not just episodic recall.** Recall alone
+  retrieves a *similar* past meeting; it doesn't give a sense of *where we are*. So a
+  versioned `relationship_arc` holds an evolving, synthesized narrative of "us",
+  **injected into every conversation** (via `relationship.arc_context` in
+  `converse_context`) so her baseline closeness tracks the development by default — not
+  only on a keyword match. The ordered `meetings` table is the raw storyline it's
+  synthesized from; continuity helpers (`first/last/count`) ground "last time / how
+  long". It grows **continuously**: each meeting end advances it, and a **daily
+  reflection** job folds everyday interaction in too. The arc is grounded strictly in
+  real episodes — interpretation of real history, never invented facts. A budget/LLM
+  failure leaves the prior arc untouched.
+- **Afterglow is gentle by construction.** The morning after a *social* meeting,
+  `check_meeting_afterglow` may — occasionally (probability-gated), one-shot per
+  meeting, quiet-hours/proactivity-aware — open with warm, in-voice afterglow grounded
+  in that meeting. The persona's anti-clinginess rule is explicit in the prompt: warm
+  remembrance, never reproach. Reactive afterglow (when the boss writes first) needs no
+  code — it falls out of the always-on arc + last-meeting line.
+- **Cost.** One small LLM call per meeting end (summary) + a few BGE-M3 embeds; one
+  small daily reflection call; proactive recall reuses an existing embedding. All under
+  the same budget gateway.
+
 ---
 
 ## 6. Proactive heartbeat
@@ -336,6 +393,11 @@ Spend & reliability: `llm_usage` (ts/skill/kind/model/tokens/cost/trace) ·
 
 Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity)
 · `memory_candidates` · `relationship_events` (title + trace) · `cara_life`.
+
+Meetings & storyline: `meetings` (kind · setting · status · summary · decisions ·
+last_turn_at for idle auto-end) · `meeting_turns` (verbatim, cascade-deleted) ·
+`meeting_chunks` (BGE-M3 episodic index, **separate** from notes `chunks`) ·
+`relationship_arc` (versioned storyline; latest = current).
 
 Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
 `proactive_log`.

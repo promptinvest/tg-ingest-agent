@@ -226,6 +226,11 @@ def default_profiles(cfg):
                           "json_required": False, "temperature": 0.7},
         "memory_curator": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
         "review_balanced": {"primary": primary, "fallbacks": [], "max_tokens": 900, "json_required": False},
+        # meeting end-recap: JSON {title, summary, decisions/highlights}
+        "meeting_summary": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
+        # relationship storyline arc: a short, warm evolving narrative (prose)
+        "relationship_arc": {"primary": primary, "fallbacks": fb, "max_tokens": 500,
+                             "json_required": False, "temperature": 0.5},
     }
 
 

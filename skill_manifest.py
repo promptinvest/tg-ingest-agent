@@ -120,6 +120,22 @@ SKILLS = {
                         "title": {"en": "Save Cara photo", "ru": "Сохранить фото Кары"}},
     "cara_selfie": {"risk": "read_only", "title": {"en": "Send a photo of herself",
                                                    "ru": "Прислать своё фото"}},
+    # -- shared-time meetings + relationship storyline (benign session toggles;
+    #    they open/close a meeting and recall it — no destructive data change,
+    #    no typed confirmation, real commands raised mid-meeting still confirm).
+    "meeting_start": {"risk": "state_write", "writes_state": True, "persona_context": True,
+                      "title": {"en": "Start time together", "ru": "Начать встречу"}},
+    "meeting_end": {"risk": "state_write", "uses_llm": True, "writes_state": True,
+                    "persona_context": True,
+                    "title": {"en": "End the meeting", "ru": "Завершить встречу"}},
+    "meeting_recall": {"risk": "read_only", "uses_llm": True, "persona_context": True,
+                       "title": {"en": "Recall a meeting", "ru": "Вспомнить встречу"}},
+    "meeting_list": {"risk": "read_only", "persona_context": True,
+                     "title": {"en": "Our meetings", "ru": "Наши встречи"}},
+    # -- internal: the daily relationship reflection (grows the storyline arc)
+    "relationship": {"risk": "read_only_suggestion", "uses_llm": True, "writes_state": True,
+                     "allowed_proactive": True, "internal": True,
+                     "title": {"en": "Relationship reflection", "ru": "Размышление об отношениях"}},
     # -- conversational glue (no capability surface)
     "smalltalk": {"risk": "meta"}, "confirm": {"risk": "meta"}, "amend": {"risk": "meta"},
     "cancel": {"risk": "meta"}, "clarify": {"risk": "meta"}, "out_of_scope": {"risk": "meta"},
