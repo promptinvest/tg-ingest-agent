@@ -2422,6 +2422,51 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_rename_reminder(1, "ru", {"id": 1})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
+    def test_reschedule_binds_this_to_last_touched_reminder(self):
+        # B3: a bare "это напоминание" binds to the reminder he was just dealing with.
+        from datetime import datetime, timezone, timedelta
+        c = self.agent.conn
+        now = datetime.now(timezone.utc)
+        a = store.reminder_add(c, 1, "A", (now + timedelta(hours=1)).isoformat())
+        b = store.reminder_add(c, 1, "B", (now + timedelta(hours=2)).isoformat())
+        store.kv_set(c, "last_reminder_id", str(b))   # he just touched B
+        a_due = store.reminder_get(c, a)["due_utc"]
+        new_due = (now + timedelta(hours=5)).isoformat()
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reschedule(1, "ru", {"due_utc": new_due})  # bare "это" -> B
+        self.assertEqual(store.reminder_get(c, b)["due_utc"], new_due)   # B moved
+        self.assertEqual(store.reminder_get(c, a)["due_utc"], a_due)     # A untouched
+
+    def test_parse_reminder_selector(self):
+        rows = [{"id": 10, "title": "позвонить в банк"}, {"id": 11, "title": "купить хлеб"}]
+        p = self.agent._parse_reminder_selector
+        self.assertEqual(p("#2", rows)["id"], 11)
+        self.assertEqual(p("второе", rows)["id"], 11)
+        self.assertEqual(p("про банк", rows)["id"], 10)
+        self.assertIsNone(p("давай попозже", rows))
+
+    def test_ambiguous_reschedule_then_pick_completes_it(self):
+        # B2: ambiguous reschedule remembers the op; his next "второе" completes it
+        # on the RIGHT reminder (not a stray close).
+        import router
+        from datetime import datetime, timezone, timedelta
+        c = self.agent.conn
+        now = datetime.now(timezone.utc)
+        a = store.reminder_add(c, 1, "позвонить в банк", (now + timedelta(hours=1)).isoformat())
+        b = store.reminder_add(c, 1, "купить хлеб", (now + timedelta(hours=2)).isoformat())
+        a_due = store.reminder_get(c, a)["due_utc"]
+        new_due = (now + timedelta(hours=5)).isoformat()
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reschedule(1, "ru", {"due_utc": new_due})  # ambiguous -> asks which
+        self.assertEqual(store.pending_get(c, 1)["kind"], "reminder_op")
+        with mock.patch.object(router, "route") as rt, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 2}, "второе")   # picks the 2nd (B)
+            rt.assert_not_called()                                # resolved deterministically
+        self.assertEqual(store.reminder_get(c, b)["due_utc"], new_due)  # B (2nd) moved
+        self.assertEqual(store.reminder_get(c, a)["due_utc"], a_due)    # A untouched
+        self.assertIsNone(store.pending_get(c, 1))                      # pending cleared
+
     def test_undo_restores_previous_time(self):
         from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)

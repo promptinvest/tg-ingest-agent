@@ -330,6 +330,7 @@ class Agent:
             # boss explicitly acks ('готово') or cancels it; last_fired_at stops it
             # re-firing. (Old behavior closed it here, which read as 'why did you close it'.)
             store.reminder_touch_fired(self.conn, row["id"])
+            self._remember_reminder(row["id"])  # "готово/перенеси это" binds to the just-fired one
             log(f"reminder #{row['id']} fired")
 
     def check_budget_notice(self):
@@ -671,6 +672,13 @@ class Agent:
             if explicit:
                 self.resolve_pending(chat_id, "amend", {"category": explicit}, pending, lang)
                 return
+        # A pending reminder disambiguation ('which reminder?'): his next pick
+        # ('второе'/'#2'/'про банк') completes the remembered reschedule/rename (B2).
+        if pending and pending["kind"] == "reminder_op":
+            if self._resolve_reminder_op(chat_id, lang, pending, text):
+                return
+            store.pending_clear(self.conn, chat_id)  # not a pick -> abandon, route normally
+            pending = None
         # A fired reminder leaves a 30-min 'reminder_fired' pending so 'готово' / 'через
         # 30 минут' resolve it. But the boss often answers by DOING the task — a gratitude
         # reminder -> he dictates the gratitude. That content must be SAVED, not eaten as
@@ -949,6 +957,7 @@ class Agent:
                                    source_table="reminders", source_id=rid,
                                    title=payload["title"])
             store.pending_clear(self.conn, chat_id)
+            self._remember_reminder(rid)  # so a follow-up "это напоминание" binds to it
             self.reply(chat_id, T(
                 lang, "reminder_set", rid=self.reminder_no(chat_id, rid), title=payload["title"],
                 when_local=reminders.fmt_local(payload["due_utc"], self.tz_offset()),
@@ -2751,10 +2760,12 @@ class Agent:
         if due is None:
             self.reply(chat_id, T(lang, "reschedule_when"))
             return
-        row = self._resolve_reminder_target(chat_id, lang, params)
+        row = self._resolve_reminder_target(
+            chat_id, lang, params, op={"op": "reschedule", "due_utc": due.isoformat()})
         if row is None:
             return  # _resolve_reminder_target already replied (not found / which?)
         store.reminder_update_due(self.conn, row["id"], due.isoformat())
+        self._remember_reminder(row["id"])
         self.reply(chat_id, T(lang, "reminder_rescheduled",
                               rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
                               when_local=reminders.fmt_local(due.isoformat(), self.tz_offset())))
@@ -2773,10 +2784,12 @@ class Agent:
         if not new_title:
             self.reply(chat_id, T(lang, "reminder_rename_what"))
             return
-        row = self._resolve_reminder_target(chat_id, lang, params)
+        row = self._resolve_reminder_target(
+            chat_id, lang, params, op={"op": "rename", "new_title": new_title})
         if row is None:
             return  # _resolve_reminder_target already replied (not found / which?)
         store.reminder_rename(self.conn, row["id"], new_title)
+        self._remember_reminder(row["id"])
         self.reply(chat_id, T(lang, "reminder_renamed",
                               rid=self.reminder_no(chat_id, row["id"]), title=new_title))
 
@@ -2959,9 +2972,76 @@ class Agent:
                               rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
                               when_local=reminders.fmt_local(prev, self.tz_offset())))
 
-    def _resolve_reminder_target(self, chat_id, lang, params):
-        """Resolve which active reminder a reschedule/undo refers to. Returns the
-        row, or None after replying with not-found / a 'which one?' list."""
+    def _remember_reminder(self, rid):
+        """Track the reminder the boss is dealing with right now, so a later bare
+        'это напоминание' (reschedule/rename) binds to it instead of guessing (B3)."""
+        store.kv_set(self.conn, "last_reminder_id", str(rid))
+
+    _ORDINALS = {"перв": 1, "втор": 2, "трет": 3, "четвёрт": 4, "четверт": 4, "пят": 5,
+                 "шест": 6, "седьм": 7, "first": 1, "second": 2, "third": 3,
+                 "fourth": 4, "fifth": 5}
+
+    def _parse_reminder_selector(self, text, rows):
+        """Map the boss's disambiguation answer to one of `rows` (display order):
+        a number / '#2', an ordinal word ('второе'), or a title word ('про банк')."""
+        t = (text or "").strip().casefold()
+        if not t or not rows:
+            return None
+        m = re.search(r"#?\s*(\d{1,3})", t)
+        if m:
+            n = int(m.group(1))
+            if 1 <= n <= len(rows):
+                return rows[n - 1]
+        for stem, n in self._ORDINALS.items():
+            if stem in t and 1 <= n <= len(rows):
+                return rows[n - 1]
+        for r in rows:  # a word of the title appearing in his answer ('про банк')
+            words = [w for w in re.split(r"\W+", r["title"].casefold()) if len(w) >= 3]
+            if any(w in t for w in words):
+                return r
+        return None
+
+    def _resolve_reminder_op(self, chat_id, lang, pending, text):
+        """Apply a remembered reschedule/rename to the reminder the boss just picked
+        (pending reminder_op). Returns True if handled; False if his message isn't a
+        pick (caller then abandons the pending and routes the message normally)."""
+        payload = pending["payload"]
+        ids = payload.get("ids") or []
+        rows = [r for r in store.reminders_active(self.conn, chat_id) if r["id"] in ids]
+        row = self._parse_reminder_selector(text, rows)
+        if row is None:
+            return False
+        store.pending_clear(self.conn, chat_id)
+        op = payload.get("op")
+        if op == "reschedule":
+            due = reminders.parse_iso_utc(payload.get("due_utc"))
+            if due is None:
+                self.reply(chat_id, T(lang, "reschedule_when"))
+                return True
+            store.reminder_update_due(self.conn, row["id"], due.isoformat())
+            self._remember_reminder(row["id"])
+            self.reply(chat_id, T(lang, "reminder_rescheduled",
+                                  rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
+                                  when_local=reminders.fmt_local(due.isoformat(), self.tz_offset())))
+            return True
+        if op == "rename":
+            new_title = str(payload.get("new_title") or "").strip()[:reminders.MAX_TITLE_CHARS]
+            if not new_title:
+                self.reply(chat_id, T(lang, "reminder_rename_what"))
+                return True
+            store.reminder_rename(self.conn, row["id"], new_title)
+            self._remember_reminder(row["id"])
+            self.reply(chat_id, T(lang, "reminder_renamed",
+                                  rid=self.reminder_no(chat_id, row["id"]), title=new_title))
+            return True
+        return False
+
+    def _resolve_reminder_target(self, chat_id, lang, params, op=None):
+        """Resolve which active reminder a reschedule/rename/undo refers to. Returns
+        the row, or None after replying. A bare 'это' binds to the last reminder he
+        touched (B3); when that's absent and several are active, and `op` is given, it
+        remembers the operation as a `reminder_op` pending so his next pick completes
+        it (B2) — instead of losing the time/new-title to a fresh route."""
         rows = store.reminders_active(self.conn, chat_id)
         if not rows:
             self.reply(chat_id, T(lang, "reminder_not_found"))
@@ -2975,12 +3055,20 @@ class Agent:
             self.reply(chat_id, T(lang, "reminder_not_found") + "\n"
                        + reminders.format_list(rows, self.tz_offset(), lang))
             return None
-        if row is None:  # bare "это/последнее" reference
-            if len(rows) > 1:
-                self.reply(chat_id, T(lang, "reschedule_which") + "\n"
-                           + reminders.format_list(rows, self.tz_offset(), lang))
-                return None
-            row = rows[0]
+        if row is None:  # bare "это/последнее/это напоминание" reference
+            last_id = store.kv_get(self.conn, "last_reminder_id")
+            if last_id:
+                match = next((r for r in rows if str(r["id"]) == str(last_id)), None)
+                if match is not None:
+                    return match
+            if len(rows) == 1:
+                return rows[0]
+            if op is not None:  # remember the op so his next pick ('второе'/'#2'/'про X') completes it
+                store.pending_set(self.conn, chat_id, "reminder_op",
+                                  {**op, "ids": [r["id"] for r in rows]})
+            self.reply(chat_id, T(lang, "reschedule_which") + "\n"
+                       + reminders.format_list(rows, self.tz_offset(), lang))
+            return None
         return row
 
     def files_text(self, lang):

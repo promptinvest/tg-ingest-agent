@@ -185,6 +185,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   - **Reschedule / undo:** "перенеси напоминание про банк на пятницу" moves it; an
     explicit title that matches nothing active is reported (never silently moves a
     different one); "верни предыдущее время" / "отмени перенос" undoes the last move.
+  - **"Это напоминание"** binds to the one you were just dealing with; if it's genuinely
+    ambiguous she asks which and **remembers what you wanted** — your "второе" / "#2" /
+    "про банк" then completes the move/rename on the right one (never a stray close).
   - **Complete a half‑specified reminder:** "напомни в 17:00" → she asks the subject,
     stitches your answer in, then confirms — the partial isn't lost.
   - **From a note:** "поставь напоминание по заметке N" uses note N's real subject as
