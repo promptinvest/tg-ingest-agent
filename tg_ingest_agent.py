@@ -156,6 +156,30 @@ class Agent:
             log(f"sendMessage failed: {exc}")
             return None
 
+    def reply_chunks(self, chat_id, text):
+        """Send a long message in <=4000-char pieces split on line boundaries — a long
+        list/journal used to be silently cut at the Telegram cap. Oversized single
+        lines are hard-split."""
+        text = text or ""
+        limit = 3900
+        if len(text) <= limit:
+            self.reply(chat_id, text)
+            return
+        buf = ""
+        for line in text.split("\n"):
+            while len(line) > limit:          # a single very long line
+                if buf:
+                    self.reply(chat_id, buf)
+                    buf = ""
+                self.reply(chat_id, line[:limit])
+                line = line[limit:]
+            if buf and len(buf) + 1 + len(line) > limit:
+                self.reply(chat_id, buf)
+                buf = ""
+            buf = (buf + "\n" + line) if buf else line
+        if buf:
+            self.reply(chat_id, buf)
+
     def send_chat_action(self, chat_id, action="typing"):
         """Show an activity indicator (lasts ~5s in the client) so a few-second
         transcription/LLM wait feels responsive. Best-effort."""
@@ -764,7 +788,7 @@ class Agent:
         elif action == "reminder_undo":
             self.do_reminder_undo(chat_id, lang, params)
         elif action == "list_files":
-            self.reply(chat_id, self.files_text(lang))
+            self.reply_chunks(chat_id, self.files_text(lang))
         elif action == "calendar_add":
             draft = reminders.validate_draft(params)
             if draft:
@@ -799,7 +823,7 @@ class Agent:
         elif action == "overview":
             self.reply(chat_id, self.overview_text(lang))
         elif action == "list_items":
-            self.reply(chat_id, self.items_text(lang, params))
+            self.reply_chunks(chat_id, self.items_text(lang, params))
         elif action == "item_detail":
             self.do_item_detail(chat_id, lang, params)
         elif action == "recategorize":
@@ -2918,7 +2942,7 @@ class Agent:
             body = (e["summary"] or e["raw_text"] or "").strip()
             snippet = body.splitlines()[0][:120] if body else "—"
             lines.append(f"  • {snippet}")
-        self.reply(chat_id, "\n".join(lines))
+        self.reply_chunks(chat_id, "\n".join(lines))
 
     def _note_reminder_title(self, params):
         """'поставь напоминание по заметке N' arrives with note_id and no real

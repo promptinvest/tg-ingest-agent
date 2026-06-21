@@ -200,6 +200,36 @@ def parse_facts(parsed):
     return facts
 
 
+_CATEGORY_RE = re.compile(r'"category"\s*:\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
+_SUMMARY_RE = re.compile(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
+
+
+def _unescape_json_str(s):
+    # literal Cyrillic is fine as-is; only undo JSON escapes (never unicode_escape,
+    # which would mangle UTF-8 Cyrillic).
+    return (s.replace('\\"', '"').replace('\\n', ' ').replace('\\t', ' ')
+            .replace('\\/', '/').replace('\\\\', '\\'))
+
+
+def _salvage_reply(reply, known):
+    """Pull category/summary out of a malformed-but-JSON-shaped ingest reply (a stray
+    quote or trailing prose broke json.loads). Returns (category|None, summary). An
+    unsalvageable summary comes back '' so the note shows its real raw_text, never raw
+    JSON."""
+    reply = reply or ""
+    cat = None
+    mc = _CATEGORY_RE.search(reply)
+    if mc:
+        cat = llm.normalize_category(_unescape_json_str(mc.group(1)))
+        if cat:
+            cat = llm.match_category(cat, known) or cat
+    summary = ""
+    ms = _SUMMARY_RE.search(reply)
+    if ms:
+        summary = _unescape_json_str(ms.group(1)).strip()[:500]
+    return cat, summary
+
+
 def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
     """Ask the LLM for a category suggestion.
 
@@ -225,8 +255,12 @@ def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
         parsed = llm.parse_llm_json(reply)
         category = llm.normalize_category((parsed or {}).get("category"))
     if parsed is None or category is None:
-        summary = (reply or "").strip()[:500] or "(unparseable model reply)"
-        return cfg.fallback_category, [], summary, []
+        # A JSON-shaped reply that wouldn't parse must NOT be stored verbatim — that
+        # showed raw JSON as a note's summary. Salvage the category/summary fields by
+        # regex; fall back to an EMPTY summary (so the note renders its raw_text, never
+        # the model's JSON) rather than dumping the raw reply.
+        cat, summary = _salvage_reply(reply, known)
+        return (cat or cfg.fallback_category), [], summary, []
     category = llm.match_category(category, known) or category
     alternatives = []
     raw_alternatives = parsed.get("alternatives")

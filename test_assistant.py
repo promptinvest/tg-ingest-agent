@@ -2422,6 +2422,29 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_rename_reminder(1, "ru", {"id": 1})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
+    def test_unparseable_ingest_salvages_not_raw_json(self):
+        # C1: a JSON-shaped reply that won't parse must never be stored verbatim as
+        # the summary (it showed raw JSON in note #9) — salvage the fields instead.
+        import ingest, llm
+        bad = '{"category":"Полезное","alternatives":[],"summary":"Полезная статья про X"'  # truncated
+        with mock.patch.object(llm, "chat_profile", return_value=bad):
+            cat, _alts, summary, _facts = ingest.suggest(
+                self.agent.cfg, self.agent.conn, ["Полезное"], "text block", [])
+        self.assertNotIn("{", summary)                       # never raw JSON
+        self.assertNotIn('"category"', summary)
+        self.assertEqual(summary, "Полезная статья про X")   # salvaged summary
+        self.assertEqual(cat, "Полезное")                    # salvaged + matched category
+
+    def test_reply_chunks_splits_long_message(self):
+        # C4: a long list/journal is paginated, not truncated at the 4000-char cap.
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, t, **k: sent.append(t)):
+            self.agent.reply_chunks(1, "\n".join(f"line {i} " + "x" * 100 for i in range(80)))
+        self.assertGreater(len(sent), 1)                     # split into several messages
+        self.assertTrue(all(len(s) <= 3900 for s in sent))
+        self.assertIn("line 79", "\n".join(sent))            # tail not lost
+
     def test_reschedule_binds_this_to_last_touched_reminder(self):
         # B3: a bare "это напоминание" binds to the reminder he was just dealing with.
         from datetime import datetime, timezone, timedelta

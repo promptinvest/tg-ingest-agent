@@ -125,7 +125,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   5 **key facts** — strictly in the source language. Duplicates are detected.
   A **referential save** ("сохрани заметку про этот фильм") with no subject of its
   own resolves the subject from the recent conversation — so the note captures the
-  actual film/topic discussed, not the bare command.
+  actual film/topic discussed, not the bare command. If the model's reply won't parse,
+  she **never stores raw JSON** as the summary — she salvages the fields, else leaves it
+  empty so the note shows its real text. Long note/journal listings are **paginated**,
+  not cut off at Telegram's length limit.
 - **Forwarded‑message rules:** **text is parsed first**; only **images** (vision) and
   **PDFs** (text extraction — pdfminer.six, with a stdlib regex fallback) are analyzed;
   **every other file** (voice, audio, video, documents…) is **stored**, fetchable later

@@ -189,12 +189,19 @@ class PromptTests(unittest.TestCase):
         with mock.patch.object(llm, "chat_profile", side_effect=["garbage", good]):
             self.assertEqual(ingest.suggest(cfg, self.conn, [], "t", []),
                              ("ideas", [], "ok", []))
+        # C1: an unparseable, non-JSON reply must NOT be stored as the summary — it's
+        # unsalvageable, so summary is empty (the note then shows its real raw_text).
         with mock.patch.object(llm, "chat_profile", side_effect=["garbage", "still garbage"]):
             category, alternatives, summary, facts = ingest.suggest(cfg, self.conn, [], "t", [])
             self.assertEqual(category, cfg.fallback_category)
             self.assertEqual(alternatives, [])
-            self.assertEqual(summary, "still garbage")
+            self.assertEqual(summary, "")               # not the raw reply
             self.assertEqual(facts, [])
+        # but a JSON-shaped reply that broke json.loads still yields its salvaged fields
+        with mock.patch.object(llm, "chat_profile",
+                               side_effect=['{"category":"ideas","summary":"saved idea"', ] * 2):
+            category, _alts, summary, _facts = ingest.suggest(cfg, self.conn, [], "t", [])
+            self.assertEqual(summary, "saved idea")
 
     def test_source_link(self):
         self.assertEqual(ingest.source_link("vandrouki", -1001234, 55),
