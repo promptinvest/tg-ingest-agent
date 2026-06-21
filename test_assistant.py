@@ -1548,6 +1548,14 @@ class ConverseModuleTests(unittest.TestCase):
         self.assertIn("Russian", sys_ru)              # language-match directive
         self.assertIn("Майя", sys_ru)                 # a seeded life fact surfaces
 
+    def test_persona_forbids_fabricating_business_actions(self):
+        # Phase A truthful boundary: converse must never claim it did a system
+        # action (the "Готово, поменяла" lie). The guard text must be present.
+        sys_ru = converse.build_system(self.conn, "ru")
+        self.assertIn("never claim you DID something", sys_ru)
+        self.assertIn("поменяла", sys_ru)   # the fake-confirmation words it must not emit
+        self.assertIn("перенесла", sys_ru)
+
     def test_system_prompt_language_and_name(self):
         store.pref_set(self.conn, "owner_name_ru", "Олег")
         store.pref_set(self.conn, "owner_name_en", "Owen")
@@ -2318,6 +2326,50 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         with mock.patch.object(self.agent, "reply") as r:
             self.agent.do_reschedule(1, "ru", {"due_utc": new_due})  # which one?
         self.assertIn(texts.T("ru", "reschedule_which"), r.call_args[0][1])
+
+    def test_rename_reminder_in_place(self):
+        from datetime import datetime, timezone, timedelta
+        soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        rid = store.reminder_add(self.conn, 1, "Марина ничего не слышала", soon,
+                                 recurrence="daily")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_rename_reminder(1, "ru", {"id": 1, "new_title": "Иван Доронин"})
+        row = store.reminder_get(self.conn, rid)
+        self.assertEqual(row["title"], "Иван Доронин")   # retitled
+        self.assertEqual(row["due_utc"], soon)            # time unchanged
+        self.assertEqual(row["recurrence"], "daily")      # recurrence unchanged
+        self.assertEqual(row["id"], rid)                  # same id -> history intact
+        self.assertIn("Иван Доронин", r.call_args[0][1])
+        self.assertTrue(skill_manifest.known("reminder_rename"))
+
+    def test_rename_targets_by_old_title_not_new(self):
+        # the NEW name must never be used to locate the target; the old title does.
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        a = store.reminder_add(self.conn, 1, "Марина", (now + timedelta(hours=1)).isoformat())
+        b = store.reminder_add(self.conn, 1, "банк", (now + timedelta(hours=2)).isoformat())
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_rename_reminder(1, "ru", {"title_query": "Марина",
+                                                    "new_title": "Иван Доронин"})
+        self.assertEqual(store.reminder_get(self.conn, a)["title"], "Иван Доронин")
+        self.assertEqual(store.reminder_get(self.conn, b)["title"], "банк")  # untouched
+
+    def test_rename_unmatched_target_does_not_rename_wrong_one(self):
+        from datetime import datetime, timezone, timedelta
+        soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        rid = store.reminder_add(self.conn, 1, "Расписка.pdf", soon)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_rename_reminder(1, "ru", {"title_query": "Лящук", "new_title": "X"})
+        self.assertEqual(store.reminder_get(self.conn, rid)["title"], "Расписка.pdf")  # untouched
+        self.assertIn(texts.T("ru", "reminder_not_found"), r.call_args[0][1])
+
+    def test_rename_without_new_title_asks(self):
+        from datetime import datetime, timezone, timedelta
+        store.reminder_add(self.conn, 1, "x",
+                           (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_rename_reminder(1, "ru", {"id": 1})
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
     def test_undo_restores_previous_time(self):
         from datetime import datetime, timezone, timedelta

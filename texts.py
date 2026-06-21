@@ -503,6 +503,14 @@ TEXTS = {
         "ru": "На какое время перенести, босс?",
         "en": "What time should I move it to, boss?",
     },
+    "reminder_renamed": {
+        "ru": "Готово — теперь #{rid} называется «{title}» ✅",
+        "en": "Done — #{rid} is now «{title}» ✅",
+    },
+    "reminder_rename_what": {
+        "ru": "Как переименовать, босс? Скажи новое название.",
+        "en": "What should I rename it to, boss? Give me the new title.",
+    },
     "journal_marked": {
         "ru": "Готово — веду «{category}» как дневник 📔 Записи буду копить и показывать по датам; при чистке заметок не трону.",
         "en": "Done — I'll keep «{category}» as a journal 📔 Entries accumulate by date and survive a notes cleanup.",

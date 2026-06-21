@@ -85,6 +85,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   entries are retrieved (embedding match) and handed to the model as FACTS to use verbatim;
   if the answer isn't there she offers to look rather than confabulate. Reinforced by an
   absolute rule in her persona prompt.
+- **Never fakes an action (truthful boundary)** — in a `converse` turn she does NOT perform
+  state changes, so she may never reply with a made‑up «готово / поменяла / поставила /
+  перенесла / закрыла». Real saves/reminders/renames/reschedules are done by the skills and
+  report the **actual** outcome; if a request lands in chat she says she's on it (so it routes
+  to a real action) or, if it's something she genuinely can't do, says so plainly — never a
+  fabricated confirmation. (Absolute rule in the persona prompt.)
 
 ---
 

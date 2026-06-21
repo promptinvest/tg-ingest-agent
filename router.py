@@ -18,6 +18,7 @@ ACTIONS = {
     "reminder_list",
     "reminder_cancel",   # params: id or title_query
     "reminder_reschedule",  # params: id/title_query + due_utc — move an existing reminder
+    "reminder_rename",   # params: id/title_query (target) + new_title — retitle a reminder
     "reminder_undo",     # params: id/title_query (optional) — undo the last reschedule
     "list_files",        # list the documents/files stored across saved items
     "calendar_add",      # params: id/title_query of a reminder, OR title+due_utc directly
@@ -89,7 +90,10 @@ ROUTER_EXAMPLES = """Examples:
 "перенеси напоминание на 12" / "перенеси это напоминание на 12:00" / "сдвинь напоминание на завтра в 9" / "move the reminder to 12" -> {"action": "reminder_reschedule", "params": {"due_utc": "<today 12:00 local in UTC>"}, "confidence": 0.9}
 "перенеси напоминание про банк на пятницу 14:00" / "reschedule #3 to 18:00" -> {"action": "reminder_reschedule", "params": {"title_query": "банк", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
 "верни предыдущее время напоминания #9" / "отмени перенос" / "верни как было" / "undo the reschedule" -> {"action": "reminder_undo", "params": {"id": 9}, "confidence": 0.9}
+"поменяй название этого напоминания на «Иван Доронин»" / "переименуй напоминание 2 в «Иван Доронин»" / "rename reminder #2 to «Ivan»" -> {"action": "reminder_rename", "params": {"id": 2, "new_title": "Иван Доронин"}, "confidence": 0.9}
+"в напоминании про Марину поменяй название на «Иван Доронин»" / "переименуй напоминание про банк в «звонок Ире»" -> {"action": "reminder_rename", "params": {"title_query": "Марина", "new_title": "Иван Доронин"}, "confidence": 0.88}
 NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сдвинь/move/reschedule). A bare subject or a fresh "напомни/поставь напоминание про X в TIME" is reminder_create, NOT reschedule — never reschedule a reminder whose title the user did not name.
+NOTE: reminder_rename changes a REMINDER's TITLE — put the NEW name in new_title and identify the target with id or title_query (the current/old title); NEVER put the new name in title. It is NOT recategorize (that re-files a saved NOTE's category) and NOT reschedule (that changes the time).
 "покажи файлы" / "какие у меня файлы?" / "список файлов" / "show my files" / "what files do I have" -> {"action": "list_files", "params": {}, "confidence": 0.92}
 "веди Благодарности как дневник" / "сделай X журналом" / "храни эту категорию долгосрочно" / "keep Gratitude as a journal" -> {"action": "set_journal", "params": {"category": "Благодарности", "on": true}, "confidence": 0.9}
 "Благодарности больше не дневник" / "сделай X обычной категорией" / "stop journaling X" -> {"action": "set_journal", "params": {"category": "Благодарности", "on": false}, "confidence": 0.9}

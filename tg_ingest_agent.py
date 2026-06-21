@@ -750,6 +750,8 @@ class Agent:
                 self.reply(chat_id, T(lang, "reminder_not_found"))
         elif action == "reminder_reschedule":
             self.do_reschedule(chat_id, lang, params)
+        elif action == "reminder_rename":
+            self.do_rename_reminder(chat_id, lang, params)
         elif action == "reminder_undo":
             self.do_reminder_undo(chat_id, lang, params)
         elif action == "list_files":
@@ -2743,6 +2745,27 @@ class Agent:
         self.reply(chat_id, T(lang, "reminder_rescheduled",
                               rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
                               when_local=reminders.fmt_local(due.isoformat(), self.tz_offset())))
+
+    def do_rename_reminder(self, chat_id, lang, params):
+        """Retitle an existing reminder IN PLACE (keeps id/time/recurrence/history).
+        The new name is params['new_title']; the target is resolved by id/title_query/
+        'это' through the shared guard, so it never renames the wrong reminder. (Note
+        targeting reads title_query/title, never new_title, so the new name can't be
+        mistaken for the target.)"""
+        new_title = str(params.get("new_title") or "").strip()
+        if not new_title and params.get("id") is not None:
+            # target given by number -> a stray 'title' must be the NEW name
+            new_title = str(params.get("title") or "").strip()
+        new_title = new_title[:reminders.MAX_TITLE_CHARS]
+        if not new_title:
+            self.reply(chat_id, T(lang, "reminder_rename_what"))
+            return
+        row = self._resolve_reminder_target(chat_id, lang, params)
+        if row is None:
+            return  # _resolve_reminder_target already replied (not found / which?)
+        store.reminder_rename(self.conn, row["id"], new_title)
+        self.reply(chat_id, T(lang, "reminder_renamed",
+                              rid=self.reminder_no(chat_id, row["id"]), title=new_title))
 
     def start_partial_reminder(self, chat_id, lang, params):
         """A reminder_create missing the subject or the time: keep whatever the

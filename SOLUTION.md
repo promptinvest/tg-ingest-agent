@@ -36,10 +36,14 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
    warm, free-form, with her own life (§5). What stays locked down no matter how
    human she sounds: every state change is confirmed; a **permission manifest**
    gates what each skill may do; forwarded/quoted content is untrusted; budgets
-   hard-stop; and she truthfully never claims a real task was done when it
-   wasn't. Conversation and grounded Q&A are LLM-generated; **transactional and
-   system messages stay deterministic templates.** **She never fabricates a stored
-   fact** — creativity is free in her voice and fictional life, but any fact about
+   hard-stop. **Truthful business/persona boundary:** a `converse` turn performs NO
+   state change, so the persona may *phrase* outcomes but is forbidden (absolute
+   persona rule) from *inventing* one — no made-up «готово / поменяла / перенесла».
+   Real saves/reminders/renames/reschedules are executed by the skills and report
+   the actual result; an unrouted request gets a warm "I'm on it / can't do that
+   yet", never a fake confirmation. Conversation and grounded Q&A are LLM-generated;
+   **transactional and system messages stay deterministic templates.** **She never
+   fabricates a stored fact** — creativity is free in her voice and fictional life, but any fact about
    the boss must be real: every `converse` turn is grounded with his most relevant
    saved entries (embedding retrieval) handed to the model as verbatim facts, and an
    absolute persona rule forbids inventing/embellishing his data (she offers to look
@@ -197,7 +201,7 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Note & reminder numbering** | The number the boss sees/types (`#N`) is a contiguous **1..N display position** — over visible notes (oldest first, from the immutable `messages.id`) and, analogously, over active reminders (soonest-due first, from `reminders.id`). It **compacts** on deletion / fire / cancel (no gaps) and is used for both display and resolution everywhere (`find_by_query` maps a reminder `#N` to its position in the active list); the stable ids keep every attachment/embedding/memory/calendar/fired-pending reference intact. Trade-off: a number isn't permanent — removing an earlier item shifts later ones down. | — |
 | **Journals (long-term areas)** | A category can be marked a **journal** ("веди Благодарности как дневник") — append-only, recalled as a **dated day-grouped series** ("покажи дневник благодарности за месяц"), summarised by a "📔 Дневники" digest in the review/brief, and **spared by a 'clear all notes' purge**. Entries reuse `messages`; the only new state is `categories.kind` (`inbox`\|`journal`). One-time notes are unchanged. | Mark/unmark explicit; entries acked as dated. |
 | **Ask (KB Q&A)** | "когда мой рейс?", "что у нас по плану?" → semantic retrieval (BGE-M3) over stored notes, then a **grounded** answer in the question's language citing `(#id)`; refuses if it isn't in the notes. | — (read-only) |
-| **Reminders** | NL time parsing (RU/EN), one-shot / daily / weekly, fired from the poll loop (~1 min precision); survives restart & nightly reboot. **Snooze** a fired one by minutes/hours/absolute ("отложи на час", "до завтра в 9"). **Reschedule** by id/title (an unmatched explicit title is reported, never silently moves another); **undo** the last move ("верни предыдущее время", via `reminders.prev_due_utc`). A **half-specified** create ("напомни в 17:00") asks the missing piece and stitches it in. "напоминание по заметке N" uses note N's real subject. | Draft echoed before scheduling. |
+| **Reminders** | NL time parsing (RU/EN), one-shot / daily / weekly, fired from the poll loop (~1 min precision); survives restart & nightly reboot. **Snooze** a fired one by minutes/hours/absolute ("отложи на час", "до завтра в 9"). **Reschedule** by id/title (an unmatched explicit title is reported, never silently moves another); **rename** a reminder's title in place ("переименуй #2 в …" — keeps id/time/recurrence/history; targets by id/title_query, never by the new name); **undo** the last move ("верни предыдущее время", via `reminders.prev_due_utc`). A **half-specified** create ("напомни в 17:00") asks the missing piece and stitches it in. "напоминание по заметке N" uses note N's real subject. | Draft echoed before scheduling. |
 | **Calendar** | "добавь в календарь…" → .ics file (no setup) or direct Google Calendar via a service account; `auto_calendar` syncs every confirmed reminder. | Uses confirmed reminders / explicit times. |
 | **Spend** | "сколько потратили за месяц?" → totals + breakdown by skill & model + budget status. | — |
 | **Budget control** | "подними дневной лимит до $3" / "set the monthly AI budget to 20" → changes the cap at runtime (stored override, enforced by the gateway). | — (explicit request) |

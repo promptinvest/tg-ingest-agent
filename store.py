@@ -1792,6 +1792,12 @@ def reminder_restore_due(conn, rid):
     return cur["prev_due_utc"]
 
 
+def reminder_rename(conn, rid, title):
+    """Retitle an existing reminder in place (keeps id, time, recurrence, history)."""
+    conn.execute("UPDATE reminders SET title = ? WHERE id = ?", (title, rid))
+    conn.commit()
+
+
 def reminder_close(conn, rid, status="done"):
     conn.execute(
         "UPDATE reminders SET status = ?, last_fired_at = ? WHERE id = ?",
