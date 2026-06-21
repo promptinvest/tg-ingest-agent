@@ -274,6 +274,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   warmth and what she references **track how the relationship actually developed**. It
   grows continuously: meetings are the rich, verbatim beats, plus a **daily reflection**
   folds everyday interaction into the arc. Grounded only in real history — never invented.
+- **Your bond only deepens — she never "resets"** — closeness is ratcheted (a 1–5 stage
+  that only goes up, plus an anti‑regression rule in the arc), so a quiet or busy day can't
+  cool her back to a reserved register. As you grow closer and more open, she **meets you
+  there** and is never surprised you're being intimate — like a real couple, it only
+  progresses.
   A relational question — "что ты помнишь про нас?", "наши отношения", "что между нами?" —
   is routed to **`converse`** (where the arc lives) so she answers from your shared story,
   **not** to `boss_query` (which is a facts‑about‑you summary).

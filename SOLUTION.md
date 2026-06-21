@@ -345,6 +345,15 @@ proactively like real memory. Design decisions and why:
   reflection** job folds everyday interaction in too. The arc is grounded strictly in
   real episodes — interpretation of real history, never invented facts. A budget/LLM
   failure leaves the prior arc untouched.
+- **Closeness only deepens (anti-reset ratchet).** Because the arc is re-synthesized each
+  pass from the prior arc + the last turns, a cool/task-only day could quietly cool the
+  tone and make Cara "reset" to a more reserved register — surprised the boss is being more
+  open. Two guards fix it: the synthesis prompt forbids describing the relationship as more
+  distant than the prior arc absent an explicit rift (and must preserve reached milestones);
+  and a **ratcheting closeness stage 1-5** (`closeness_stage`, `new = max(prior, evidenced)`,
+  parsed from a trailing `CLOSENESS: N` line) is injected into `arc_context` so she always
+  **meets him at the level they've reached** and never snaps back. Like a real couple, the
+  bond only progresses.
 - **Afterglow is gentle by construction.** The morning after a *social* meeting,
   `check_meeting_afterglow` may — occasionally (probability-gated), one-shot per
   meeting, quiet-hours/proactivity-aware — open with warm, in-voice afterglow grounded

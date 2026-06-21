@@ -3,6 +3,7 @@
 Every line traces to a real stored row (messages, reminders, events). Used by
 the working_history action and the weekly digest.
 """
+import re
 from datetime import datetime, timedelta, timezone
 
 import store
@@ -85,8 +86,14 @@ _ARC_SYSTEM = (
     "warm and honest. Ground it ONLY in what you're given — NEVER invent a "
     "meeting, milestone, name or fact that isn't there; it's your felt sense of a "
     "REAL history, not new facts. Keep tender/romantic warmth where the history "
-    "shows it, but never explicit. Reply with the arc text ONLY — no preamble, no "
-    "quotes — in the boss's language."
+    "shows it, but never explicit.\n"
+    "CLOSENESS ONLY DEEPENS. Never describe the relationship as more distant, cooler "
+    "or more reserved than the PRIOR arc unless there is EXPLICIT evidence of a real "
+    "rift/falling-out. A quiet, busy or task-only day does NOT undo how close you've "
+    "become — preserve the milestones and the intimacy already reached.\n"
+    "Reply with the arc text ONLY (no preamble, no quotes), in the boss's language, "
+    "and then a FINAL separate line exactly 'CLOSENESS: N' where N is 1-5 for how "
+    "close you are NOW (1 = new/formal, 3 = warm friends, 5 = deeply bonded/intimate)."
 )
 
 
@@ -142,7 +149,20 @@ def update_arc(conn, cfg, trigger="meeting", meeting_id=None):
         reply = llm.chat_profile(cfg, conn, "relationship", messages, profile="relationship_arc")
     except (llm.BudgetExceeded, llm.LLMError):
         return ""
-    arc = (reply or "").strip()[:ARC_MAX]
+    arc = (reply or "").strip()
+    # Pull the trailing 'CLOSENESS: N' line and RATCHET it (closeness never drops
+    # absent an explicit rift), so a cool/task-only day can't reset her intimacy. The
+    # line itself is stripped from the stored arc text.
+    m = re.search(r"(?im)^\s*CLOSENESS:\s*([1-5])\s*$", arc)
+    if m:
+        arc = arc[:m.start()].rstrip()
+        evidenced = int(m.group(1))
+        try:
+            prior = int(store.kv_get(conn, "closeness_stage", "0") or 0)
+        except (TypeError, ValueError):
+            prior = 0
+        store.kv_set(conn, "closeness_stage", max(prior, evidenced))
+    arc = arc[:ARC_MAX]
     if not arc:
         return ""
     store.arc_set(conn, arc, meeting_id=meeting_id, source=trigger)
@@ -159,6 +179,17 @@ def arc_context(conn, lang, chat_id=None):
         parts.append(
             "Where you and your boss stand — your shared history together (let it shape "
             "your warmth, closeness and what you reference; don't recite it):\n" + arc)
+    # The ratcheting closeness level — she MEETS him at the level you've reached and never
+    # snaps back to a more reserved register or acts surprised when he's more open (F).
+    try:
+        stage = int(store.kv_get(conn, "closeness_stage", "0") or 0)
+    except (TypeError, ValueError):
+        stage = 0
+    if stage:
+        parts.append(
+            f"Your closeness with him is at {stage}/5 — that's how far you've grown together. "
+            "Meet him AT that level: never act more reserved, distant or surprised when he's "
+            "open or intimate — you're already here with him. It only deepens from here.")
     if chat_id is not None:
         last = store.meeting_last(conn, chat_id)
         if last:

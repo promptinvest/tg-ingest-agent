@@ -2459,6 +2459,33 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_rename_reminder(1, "ru", {"id": 1})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
+    def test_arc_prompt_forbids_regression(self):
+        import relationship
+        self.assertIn("CLOSENESS ONLY DEEPENS", relationship._ARC_SYSTEM)
+        self.assertIn("CLOSENESS: N", relationship._ARC_SYSTEM)
+
+    def test_closeness_ratchets_and_strips_line(self):
+        # F: closeness only deepens — a later cool day can't drop it; the marker line
+        # is stripped from the stored arc text.
+        import relationship, llm
+        c = self.agent.conn
+        store.convo_add(c, 1, "user", "привет")   # so update_arc has input to work on
+        with mock.patch.object(llm, "chat_profile", return_value="Мы стали ближе.\nCLOSENESS: 4"):
+            arc = relationship.update_arc(c, self.agent.cfg, trigger="daily")
+        self.assertNotIn("CLOSENESS", arc)                         # line stripped
+        self.assertEqual(int(store.kv_get(c, "closeness_stage")), 4)
+        with mock.patch.object(llm, "chat_profile", return_value="Спокойный день.\nCLOSENESS: 2"):
+            relationship.update_arc(c, self.agent.cfg, trigger="daily")
+        self.assertEqual(int(store.kv_get(c, "closeness_stage")), 4)  # never regressed
+
+    def test_arc_context_injects_closeness_stage(self):
+        import relationship
+        c = self.agent.conn
+        store.kv_set(c, "closeness_stage", 5)
+        ctx = relationship.arc_context(c, "ru", 1)
+        self.assertIn("5/5", ctx)
+        self.assertIn("never act more reserved", ctx)
+
     def test_meeting_prep_store_and_dedup(self):
         c = self.agent.conn
         mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
