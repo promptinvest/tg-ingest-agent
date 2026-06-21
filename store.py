@@ -1760,10 +1760,21 @@ def reminder_display_no(conn, chat_id, rid):
 
 
 def reminders_due(conn, now_iso):
+    # A one-shot that already fired stays 'active' (visible/snoozable until the boss
+    # closes it) — exclude it from re-firing via last_fired_at. A reschedule/snooze
+    # moves due_utc into the future (> last_fired_at), which re-arms it automatically.
     return conn.execute(
-        "SELECT * FROM reminders WHERE status = 'active' AND due_utc <= ? ORDER BY due_utc",
+        "SELECT * FROM reminders WHERE status = 'active' AND due_utc <= ?"
+        " AND (last_fired_at IS NULL OR last_fired_at < due_utc) ORDER BY due_utc",
         (now_iso,),
     ).fetchall()
+
+
+def reminder_touch_fired(conn, rid, when=None):
+    """Stamp a reminder as fired NOW (stops a one-shot re-firing; never closes it)."""
+    conn.execute("UPDATE reminders SET last_fired_at = ? WHERE id = ?",
+                 (when or _now(), rid))
+    conn.commit()
 
 
 def reminder_update_due(conn, rid, due_utc):

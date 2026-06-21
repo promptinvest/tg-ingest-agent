@@ -177,8 +177,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 ### Time & money
 - **Reminders:** natural‑language times (RU/EN), one‑shot / daily / weekly, fired from
   the poll loop (~1 min precision), survive restarts/reboots.
-  - **Snooze a fired reminder** by minutes, hours, or an absolute time ("через
-    полчаса", "отложи на час", "до завтра в 9").
+  - **A fired reminder stays open** (visible, still pending) until you explicitly say
+    "готово" — she never auto‑closes it on a misread. **Snooze** by minutes, hours, or an
+    absolute time ("через полчаса", "отложи на час", "до завтра в 9") **re‑arms the same
+    reminder** (keeps its id, recurrence and history — no orphaned new row).
+  - **Rename** a reminder's title in place ("переименуй #2 в «Иван Доронин»").
   - **Reschedule / undo:** "перенеси напоминание про банк на пятницу" moves it; an
     explicit title that matches nothing active is reported (never silently moves a
     different one); "верни предыдущее время" / "отмени перенос" undoes the last move.

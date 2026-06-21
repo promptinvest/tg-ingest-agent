@@ -325,10 +325,11 @@ class Agent:
             )
             following = reminders.next_due(row["due_utc"], row["recurrence"])
             if following:
-                store.reminder_update_due(self.conn, row["id"], following)
-            else:
-                # stays visible to snooze via the pending action; closed as done
-                store.reminder_close(self.conn, row["id"], "done")
+                store.reminder_update_due(self.conn, row["id"], following)  # recurring: re-arm
+            # B5: a fired ONE-SHOT is NOT auto-closed — it stays active/visible until the
+            # boss explicitly acks ('готово') or cancels it; last_fired_at stops it
+            # re-firing. (Old behavior closed it here, which read as 'why did you close it'.)
+            store.reminder_touch_fired(self.conn, row["id"])
             log(f"reminder #{row['id']} fired")
 
     def check_budget_notice(self):
@@ -963,6 +964,7 @@ class Agent:
             # minutes ("через полчаса") — "отложи на час"/"до завтра" used to fall
             # through to reschedule and dead-end.
             due_at = reminders.parse_iso_utc(params.get("due_utc")) if action == "amend" else None
+            rid = payload.get("reminder_id")
             if snooze or due_at is not None:
                 if due_at is not None:
                     due = due_at.isoformat()
@@ -972,11 +974,22 @@ class Agent:
                     except (TypeError, ValueError):
                         minutes = 30
                     due = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
-                rid = store.reminder_add(self.conn, chat_id, payload["title"], due)
+                # B4: re-arm the ORIGINAL reminder (moving due_utc into the future re-arms
+                # it past last_fired_at) — keeps its id, recurrence and history, instead of
+                # spawning a fresh one-shot row that dropped all of that.
+                if rid is not None and store.reminder_get(self.conn, rid) is not None:
+                    store.reminder_update_due(self.conn, rid, due)
+                else:
+                    rid = store.reminder_add(self.conn, chat_id, payload["title"], due)
                 self.reply(chat_id, T(lang, "reminder_snoozed",
                                       when_local=reminders.fmt_local(due, self.tz_offset())))
-                log(f"reminder snoozed as #{rid}")
+                log(f"reminder #{rid} snoozed to {due}")
             else:
+                # B5: 'готово' now actually closes a fired ONE-SHOT (it's no longer
+                # auto-closed at fire). A recurring reminder already advanced — just ack it.
+                rem = store.reminder_get(self.conn, rid) if rid is not None else None
+                if rem is not None and rem["recurrence"] == "none" and rem["status"] == "active":
+                    store.reminder_close(self.conn, rid, "done")
                 self.reply(chat_id, T(lang, "reminder_done"))
         elif kind == "delete":
             if action != "confirm":  # deletion only on an explicit yes

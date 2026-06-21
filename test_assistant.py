@@ -1397,6 +1397,57 @@ class ConversationDispatchTests(unittest.TestCase):
             self.agent.dispatch(1, {"message_id": 9}, "запиши благодарность: классное общение")
         self.assertTrue(fin.called)  # saved as a journal entry, not eaten as the reminder ack
 
+    def test_fired_oneshot_stays_open_and_does_not_refire(self):
+        # B5: a fired one-shot is NOT auto-closed (stays visible/pending) and must
+        # not fire again on the next sweep.
+        from datetime import datetime, timezone, timedelta
+        c = self.agent.conn
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        rid = store.reminder_add(c, 1, "посмотреть фильм", past)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.fire_due_reminders()
+            after_first = r.call_count
+            self.agent.fire_due_reminders()      # must NOT re-fire
+        self.assertEqual(after_first, 1)
+        self.assertEqual(r.call_count, 1)
+        self.assertEqual(store.reminder_get(c, rid)["status"], "active")  # stays open
+
+    def test_done_closes_fired_oneshot(self):
+        # B5: 'готово' now actually closes the fired one-shot (it wasn't closed at fire).
+        from datetime import datetime, timezone, timedelta
+        c = self.agent.conn
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        rid = store.reminder_add(c, 1, "посмотреть фильм", past)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.fire_due_reminders()
+            self.agent.resolve_pending(1, "confirm", {}, store.pending_get(c, 1), "ru")
+        self.assertEqual(store.reminder_get(c, rid)["status"], "done")
+
+    def test_done_does_not_close_recurring(self):
+        from datetime import datetime, timezone, timedelta
+        c = self.agent.conn
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        rid = store.reminder_add(c, 1, "благодарности", past, recurrence="daily")
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.fire_due_reminders()      # advances to next day, stays active
+            self.agent.resolve_pending(1, "confirm", {}, store.pending_get(c, 1), "ru")
+        self.assertEqual(store.reminder_get(c, rid)["status"], "active")  # recurring NOT closed
+
+    def test_snooze_rearms_original_no_new_row(self):
+        # B4: snooze re-arms the ORIGINAL reminder (keeps id), never spawns a new row.
+        from datetime import datetime, timezone, timedelta
+        c = self.agent.conn
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        rid = store.reminder_add(c, 1, "позвонить Ире", past)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.fire_due_reminders()
+            self.agent.resolve_pending(1, "amend", {"snooze_minutes": 60},
+                                       store.pending_get(c, 1), "ru")
+        rows = c.execute("SELECT id, status FROM reminders WHERE chat_id = 1").fetchall()
+        self.assertEqual(len(rows), 1)               # original re-armed, NOT a new row
+        self.assertEqual(rows[0]["id"], rid)
+        self.assertEqual(store.reminder_get(c, rid)["status"], "active")  # pending again (future)
+
     def test_sticker_store_and_pick(self):
         c = self.agent.conn
         store.stickers_add(c, "pack1", [
