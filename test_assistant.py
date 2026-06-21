@@ -2445,6 +2445,34 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertTrue(all(len(s) <= 3900 for s in sent))
         self.assertIn("line 79", "\n".join(sent))            # tail not lost
 
+    def test_gratitude_snaps_to_journal_category(self):
+        # C3: a gratitude entry lands in the «Благодарности» journal even when the
+        # model writes the singular «Благодарность» (journal match is exact-name).
+        import ingest, llm
+        c = self.agent.conn
+        store.ensure_category(c, "Благодарности")
+        store.set_category_kind(c, "Благодарности", "journal")
+        reply = '{"category":"Благодарность","alternatives":[],"summary":"спасибо за день","facts":[]}'
+        with mock.patch.object(llm, "chat_profile", return_value=reply):
+            cat, _a, _s, _f = ingest.suggest(self.agent.cfg, c, ["Благодарности"], "t", [])
+        self.assertEqual(cat, "Благодарности")
+
+    def test_referential_empty_summary_shows_raw_text(self):
+        # C2: a referential save with no resolvable subject must not be a blank note —
+        # it falls back to its real raw_text (shown + indexed), not "(no summary)".
+        import ingest
+        c = self.agent.conn
+        rid = store.insert_message(c, {"chat_id": 1, "tg_message_id": 222,
+                                       "received_at": "2026-06-21T10:00:00+00:00",
+                                       "raw_text": "Сохрани заметку про этот фильм, да"})
+        row = store.get_message(c, rid)
+        with mock.patch.object(ingest, "suggest", return_value=("Разное", [], "(no summary)", [])), \
+                mock.patch.object(self.agent, "_is_referential_save", return_value=True), \
+                mock.patch.object(self.agent, "index_message") as idx:
+            self.agent.suggest_row(row)
+        self.assertEqual((store.get_message(c, rid)["summary"] or ""), "")  # no blank placeholder
+        self.assertIn("фильм", idx.call_args[0][1])                         # real text indexed
+
     def test_reschedule_binds_this_to_last_touched_reminder(self):
         # B3: a bare "это напоминание" binds to the reminder he was just dealing with.
         from datetime import datetime, timezone, timedelta

@@ -3635,6 +3635,12 @@ class Agent:
                         return self._ingest_failed(row_id, row["chat_id"], exc)
                 else:
                     return self._ingest_failed(row_id, row["chat_id"], exc)
+        # C2: an empty / placeholder summary (e.g. a referential "save a note about THIS"
+        # whose subject couldn't be resolved from the conversation) must NOT become a
+        # blank note — drop it to "" so the note shows/indexes its real raw_text instead.
+        if summary.strip() in ("", "(no summary)"):
+            summary = ""
+            referential = False
         store.set_suggestion(self.conn, row_id, category, summary, self.cfg.do_model)
         store.set_facts(self.conn, row_id, facts)
         # Index for semantic recall: full text for documents, else summary+facts.

@@ -118,7 +118,8 @@ def build_text_block(raw_text, forward_type, forward_title, urls):
 MAX_LLM_IMAGE_BYTES = 5 * 1024 * 1024
 
 
-def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, lang="ru"):
+def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, lang="ru",
+                       journals=None):
     import base64
     from pathlib import Path
 
@@ -132,6 +133,12 @@ def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, la
             " the existing ones. Strongly prefer reusing an existing category — the"
             " operator keeps re-filing over-specific new ones."
         )
+        if journals:
+            taxonomy += (
+                "\nThese are JOURNAL categories (ongoing diaries): " + ", ".join(journals)
+                + ". If the message is an entry for one of them (e.g. a gratitude note"
+                " belongs to the gratitude journal), use that journal's EXACT name —"
+                " do NOT coin a singular/variant of it.")
     else:
         taxonomy = ("No categories yet; propose ONE short, broad (1-2 word) category in "
                     + new_lang + ".")
@@ -230,6 +237,29 @@ def _salvage_reply(reply, known):
     return cat, summary
 
 
+def _journal_stem(s):
+    # crude RU singular/plural fold: drop trailing soft/vowel endings for matching.
+    return re.sub(r"[ьйаяуюоёеиыэ]+$", "", (s or "").strip().casefold())
+
+
+def _snap_to_journal(category, journals):
+    """Snap a near-variant (singular/plural) of an existing JOURNAL category to that
+    journal's exact name — so a gratitude entry lands in «Благодарности» even when the
+    model writes «Благодарность» (journal membership is an exact-name match)."""
+    if not category or not journals:
+        return category
+    cf = category.casefold()
+    for j in journals:
+        if j.casefold() == cf:
+            return j
+    st = _journal_stem(category)
+    if len(st) >= 4:
+        for j in journals:
+            if _journal_stem(j) == st:
+                return j
+    return category
+
+
 def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
     """Ask the LLM for a category suggestion.
 
@@ -238,7 +268,9 @@ def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
     errors.
     """
     corrections = store.feedback_recent(conn, "ingest", limit=5)
-    messages = build_llm_messages(cfg, known, text_block, image_paths, corrections, lang)
+    journals = store.journal_categories(conn)
+    messages = build_llm_messages(cfg, known, text_block, image_paths, corrections, lang,
+                                  journals=journals)
     reply = llm.chat_profile(cfg, conn, "ingest", messages, profile="ingest_balanced")
     parsed = llm.parse_llm_json(reply)
     category = llm.normalize_category((parsed or {}).get("category"))
@@ -260,8 +292,8 @@ def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
         # regex; fall back to an EMPTY summary (so the note renders its raw_text, never
         # the model's JSON) rather than dumping the raw reply.
         cat, summary = _salvage_reply(reply, known)
-        return (cat or cfg.fallback_category), [], summary, []
-    category = llm.match_category(category, known) or category
+        return _snap_to_journal(cat or cfg.fallback_category, journals), [], summary, []
+    category = _snap_to_journal(llm.match_category(category, known) or category, journals)
     alternatives = []
     raw_alternatives = parsed.get("alternatives")
     if isinstance(raw_alternatives, list):
