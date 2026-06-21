@@ -399,6 +399,16 @@ last_turn_at for idle auto-end) · `meeting_turns` (verbatim, cascade-deleted) �
 `meeting_chunks` (BGE-M3 episodic index, **separate** from notes `chunks`) ·
 `relationship_arc` (versioned storyline; latest = current).
 
+Embedding storage (retrieval): vectors in `chunks`/`meeting_chunks` are stored as
+**packed float32 BLOBs** (4 B/dim, ~5× smaller than the old JSON-text form and far
+cheaper to decode; `store.pack/unpack_embedding`, with a one-time JSON→BLOB
+`_migrate`). The retrieval hot path (converse grounding, ask, meeting recall)
+ranks via a **decoded-vector cache** invalidated by a cheap `(count,max_id,sum_id)`
+fingerprint, so embeddings are decoded only when the table changes — keeping the
+single-file, in-process design while deferring any need for a vector index well
+into the tens-of-thousands-of-chunks range. A `grounding.ranked` trace event logs
+chunk count + latency so that future decision stays data-driven.
+
 Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
 `proactive_log`.
 
