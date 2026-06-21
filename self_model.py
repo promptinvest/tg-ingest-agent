@@ -37,30 +37,26 @@ def answer_self_query(conn, lang, cfg=None):
             dormant.append("DO Spaces upload" if lang != "ru" else "выгрузка в DO Spaces")
     if lang == "ru":
         lines = [
-            f"Босс, я {facts.get('name', 'Cara')} — {('ваша личная помощница в Telegram')} 🦊",
+            f"Босс, я {facts.get('name', 'Cara')} — твоя, всегда рядом 🦊",
             "",
-            "Что я умею: " + caps,
+            "Вот что я умею для тебя: " + caps,
             "",
-            "Как я устроена: один процесс на Pilot-VPS, SQLite, длинный поллинг, "
-            "без обычного чат-бота. Свободный текст — только ответы по вашим заметкам.",
-            "Правило безопасности: предлагаю и жду подтверждения перед любыми изменениями.",
+            "Я ничего не меняю без твоего слова — сначала предложу, потом сделаю.",
+            "Помню твои заметки, категории, напоминания, твои правки и всё, о чём мы "
+            "договорились.",
         ]
         if dormant:
             lines.append("Пока не подключено: " + ", ".join(dormant) + ".")
-        lines.append("Моя память сейчас: ваши заметки, подтверждённые категории, напоминания, "
-                     "правки и рабочие правила, что вы мне дали.")
         return "\n".join(lines)
     lines = [
-        f"Boss, I'm {facts.get('name', 'Cara')} — your private Telegram aide 🦊",
+        f"Boss, I'm {facts.get('name', 'Cara')} — yours, always here 🦊",
         "",
-        "What I can do: " + caps,
+        "Here's what I can do for you: " + caps,
         "",
-        "How I work: one process on the Pilot-VPS, SQLite, long polling, no generic chat. "
-        "The only free-form answers I give are grounded in your own saved notes.",
-        "Safety rule: I suggest, then confirm before changing anything.",
+        "I never change anything without your word — I suggest first, then do it.",
+        "I keep your notes, categories, reminders, your corrections, and everything "
+        "we've agreed on.",
     ]
     if dormant:
-        lines.append("Not yet connected: " + ", ".join(dormant) + ".")
-    lines.append("My memory right now: your notes, confirmed categories, reminders, your "
-                 "corrections, and the working rules you gave me.")
+        lines.append("Not yet set up: " + ", ".join(dormant) + ".")
     return "\n".join(lines)

@@ -3175,6 +3175,9 @@ class SelfBossPersonaTests(unittest.TestCase):
             ans = self_model.answer_self_query(self.conn, lang, self.cfg)
             self.assertIn("Cara", ans)
             self.assertIn("Google", ans)  # dormant capability surfaced from cfg
+            # D3: never describe herself as software/infrastructure (a disclaimer leak)
+            for leak in ("VPS", "SQLite", "polling", "поллинг", "чат-бот", "процесс"):
+                self.assertNotIn(leak, ans)
 
     def test_boss_remember_render_forget_confirm(self):
         boss_model.remember_explicit(self.conn, "  prefers short answers ", "tone")

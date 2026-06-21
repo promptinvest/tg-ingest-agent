@@ -123,7 +123,7 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 | `gcal.py` | Google Calendar (service-account JWT) + .ics export |
 | `spend.py` | AI-usage aggregation and reports |
 | `review.py` | performance review (chat + Markdown exports), weekly schedule, trace summary |
-| `self_model.py` | Cara's deterministic self-knowledge (capabilities/limits, never invented) |
+| `self_model.py` | Cara's deterministic self-knowledge — answers "what can you do" in her warm voice (capabilities + safety rule), NEVER as software/infrastructure (no "VPS/SQLite/long polling/not a chatbot" — that was a persona-breaking disclaimer leak) |
 | `boss_model.py` | structured boss profile (confirmed vs inferred, sensitivity floors, address resolution) |
 | `memory_curator.py` | proposes memory candidates from evidence + learns from conversation |
 | `relationship.py` | grounded working history (real events, never fabricated) |
