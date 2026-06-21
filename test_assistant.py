@@ -1599,6 +1599,22 @@ class ConverseModuleTests(unittest.TestCase):
         self.assertIn("Russian", sys_ru)              # language-match directive
         self.assertIn("Майя", sys_ru)                 # a seeded life fact surfaces
 
+    def test_life_seed_no_tea_fixation(self):
+        # D1: tea is no longer hardcoded in CHARACTER nor an emphatic seed life fact.
+        converse.seed_life(self.conn)
+        facts = " ".join(r["text"] for r in store.life_facts(self.conn, limit=40))
+        self.assertNotIn("чёрный чай", facts)
+        self.assertNotIn("чайник", facts)
+        self.assertNotIn("strong tea", converse.CHARACTER)
+
+    def test_migration_rebalances_old_tea_seeds(self):
+        # D1: an existing DB still holding the emphatic tea seed gets it rewritten.
+        store.life_add(self.conn, "habit",
+                       "Завариваешь крепкий чёрный чай и почти никогда не пьёшь кофе.")
+        store._migrate(self.conn)
+        facts = " ".join(r["text"] for r in store.life_facts(self.conn, limit=40))
+        self.assertNotIn("крепкий чёрный чай", facts)
+
     def test_persona_forbids_fabricating_business_actions(self):
         # Phase A truthful boundary: converse must never claim it did a system
         # action (the "Готово, поменяла" lie). The guard text must be present.
@@ -2174,6 +2190,27 @@ class GoldenTranscriptTests(unittest.TestCase):
         m = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": mid, "text": text}
         m.update(extra)
         return m
+
+    def test_photo_placeholder_stripped(self):
+        # D2: a stray "[Фото]" the model narrates (it can't actually attach) is removed.
+        sent = self.drive({"message": self._msg(61, "пришли фото")}, {
+            "router": '{"action":"converse","params":{},"confidence":0.95}',
+            "converse": "Вот, специально для тебя 😊\n\n[Фото]\n\nНадеюсь, нравлюсь."})
+        text = " ".join(sent)
+        self.assertNotIn("Фото", text)
+        self.assertIn("нравлюсь", text)
+
+    def test_selfie_tag_sends_real_photo(self):
+        # D2: a [[selfie]] tag sends an actual saved photo, and the tag never ships.
+        store.cara_photo_add(self.conn, [{"file_id": "P1", "file_unique_id": "u1"}])
+        photos = []
+        with mock.patch.object(self.mod, "tg_send_photo",
+                               side_effect=lambda tok, cid, fid, **k: photos.append(fid)):
+            sent = self.drive({"message": self._msg(62, "покажи себя")}, {
+                "router": '{"action":"converse","params":{},"confidence":0.95}',
+                "converse": "Ну вот я, лови 😊 [[selfie]]"})
+        self.assertNotIn("selfie", " ".join(sent).lower())   # tag stripped
+        self.assertEqual(photos, ["P1"])                     # real photo sent
 
     def test_no_state_change_before_confirmation(self):
         fwd = self._msg(10, "Скидки на авиабилеты Москва–Тбилиси от 9800",

@@ -78,7 +78,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   — and she fetches and stores the whole pack (the link is caught before it's mis-routed to
   fetch as a generic URL). She also keeps a
   **photo library** of herself — "это твои фото" adds them, "пришли своё фото"/"send a selfie"
-  sends one. (Her bot **profile avatar** can only be set via @BotFather — the Bot API can't.)
+  sends one. In conversation she sends a **real** photo via a `[[selfie]]` tag (and a stray
+  `[Фото]` placeholder she can't actually attach is stripped) — never a faked attachment.
+  (Her bot **profile avatar** can only be set via @BotFather — the Bot API can't.)
+- **Her life flavour is varied, not fixated** — life details are sampled per turn (not the
+  same fixed slice every time), and the old tea over‑emphasis was rebalanced, so she stops
+  repeating the same beat ("a bad joke"). This is generic flavour only — her relationship /
+  meetings / storyline memory is untouched.
 - **Never fabricates a stored fact (guardrail)** — creativity is free in her *voice* and her
   own fictional life, but any fact about the boss (notes, journal, reminders, names, dates,
   counts, spend) must be real. Every `converse` turn is **grounded**: his most relevant saved

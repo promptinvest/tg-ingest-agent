@@ -1257,6 +1257,11 @@ class Agent:
             parts.append("You have saved stickers — RARELY, when it genuinely fits the "
                          "mood, you may end your reply with [[sticker:emoji]] (e.g. "
                          "[[sticker:😍]]) to send one. Don't overuse them.")
+        if store.cara_photo_count(self.conn):
+            parts.append("If you want to send him a photo of YOURSELF, end your reply with "
+                         "the tag [[selfie]] — it sends a real saved photo. Never write a "
+                         "'[Фото]' placeholder or narrate attaching a picture; you have no "
+                         "other way to send one, so it's [[selfie]] or nothing.")
         if self.turn_extra:  # an own-photo he showed her, or the message he replied to
             parts.append("\n".join(x for x in self.turn_extra if x))
         return "\n".join(parts)
@@ -1274,6 +1279,14 @@ class Agent:
     # A shared sticker-pack link — the boss's main way to give Cara a pack to learn.
     STICKER_LINK_RE = re.compile(r"(?:t\.me/addstickers/|addstickers\?set=)([A-Za-z0-9_]+)",
                                  re.IGNORECASE)
+    # A real selfie affordance — [[selfie]] sends one of her saved photos, so she stops
+    # narrating an attachment she can't make.
+    SELFIE_RE = re.compile(r"\[\[\s*(?:selfie|photo|фото|себя)\s*\]\]", re.IGNORECASE)
+    # A stray single-bracket photo placeholder the model writes when it WANTS to attach a
+    # picture but has no way to ([Фото], [photo], [картинка]…) — strip it from the text.
+    PHOTO_PLACEHOLDER_RE = re.compile(
+        r"\[\s*(?:фото|photo|картинк\w*|изображени\w*|image|снимок|selfie)\b[^\]\n]*\]",
+        re.IGNORECASE)
 
     def _converse_grounding(self, text):
         """Pull the boss's OWN saved entries most relevant to what he just said, so
@@ -1360,6 +1373,10 @@ class Agent:
         # below doesn't swallow a [[sticker:emoji]] as a reaction.
         sm = self.STICKER_RE.search(reply)
         reply = self.STICKER_RE.sub("", reply).strip()
+        # A real [[selfie]] tag sends one of her saved photos (so she stops faking a
+        # "[Фото]" placeholder); remove the tag from the text either way.
+        selfie = bool(self.SELFIE_RE.search(reply))
+        reply = self.SELFIE_RE.sub("", reply).strip()
         # The reaction the model intends, in ANY form it uses: an array pair (above), a
         # [[…]] block (labelled or bare — [[react:X]] / [[реакция: X]] / [[X]]), or a bare
         # emoji leading the message. Apply it as a real reaction; never ship it as text.
@@ -1368,16 +1385,21 @@ class Agent:
         if reaction:
             self.react(chat_id, message_id, reaction)
         reply = self._strip_roleplay(reply)  # drop *narrated actions* — words/emojis only
+        reply = re.sub(r"\n{3,}", "\n\n", self.PHOTO_PLACEHOLDER_RE.sub("", reply)).strip()
         if not reply:
-            # A reaction or sticker on its own IS a complete response — not an error.
+            # A reaction / sticker / selfie on its own IS a complete response — not an error.
             if sm:
                 self.send_sticker_for(chat_id, sm.group(1))
-            elif not reaction:
+            if selfie:
+                self._send_selfie(chat_id)
+            if not (sm or selfie or reaction):
                 self.reply(chat_id, T(lang, "llm_error"))
             return
         self.reply(chat_id, reply)
         if sm:
             self.send_sticker_for(chat_id, sm.group(1))
+        if selfie:
+            self._send_selfie(chat_id)
         # Learn immediately when he's correcting me; otherwise on the usual cadence.
         self.maybe_curate_conversation(chat_id, lang=lang,
                                        force=self.looks_like_correction(text))
@@ -1623,6 +1645,17 @@ class Agent:
             tg_send_sticker(self.cfg.token, chat_id, fid)
         except TelegramError as exc:
             log(f"sendSticker failed: {exc}")
+
+    def _send_selfie(self, chat_id):
+        """Send one of Cara's saved photos for a [[selfie]] tag — silent no-op if she
+        has none (unlike the cara_selfie action, which tells the boss she has none)."""
+        fid = store.cara_photo_random(self.conn)
+        if not fid:
+            return
+        try:
+            tg_send_photo(self.cfg.token, chat_id, fid, by_file_id=True)
+        except TelegramError as exc:
+            log(f"send selfie failed: {exc}")
 
     @staticmethod
     def _unwrap_converse_array(reply):

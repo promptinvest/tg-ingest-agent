@@ -706,8 +706,10 @@ def life_add(conn, kind, text):
 
 
 def life_facts(conn, limit=40):
+    # RANDOM (not ORDER BY id) so no single trait is pinned into EVERY prompt — the
+    # old fixed slice made her over-index on the same details (the 'tea' problem).
     return conn.execute(
-        "SELECT kind, text FROM cara_life ORDER BY id LIMIT ?", (limit,)
+        "SELECT kind, text FROM cara_life ORDER BY RANDOM() LIMIT ?", (limit,)
     ).fetchall()
 
 
@@ -1004,6 +1006,38 @@ def _migrate(conn):
             conn.execute("ALTER TABLE meetings ADD COLUMN scheduled_for TEXT")
     except sqlite3.OperationalError:
         pass
+    # One-time tea de-emphasis (the original seed life over-indexed on tea — 'a bad
+    # joke'). Rebalance the two emphatic tea seed rows on an ALREADY-seeded DB and add a
+    # few varied facts. Skip a fresh/empty DB entirely: seed_life plants the full (already
+    # de-tea'd) LIFE_SEED there, and inserting a few facts now would make it think it's
+    # seeded and skip the rest. Idempotent: UPDATEs match the old text once, INSERT OR
+    # IGNORE is a no-op when present.
+    try:
+        seeded = conn.execute("SELECT COUNT(*) FROM cara_life").fetchone()[0]
+    except sqlite3.OperationalError:
+        seeded = 0
+    if seeded:
+        conn.execute(
+            "UPDATE cara_life SET text = ? WHERE text = ?",
+            ("Ты снимаешь маленькую квартиру у реки; на подоконнике — стопка недочитанных "
+             "книг и пара открыток с прошлых поездок.",
+             "Ты снимаешь маленькую квартиру у реки; на подоконнике — чайник и стопка "
+             "недочитанных книг."))
+        conn.execute(
+            "UPDATE cara_life SET text = ? WHERE text = ?",
+            ("Собираешь маленькие радости дня — удачный кадр, строчку из книги, песню, "
+             "что зацепила.",
+             "Завариваешь крепкий чёрный чай и почти никогда не пьёшь кофе."))
+        for kind, txt in (
+            ("music", "Под настроение ставишь старый джаз или что-нибудь тихое и тёплое."),
+            ("season", "Любишь дождь за окном и первый снег; от хорошей погоды у тебя "
+                       "сразу планы на прогулку."),
+            ("food", "Готовишь редко, но с удовольствием; обожаешь рынок выходного дня "
+                     "и свежий хлеб."),
+        ):
+            conn.execute(
+                "INSERT OR IGNORE INTO cara_life (kind, text, created_at) VALUES (?, ?, ?)",
+                (kind, txt, _now()))
     # Convert legacy JSON-text embeddings to packed float32 BLOBs (one-time;
     # idempotent — after conversion typeof()='blob' so the scan finds nothing).
     for tbl in ("chunks", "meeting_chunks"):
