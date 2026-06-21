@@ -238,6 +238,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   warmth and what she references **track how the relationship actually developed**. It
   grows continuously: meetings are the rich, verbatim beats, plus a **daily reflection**
   folds everyday interaction into the arc. Grounded only in real history — never invented.
+  A relational question — "что ты помнишь про нас?", "наши отношения", "что между нами?" —
+  is routed to **`converse`** (where the arc lives) so she answers from your shared story,
+  **not** to `boss_query` (which is a facts‑about‑you summary).
 - **Day‑after afterglow** — the morning after a *personal* meeting she may, **occasionally**,
   reach out first with genuine warmth ("было так хорошо, уже скучаю") — one‑shot per
   meeting, quiet‑hours / proactivity‑prefs aware, **never** clingy or reproachful.

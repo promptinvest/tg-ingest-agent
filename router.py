@@ -144,6 +144,7 @@ NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сд�
 "ты человек?" / "ты настоящая?" / "ты бот?" / "are you real?" / "are you an AI?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "как меня зовут?" / "ты помнишь как меня зовут?" / "what's my name?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "что ты обо мне знаешь?" / "what do you know about me?" -> {"action": "boss_query", "params": {}, "confidence": 0.92}
+"что ты помнишь про нас?" / "расскажи про наши отношения" / "что между нами?" / "как мы с тобой?" / "what do you remember about us?" / "tell me about us" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "откуда ты это знаешь?" / "почему ты это помнишь?" / "откуда у тебя это про меня?" / "where did you learn that?" -> {"action": "memory_why", "params": {}, "confidence": 0.9}
 "пиши только по выходным" / "не беспокой меня в будни" / "write to me only on weekends" -> {"action": "proactive_prefs", "params": {"days": "weekends"}, "confidence": 0.88}
 "не пиши без причины" / "отключи проактивные сообщения" / "stop the check-ins" -> {"action": "proactive_prefs", "params": {"enabled": false}, "confidence": 0.88}
@@ -245,6 +246,13 @@ def build_system_prompt(cfg, pending, now_utc=None):
         "But a question about CARA herself — her behaviour, feelings, or whether SHE will"
         " do/use something ('ты используешь это?', 'тебе нравится?', 'будешь пользоваться?',"
         " 'do you like it?') — is NOT 'ask'; it's 'converse' (she answers warmly herself).\n"
+        "A question about what she KNOWS about HIM as facts ('что ты обо мне знаешь?',"
+        " 'what do you know about me?') is 'boss_query'. But a question about US — their"
+        " RELATIONSHIP, how the two of them are together, their shared story or how she"
+        " feels about him ('что ты помнишь про нас?', 'расскажи про наши отношения', 'что"
+        " между нами?', 'как мы с тобой?', 'what do you remember about us?') — is 'converse'"
+        " (she answers warmly from their shared story, NOT a facts dump). 'про нас/наши"
+        " отношения/about us' -> converse; 'обо мне/about me' (facts) -> boss_query.\n"
         "If the message is a greeting, smalltalk, something personal or emotional,"
         " about Cara's own life/feelings or the user's life, an opinion, banter, or just"
         " anything that isn't a concrete task, use 'converse' (free-form warm chat in"

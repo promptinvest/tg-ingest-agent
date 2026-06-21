@@ -88,6 +88,15 @@ class RouterMeetingTests(unittest.TestCase):
             self.assertIn(a, skill_manifest.SKILLS)
         skill_manifest.assert_covers(router.ACTIONS)  # no missing policy
 
+    def test_relationship_query_steering_present(self):
+        # 'про нас / our relationship' must steer to converse (the arc), not a
+        # boss_query facts dump. Guard the prompt guidance + the example.
+        prompt = router.build_system_prompt(self.cfg, None)
+        self.assertIn("наши отношения", prompt)
+        self.assertIn("boss_query", prompt)
+        self.assertIn("про нас", router.ROUTER_EXAMPLES)
+        self.assertIn("what do you remember about us?", router.ROUTER_EXAMPLES)
+
 
 class MeetingLifecycleTests(unittest.TestCase):
     def setUp(self):
