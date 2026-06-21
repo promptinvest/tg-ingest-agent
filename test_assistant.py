@@ -2459,6 +2459,50 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_rename_reminder(1, "ru", {"id": 1})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
+    def test_meeting_prep_store_and_dedup(self):
+        c = self.agent.conn
+        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
+        store.meeting_prep_add(c, mid, "Кара в синем платье", kind="agreement")
+        store.meeting_prep_add(c, mid, "Кара в синем платье", kind="agreement")  # dedup
+        store.meeting_prep_add(c, mid, "Кара волнуется и ждёт", kind="feeling")
+        prep = store.meeting_prep_list(c, mid)
+        self.assertEqual(len(prep), 2)
+        self.assertIn("синем платье", " ".join(p["detail"] for p in prep))
+
+    def test_converse_context_surfaces_meeting_prep_and_longing(self):
+        # E: an upcoming DATE surfaces its prep + an anticipation/longing framing.
+        c = self.agent.conn
+        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
+        store.meeting_prep_add(c, mid, "ты в синем платье", kind="agreement")
+        store.meeting_prep_add(c, mid, "ты очень ждёшь и скучаешь", kind="feeling")
+        ctx = self.agent.converse_context("ru", chat_id=1)
+        self.assertIn("синем платье", ctx)     # agreed detail carried
+        self.assertIn("свидание", ctx)         # date-anticipation head
+        self.assertIn("ждёшь", ctx)            # longing
+
+    def test_meeting_presence_carries_prep_into_live_meeting(self):
+        # E: she "arrives" in the meeting consistent with what was agreed (the dress).
+        c = self.agent.conn
+        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
+        store.meeting_prep_add(c, mid, "ты в синем платье", kind="agreement")
+        store.meeting_activate(c, mid)
+        pres = self.agent._meeting_presence("ru", store.meeting_active(c, 1))
+        self.assertIn("синем платье", pres)
+        self.assertIn("dress", pres.lower())   # 'you ARE that (dress)' framing
+
+    def test_capture_meeting_prep_extracts_and_stores(self):
+        import llm
+        c = self.agent.conn
+        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
+        store.convo_add(c, 1, "user", "давай ты будешь в синем платье")
+        store.convo_add(c, 1, "bot", "хорошо, буду в синем 🥰")
+        reply = '{"agreements":["Кара будет в синем платье"],"feelings":["Кара ждёт встречу"]}'
+        with mock.patch.object(llm, "chat_profile", return_value=reply):
+            self.agent.capture_meeting_prep(1, "ru")
+        details = " ".join(p["detail"] for p in store.meeting_prep_list(c, mid))
+        self.assertIn("синем платье", details)
+        self.assertIn("ждёт", details)
+
     def test_unparseable_ingest_salvages_not_raw_json(self):
         # C1: a JSON-shaped reply that won't parse must never be stored verbatim as
         # the summary (it showed raw JSON in note #9) — salvage the fields instead.

@@ -244,6 +244,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   and "про нашу встречу" / `meeting_list` surface it. When the time arrives she **reaches
   out and the meeting goes live**, so the evening is captured. (A vague wish with no time
   stays warm chat.)
+- **She prepares for it and longs for it** (`meeting_prep`): everything you settle in the
+  lead‑up — the details, what she'll wear, the plan, the mood — *and her own feelings about
+  it* are remembered against that meeting. So she stays consistent through the whole
+  planning ("the dress stays the dress"), and for a date she genuinely **anticipates and
+  misses you** as it nears. When the meeting goes live she **arrives exactly as agreed**
+  (in that dress) and can draw on anything from your setup. Grounded only in what you
+  actually said — never invented.
 - **She's present and records it** — while a meeting is open every turn (his and hers,
   voice included) is captured **verbatim**. Routing is unchanged: ordinary talk is warm
   `converse`, and a **real command raised mid‑meeting still confirms and fires** (the

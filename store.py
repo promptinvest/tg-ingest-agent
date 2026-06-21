@@ -384,6 +384,19 @@ CREATE TABLE IF NOT EXISTS meeting_chunks (
   embedding TEXT
 );
 
+-- Preparation agreed for an UPCOMING meeting: logistical details/agreements (what
+-- she'll wear, what he brings, the plan) and emotional beats (her anticipation,
+-- longing). Accumulated during the lead-up, surfaced while planning AND carried into
+-- the live meeting so she stays consistent ("she's in that dress") and never surprised.
+CREATE TABLE IF NOT EXISTS meeting_prep (
+  id INTEGER PRIMARY KEY,
+  meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'detail',   -- agreement|detail|feeling
+  detail TEXT NOT NULL,
+  added_at TEXT NOT NULL,
+  UNIQUE(meeting_id, detail)
+);
+
 -- The relationship storyline: an evolving, synthesized narrative of "us",
 -- versioned so Cara can speak to how things changed. The latest row is the
 -- current arc, injected into every conversation so her attitude tracks the
@@ -760,6 +773,28 @@ def meetings_upcoming(conn, chat_id, limit=10):
         "SELECT * FROM meetings WHERE chat_id = ? AND status = 'scheduled'"
         " ORDER BY scheduled_for LIMIT ?", (chat_id, limit),
     ).fetchall()
+
+
+def meeting_prep_add(conn, meeting_id, detail, kind="detail"):
+    """Note one agreed prep detail / emotional beat for an upcoming meeting.
+    Idempotent via UNIQUE(meeting_id, detail). Returns the row id or None."""
+    detail = str(detail or "").strip()[:300]
+    if not detail:
+        return None
+    try:
+        cur = conn.execute(
+            "INSERT INTO meeting_prep (meeting_id, kind, detail, added_at) VALUES (?, ?, ?, ?)",
+            (meeting_id, kind, detail, _now()))
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.IntegrityError:  # already noted
+        return None
+
+
+def meeting_prep_list(conn, meeting_id, limit=40):
+    return conn.execute(
+        "SELECT kind, detail FROM meeting_prep WHERE meeting_id = ? ORDER BY id LIMIT ?",
+        (meeting_id, limit)).fetchall()
 
 
 def meetings_due_scheduled(conn, now_iso):

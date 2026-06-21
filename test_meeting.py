@@ -455,7 +455,7 @@ class MeetingDispatchTests(unittest.TestCase):
         store.meeting_schedule(self.conn, 111, "2026-06-22T16:00:00+00:00",
                                kind="visit", setting="у тебя дома")
         ctx = self.agent.converse_context("ru", 111)
-        self.assertIn("coming up", ctx)
+        self.assertIn("свидание", ctx)   # RU anticipation/longing head for a social meeting
         self.assertIn("visit", ctx)
 
     def test_afterglow_sends_once_and_is_grounded(self):

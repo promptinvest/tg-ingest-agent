@@ -303,6 +303,14 @@ proactively like real memory. Design decisions and why:
   injected into `converse_context` (she's aware of it in chat) and surfaced by
   `meeting_recall`/`meeting_list`; and a poll-loop tick **activates it at the time and
   reaches out**, so the time together is captured. A vague timeless wish stays `converse`.
+- **Prep continuity + anticipation for an upcoming meeting (`meeting_prep`).** While a
+  date/meeting is being set up, agreed details/logistics and **emotional beats** (her
+  longing, nerves) are extracted from the lead-up conversation (a small pass on the curator
+  cadence, only when a meeting is upcoming) and stored against that meeting. They're
+  surfaced in `converse_context` so she stays consistent through planning (the dress stays
+  the dress) and — for a social/date meeting — with genuine **anticipation/longing**; and
+  they're **carried into the live meeting** (`_meeting_presence`) so she "arrives" exactly
+  as agreed and can draw on anything from the setup. Grounded only in what was said.
 - **Capture is a minimal overlay, routing is unchanged.** While a meeting is open,
   the boss's turn is teed into `meeting_turns` at the top of `dispatch` and Cara's
   into the same record from `reply()`. The router still runs, so **a real command
