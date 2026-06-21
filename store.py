@@ -358,8 +358,9 @@ CREATE TABLE IF NOT EXISTS meetings (
   kind TEXT NOT NULL DEFAULT 'other',   -- business|dinner|walk|movies|visit|call|other
   setting TEXT,                         -- the scene/place (grounds recall)
   title TEXT,
-  status TEXT NOT NULL DEFAULT 'active', -- active|ended
+  status TEXT NOT NULL DEFAULT 'active', -- scheduled|active|ended
   started_at TEXT NOT NULL,
+  scheduled_for TEXT,                   -- planned time (status='scheduled' future meeting)
   last_turn_at TEXT,                    -- for idle auto-end
   ended_at TEXT,
   summary TEXT,                         -- recap written at end
@@ -739,6 +740,43 @@ def meeting_get(conn, meeting_id):
     return conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
 
 
+def meeting_schedule(conn, chat_id, scheduled_for, kind="other", setting=None, title=None):
+    """Create a FUTURE (status='scheduled') meeting agreed in conversation, so
+    Cara remembers the appointment. started_at mirrors scheduled_for so it dates
+    correctly when it later goes live."""
+    cur = conn.execute(
+        "INSERT INTO meetings (chat_id, kind, setting, title, status, started_at,"
+        " scheduled_for, trace_id) VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?)",
+        (chat_id, kind, setting, title, scheduled_for, scheduled_for, _trace_id()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def meetings_upcoming(conn, chat_id, limit=10):
+    return conn.execute(
+        "SELECT * FROM meetings WHERE chat_id = ? AND status = 'scheduled'"
+        " ORDER BY scheduled_for LIMIT ?", (chat_id, limit),
+    ).fetchall()
+
+
+def meetings_due_scheduled(conn, now_iso):
+    """Scheduled meetings whose time has arrived (for proactive go-live)."""
+    return conn.execute(
+        "SELECT * FROM meetings WHERE status = 'scheduled' AND scheduled_for <= ?"
+        " ORDER BY scheduled_for", (now_iso,),
+    ).fetchall()
+
+
+def meeting_activate(conn, meeting_id):
+    """Move a scheduled meeting into the live (active) state when it begins."""
+    conn.execute(
+        "UPDATE meetings SET status = 'active', last_turn_at = ? WHERE id = ?",
+        (_now(), meeting_id),
+    )
+    conn.commit()
+
+
 def meeting_turn_add(conn, meeting_id, role, text):
     text = str(text or "").strip()
     if not text:
@@ -960,6 +998,12 @@ def _migrate(conn):
     cat_columns = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
     if "kind" not in cat_columns:
         conn.execute("ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'inbox'")
+    try:
+        mtg_columns = {row["name"] for row in conn.execute("PRAGMA table_info(meetings)")}
+        if mtg_columns and "scheduled_for" not in mtg_columns:
+            conn.execute("ALTER TABLE meetings ADD COLUMN scheduled_for TEXT")
+    except sqlite3.OperationalError:
+        pass
     # Convert legacy JSON-text embeddings to packed float32 BLOBs (one-time;
     # idempotent — after conversion typeof()='blob' so the scan finds nothing).
     for tbl in ("chunks", "meeting_chunks"):

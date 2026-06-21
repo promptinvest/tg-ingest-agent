@@ -212,9 +212,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Spend real time together** (`meeting_start`): a working sit‑down OR a social/
   personal one — **dinner, a walk, the movies, or visiting her at her place**. "давай
   проведём встречу", "пойдём поужинаем", "погуляем?", "сходим в кино", "можно я зайду к
-  тебе?" begin a live session with an inferred **kind** (+optional setting). A *future*
-  plan ("в пятницу в кино") is **not** a meeting — she reacts warmly and may offer a
-  reminder. One meeting at a time; re‑opening just says "мы же уже вместе".
+  тебе?" begin a live session NOW with an inferred **kind** (+optional setting). One
+  meeting at a time; re‑opening just says "мы же уже вместе".
+- **Agree a future meeting** (`meeting_schedule`): a future plan with a concrete time
+  ("давай завтра в 19:00 ко мне", "сходим в кино в пятницу в 20:00") is **remembered as a
+  scheduled meeting** — she warmly **confirms** it then keeps it (`scheduled → active →
+  ended` lifecycle). She's aware of it in conversation ("ты же сегодня вечером зайдёшь?"),
+  and "про нашу встречу" / `meeting_list` surface it. When the time arrives she **reaches
+  out and the meeting goes live**, so the evening is captured. (A vague wish with no time
+  stays warm chat.)
 - **She's present and records it** — while a meeting is open every turn (his and hers,
   voice included) is captured **verbatim**. Routing is unchanged: ordinary talk is warm
   `converse`, and a **real command raised mid‑meeting still confirms and fires** (the

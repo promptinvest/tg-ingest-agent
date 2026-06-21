@@ -125,6 +125,9 @@ SKILLS = {
     #    no typed confirmation, real commands raised mid-meeting still confirm).
     "meeting_start": {"risk": "state_write", "writes_state": True, "persona_context": True,
                       "title": {"en": "Start time together", "ru": "Начать встречу"}},
+    "meeting_schedule": {"risk": "draft_write", "writes_state": True, "requires_confirmation": True,
+                         "persona_context": True,
+                         "title": {"en": "Schedule a meeting", "ru": "Договориться о встрече"}},
     "meeting_end": {"risk": "state_write", "uses_llm": True, "writes_state": True,
                     "persona_context": True,
                     "title": {"en": "End the meeting", "ru": "Завершить встречу"}},

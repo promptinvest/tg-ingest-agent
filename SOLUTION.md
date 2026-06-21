@@ -290,6 +290,15 @@ proactively like real memory. Design decisions and why:
   recall) and its own *separate* episodic store. That cohesion earns a module. It
   *wires into* the router (4 actions), dispatch, converse grounding, the scheduler
   and proactive — but the logic lives in one place.
+- **Future meetings are remembered (scheduled lifecycle).** A meeting agreed for a
+  concrete future time is a first-class `meetings` row with `status='scheduled'` +
+  `scheduled_for`, so the lifecycle is `scheduled → active → ended`. This closed a real
+  gap: the original design routed future plans to `converse` (which changes no state), so
+  an agreed meeting persisted nothing and Cara couldn't recall it. Now `meeting_schedule`
+  **warm-confirms** then stores it (confirm-before-state-change, like reminders); it's
+  injected into `converse_context` (she's aware of it in chat) and surfaced by
+  `meeting_recall`/`meeting_list`; and a poll-loop tick **activates it at the time and
+  reaches out**, so the time together is captured. A vague timeless wish stays `converse`.
 - **Capture is a minimal overlay, routing is unchanged.** While a meeting is open,
   the boss's turn is teed into `meeting_turns` at the top of `dispatch` and Cara's
   into the same record from `reply()`. The router still runs, so **a real command

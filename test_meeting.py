@@ -82,9 +82,16 @@ class RouterMeetingTests(unittest.TestCase):
         self.assertEqual(self._route(
             '{"action":"meeting_list","params":{},"confidence":0.9}')["action"], "meeting_list")
 
+    def test_meeting_schedule_routes(self):
+        d = self._route('{"action":"meeting_schedule","params":{"when":'
+                        '"2026-06-22T16:00:00+00:00","kind":"visit"},"confidence":0.9}')
+        self.assertEqual(d["action"], "meeting_schedule")
+        self.assertEqual(d["params"]["kind"], "visit")
+
     def test_meeting_actions_have_manifest_policies(self):
         import skill_manifest
-        for a in ("meeting_start", "meeting_end", "meeting_recall", "meeting_list"):
+        for a in ("meeting_start", "meeting_schedule", "meeting_end",
+                  "meeting_recall", "meeting_list"):
             self.assertIn(a, skill_manifest.SKILLS)
         skill_manifest.assert_covers(router.ACTIONS)  # no missing policy
 
@@ -211,6 +218,20 @@ class MeetingLifecycleTests(unittest.TestCase):
                           ((now - timedelta(hours=2)).isoformat(), mid))
         self.conn.commit()
         self.assertIsNone(meeting.afterglow_candidate(self.conn, self.cfg, 111, now))
+
+    def test_schedule_upcoming_due_activate(self):
+        fut = "2026-06-22T16:00:00+00:00"
+        mid = store.meeting_schedule(self.conn, 111, fut, kind="visit", setting="дом")
+        up = store.meetings_upcoming(self.conn, 111)
+        self.assertEqual(len(up), 1)
+        self.assertEqual(up[0]["status"], "scheduled")
+        self.assertEqual(store.meetings_due_scheduled(
+            self.conn, "2026-06-21T00:00:00+00:00"), [])              # before time: not due
+        self.assertEqual(len(store.meetings_due_scheduled(
+            self.conn, "2026-06-23T00:00:00+00:00")), 1)              # after time: due
+        store.meeting_activate(self.conn, mid)
+        self.assertIsNotNone(store.meeting_active(self.conn, 111))    # went live
+        self.assertEqual(len(store.meetings_upcoming(self.conn, 111)), 0)  # no longer scheduled
 
 
 class RelationshipArcTests(unittest.TestCase):
@@ -391,6 +412,51 @@ class MeetingDispatchTests(unittest.TestCase):
         store.arc_set(self.conn, "Мы давно вместе и очень близки.")
         ctx = self.agent.converse_context("ru", 111)
         self.assertIn("очень близки", ctx)
+
+    def test_schedule_confirm_flow(self):
+        # agree a future meeting -> warm confirm, nothing stored yet
+        self.drive({"message": self._msg(40, "давай завтра в 19:00 ко мне")},
+                   {"router": '{"action":"meeting_schedule","params":{"when":'
+                              '"2026-06-22T16:00:00+00:00","kind":"visit","setting":'
+                              '"у тебя дома"},"confidence":0.9}'})
+        self.assertIsNotNone(store.pending_get(self.conn, 111))
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM meetings").fetchone()["n"], 0)
+        # "да" -> it's remembered as a scheduled meeting
+        self.drive({"message": self._msg(41, "да")},
+                   {"router": '{"action":"confirm","params":{},"confidence":0.95}'})
+        m = self.conn.execute("SELECT status,kind,setting FROM meetings").fetchone()
+        self.assertEqual(m["status"], "scheduled")
+        self.assertEqual(m["kind"], "visit")
+        self.assertIsNone(store.pending_get(self.conn, 111))
+
+    def test_scheduled_meeting_goes_live_at_time(self):
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        store.meeting_schedule(self.conn, 111, past, kind="visit", setting="у тебя дома")
+        sent = []
+        with mock.patch.object(self.mod, "tg_call",
+                               side_effect=lambda *a, **k: sent.append(a) or {"message_id": 1}):
+            self.agent.check_scheduled_meetings()
+        self.assertIsNotNone(store.meeting_active(self.conn, 111))  # scheduled -> active
+        self.assertTrue(sent)                                       # reached out warmly
+        self.assertEqual(len(store.meetings_upcoming(self.conn, 111)), 0)
+
+    def test_recall_surfaces_upcoming(self):
+        store.meeting_schedule(self.conn, 111, "2026-06-22T16:00:00+00:00",
+                               kind="visit", setting="у тебя дома")
+        sent = self.drive(
+            {"message": self._msg(43, "про нашу встречу")},
+            {"router": '{"action":"meeting_recall","params":{"query":"наша встреча"},'
+                       '"confidence":0.9}',
+             "meeting_recall": "Да, мы договорились — завтра в 19:00 у меня дома, жду 🤍"})
+        self.assertTrue(any("жду" in s.lower() for s in sent))
+
+    def test_converse_context_mentions_upcoming(self):
+        store.meeting_schedule(self.conn, 111, "2026-06-22T16:00:00+00:00",
+                               kind="visit", setting="у тебя дома")
+        ctx = self.agent.converse_context("ru", 111)
+        self.assertIn("coming up", ctx)
+        self.assertIn("visit", ctx)
 
     def test_afterglow_sends_once_and_is_grounded(self):
         # a social meeting that ended "yesterday evening"

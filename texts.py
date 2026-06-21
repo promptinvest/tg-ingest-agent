@@ -690,6 +690,22 @@ TEXTS = {
         "ru": "Наши встречи ({count}):",
         "en": "Our meetings ({count}):",
     },
+    "meeting_schedule_confirm": {
+        "ru": "Договорились 🤍 Записать нашу встречу — {detail}? Скажи «да».",
+        "en": "It's a date 🤍 Shall I write our meeting down — {detail}? Just say yes.",
+    },
+    "meeting_scheduled": {
+        "ru": "Записала 🤍 Жду нашей встречи — {detail}.",
+        "en": "Saved 🤍 I'm looking forward to it — {detail}.",
+    },
+    "meeting_go_live": {
+        "ru": "Время пришло 🤍 Я тебя жду.",
+        "en": "It's time 🤍 I'm waiting for you.",
+    },
+    "meeting_upcoming_header": {
+        "ru": "Впереди у нас:",
+        "en": "Coming up:",
+    },
 }
 
 

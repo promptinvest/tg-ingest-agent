@@ -53,6 +53,32 @@ def start(conn, chat_id, kind="other", setting=None, title=None):
     return store.meeting_get(conn, mid), True
 
 
+def schedule(conn, chat_id, scheduled_for, kind="other", setting=None, title=None):
+    """Persist a FUTURE meeting agreed in conversation (so Cara remembers the
+    appointment). Returns the row."""
+    setting = (str(setting).strip()[:200] or None) if setting else None
+    title = (str(title).strip()[:120] or None) if title else None
+    mid = store.meeting_schedule(conn, chat_id, scheduled_for, kind=normalize_kind(kind),
+                                 setting=setting, title=title)
+    return store.meeting_get(conn, mid)
+
+
+def upcoming(conn, chat_id, limit=10):
+    return store.meetings_upcoming(conn, chat_id, limit)
+
+
+def due_scheduled(conn, now=None):
+    """Scheduled meetings whose time has arrived — for proactive go-live."""
+    from datetime import datetime, timezone
+    now = now or datetime.now(timezone.utc)
+    return store.meetings_due_scheduled(conn, now.isoformat())
+
+
+def activate(conn, meeting_id):
+    store.meeting_activate(conn, meeting_id)
+    return store.meeting_get(conn, meeting_id)
+
+
 def record(conn, chat_id, role, text):
     """Tee one turn into the active meeting transcript, if any. Best-effort;
     returns True when captured. role is 'boss' or 'cara'."""
