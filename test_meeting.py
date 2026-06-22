@@ -430,16 +430,37 @@ class MeetingDispatchTests(unittest.TestCase):
         self.assertEqual(m["kind"], "visit")
         self.assertIsNone(store.pending_get(self.conn, 111))
 
-    def test_scheduled_meeting_goes_live_at_time(self):
+    def test_scheduled_meeting_pings_and_waits(self):
+        # At the agreed time Cara PINGS (like real life) but does NOT auto-go-live —
+        # she waits for him to come in. Once per meeting.
         past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
         store.meeting_schedule(self.conn, 111, past, kind="visit", setting="у тебя дома")
         sent = []
         with mock.patch.object(self.mod, "tg_call",
                                side_effect=lambda *a, **k: sent.append(a) or {"message_id": 1}):
             self.agent.check_scheduled_meetings()
-        self.assertIsNotNone(store.meeting_active(self.conn, 111))  # scheduled -> active
-        self.assertTrue(sent)                                       # reached out warmly
-        self.assertEqual(len(store.meetings_upcoming(self.conn, 111)), 0)
+            self.agent.check_scheduled_meetings()              # idempotent
+        self.assertIsNone(store.meeting_active(self.conn, 111))           # waits, not auto-live
+        self.assertEqual(len(store.meetings_upcoming(self.conn, 111)), 1)  # still scheduled
+        self.assertEqual(len(sent), 1)                                    # pinged exactly once
+
+    def test_come_in_activates_scheduled_meeting_with_prep(self):
+        # 'я пришёл' activates the AGREED scheduled meeting (with its prep), not a new blank.
+        soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        mid = store.meeting_schedule(self.conn, 111, soon, kind="visit", setting="у тебя дома")
+        store.meeting_prep_add(self.conn, mid, "ты в синем платье", kind="agreement")
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_meeting_start(111, "ru", {"kind": "visit"})
+        active = store.meeting_active(self.conn, 111)
+        self.assertIsNotNone(active)
+        self.assertEqual(active["id"], mid)                              # the agreed one
+        self.assertEqual(len(store.meetings_upcoming(self.conn, 111)), 0)  # no longer scheduled
+        self.assertIn("синем платье", self.agent._meeting_presence("ru", active))  # prep carried in
+
+    def test_spontaneous_meeting_starts_new_when_nothing_scheduled(self):
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_meeting_start(111, "ru", {"kind": "walk"})
+        self.assertIsNotNone(store.meeting_active(self.conn, 111))        # fresh meeting
 
     def test_recall_surfaces_upcoming(self):
         store.meeting_schedule(self.conn, 111, "2026-06-22T16:00:00+00:00",

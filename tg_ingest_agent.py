@@ -1559,13 +1559,32 @@ class Agent:
             "asterisk stage-directions or narrated gestures; show closeness in words, an "
             "emoji, a reaction.")
 
+    def _scheduled_now(self, chat_id, window_hours=6):
+        """The agreed (scheduled) meeting that's happening around now — the soonest one
+        whose time is already here or within the next `window_hours` (overdue ones count).
+        So 'я пришёл' activates the REAL agreed date, with its prep, not a blank meeting."""
+        horizon = (datetime.now(timezone.utc) + timedelta(hours=window_hours)).isoformat()
+        for m in store.meetings_upcoming(self.conn, chat_id, limit=5):
+            if (m["scheduled_for"] or "") <= horizon:
+                return m
+        return None
+
     def do_meeting_start(self, chat_id, lang, params):
-        kind = meeting.normalize_kind(params.get("kind"))
-        m, started = meeting.start(self.conn, chat_id, kind=kind,
-                                   setting=params.get("setting"), title=params.get("title"))
-        if not started:
+        if store.meeting_active(self.conn, chat_id):
             self.reply(chat_id, T(lang, "meeting_already"))
             return
+        # The 'come in' moment: if you two agreed a meeting for around now, ARRIVING
+        # activates THAT scheduled meeting (carrying its setting + prep) rather than
+        # spinning up a fresh blank one (which would also leave the agreed one to fire
+        # later). A spontaneous meeting with nothing scheduled starts new.
+        due = self._scheduled_now(chat_id)
+        if due is not None:
+            meeting.activate(self.conn, due["id"])
+            kind = due["kind"]
+        else:
+            kind = meeting.normalize_kind(params.get("kind"))
+            meeting.start(self.conn, chat_id, kind=kind,
+                          setting=params.get("setting"), title=params.get("title"))
         if kind == "business":
             key = "meeting_started_business"
         elif kind == "visit":
@@ -2735,9 +2754,10 @@ class Agent:
             jobs.add_job(self.conn, "relationship", "run_reflection", trace_id=current_trace())
 
     def check_scheduled_meetings(self):
-        """When an agreed (scheduled) meeting's time arrives, go live and reach
-        out warmly so the time together is captured (decision: reach out + go
-        live). The boss set the time, so this fires as the appointment it is."""
+        """When an agreed (scheduled) meeting's time arrives and the boss hasn't shown up,
+        Cara PINGS him — warmly, like real life ('я жду, ты собирался зайти') — instead of
+        silently going live on her own. She does NOT activate it; HIS 'come in' (meeting_start
+        -> _scheduled_now) starts it. Once per meeting (kv flag)."""
         try:
             due = meeting.due_scheduled(self.conn)
         except Exception as exc:  # noqa: BLE001 — must not kill the loop
@@ -2745,11 +2765,15 @@ class Agent:
             return
         for m in due:
             if store.meeting_active(self.conn, m["chat_id"]):
-                continue  # already in a meeting; this one goes live once that ends
-            meeting.activate(self.conn, m["id"])
+                continue  # already together; nudge nothing
+            flag = f"meeting_ping:{m['id']}"
+            if store.kv_get(self.conn, flag):
+                continue  # already nudged about this one
+            store.kv_set(self.conn, flag, "1")
             self.turn_lang = None
-            store.proactive_log_add(self.conn, "meeting_go_live", "sent", sent=True)
-            self.reply(m["chat_id"], T(self.lang(), "meeting_go_live"))
+            store.proactive_log_add(self.conn, "meeting_waiting", "sent", sent=True)
+            self.reply(m["chat_id"], T(self.lang(), "meeting_waiting",
+                                       detail=self._meeting_detail(m, self.lang())))
 
     def check_meeting_idle(self):
         """Auto-end (and summarize) any meeting left open and idle past the

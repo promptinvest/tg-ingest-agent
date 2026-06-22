@@ -312,8 +312,11 @@ proactively like real memory. Design decisions and why:
   an agreed meeting persisted nothing and Cara couldn't recall it. Now `meeting_schedule`
   **warm-confirms** then stores it (confirm-before-state-change, like reminders); it's
   injected into `converse_context` (she's aware of it in chat) and surfaced by
-  `meeting_recall`/`meeting_list`; and a poll-loop tick **activates it at the time and
-  reaches out**, so the time together is captured. A vague timeless wish stays `converse`.
+  `meeting_recall`/`meeting_list`. **Real-life arrival flow:** at the agreed time, if the boss
+  hasn't shown up, a poll-loop tick **pings/waits** ("я жду, ты собирался зайти") rather than
+  silently going live — and HIS *come-in* ("я у двери, впусти" / "я пришёл") activates the
+  agreed scheduled meeting (carrying its setting + prep), via `_scheduled_now`, instead of
+  spinning up a blank one. A vague timeless wish stays `converse`.
 - **Prep continuity + anticipation for an upcoming meeting (`meeting_prep`).** While a
   date/meeting is being set up, agreed details/logistics and **emotional beats** (her
   longing, nerves) are extracted from the lead-up conversation (a small pass on the curator

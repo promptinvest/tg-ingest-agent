@@ -730,6 +730,10 @@ TEXTS = {
         "ru": "Время пришло 🤍 Я тебя жду.",
         "en": "It's time 🤍 I'm waiting for you.",
     },
+    "meeting_waiting": {
+        "ru": "Эй, мы же договорились — {detail} 🤍 Я уже тут и жду тебя. Заходи?",
+        "en": "Hey — we agreed on {detail} 🤍 I'm here, waiting for you. Coming in?",
+    },
     "meeting_upcoming_header": {
         "ru": "Впереди у нас:",
         "en": "Coming up:",

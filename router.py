@@ -200,6 +200,7 @@ NOTE: while a fired reminder is pending, "отложи"/"перенеси"/"по
 "погуляем?" / "пойдём на прогулку" / "let's take a walk" -> {"action": "meeting_start", "params": {"kind": "walk"}, "confidence": 0.85}
 "сходим в кино?" / "давай посмотрим фильм вместе" / "let's watch a movie" -> {"action": "meeting_start", "params": {"kind": "movies"}, "confidence": 0.85}
 "можно я зайду к тебе?" / "я к тебе" / "приходи ко мне" / "can I come over to your place?" -> {"action": "meeting_start", "params": {"kind": "visit"}, "confidence": 0.85}
+"я у двери" / "впусти меня" / "открывай, я пришёл" / "я уже тут, стучусь" / "захожу" / "I'm at your door, let me in" / "I'm here" -> {"action": "meeting_start", "params": {"kind": "visit"}, "confidence": 0.85}
 NOTE: meeting_start is only for STARTING time together NOW. A FUTURE meeting with a time you AGREE ON is meeting_schedule (she remembers the appointment), NOT meeting_start and NOT converse.
 "давай завтра в 19:00 ко мне" / "приходи завтра в 7 вечера" / "встретимся завтра в 7 у тебя дома" / "let's meet tomorrow at 7 at your place" -> {"action": "meeting_schedule", "params": {"when": "<tomorrow 19:00 local in UTC>", "kind": "visit", "setting": "у Cara дома"}, "confidence": 0.9}
 "давай в пятницу в 20:00 сходим в кино" / "поужинаем завтра в 8?" / "let's have dinner tomorrow at 8" -> {"action": "meeting_schedule", "params": {"when": "<that time, local, in UTC>", "kind": "dinner"}, "confidence": 0.88}
