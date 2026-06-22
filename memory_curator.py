@@ -225,3 +225,67 @@ def confirm_candidate(conn, candidate_id, accept):
         return cand["proposed_text"], True
     store.candidate_set_status(conn, candidate_id, "rejected")
     return cand["proposed_text"], False
+
+
+# -- memory consolidation (dedup) --------------------------------------------
+
+_CONSOLIDATE_SYSTEM = (
+    "You de-duplicate Cara's memory of her boss. You are given remembered items as "
+    "'<id>: <text>'. Group items that capture the SAME underlying fact, preference or "
+    "standing rule — INCLUDING shorter restatements and paraphrases that only add a small "
+    "detail. For example 'Начинает день рано', 'Начинает день рано, уже в работе с утра' and "
+    "'Начинает день рано и сразу в работу, есть дисциплина' are ONE fact; 'Его зовут Олег' "
+    "and 'Зовут Олег' are one. For each group of 2+, KEEP the single most complete/clear id "
+    "and DROP the rest (no information is lost — the kept item is the richest). Keep items "
+    "SEPARATE only when they are genuinely DIFFERENT facts (a different topic or a materially "
+    "different claim) — never merge two distinct facts. Never invent text — only reference the "
+    "given ids. Return STRICT JSON only: "
+    '{"groups": [{"keep": <id>, "drop": [<id>, ...]}]}. Empty groups if nothing duplicates.'
+)
+
+
+def consolidate(conn, cfg, max_items=120):
+    """De-duplicate boss memory: an LLM groups genuine duplicate items; we KEEP the best
+    existing one and mark the rest 'merged' (reversible — never deleted, never rewritten,
+    no new text invented). Returns how many were merged. No-op when there's little to do."""
+    import llm
+    items, seen = [], set()
+    for status in ("confirmed", "inferred"):
+        for row in store.boss_items(conn, status, limit=max_items):
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
+            val = (row["value"] or "").strip()
+            if val:
+                items.append((row["id"], val))
+    if len(items) < 8:
+        return 0
+    listing = "\n".join(f"{i}: {v}" for i, v in items[:max_items])
+    try:
+        reply = llm.chat_profile(
+            cfg, conn, "memory_curator",
+            [{"role": "system", "content": _CONSOLIDATE_SYSTEM},
+             {"role": "user", "content": listing}],
+            profile="memory_curator")
+    except (llm.BudgetExceeded, llm.LLMError):
+        return 0
+    parsed = llm.parse_llm_json(reply) or {}
+    valid = {i for i, _ in items}
+
+    def _id(x):  # the model may emit ids as ints OR strings ("12") — accept both
+        try:
+            return int(x)
+        except (TypeError, ValueError):
+            return None
+    merged = 0
+    for g in (parsed.get("groups") or []):
+        if not isinstance(g, dict):
+            continue
+        keep = _id(g.get("keep"))
+        if keep not in valid:
+            continue
+        for d in (g.get("drop") or []):
+            di = _id(d)
+            if di in valid and di != keep and store.boss_set_status(conn, di, "merged"):
+                merged += 1
+    return merged

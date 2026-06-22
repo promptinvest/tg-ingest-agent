@@ -2459,6 +2459,22 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_rename_reminder(1, "ru", {"id": 1})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
+    def test_memory_consolidate_marks_duplicates_merged(self):
+        import memory_curator, boss_model, llm
+        c = self.agent.conn
+        for v in ["A", "B", "C", "D", "E", "F", "G", "H"]:
+            boss_model.remember_explicit(c, v, "tone")
+        items = store.boss_items(c, "confirmed", limit=50)
+        self.assertGreaterEqual(len(items), 8)
+        keep, drop = items[0]["id"], items[1]["id"]
+        reply = __import__("json").dumps({"groups": [{"keep": keep, "drop": [drop]}]})
+        with mock.patch.object(llm, "chat_profile", return_value=reply):
+            n = memory_curator.consolidate(c, self.agent.cfg)
+        self.assertEqual(n, 1)
+        self.assertEqual(store.boss_get(c, drop)["status"], "merged")   # dup demoted
+        self.assertEqual(store.boss_get(c, keep)["status"], "confirmed")  # canonical kept
+        self.assertTrue(skill_manifest.known("memory_cleanup"))
+
     def test_merge_categories_folds_and_deletes_duplicate(self):
         c = self.agent.conn
         a = store.insert_message(c, {"chat_id": 1, "tg_message_id": 1,

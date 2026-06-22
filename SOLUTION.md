@@ -276,6 +276,12 @@ tone variants; only conversation and grounded answers are free-form.
   candidates, never auto-stored. It also captures **behavioral corrections** as
   standing guidance (injected into her prompt) and escalates recurring ones as
   "needs a code fix".
+- **Consolidation (`memory_curator.consolidate`).** The curator accumulates near-duplicate
+  facts over time (the same trait restated). A **weekly** pass (first run fires immediately;
+  on-demand via the `memory_cleanup` action, "почисти память") asks the model to GROUP genuine
+  duplicates/paraphrases of one fact and KEEP the single richest item, marking the rest
+  `merged` — **never deleting or rewriting** (reversible), and never merging distinct facts.
+  Keeps her self-knowledge from bloating without losing nuance.
 - **Provenance (`boss_model.explain`).** "Откуда ты это знаешь?" cites how a fact
   was learned, in character (the source she stored + the date) — memory you can
   inspect, not magic.

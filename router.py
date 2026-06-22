@@ -56,6 +56,7 @@ ACTIONS = {
     "style_update",      # params: tone (warmer|neutral|concise) / intensity
     "trace_query",       # why did you do that / show last trace
     "memory_review",     # show pending memory candidates for confirmation
+    "memory_cleanup",    # de-duplicate remembered facts ("почисти память")
     "working_history",   # how have you helped me / what have you learned about helping me
     "export",            # params: what in review|self|profile|history|candidates — md export
     "confirm",           # pending action: yes
@@ -167,6 +168,7 @@ NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and
 "будь покороче и суше" / "be more concise" -> {"action": "style_update", "params": {"tone": "concise"}, "confidence": 0.9}
 "почему ты так решила?" / "why did you do that?" / "покажи последний трейс" -> {"action": "trace_query", "params": {}, "confidence": 0.85}
 "покажи, что хочешь запомнить" / "what do you want to remember?" / "обзор памяти" -> {"action": "memory_review", "params": {}, "confidence": 0.9}
+"почисти память" / "убери дубликаты в памяти" / "consolidate your memory" / "tidy up what you remember" -> {"action": "memory_cleanup", "params": {}, "confidence": 0.9}
 "как давно ты мне помогаешь?" / "how have you helped me?" / "что ты сделала для меня?" -> {"action": "working_history", "params": {}, "confidence": 0.9}
 "выгрузи профиль файлом" / "export what you know about me" -> {"action": "export", "params": {"what": "profile"}, "confidence": 0.9}
 "экспортируй себя / историю / кандидатов в md" / "export your self profile" -> {"action": "export", "params": {"what": "self"}, "confidence": 0.85}

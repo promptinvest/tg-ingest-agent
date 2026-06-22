@@ -273,6 +273,7 @@ class Agent:
             self.check_morning_brief()
             self.check_daily_curator()
             self.check_daily_reflection()  # grow the relationship storyline daily
+            self.check_memory_consolidation()  # weekly: fold duplicate remembered items
             self.check_proactive()
             self.check_model_health()
             if now - self.last_sweep >= self.cfg.retry_interval:
@@ -890,6 +891,8 @@ class Agent:
             self.reply(chat_id, self.trace_explain_text(lang, chat_id))
         elif action == "memory_review":
             self.show_memory_review(chat_id, lang)
+        elif action == "memory_cleanup":
+            self.do_memory_cleanup(chat_id, lang)
         elif action == "working_history":
             self.reply(chat_id, relationship.render_working_history(self.conn, lang))
         elif action == "export":
@@ -2634,6 +2637,38 @@ class Agent:
         if not jobs.has_pending(self.conn, "memory_curator", "run_memory_curator"):
             jobs.add_job(self.conn, "memory_curator", "run_memory_curator",
                          trace_id=current_trace())
+
+    def check_memory_consolidation(self):
+        """Weekly: fold duplicate boss-memory items (the curator accumulates near-dupes
+        over time) so her self-knowledge stays clean. The first run (no timestamp yet)
+        fires right away to clear existing bloat. One cheap LLM pass; best-effort."""
+        now = datetime.now(timezone.utc)
+        last = store.kv_get(self.conn, "memory_consolidate_at")
+        if last:
+            try:
+                if (now - datetime.fromisoformat(last)).days < 7:
+                    return
+            except ValueError:
+                pass
+        store.kv_set(self.conn, "memory_consolidate_at", now.isoformat())
+        try:
+            n = memory_curator.consolidate(self.conn, self.cfg)
+            if n:
+                log(f"memory consolidation: merged {n} duplicate item(s)")
+        except Exception as exc:
+            log(f"memory consolidation failed: {exc}")
+
+    def do_memory_cleanup(self, chat_id, lang):
+        """On-demand: 'почисти память' — fold duplicate remembered items now."""
+        try:
+            n = memory_curator.consolidate(self.conn, self.cfg)
+        except Exception as exc:
+            log(f"memory cleanup failed: {exc}")
+            n = 0
+        store.kv_set(self.conn, "memory_consolidate_at",
+                     datetime.now(timezone.utc).isoformat())
+        self.reply(chat_id, T(lang, "memory_cleaned", n=n) if n
+                   else T(lang, "memory_clean_none"))
 
     def check_daily_reflection(self):
         """Enqueue the daily relationship-storyline reflection once per UTC day

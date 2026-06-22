@@ -624,6 +624,14 @@ TEXTS = {
         "ru": "Объединила «{src}» в «{dst}» — перенесла {n} и убрала дубликат ✅",
         "en": "Merged «{src}» into «{dst}» — moved {n} and removed the duplicate ✅",
     },
+    "memory_cleaned": {
+        "ru": "Почистила память, босс — объединила {n} повторяющихся записей 🧹",
+        "en": "Tidied my memory, boss — merged {n} duplicate item(s) 🧹",
+    },
+    "memory_clean_none": {
+        "ru": "Память и так в порядке, босс — повторов не нашла 🧹",
+        "en": "Memory's already tidy, boss — no duplicates to merge 🧹",
+    },
     "merge_which": {
         "ru": "Какие категории объединить, босс? Скажи «объедини X в Y».",
         "en": "Which categories should I merge, boss? Say \"merge X into Y\".",
