@@ -1464,10 +1464,57 @@ class Agent:
         except (TypeError, StopIteration):
             return None
 
+    _CLOTHING_HINTS = ("плать", "бель", "наряд", "одет", "пижам", "халат", "юбк", "топ",
+                       "джинс", "dress", "lingerie", "outfit", "wear", "robe", "skirt")
+
+    def _meeting_attire(self, kind, setting, lang):
+        """How Cara is dressed for THIS in-person meeting. Varies with the SETTING (her
+        place → cosy/informal; out → a touch dressed) and with how close they've grown
+        (closeness_stage): the further along, the freer and more for-him she dresses, and
+        at the highest closeness she may surprise him with something special. Tasteful and
+        at most suggestive — never explicit/graphic. (Skipped for business / when an outfit
+        was already agreed.)"""
+        try:
+            stage = int(store.kv_get(self.conn, "closeness_stage", "0") or 0)
+        except (TypeError, ValueError):
+            stage = 0
+        s = (setting or "").casefold()
+        at_her_place = kind == "visit" or any(w in s for w in ("дома", "у неё", "у тебя", "her place", "your place"))
+        ru = lang == "ru"
+        base = ("Ты сама выбрала, во что одеться для этой встречи — будь в этом и держись "
+                "последовательно весь вечер. " if ru else
+                "You chose what to wear for this — be in it and stay consistent all evening. ")
+        if kind == "walk":
+            scene = "Прогулка — удобное и по погоде. " if ru else "A walk — comfy, weather-appropriate. "
+        elif at_her_place:
+            scene = ("Дома у тебя — по-домашнему, уютно и неформально, что-то мягкое и "
+                     "расслабленное. " if ru else
+                     "At your place — homey, cosy and informal, something soft and relaxed. ")
+        elif kind == "dinner":
+            scene = "Ужин — можно чуть нарядиться. " if ru else "Dinner — a little dressed up is nice. "
+        else:
+            scene = ""
+        if stage >= 5:
+            lvl = ("Вы очень близки — ты одеваешься для НЕГО, свободно и смело; дома вечером "
+                   "можешь приятно удивить его чем-то особенным (красивым бельём или нежным) — "
+                   "со вкусом и намёком, но никогда не пошло и не откровенно." if ru else
+                   "You're very close now — you dress for HIM, free and a little daring; at your "
+                   "place in the evening you might surprise him with something special (pretty "
+                   "lingerie or something soft) — tasteful and suggestive, never crude or graphic.")
+        elif stage >= 4:
+            lvl = ("Вы близки — можно более открыто и неформально, чуть кокетливо." if ru else
+                   "You're close — freer and more informal, a touch flirtatious.")
+        elif stage >= 3:
+            lvl = "Тепло и мило, немного для него." if ru else "Warm and pretty, a little for him."
+        else:
+            lvl = "Скромно и просто." if ru else "Modest and simple."
+        return base + scene + lvl
+
     def _meeting_presence(self, lang, m):
         """The kind-aware 'you're together right now' context. Business stays
         focused; social/personal unlocks the lead-following, register-adaptive
-        intimacy (within the non-graphic, texting-voice ceiling)."""
+        intimacy (within the non-graphic, texting-voice ceiling), and attire that
+        tracks the setting + how close they've grown."""
         kind = m["kind"]
         started = (m["started_at"] or "")[11:16]
         setting = m["setting"] or ""
@@ -1486,15 +1533,21 @@ class Agent:
         # consistent (in that dress) and can draw on anything you set up beforehand.
         carry = ""
         prep = store.meeting_prep_list(self.conn, m["id"])
+        agreed_outfit = False
         if prep:
             agreed = [p["detail"] for p in prep if p["kind"] != "feeling"]
             feelings = [p["detail"] for p in prep if p["kind"] == "feeling"]
+            agreed_outfit = any(any(h in (a or "").casefold() for h in self._CLOTHING_HINTS)
+                                for a in agreed)
             if agreed:
                 carry += (" Beforehand you two agreed: " + "; ".join(agreed)
                           + " — you ARE exactly that now (e.g. in that dress); stay consistent "
                           "with it and you may draw on anything from your setup.")
             if feelings:
                 carry += " Coming into it you've been feeling: " + "; ".join(feelings) + "."
+        # Attire only when you didn't already agree a specific outfit (else that wins).
+        if not agreed_outfit:
+            carry += " " + self._meeting_attire(kind, setting, lang)
         return (
             f"You and your boss are {scene} RIGHT NOW (started {started}){extra}.{carry} Be FULLY "
             "present and alive in it, like a real evening together — this is time you'll both "

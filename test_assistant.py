@@ -2459,6 +2459,44 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_rename_reminder(1, "ru", {"id": 1})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
+    def test_consolidate_dedups_life_facts(self):
+        import memory_curator, llm
+        c = self.agent.conn
+        a = store.life_add(c, "moment", "Любит крепкий чай по утрам")
+        b = store.life_add(c, "moment", "Пьёт крепкий чай по утрам")  # paraphrase dup
+        for t in ["Гуляет на рассвете", "Слушает джаз", "Любит дождь", "Печёт хлеб",
+                  "Собирает открытки", "Читает по ночам"]:
+            store.life_add(c, "moment", t)
+        reply = __import__("json").dumps({"groups": [{"keep": a, "drop": [b]}]})
+        with mock.patch.object(llm, "chat_profile", return_value=reply):
+            n = memory_curator.consolidate(c, self.agent.cfg)
+        self.assertGreaterEqual(n, 1)
+        ids = [r["id"] for r in store.life_all(c)]
+        self.assertIn(a, ids)            # richest kept
+        self.assertNotIn(b, ids)         # duplicate deleted
+
+    def test_meeting_attire_scales_with_setting_and_stage(self):
+        c = self.agent.conn
+        store.kv_set(c, "closeness_stage", 5)
+        hi = self.agent._meeting_attire("visit", "у неё дома", "ru").lower()
+        self.assertIn("бель", hi)            # may surprise with lingerie at high closeness + home
+        store.kv_set(c, "closeness_stage", 1)
+        lo = self.agent._meeting_attire("dinner", "ресторан", "ru").lower()
+        self.assertIn("скромно", lo)
+        self.assertNotIn("бель", lo)
+
+    def test_meeting_presence_attire_vs_agreed_outfit(self):
+        c = self.agent.conn
+        store.kv_set(c, "closeness_stage", 5)
+        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="visit", setting="у неё")
+        store.meeting_activate(c, mid)
+        pres = self.agent._meeting_presence("ru", store.meeting_active(c, 1))
+        self.assertIn("одеться", pres)               # attire chosen by setting/stage
+        store.meeting_prep_add(c, mid, "ты в синем платье", kind="agreement")
+        pres2 = self.agent._meeting_presence("ru", store.meeting_active(c, 1))
+        self.assertIn("синем платье", pres2)         # the agreed outfit wins
+        self.assertNotIn("одеться", pres2)           # generic attire skipped
+
     def test_memory_consolidate_marks_duplicates_merged(self):
         import memory_curator, boss_model, llm
         c = self.agent.conn
@@ -2468,7 +2506,9 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertGreaterEqual(len(items), 8)
         keep, drop = items[0]["id"], items[1]["id"]
         reply = __import__("json").dumps({"groups": [{"keep": keep, "drop": [drop]}]})
-        with mock.patch.object(llm, "chat_profile", return_value=reply):
+        empty = __import__("json").dumps({"groups": []})
+        # consolidate runs two passes (boss facts, then cara_life): script both.
+        with mock.patch.object(llm, "chat_profile", side_effect=[reply, empty]):
             n = memory_curator.consolidate(c, self.agent.cfg)
         self.assertEqual(n, 1)
         self.assertEqual(store.boss_get(c, drop)["status"], "merged")   # dup demoted

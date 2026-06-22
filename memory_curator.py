@@ -244,11 +244,56 @@ _CONSOLIDATE_SYSTEM = (
 )
 
 
-def consolidate(conn, cfg, max_items=120):
-    """De-duplicate boss memory: an LLM groups genuine duplicate items; we KEEP the best
-    existing one and mark the rest 'merged' (reversible — never deleted, never rewritten,
-    no new text invented). Returns how many were merged. No-op when there's little to do."""
+def _merge_groups(conn, cfg, items, max_items=120):
+    """Ask the model to GROUP duplicate items (a list of (id, text)). Returns a list of
+    (keep_id, [drop_ids]) for genuine duplicates only. [] when <8 items or on failure.
+    Never invents — only references the given ids; tolerates int OR string ids."""
     import llm
+    if len(items) < 8:
+        return []
+    listing = "\n".join(f"{i}: {v}" for i, v in items[:max_items])
+    try:
+        reply = llm.chat_profile(
+            cfg, conn, "memory_curator",
+            [{"role": "system", "content": _CONSOLIDATE_SYSTEM},
+             {"role": "user", "content": listing}],
+            profile="memory_curator")
+    except (llm.BudgetExceeded, llm.LLMError):
+        return []
+    parsed = llm.parse_llm_json(reply) or {}
+    valid = {i for i, _ in items}
+
+    def _id(x):  # the model may emit ids as ints OR strings ("12") — accept both
+        try:
+            return int(x)
+        except (TypeError, ValueError):
+            return None
+    groups = []
+    for g in (parsed.get("groups") or []):
+        if not isinstance(g, dict):
+            continue
+        keep = _id(g.get("keep"))
+        if keep not in valid:
+            continue
+        drops = [d for d in (_id(x) for x in (g.get("drop") or []))
+                 if d in valid and d != keep]
+        if drops:
+            groups.append((keep, drops))
+    return groups
+
+
+def consolidate(conn, cfg, max_items=120):
+    """De-duplicate Cara's memory: an LLM groups genuine duplicate items and we KEEP the
+    richest. Boss facts: the rest are marked 'merged' (reversible). Her life-flavour facts
+    (cara_life, no status column): the redundant copies are deleted, keeping one of each
+    distinct beat — this is what folds the over-grown 'tea' duplicates. Returns total folded."""
+    # Group in SMALL batches — the fast model reliably spots duplicates in ~40 items but
+    # misses them in a 120-item wall. (Re-running across weeks folds anything a batch split.)
+    def _batches(seq, size=40):
+        for i in range(0, len(seq), size):
+            yield seq[i:i + size]
+    merged = 0
+    # 1) boss profile items -> demote duplicates to 'merged' (reversible)
     items, seen = [], set()
     for status in ("confirmed", "inferred"):
         for row in store.boss_items(conn, status, limit=max_items):
@@ -258,34 +303,16 @@ def consolidate(conn, cfg, max_items=120):
             val = (row["value"] or "").strip()
             if val:
                 items.append((row["id"], val))
-    if len(items) < 8:
-        return 0
-    listing = "\n".join(f"{i}: {v}" for i, v in items[:max_items])
-    try:
-        reply = llm.chat_profile(
-            cfg, conn, "memory_curator",
-            [{"role": "system", "content": _CONSOLIDATE_SYSTEM},
-             {"role": "user", "content": listing}],
-            profile="memory_curator")
-    except (llm.BudgetExceeded, llm.LLMError):
-        return 0
-    parsed = llm.parse_llm_json(reply) or {}
-    valid = {i for i, _ in items}
-
-    def _id(x):  # the model may emit ids as ints OR strings ("12") — accept both
-        try:
-            return int(x)
-        except (TypeError, ValueError):
-            return None
-    merged = 0
-    for g in (parsed.get("groups") or []):
-        if not isinstance(g, dict):
-            continue
-        keep = _id(g.get("keep"))
-        if keep not in valid:
-            continue
-        for d in (g.get("drop") or []):
-            di = _id(d)
-            if di in valid and di != keep and store.boss_set_status(conn, di, "merged"):
-                merged += 1
+    for batch in _batches(items):
+        for _keep, drops in _merge_groups(conn, cfg, batch):
+            for d in drops:
+                if store.boss_set_status(conn, d, "merged"):
+                    merged += 1
+    # 2) Cara's life flavour -> delete redundant duplicates, keep the richest of each
+    life = [(r["id"], r["text"]) for r in store.life_all(conn) if (r["text"] or "").strip()]
+    for batch in _batches(life):
+        for _keep, drops in _merge_groups(conn, cfg, batch):
+            for d in drops:
+                if store.life_delete(conn, d):
+                    merged += 1
     return merged

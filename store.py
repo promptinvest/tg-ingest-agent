@@ -726,6 +726,17 @@ def life_facts(conn, limit=40):
     ).fetchall()
 
 
+def life_all(conn):
+    """Every life fact with its id (for consolidation/dedup)."""
+    return conn.execute("SELECT id, text FROM cara_life ORDER BY id").fetchall()
+
+
+def life_delete(conn, life_id):
+    cur = conn.execute("DELETE FROM cara_life WHERE id = ?", (life_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def life_count(conn):
     return conn.execute("SELECT COUNT(*) AS n FROM cara_life").fetchone()["n"]
 

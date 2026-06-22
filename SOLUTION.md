@@ -279,9 +279,10 @@ tone variants; only conversation and grounded answers are free-form.
 - **Consolidation (`memory_curator.consolidate`).** The curator accumulates near-duplicate
   facts over time (the same trait restated). A **weekly** pass (first run fires immediately;
   on-demand via the `memory_cleanup` action, "почисти память") asks the model to GROUP genuine
-  duplicates/paraphrases of one fact and KEEP the single richest item, marking the rest
-  `merged` — **never deleting or rewriting** (reversible), and never merging distinct facts.
-  Keeps her self-knowledge from bloating without losing nuance.
+  duplicates/paraphrases of one fact and KEEP the single richest item. It runs over BOTH
+  **boss facts** (`boss_profile_items` — the rest demoted to `merged`, reversible) AND **her
+  life flavour** (`cara_life` — redundant copies deleted, keeping one of each distinct beat;
+  this is what folds the over-grown "tea" duplicates). Never merges genuinely distinct facts.
 - **Provenance (`boss_model.explain`).** "Откуда ты это знаешь?" cites how a fact
   was learned, in character (the source she stored + the date) — memory you can
   inspect, not magic.

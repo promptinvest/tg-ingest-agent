@@ -254,6 +254,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   misses you** as it nears. When the meeting goes live she **arrives exactly as agreed**
   (in that dress) and can draw on anything from your setup. Grounded only in what you
   actually said — never invented.
+- **She dresses for the setting and for how close you are** — when no outfit was agreed,
+  her attire tracks the **setting** (her place → cosy/informal; dinner → a touch dressed;
+  a walk → casual) and the **closeness stage**: the further along you've grown, the freer
+  and more for‑you she dresses, and at the highest closeness she may surprise you with
+  something special (tasteful, suggestive at most — never explicit). Business meetings stay
+  professional.
 - **She's present and records it** — while a meeting is open every turn (his and hers,
   voice included) is captured **verbatim**. Routing is unchanged: ordinary talk is warm
   `converse`, and a **real command raised mid‑meeting still confirms and fires** (the
