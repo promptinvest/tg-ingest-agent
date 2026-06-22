@@ -466,6 +466,35 @@ class MeetingDispatchTests(unittest.TestCase):
         turns = store.meeting_turns(self.conn, mid)
         self.assertTrue(any(t["role"] == "boss" and "вошёл" in t["text"] for t in turns))
 
+    def test_meeting_anticipation_pings_once_for_a_date(self):
+        import llm
+        store.pref_set(self.conn, "proactive_enabled", "true")
+        store.pref_set(self.conn, "quiet_start", "0")
+        store.pref_set(self.conn, "quiet_end", "0")   # no quiet window
+        soon = (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat()
+        store.meeting_schedule(self.conn, 111, soon, kind="date", setting="у неё")
+        sent = []
+        with mock.patch.object(llm, "chat_profile", return_value="Не могу дождаться 🙈"), \
+                mock.patch.object(self.mod, "tg_call",
+                                  side_effect=lambda *a, **k: sent.append(a) or {"message_id": 1}):
+            self.agent.check_meeting_anticipation()
+            self.agent.check_meeting_anticipation()   # within the gap -> suppressed
+        self.assertEqual(len(sent), 1)
+
+    def test_no_anticipation_for_business_meeting(self):
+        import llm
+        store.pref_set(self.conn, "proactive_enabled", "true")
+        store.pref_set(self.conn, "quiet_start", "0")
+        store.pref_set(self.conn, "quiet_end", "0")
+        soon = (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat()
+        store.meeting_schedule(self.conn, 111, soon, kind="business", setting="офис")
+        sent = []
+        with mock.patch.object(llm, "chat_profile", return_value="x"), \
+                mock.patch.object(self.mod, "tg_call",
+                                  side_effect=lambda *a, **k: sent.append(a) or {"message_id": 1}):
+            self.agent.check_meeting_anticipation()
+        self.assertEqual(len(sent), 0)              # business gets no anticipation pings
+
     def test_spontaneous_meeting_starts_new_when_nothing_scheduled(self):
         with mock.patch.object(self.agent, "reply"):
             self.agent.do_meeting_start(111, "ru", {"kind": "walk"})

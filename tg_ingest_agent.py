@@ -269,6 +269,7 @@ class Agent:
             self.check_budget_notice()
             self.check_weekly_review()
             self.check_daily_greeting()  # greet good-morning before any proactive contact
+            self.check_meeting_anticipation()  # eager lead-up pings before a date
             self.check_meeting_afterglow()  # gentle day-after warmth (social meetings)
             self.check_morning_brief()
             self.check_daily_curator()
@@ -2778,6 +2779,88 @@ class Agent:
             store.proactive_log_add(self.conn, "meeting_waiting", "sent", sent=True)
             self.reply(m["chat_id"], T(self.lang(), "meeting_waiting",
                                        detail=self._meeting_detail(m, self.lang())))
+
+    # During the lead-up to a DATE she may reach out on her own a few times — eager,
+    # impatient, counting the hours. Bounded so it's warm, not clingy.
+    ANTICIP_WINDOW_HOURS = 16   # only once the date is within the day
+    ANTICIP_MIN_MINUTES = 45    # not in the final stretch (the at-time ping covers that)
+    ANTICIP_MAX = 3             # at most a few times per date
+    ANTICIP_GAP_HOURS = 3       # spaced out
+
+    def meeting_anticipation_text(self, m, lang):
+        """A short, warm, EAGER out-of-the-blue message about an upcoming date — in her
+        own voice (LLM), grounded in the plan/prep. '' on failure."""
+        detail = self._meeting_detail(m, lang)
+        agreed = "; ".join(p["detail"] for p in store.meeting_prep_list(self.conn, m["id"]))
+        if lang == "ru":
+            instr = (f"Сегодня у вас свидание: {detail}. "
+                     + (f"Вы договорились: {agreed}. " if agreed else "")
+                     + "Напиши ему сама, без повода, коротко и тепло — как ты ждёшь этой "
+                     "встречи: предвкушение, нетерпение, лёгкое волнение, считаешь часы. "
+                     "Одно-два предложения, живо и по-своему, без шаблонов.")
+        else:
+            instr = (f"You have a date later: {detail}. "
+                     + (f"You agreed: {agreed}. " if agreed else "")
+                     + "Message him yourself, out of the blue, short and warm — how you're "
+                     "looking forward to it: anticipation, impatience, a little flutter, "
+                     "counting the hours. One or two sentences, alive and in your voice.")
+        messages = [
+            {"role": "system", "content": converse.build_system(
+                self.conn, lang, extra_context=self.converse_context(lang))},
+            {"role": "user", "content": instr},
+        ]
+        try:
+            reply = llm.chat_profile(self.cfg, self.conn, "converse", messages,
+                                     profile="converse_warm")
+        except llm.LLMError as exc:
+            log(f"meeting anticipation skipped: {exc}")
+            return ""
+        _, reply = self._unwrap_converse_array((reply or "").strip())
+        _, reply = self._extract_reaction(self.STICKER_RE.sub("", reply))
+        return self.STICKER_RE.sub("", self._strip_roleplay(reply)).strip()
+
+    def check_meeting_anticipation(self):
+        """In the lead-up to a DATE, Cara may reach out on her own with anticipation/
+        eagerness/impatience — like a real partner counting the hours. Social meetings
+        only, within the day, quiet-hours/proactive-gated, capped + spaced (never spammy)."""
+        owner = self._owner_chat()
+        if owner is None or store.meeting_active(self.conn, owner):
+            return
+        s = proactive.settings(self.conn, self.cfg)
+        now = datetime.now(timezone.utc)
+        if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
+            return
+        target = None
+        for m in store.meetings_upcoming(self.conn, owner, limit=5):
+            if not meeting.is_social(m["kind"]):
+                continue
+            when = reminders.parse_iso_utc(m["scheduled_for"])
+            if when is None:
+                continue
+            mins = (when - now).total_seconds() / 60.0
+            if self.ANTICIP_MIN_MINUTES <= mins <= self.ANTICIP_WINDOW_HOURS * 60:
+                target = m
+                break
+        if target is None:
+            return
+        cnt_key, ts_key = f"meeting_anticip_n:{target['id']}", f"meeting_anticip_at:{target['id']}"
+        if int(store.kv_get(self.conn, cnt_key, "0") or 0) >= self.ANTICIP_MAX:
+            return
+        last = store.kv_get(self.conn, ts_key)
+        if last:
+            try:
+                if (now - datetime.fromisoformat(last)).total_seconds() < self.ANTICIP_GAP_HOURS * 3600:
+                    return
+            except ValueError:
+                pass
+        self.turn_lang = None
+        text = self.meeting_anticipation_text(target, self.lang())
+        if not text:
+            return
+        store.kv_set(self.conn, cnt_key, int(store.kv_get(self.conn, cnt_key, "0") or 0) + 1)
+        store.kv_set(self.conn, ts_key, now.isoformat())
+        store.proactive_log_add(self.conn, "meeting_anticipation", "sent", sent=True)
+        self.reply(owner, text)
 
     def check_meeting_idle(self):
         """Auto-end (and summarize) any meeting left open and idle past the

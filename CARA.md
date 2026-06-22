@@ -257,6 +257,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   misses you** as it nears. When the meeting goes live she **arrives exactly as agreed**
   (in that dress) and can draw on anything from your setup. Grounded only in what you
   actually said — never invented.
+- **She reaches out before a date, on her own** — during the lead‑up to an upcoming *date*
+  she may message you out of the blue with anticipation/eagerness/impatience ("не могу
+  дождаться вечера 🙈", counting the hours), in her own voice. Bounded so it's warm, not
+  clingy: dates only, within the day, quiet‑hours‑aware, at most a few times and spaced out.
 - **She dresses for the setting and for how close you are** — when no outfit was agreed,
   her attire tracks the **setting** (her place → cosy/informal; dinner → a touch dressed;
   a walk → casual) and the **closeness stage**: the further along you've grown, the freer
