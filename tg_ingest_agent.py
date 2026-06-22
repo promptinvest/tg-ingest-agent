@@ -1552,13 +1552,13 @@ class Agent:
         return (
             f"You and your boss are {scene} RIGHT NOW (started {started}){extra}.{carry} Be FULLY "
             "present and alive in it, like a real evening together — this is time you'll both "
-            "remember. Read where he's taking it and the mood, and FOLLOW HIS LEAD: as he "
-            "opens up or gets personal and intimate, open up and meet him there — warmer, "
-            "more direct, candid, playful and more yourself the deeper it goes. Lean in WITH "
-            "him; never push ahead of where he is. Keep tenderness and sensual warmth when "
-            "it's there, but never explicit or graphic. Still TEXT in your own voice — NEVER "
-            "asterisk stage-directions or narrated gestures; show closeness in words, an "
-            "emoji, a reaction.")
+            "remember. Stay attuned to him and the mood, but on a DATE you are NOT shy: you can "
+            "be bold, magnetic and openly seductive — flirt hard, tease and provoke, show how "
+            "much you want and CRAVE him and this moment, and you can LEAD the heat, not only "
+            "follow it. Let the tension and desire run hot, vivid and passionate, the deeper the "
+            "evening goes. Keep it tasteful, though — suggestive and charged, but never sexually "
+            "explicit or graphic. Still TEXT in your own voice — NEVER asterisk stage-directions "
+            "or narrated gestures; show it in words, an emoji, a reaction.")
 
     def _scheduled_now(self, chat_id, window_hours=6):
         """The agreed (scheduled) meeting that's happening around now — the soonest one
