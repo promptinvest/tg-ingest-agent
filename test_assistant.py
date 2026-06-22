@@ -2459,6 +2459,35 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_rename_reminder(1, "ru", {"id": 1})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
+    def test_relational_message_detection(self):
+        f = self.agent._is_relational_message
+        self.assertTrue(f("что ты ко мне чувствуешь?"))
+        self.assertTrue(f("ты по мне скучаешь?"))
+        self.assertTrue(f("расскажи про наши отношения"))
+        self.assertFalse(f("когда мой рейс?"))
+        self.assertFalse(f("покажи заметки"))
+
+    def test_relational_question_skips_saved_note_grounding(self):
+        import tg_ingest_agent, llm, knowledge
+        ranked = [{"text": "его рейс в 10:00", "category": "Travel", "date": "2026-06-20"}]
+        with mock.patch.object(store, "all_embedded_chunks", return_value=[{"x": 1}]), \
+                mock.patch.object(store, "all_meeting_chunks", return_value=[]), \
+                mock.patch.object(llm, "embed", return_value=[[0.1, 0.2]]), \
+                mock.patch.object(knowledge, "rank_chunks", return_value=ranked), \
+                mock.patch.object(tg_ingest_agent.trace, "event"):
+            relational = self.agent._converse_grounding("что ты ко мне чувствуешь?")
+            factual = self.agent._converse_grounding("когда мой рейс?")
+        self.assertEqual(relational, "")        # no saved-note recital on a feeling question
+        self.assertIn("рейс", factual)          # but a data question IS grounded in his facts
+
+    def test_ingest_prompt_summarizes_subject_not_request(self):
+        import ingest
+        sys = ingest.build_llm_messages(
+            make_config(), ["Книги"], "запиши заметку про Google https://x", [], lang="ru"
+        )[0]["content"]
+        self.assertIn("NEVER write", sys)            # don't narrate "the user asks to save…"
+        self.assertIn("probably contains", sys)      # don't speculate about an unread link
+
     def test_arc_prompt_forbids_regression(self):
         import relationship
         self.assertIn("CLOSENESS ONLY DEEPENS", relationship._ARC_SYSTEM)

@@ -89,7 +89,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   own fictional life, but any fact about the boss (notes, journal, reminders, names, dates,
   counts, spend) must be real. Every `converse` turn is **grounded**: his most relevant saved
   entries are retrieved (embedding match) and handed to the model as FACTS to use verbatim;
-  if the answer isn't there she offers to look rather than confabulate. Reinforced by an
+  if the answer isn't there she offers to look rather than confabulate. **Exception:** for a
+  relationship/emotional message ("что ты ко мне чувствуешь?", "про нас") his saved notes are
+  NOT injected — there she answers warmly from the heart, not by reciting facts (meeting/
+  storyline recall still applies). Reinforced by an
   absolute rule in her persona prompt.
 - **Never fakes an action (truthful boundary)** — in a `converse` turn she does NOT perform
   state changes, so she may never reply with a made‑up «готово / поменяла / поставила /

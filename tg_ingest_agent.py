@@ -1317,14 +1317,31 @@ class Agent:
         r"\[\s*(?:фото|photo|картинк\w*|изображени\w*|image|снимок|selfie)\b[^\]\n]*\]",
         re.IGNORECASE)
 
+    # Cues that a message is about THEM / her feelings / the relationship rather than
+    # his stored data — there she should answer warmly from the heart, NOT recite his
+    # saved notes ("когда спрашивает про отношения — отвечай прямо, а не вспоминай факты").
+    _RELATIONAL_CUES = (
+        "отношени", "чувству", "что ты ко мне", "как ты ко мне", "любишь", "люблю",
+        "скучаеш", "скучаю", "ты меня", "про нас", "о нас", "между нами", "близ",
+        "обнim", "тоскуеш", "веришь мне", "relationship", "feel about", "do you love",
+        "do you miss", "about us", "between us", "do you like me", "how do you feel",
+    )
+
+    def _is_relational_message(self, text):
+        t = (text or "").casefold()
+        return any(c in t for c in self._RELATIONAL_CUES)
+
     def _converse_grounding(self, text):
         """Pull the boss's OWN saved entries most relevant to what he just said, so
         converse answers FROM real facts instead of inventing them — the guardrail that
         she may be creative in voice but must use real facts in any dialog. Best-effort
-        and cheap (one tiny embed + in-memory ranking); '' when nothing's indexed/fails."""
+        and cheap (one tiny embed + in-memory ranking); '' when nothing's indexed/fails.
+        For a RELATIONSHIP/emotional message his saved notes are skipped (she answers from
+        the heart, not by reciting facts); meeting/storyline recall still applies."""
         text = (text or "").strip()
         if len(text) < 3:
             return ""
+        relational = self._is_relational_message(text)
         rows = store.all_embedded_chunks(self.conn)
         meeting_rows = store.all_meeting_chunks(self.conn)
         if not rows and not meeting_rows:
@@ -1335,8 +1352,9 @@ class Agent:
         except llm.LLMError:
             return ""
         blocks = []
-        # His own saved notes/journal entries relevant to what he just said.
-        if rows:
+        # His own saved notes/journal entries relevant to what he just said — but NOT for a
+        # relationship/emotional message (there, reciting saved facts is exactly the wrong move).
+        if rows and not relational:
             ctx = knowledge.rank_chunks(qvec, rows, self.cfg.ask_top_k,
                                         self.cfg.ask_context_chars)
             lines = []

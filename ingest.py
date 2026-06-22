@@ -161,6 +161,13 @@ def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, la
         "The summary must preserve the CONCRETE SPECIFICS of the message — numbers,"
         " prices, dates, deadlines, names, places, links' subjects — not a vague"
         " description of what the message is about.\n"
+        "Summarize the SUBJECT/CONTENT itself, NEVER the boss's request. If the message is"
+        " a save command ('запиши заметку про X', 'сохрани это про Y', 'save a note about"
+        " Z'), strip the command and summarize X/Y/Z and any link or quoted material —"
+        " NEVER write 'Пользователь просит записать…' / 'The user asks to save…'.\n"
+        "Do NOT speculate about a link you cannot read (no 'вероятно содержит' / 'probably"
+        " contains'): give the link's visible title/subject if present, otherwise just note"
+        " it's a link to <source> without guessing its contents.\n"
         "Reply with ONLY a JSON object: "
         '{"category": "<best category>", '
         '"alternatives": ["<up to 2 other plausible categories>"], '
