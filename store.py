@@ -1131,6 +1131,28 @@ def known_categories(conn, limit=50):
     return [r["name"] for r in rows]
 
 
+def merge_categories(conn, src, dst):
+    """Fold a duplicate category `src` into `dst`: move every message (confirmed AND
+    still-suggested) from src to dst, then delete the now-empty src category. Returns
+    (moved_count, dst_canonical_name), or (0, None) if src doesn't exist; (0, dst) if
+    src == dst. Preserves message ids/embeddings (only the category string changes)."""
+    src_row = conn.execute("SELECT name FROM categories WHERE norm_key = ?",
+                           (str(src or "").casefold(),)).fetchone()
+    if not src_row:
+        return 0, None
+    src_name = src_row["name"]
+    dst_name = ensure_category(conn, dst)
+    if src_name.casefold() == dst_name.casefold():
+        return 0, dst_name
+    moved = conn.execute("UPDATE messages SET category = ? WHERE category = ?",
+                         (dst_name, src_name)).rowcount
+    conn.execute("UPDATE messages SET suggested_category = ? WHERE suggested_category = ?",
+                 (dst_name, src_name))
+    conn.execute("DELETE FROM categories WHERE norm_key = ?", (src_name.casefold(),))
+    conn.commit()
+    return moved, dst_name
+
+
 def category_counts(conn):
     return conn.execute(
         "SELECT c.name AS name, c.kind AS kind,"

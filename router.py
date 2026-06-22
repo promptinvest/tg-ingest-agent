@@ -32,6 +32,7 @@ ACTIONS = {
     "item_detail",       # params: id OR query/category — one item in full (links, source)
     "item_delete",       # params: id OR query — delete a stored item (asks confirmation)
     "recategorize",      # params: id/ids/query/count + category — change a saved item's category
+    "merge_categories",  # params: from + into — fold a duplicate category into another, delete the empty one
     "show_media",        # params: id OR query — re-send the stored photo(s)
     "discard",           # decline adding the just-suggested item (deletes it)
     "vps_stats",         # read-only host resource usage report
@@ -120,6 +121,8 @@ NOTE: reminder_rename changes a REMINDER's TITLE — put the NEW name in new_tit
 "поменяй категорию #2 на Документы" / "переложи #2 в Документы" / "смени категорию на Документы" / "recategorize #2 as Documents" / "change category to Documents" -> {"action": "recategorize", "params": {"id": 2, "category": "Документы"}, "confidence": 0.92}
 "поменяй категорию последнего на Чеки" / "переложи это в Чеки" (no id -> most recent) -> {"action": "recategorize", "params": {"category": "Чеки"}, "confidence": 0.9}
 "переложи всё из crypto в news" / "move category crypto to news" -> {"action": "recategorize", "params": {"query": "crypto", "category": "news"}, "confidence": 0.85}
+"объедини «AI tools» и «AI Tools & Resources»" / "это одна и та же категория, слей их в AI Tools & Resources" / "merge AI tools into AI Tools & Resources" / "удали дубликат категории X, перенеси в Y" -> {"action": "merge_categories", "params": {"from": "AI tools", "into": "AI Tools & Resources"}, "confidence": 0.9}
+NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and deletes the empty one) — use it for "объедини/слей/это одно и то же/дубликат". recategorize just MOVES items and keeps both categories.
 "удали 7 сообщений" / "удали последние 5 заметок" / "delete 5 notes" -> {"action": "item_delete", "params": {"count": 7}, "confidence": 0.85}
 "сотри заметки" / "удали все заметки" / "почисти заметки" / "delete all notes" -> {"action": "purge", "params": {"scope": "messages"}, "confidence": 0.9}
 "покажи фото" / "show the photo" / "покажи картинку из #2" -> {"action": "show_media", "params": {"id": 2}, "confidence": 0.9}

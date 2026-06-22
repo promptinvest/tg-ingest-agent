@@ -38,6 +38,8 @@ SKILLS = {
                     "title": {"en": "Delete item", "ru": "Удалить запись"}},
     "recategorize": {"risk": "state_write", "writes_state": True, "persona_context": True,
                      "title": {"en": "Re-categorize item", "ru": "Сменить категорию"}},
+    "merge_categories": {"risk": "state_write", "writes_state": True,
+                         "title": {"en": "Merge categories", "ru": "Объединить категории"}},
     "purge": {"risk": "destructive", "writes_state": True, "destructive": True,
               "requires_confirmation": "typed_phrase",
               "title": {"en": "Purge", "ru": "Очистка"}},

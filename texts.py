@@ -620,6 +620,18 @@ TEXTS = {
         "ru": "Готово, босс — переложила {n} в «{category}» ✅",
         "en": "Done, boss — moved {n} into «{category}» ✅",
     },
+    "categories_merged": {
+        "ru": "Объединила «{src}» в «{dst}» — перенесла {n} и убрала дубликат ✅",
+        "en": "Merged «{src}» into «{dst}» — moved {n} and removed the duplicate ✅",
+    },
+    "merge_which": {
+        "ru": "Какие категории объединить, босс? Скажи «объедини X в Y».",
+        "en": "Which categories should I merge, boss? Say \"merge X into Y\".",
+    },
+    "category_not_found": {
+        "ru": "Не нашла категорию «{category}», босс.",
+        "en": "I don't see a category «{category}», boss.",
+    },
     "budget_set_done": {
         "ru": "Готово, босс — лимит AI на {period}: ${amount} ✅",
         "en": "Done, boss — AI budget for the {period}: ${amount} ✅",

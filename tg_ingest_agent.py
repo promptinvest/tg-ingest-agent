@@ -826,6 +826,8 @@ class Agent:
             self.reply_chunks(chat_id, self.items_text(lang, params))
         elif action == "item_detail":
             self.do_item_detail(chat_id, lang, params)
+        elif action == "merge_categories":
+            self.do_merge_categories(chat_id, lang, params)
         elif action == "recategorize":
             self.do_recategorize(chat_id, lang, params)
         elif action == "item_delete":
@@ -2585,6 +2587,20 @@ class Agent:
             self.apply_category_confirm(chat_id, row, category, reply_to=None, quiet=multi)
         if multi:
             self.reply(chat_id, T(lang, "recategorized_multi", n=len(rows), category=category))
+
+    def do_merge_categories(self, chat_id, lang, params):
+        """Fold a duplicate category into another ('объедини «AI tools» в «AI Tools &
+        Resources»'): move all its items over and drop the empty one."""
+        src = str(params.get("from") or params.get("query") or "").strip()
+        dst = llm.normalize_category(params.get("into") or params.get("category"))
+        if not src or not dst:
+            self.reply(chat_id, T(lang, "merge_which"))
+            return
+        moved, dst_name = store.merge_categories(self.conn, src, dst)
+        if dst_name is None:
+            self.reply(chat_id, T(lang, "category_not_found", category=src))
+            return
+        self.reply(chat_id, T(lang, "categories_merged", src=src, dst=dst_name, n=moved))
 
     def issues_text(self, lang, period=None):
         period = str(period or "week").strip().lower()

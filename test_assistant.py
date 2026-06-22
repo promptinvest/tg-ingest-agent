@@ -2459,6 +2459,27 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_rename_reminder(1, "ru", {"id": 1})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
+    def test_merge_categories_folds_and_deletes_duplicate(self):
+        c = self.agent.conn
+        a = store.insert_message(c, {"chat_id": 1, "tg_message_id": 1,
+                                     "received_at": "2026-06-20T10:00:00Z", "raw_text": "x"})
+        store.confirm_category(c, a, store.ensure_category(c, "AI tools"))
+        b = store.insert_message(c, {"chat_id": 1, "tg_message_id": 2,
+                                     "received_at": "2026-06-20T11:00:00Z", "raw_text": "y"})
+        store.confirm_category(c, b, store.ensure_category(c, "AI Tools & Resources"))
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_merge_categories(1, "ru", {"from": "AI tools",
+                                                     "into": "AI Tools & Resources"})
+        self.assertEqual(store.get_message(c, a)["category"], "AI Tools & Resources")  # moved
+        self.assertNotIn("AI tools", store.known_categories(c))                        # dup gone
+        self.assertIn("AI Tools & Resources", store.known_categories(c))
+        self.assertTrue(skill_manifest.known("merge_categories"))
+
+    def test_merge_categories_unknown_source_reports(self):
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_merge_categories(1, "ru", {"from": "Нетакой", "into": "Разное"})
+        self.assertIn("Нетакой", r.call_args[0][1])
+
     def test_journal_entries_hidden_from_notes_list_and_numbering(self):
         c = self.agent.conn
         n1 = store.insert_message(c, {"chat_id": 1, "tg_message_id": 1,
