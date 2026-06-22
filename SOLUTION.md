@@ -183,7 +183,10 @@ by forward ids (no LLM) → `ingest.suggest()` proposes category / alternatives 
 ≤5 facts (existing categories preferred, confirmed corrections fed back) → facts stored,
 text chunked + embedded for `ask` → suggestion shown with buttons + conversational
 confirm → confirmation finalises the category (a journal category acks as a dated
-entry), logs any correction, and may propose an auto-confirm habit.
+entry), logs any correction, and may propose an auto-confirm habit. A **confirmed
+journal entry lives only in its dated journal** (`journal_show`) — it's excluded from
+the general notes list and the `#N` numbering, so it doesn't double-list (a
+still-suggested one keeps its card until confirmed).
 
 Ask, reminders/calendar, memory/learning and the proactive heartbeat are detailed in
 §3–§7.

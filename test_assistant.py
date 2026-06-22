@@ -2459,6 +2459,24 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             self.agent.do_rename_reminder(1, "ru", {"id": 1})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_rename_what"))
 
+    def test_journal_entries_hidden_from_notes_list_and_numbering(self):
+        c = self.agent.conn
+        n1 = store.insert_message(c, {"chat_id": 1, "tg_message_id": 1,
+                                      "received_at": "2026-06-20T10:00:00Z",
+                                      "raw_text": "обычная заметка"})
+        store.confirm_category(c, n1, store.ensure_category(c, "Разное"))
+        store.set_category_kind(c, "Благодарность", "journal")
+        j1 = store.insert_message(c, {"chat_id": 1, "tg_message_id": 2,
+                                      "received_at": "2026-06-21T10:00:00Z",
+                                      "raw_text": "спасибо за тёплый день"})
+        store.confirm_category(c, j1, store.ensure_category(c, "Благодарность"))
+        ids = store.display_ids(c)
+        self.assertIn(n1, ids)
+        self.assertNotIn(j1, ids)                       # journal entry out of #N numbering
+        listed = [r["id"] for r in store.list_messages(c)]   # general notes list
+        self.assertNotIn(j1, listed)
+        self.assertTrue(any(e["id"] == j1 for e in store.journal_entries(c, "Благодарность")))
+
     def test_relational_message_detection(self):
         f = self.agent._is_relational_message
         self.assertTrue(f("что ты ко мне чувствуешь?"))

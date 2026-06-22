@@ -1437,10 +1437,15 @@ def list_messages(conn, category=None, query=None, limit=10):
             "SELECT message_id, GROUP_CONCAT(fact, ' ') AS f FROM facts GROUP BY message_id"
         ):
             facts_by_message[row["message_id"]] = row["f"]
+    # The general notes list hides CONFIRMED journal entries (they have their own dated
+    # journal); an explicit category filter still shows everything in that category.
+    journals = {n.casefold() for n in journal_categories(conn)} if category is None else set()
     result = []
     for row in rows:
         row_category = row["category"] or row["suggested_category"] or ""
         if category and row_category.casefold() != str(category).casefold():
+            continue
+        if journals and (row["category"] or "").casefold() in journals:
             continue
         if query:
             haystack = " ".join(filter(None, [
@@ -1468,9 +1473,18 @@ def status_counts(conn):
 # so the numbers the boss sees always start at 1 with no gaps.
 
 def display_ids(conn):
-    """Visible-note ids in display order (oldest first); position = number."""
-    return [r["id"] for r in conn.execute(
-        "SELECT id FROM messages WHERE status IN ('confirmed', 'suggested') ORDER BY id ASC")]
+    """Visible-note ids in display order (oldest first); position = number. A CONFIRMED
+    journal entry lives in its dated journal (journal_show), so it's excluded from the
+    #N notes list/numbering; a still-suggested one (category not yet set) stays for its card."""
+    journals = {n.casefold() for n in journal_categories(conn)}
+    out = []
+    for r in conn.execute(
+            "SELECT id, category FROM messages WHERE status IN ('confirmed', 'suggested')"
+            " ORDER BY id ASC"):
+        if journals and (r["category"] or "").casefold() in journals:
+            continue
+        out.append(r["id"])
+    return out
 
 
 def display_map(conn):
