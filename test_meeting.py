@@ -457,6 +457,15 @@ class MeetingDispatchTests(unittest.TestCase):
         self.assertEqual(len(store.meetings_upcoming(self.conn, 111)), 0)  # no longer scheduled
         self.assertIn("синем платье", self.agent._meeting_presence("ru", active))  # prep carried in
 
+    def test_come_in_line_recorded_as_opening_turn(self):
+        # His varied arrival line ("я вошёл, привет") becomes the meeting's first turn.
+        soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        mid = store.meeting_schedule(self.conn, 111, soon, kind="visit", setting="у тебя дома")
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_meeting_start(111, "ru", {"kind": "visit"}, "я вошёл, привет")
+        turns = store.meeting_turns(self.conn, mid)
+        self.assertTrue(any(t["role"] == "boss" and "вошёл" in t["text"] for t in turns))
+
     def test_spontaneous_meeting_starts_new_when_nothing_scheduled(self):
         with mock.patch.object(self.agent, "reply"):
             self.agent.do_meeting_start(111, "ru", {"kind": "walk"})

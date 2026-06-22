@@ -246,9 +246,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   ended` lifecycle). She's aware of it in conversation ("ты же сегодня вечером зайдёшь?"),
   and "про нашу встречу" / `meeting_list` surface it. When the time arrives, if you haven't
   shown up she **pings and waits** ("я жду, ты собирался зайти") like a real person — and your
-  **"come in"** ("я у двери, впусти" / "я пришёл") starts the agreed meeting (carrying its
-  setting + prep), not a blank one; from there every turn is recorded. (A vague wish with no
-  time stays warm chat.)
+  **"come in"** starts the agreed meeting (carrying its setting + prep), not a blank one. The
+  arrival is understood **semantically**, however you phrase it ("я у двери, впусти", "я
+  вошёл, привет", "ну вот и я", "I'm in") — and that opening line becomes the meeting's first
+  recorded turn; from there every turn is captured. (A vague wish with no time stays warm chat.)
 - **She prepares for it and longs for it** (`meeting_prep`): everything you settle in the
   lead‑up — the details, what she'll wear, the plan, the mood — *and her own feelings about
   it* are remembered against that meeting. So she stays consistent through the whole

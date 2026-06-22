@@ -914,7 +914,7 @@ class Agent:
         elif action == "cara_selfie":
             self.do_cara_selfie(chat_id, lang)
         elif action == "meeting_start":
-            self.do_meeting_start(chat_id, lang, params)
+            self.do_meeting_start(chat_id, lang, params, text)
         elif action == "meeting_schedule":
             self.do_meeting_schedule(chat_id, lang, params, text, msg_id)
         elif action == "meeting_end":
@@ -1569,7 +1569,7 @@ class Agent:
                 return m
         return None
 
-    def do_meeting_start(self, chat_id, lang, params):
+    def do_meeting_start(self, chat_id, lang, params, text=None):
         if store.meeting_active(self.conn, chat_id):
             self.reply(chat_id, T(lang, "meeting_already"))
             return
@@ -1585,6 +1585,10 @@ class Agent:
             kind = meeting.normalize_kind(params.get("kind"))
             meeting.start(self.conn, chat_id, kind=kind,
                           setting=params.get("setting"), title=params.get("title"))
+        # Capture his actual arrival line ("я вошёл, привет") as the meeting's FIRST turn —
+        # at dispatch top there was no live meeting yet, so it wasn't recorded there.
+        if text and (text or "").strip():
+            meeting.record(self.conn, chat_id, "boss", text.strip())
         if kind == "business":
             key = "meeting_started_business"
         elif kind == "visit":
