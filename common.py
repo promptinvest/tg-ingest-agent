@@ -188,6 +188,19 @@ def parse_chat_ids(value):
     return ids
 
 
+def parse_int_set(value, default=None):
+    """Parse a comma/space list of integers into a set; blank -> default (copied)."""
+    if value is None or not str(value).strip():
+        return set(default) if default is not None else set()
+    out = set()
+    for part in config_list(value):
+        try:
+            out.add(int(part))
+        except ValueError:
+            continue
+    return out or (set(default) if default is not None else set())
+
+
 def load_categories(env):
     file_path = (env.get("CATEGORIES_FILE") or "").strip()
     if file_path:
@@ -310,6 +323,30 @@ def load_config(env=None):
     cfg.anticipation_probability = float(env.get("ANTICIPATION_PROBABILITY") or "0.5")
     cfg.anticipation_window_hours = float(env.get("ANTICIPATION_WINDOW_HOURS") or "12")
     cfg.anticipation_max_per_meeting = int(env.get("ANTICIPATION_MAX_PER_MEETING") or "2")
+    # Companion register baseline. Her resting tone is set by whether it's WORK time
+    # and whether he's been doing business recently — NOT a rigid day/night gate, and
+    # always overridden by how personal his actual message is. After he's been heavy on
+    # business she stays mobilized (working style) for this many minutes, then eases
+    # back to the time-of-day baseline (relaxed/playful off-hours). Work window is the
+    # boss-local hours/days that set the resting tone to professional when business is quiet.
+    cfg.work_register_hold_minutes = int(env.get("WORK_REGISTER_HOLD_MINUTES") or "40")
+    cfg.work_hours_start = max(0, min(23, int(env.get("WORK_HOURS_START") or "9")))
+    cfg.work_hours_end = max(0, min(24, int(env.get("WORK_HOURS_END") or "19")))
+    # Work days as weekday numbers 0=Mon..6=Sun (default Mon-Fri). Off these days the
+    # resting baseline is the relaxed/playful one all day.
+    cfg.work_days = parse_int_set(env.get("WORK_DAYS"), default={0, 1, 2, 3, 4})
+    # Proactive INTIMACY outreach: off-hours, like a remote girlfriend keeping in touch —
+    # she may reach out on her own, missing/craving/teasing him (by hint/euphemism, never
+    # graphic), scaled by closeness. Conservative by default; capped + once/day + gated.
+    cfg.intimacy_outreach_enabled = (
+        env.get("INTIMACY_OUTREACH_ENABLED") or "true").strip().lower() == "true"
+    cfg.intimacy_outreach_probability = float(env.get("INTIMACY_OUTREACH_PROBABILITY") or "0.25")
+    cfg.intimacy_outreach_min_stage = int(env.get("INTIMACY_OUTREACH_MIN_STAGE") or "2")
+    cfg.intimacy_outreach_max_per_day = int(env.get("INTIMACY_OUTREACH_MAX_PER_DAY") or "1")
+    # Don't reach out into a long silence-of-his — only within this many hours of a real
+    # exchange, so it reads as keeping-in-touch, not pestering an absent boss.
+    cfg.intimacy_outreach_after_contact_hours = float(
+        env.get("INTIMACY_OUTREACH_AFTER_CONTACT_HOURS") or "6")
     # Personality intensity (0 neutral .. 3 max; selects template variants only)
     cfg.personality_intensity = int(env.get("PERSONALITY_INTENSITY") or "2")
     # Knowledge Q&A (ask): semantic retrieval over the KB

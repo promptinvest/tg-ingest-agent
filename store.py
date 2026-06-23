@@ -1014,6 +1014,14 @@ def proactive_key_sent_today(conn, day, check_name):
     ).fetchone()["n"] > 0
 
 
+def proactive_key_sent_count(conn, day, check_name):
+    """How many times a specific proactive check actually sent on a given UTC day."""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM proactive_log WHERE day = ? AND check_name = ?"
+        " AND sent_message = 1", (day, check_name),
+    ).fetchone()["n"]
+
+
 # -- model cooldowns (failover) ----------------------------------------------
 
 def cooldown_set(conn, profile, model, seconds, reason):

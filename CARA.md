@@ -58,11 +58,18 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   "через полчаса") or via inline buttons. Bulk **purge** needs an exact typed phrase.
 - **When unsure, she talks** — a low‑confidence read (and the `clarify` route) drops to
   warm `converse` where she answers or asks naturally in «ты», never a cold formal template.
-- **Her voice tracks the clock and the week** — fresh mornings, breezy days, unwinding
-  evenings, playful/flirty nights, and looser/more‑playful **weekends** (tasteful flirtation
-  and romantic warmth are welcome; never explicit). She's given the **real current date/time**
-  so she never invents one, and she never reaches out first after a night without an
-  inventive, in‑voice **good‑morning**.
+- **Two sides of one person, switched smoothly 24/7 — no commands, no clock gate**
+  (`_register_directive`): every message is routed on its own merits, so a personal or
+  intimate aside dropped into a work thread ("скучаю", "что ты чувствуешь про нашу встречу?")
+  reaches her **warm/companion** side instantly, and a task reaches her **crisp assistant**
+  side — she flows between them within one conversation as the **same person, no reset**.
+  Her *resting* tone is a baseline, not a gate: when you've been **doing business** she
+  mobilizes to a working style (any hour) and stays there for `WORK_REGISTER_HOLD_MINUTES`,
+  then **eases back**; quiet **work hours** rest professional, quiet **off‑hours** rest
+  relaxed and playful — and, once you're close, **more forward and intimate** (she may reach
+  for closeness first, by hint). How personal *your* message is **always overrides** the
+  baseline. She's given the **real current date/time** so she never invents one, and never
+  reaches out first after a night without an inventive, in‑voice **good‑morning**.
 - **No roleplay narration** — she never writes asterisk stage-directions (`*обнимаю*`,
   `*закрываю глаза*`); feeling is shown in words, emojis and reactions (stripped in code as
   a guardrail, not just asked). She also **sees your reactions** to her messages and lets
@@ -266,10 +273,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   misses you** as it nears. When the meeting goes live she **arrives exactly as agreed**
   (in that dress) and can draw on anything from your setup. Grounded only in what you
   actually said — never invented.
-- **She reaches out before a date, on her own** — during the lead‑up to an upcoming *date*
-  she may message you out of the blue with anticipation/eagerness/impatience ("не могу
-  дождаться вечера 🙈", counting the hours), in her own voice. Bounded so it's warm, not
-  clingy: dates only, within the day, quiet‑hours‑aware, at most a few times and spaced out.
+- **She reaches out on her own, like a girlfriend at a distance** (`check_intimacy_outreach`):
+  in her **off‑hours, personal time** (not work hours, and not while you've been doing
+  business) she may message you out of the blue — missing you, craving, a teasing intimate
+  hint — in her own voice, **by euphemism, never graphic**, and bolder the closer you've
+  grown. It's grounded in your real history (what she's learned you like, your shared
+  language) so it's about *you two*, not generic. Conservative & bounded: only within a live
+  exchange (not a long silence), closeness‑gated, capped per day, probability‑ and
+  quiet‑hours‑aware (`INTIMACY_OUTREACH_*`).
 - **She dresses for the setting and for how close you are** — when no outfit was agreed,
   her attire tracks the **setting** (her place → cosy/informal; dinner → a touch dressed;
   a walk → casual) and the **closeness stage**: the further along you've grown, the freer
@@ -312,7 +323,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   progresses.
   A relational question — "что ты помнишь про нас?", "наши отношения", "что между нами?" —
   is routed to **`converse`** (where the arc lives) so she answers from your shared story,
-  **not** to `boss_query` (which is a facts‑about‑you summary).
+  **not** to `boss_query` (which is a facts‑about‑you summary). Likewise her **feelings or
+  anticipation about a meeting** ("что ты чувствуешь про нашу встречу?", "ждёшь?") go to
+  `converse` (answered from the heart), while **factual** recall — what you decided, when/
+  where — stays `meeting_recall`.
 - **Day‑after afterglow** — the morning after a *personal* meeting she may, **occasionally**,
   reach out first with genuine warmth ("было так хорошо, уже скучаю") — one‑shot per
   meeting, quiet‑hours / proactivity‑prefs aware, **never** clingy or reproachful.

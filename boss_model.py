@@ -285,3 +285,25 @@ def standing_guidance(conn, max_items=8, max_chars=600):
             used += len(line)
             seen.add(value)
     return out
+
+
+# What Cara has learned about HIM in the relationship — his likings, taste and what
+# he responds to. Drawn from the relationship_note shelf (normal sensitivity only, so
+# nothing sensitive like health/finance leaks); used to ground intimacy in real,
+# personal facts rather than generic seduction.
+def intimacy_notes(conn, max_items=6, max_chars=500):
+    out, used, seen = [], 0, set()
+    for status in ("confirmed", "inferred"):
+        for row in store.boss_items(conn, status, sensitivities=("normal",), limit=20):
+            if row["kind"] != "relationship_note":
+                continue
+            value = (row["value"] or "").strip()
+            if not value or value in seen:
+                continue
+            line = f"- {value}"
+            if used + len(line) > max_chars or len(out) >= max_items:
+                return out
+            out.append(line)
+            used += len(line)
+            seen.add(value)
+    return out

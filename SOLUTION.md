@@ -386,6 +386,46 @@ proactively like real memory. Design decisions and why:
   small daily reflection call; proactive recall reuses an existing embedding. All under
   the same budget gateway.
 
+### 5a. Smooth register switching + off-hours intimacy
+
+The boss wanted Cara to be one person who flows between her **assistant** and **companion**
+sides smoothly, 24/7 — *no* mode commands, *no* rigid day/night tone gate — and to lean
+playful/intimate in her personal time while mobilizing to a working style when he's heavy on
+business (then easing back).
+
+- **Layer routing is the router, per message.** There is no new "mode": the closed-world
+  router already sends each message to a **skill** (assistant) or to **`converse`**
+  (companion). The router was hardened so the *whole* personal/intimate spectrum — affection,
+  longing, desire, intimate hints, **and feelings/anticipation about a meeting** — routes to
+  `converse` even when dropped mid-work, while **factual** meeting recall stays
+  `meeting_recall`. A low-confidence read still falls safely to `converse`.
+- **Resting register, not a clock gate (`_register_state` / `_register_directive`).** The old
+  `_time_mood`/`_weekend_mood` clock gate is **removed**. Her resting tone is now: `working`
+  if a **business action** ran within `work_register_hold_minutes` (stamped as
+  `last_business_at` on the `BUSINESS_REGISTER_ACTIONS` set) — at any hour; otherwise the
+  boss-local **work window** (`work_hours_start/end`, `work_days`) sets it — `neutral`
+  (professional) inside, `relaxed` (playful, and **more forward/intimate at higher
+  closeness**) outside. The directive always carries a **content-override** rule: she reads
+  how personal *his* message is and answers at exactly that depth, flowing between registers
+  as the same person with no reset. So business mobilizes her and a quiet stretch eases her
+  back, while a personal message is met warmly any time.
+- **Proactive intimacy outreach (`check_intimacy_outreach` / `compose_intimacy_outreach`).**
+  In her relaxed off-hours register only (never work hours, never while business is recent,
+  never mid-meeting), once closeness ≥ `intimacy_outreach_min_stage`, and only **within a
+  live exchange** (`last_boss_msg_at` inside `intimacy_outreach_after_contact_hours`), she
+  may reach out unprompted like a remote girlfriend — missing/craving/teasing **by hint and
+  euphemism, never graphic**, bolder at higher closeness. Rate-limited: probability-gated,
+  `intimacy_outreach_max_per_day` (counted via `proactive_key_sent_count`), quiet-hours aware.
+- **Intimacy grounded in shared history.** Both responsive and proactive intimacy lean on
+  what she's actually learned about him — his likings/taste from the **`relationship_note`**
+  shelf (`boss_model.intimacy_notes`, **normal-sensitivity only** so nothing like health/
+  finance leaks) plus the shared `intimacy_style` language and the relevant past-meeting
+  recall — so it's about *you two*, never generic seduction. (Surfaced in `_converse_grounding`
+  for a relational message once close, and folded into `compose_intimacy_outreach`.)
+- **Cruft removed.** A duplicate, shadowed `check_meeting_anticipation` (and its dead helper/
+  constants) left from a prior pass — which also ran twice per loop — was deleted; the live
+  config-driven `anticipation_candidate` path is the only one.
+
 ---
 
 ## 6. Proactive heartbeat

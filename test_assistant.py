@@ -1366,14 +1366,30 @@ class ConversationDispatchTests(unittest.TestCase):
         # malformed array passes through untouched
         self.assertEqual(u('[broken'), (None, "[broken"))
 
-    def test_time_mood_tracks_clock(self):
-        import tg_ingest_agent
-        m = tg_ingest_agent.Agent._time_mood
-        self.assertIn("flirt", m(1, "en").lower())     # 01:00 -> night, flirty
-        self.assertIn("morning", m(8, "en").lower())   # 08:00 -> morning
-        self.assertIn("флирт", m(2, "ru"))             # night mood in Russian
-        # weekend mood is its own directive
-        self.assertIn("weekend", tg_ingest_agent.Agent._weekend_mood("en").lower())
+    def test_register_state_mobilizes_and_eases(self):
+        # The companion register is set by recent business + the work window, NOT a
+        # day/night clock gate. Business activity -> 'working' at any hour; off-hours
+        # quiet -> 'relaxed'; work-hours quiet -> 'neutral'.
+        from datetime import datetime, timezone
+        a = self.agent
+        # tz_offset default is +3 (MSK): pick UTC instants with known boss-local times.
+        wed_work = datetime(2026, 6, 17, 9, 0, tzinfo=timezone.utc)   # Wed 12:00 local
+        wed_eve = datetime(2026, 6, 17, 20, 0, tzinfo=timezone.utc)   # Wed 23:00 local
+        sun_day = datetime(2026, 6, 21, 9, 0, tzinfo=timezone.utc)    # Sun 12:00 local
+        store.kv_set(a.conn, "last_business_at", "")
+        self.assertEqual(a._register_state(wed_work), "neutral")   # work hours, quiet
+        self.assertEqual(a._register_state(wed_eve), "relaxed")    # off hours, quiet
+        self.assertEqual(a._register_state(sun_day), "relaxed")    # weekend = off
+        # Recent business mobilizes her to 'working' even in the evening.
+        store.kv_set(a.conn, "last_business_at", wed_eve.isoformat())
+        self.assertEqual(a._register_state(wed_eve), "working")
+
+    def test_register_directive_has_content_override(self):
+        # The resting baseline always carries the content-override rule (no clock gate).
+        a = self.agent
+        d = a._register_directive("en")
+        self.assertIn("depth", d.lower())
+        self.assertIn("no reset", d.lower())
 
     def test_is_reminder_ack(self):
         import tg_ingest_agent

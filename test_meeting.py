@@ -104,6 +104,19 @@ class RouterMeetingTests(unittest.TestCase):
         self.assertIn("про нас", router.ROUTER_EXAMPLES)
         self.assertIn("what do you remember about us?", router.ROUTER_EXAMPLES)
 
+    def test_personal_spectrum_steering_present(self):
+        # The full personal/intimate spectrum — even mid-work — must route to
+        # converse, and feelings-about-a-meeting must NOT collapse into a
+        # factual meeting_recall.
+        prompt = router.build_system_prompt(self.cfg, None)
+        self.assertIn("personal spectrum", prompt.lower())
+        self.assertIn("скучаю по тебе", router.ROUTER_EXAMPLES)
+        self.assertIn("что ты чувствуешь про нашу встречу", router.ROUTER_EXAMPLES)
+        # FEELINGS about a meeting -> converse; FACTUAL recall -> meeting_recall.
+        self.assertIn("FEELINGS", router.ROUTER_EXAMPLES)
+        # The system prompt itself carries the feelings-vs-logistics carve-out.
+        self.assertIn("FEELINGS or anticipation about a meeting", prompt)
+
 
 class MeetingLifecycleTests(unittest.TestCase):
     def setUp(self):
@@ -486,11 +499,12 @@ class MeetingDispatchTests(unittest.TestCase):
         soon = (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat()
         store.meeting_schedule(self.conn, 111, soon, kind="date", setting="у неё")
         sent = []
-        with mock.patch.object(llm, "chat_profile", return_value="Не могу дождаться 🙈"), \
+        with mock.patch("random.random", return_value=0.0), \
+                mock.patch.object(llm, "chat_profile", return_value="Не могу дождаться 🙈"), \
                 mock.patch.object(self.mod, "tg_call",
                                   side_effect=lambda *a, **k: sent.append(a) or {"message_id": 1}):
             self.agent.check_meeting_anticipation()
-            self.agent.check_meeting_anticipation()   # within the gap -> suppressed
+            self.agent.check_meeting_anticipation()   # once/day gate -> suppressed
         self.assertEqual(len(sent), 1)
 
     def test_no_anticipation_for_business_meeting(self):
@@ -576,6 +590,77 @@ class MeetingDispatchTests(unittest.TestCase):
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) n FROM proactive_log WHERE check_name='afterglow' AND sent_message=1"
         ).fetchone()["n"], 0)
+
+    # -- proactive intimacy outreach (off-hours, remote-gf keeping-in-touch) ----
+
+    def _outreach_now(self):
+        # boss-local 23:00 Wed -> off-hours (relaxed register), a weekday
+        return datetime(2026, 6, 17, 20, 0, tzinfo=timezone.utc)
+
+    def _prime_outreach(self, now, *, stage=3, business=None, last_msg_hours=1.0):
+        store.pref_set(self.conn, "proactive_enabled", "true")
+        store.pref_set(self.conn, "quiet_start", "0")
+        store.pref_set(self.conn, "quiet_end", "0")              # no quiet window
+        store.kv_set(self.conn, "closeness_stage", str(stage))
+        store.kv_set(self.conn, "last_business_at", business or "")
+        store.kv_set(self.conn, "last_boss_msg_at",
+                     (now - timedelta(hours=last_msg_hours)).isoformat())
+
+    def _run_outreach(self, now, **prime):
+        self._prime_outreach(now, **prime)
+
+        class FakeDT(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now if tz is None else now.astimezone(tz)
+
+        sent = []
+        with mock.patch.object(self.mod, "datetime", FakeDT), \
+                mock.patch("random.random", return_value=0.0), \
+                mock.patch.object(llm, "chat_profile",
+                                  return_value="Скучаю по тебе 🙈 весь вечер о тебе думаю…"), \
+                mock.patch.object(llm, "embed", side_effect=fake_embed), \
+                mock.patch.object(self.mod, "tg_call",
+                                  side_effect=lambda *a, **k: sent.append(a) or {"message_id": 1}):
+            self.agent.check_intimacy_outreach()
+            self.agent.check_intimacy_outreach()   # daily cap -> at most one
+        return sent
+
+    def test_intimacy_outreach_sends_offhours_when_close(self):
+        now = self._outreach_now()
+        sent = self._run_outreach(now, stage=3)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) n FROM proactive_log WHERE check_name='intimacy_outreach'"
+            " AND sent_message=1").fetchone()["n"], 1)
+
+    def test_intimacy_outreach_skips_when_business_recent(self):
+        now = self._outreach_now()
+        # recent business -> mobilized 'working' register, not her relaxed time
+        sent = self._run_outreach(now, stage=3, business=now.isoformat())
+        self.assertEqual(len(sent), 0)
+
+    def test_intimacy_outreach_skips_when_not_close(self):
+        now = self._outreach_now()
+        sent = self._run_outreach(now, stage=0)
+        self.assertEqual(len(sent), 0)
+
+    def test_intimacy_outreach_skips_on_long_silence(self):
+        now = self._outreach_now()
+        # last heard from him 10h ago (> after_contact window) -> don't pester
+        sent = self._run_outreach(now, stage=3, last_msg_hours=10)
+        self.assertEqual(len(sent), 0)
+
+    def test_shared_intimacy_facts_uses_learned_likings(self):
+        # Intimacy is grounded in what she's learned about HIM (relationship_note shelf).
+        store.boss_add(self.conn, "relationship_note", "любит, когда она в красном",
+                       status="confirmed", confidence=1.0)
+        facts = self.agent._shared_intimacy_facts("ru")
+        self.assertIn("в красном", facts)
+        # A sensitive personal_fact must NOT leak into intimacy grounding.
+        store.boss_add(self.conn, "personal_fact", "номер карты 1234",
+                       status="confirmed", confidence=1.0, sensitivity="sensitive")
+        self.assertNotIn("карты", self.agent._shared_intimacy_facts("ru"))
 
 
 if __name__ == "__main__":
