@@ -2514,9 +2514,10 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
         store.meeting_activate(c, mid)
         pres = self.agent._meeting_presence("ru", store.meeting_active(c, 1)).lower()
-        self.assertIn("seductive", pres)     # bold / wild / craving on a date
-        self.assertIn("crave", pres)
-        self.assertIn("never sexually explicit or graphic", pres)  # the kept boundary
+        self.assertIn("seductive", pres)        # bold / forward on a date
+        self.assertIn("own wishes", pres)       # open about her OWN desires & asks
+        self.assertIn("euphemism", pres)        # hints/euphemism at the explicit edge
+        self.assertIn("graphic", pres)          # the kept non-graphic boundary
 
     def test_meeting_attire_scales_with_setting_and_stage(self):
         c = self.agent.conn
