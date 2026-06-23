@@ -316,6 +316,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   chose for you — **named and teased, suggestive, never graphic**. The wardrobe is
   tasteful‑to‑racy lace/satin/velvet/teddy/corset/garter looks; **explicit‑display and
   fetish/BDSM pieces are deliberately excluded**. Business meetings stay professional.
+- **"Что наденешь?" — she teases in anticipation** (`_planned_outfit_for`, `wardrobe.tease`):
+  before an agreed date she has a specific piece **in mind**, and if you ask what she'll wear
+  she **teases it** — hints a colour or detail but keeps the surprise ("узнаешь вечером…
+  скажу только, что оно изумрудное 🙈"). What she hinted is **what she actually wears** when
+  the date goes live (the planned piece carries through). Still suggestive, never graphic.
 - **On a date she's not shy — she's bold and open** — openly seductive and forward, and
   **open about her OWN wishes and asks** (she says what she wants, asks for things, leads).
   At the explicit edge she **neither goes graphic nor goes shy** — she pivots to **euphemism,

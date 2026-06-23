@@ -719,6 +719,27 @@ class MeetingDispatchTests(unittest.TestCase):
         self.assertNotEqual(chosen["family"], "intimate")      # lingerie locked when not close
         self.assertLessEqual(chosen["intimacy"], 1)
 
+    def test_outfit_anticipation_tease_and_continuity(self):
+        # "Что наденешь?" — she has a piece in mind for the upcoming date, teases it (not
+        # reveal), and wears exactly that when the date goes live.
+        store.kv_set(self.conn, "closeness_stage", "5")
+        mid = store.meeting_schedule(self.conn, 111, "2026-07-01T16:00:00+00:00",
+                                     kind="visit", setting="у неё")
+        ctx = self.agent.converse_context("ru", 111)
+        self.assertIn("присмотрела", ctx)                       # the tease directive is present
+        planned = store.kv_get(self.conn, f"planned_outfit:{mid}")
+        self.assertTrue(planned)                                # an outfit is planned + cached
+        # asking again keeps the SAME planned piece (consistent tease)
+        self.agent.converse_context("ru", 111)
+        self.assertEqual(store.kv_get(self.conn, f"planned_outfit:{mid}"), planned)
+        # go live -> she wears exactly what she teased (continuity)
+        store.meeting_activate(self.conn, mid)
+        self.agent._meeting_attire("visit", "у неё", "ru", meeting_id=mid)
+        self.assertEqual(store.kv_get(self.conn, f"meeting_outfit:{mid}"), planned)
+
+    def test_outfit_question_routes_to_converse(self):
+        self.assertIn("что наденешь", router.ROUTER_EXAMPLES)
+
     def test_date_presence_unlocks_roleplay_when_close(self):
         # On a social date, once close, presence includes the imaginative roleplay layer
         # (scenes/roles, her own desires) — still non-graphic, no asterisk stage-directions.

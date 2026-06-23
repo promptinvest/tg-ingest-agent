@@ -2166,6 +2166,11 @@ def wardrobe_candidates(conn, families, max_intimacy):
     return [_wardrobe_row(r) for r in rows]
 
 
+def wardrobe_get(conn, outfit_id):
+    row = conn.execute("SELECT * FROM cara_wardrobe WHERE id = ?", (outfit_id,)).fetchone()
+    return _wardrobe_row(row) if row else None
+
+
 def wardrobe_mark_worn(conn, outfit_id):
     conn.execute("UPDATE cara_wardrobe SET last_worn_at = ? WHERE id = ?", (_now(), outfit_id))
     conn.commit()

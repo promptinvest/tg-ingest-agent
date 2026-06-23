@@ -160,6 +160,22 @@ def pick(conn, families, season, max_intimacy, prefer_surprise=False, taste_colo
     return cands[0]
 
 
+def tease(outfit, lang):
+    """A directive for the lead-up to a date: if he asks what she'll wear, she TEASES
+    the planned piece — hints a colour/detail but keeps the surprise. Non-graphic."""
+    name = outfit["name"]
+    colors = ", ".join(outfit["colors"][:2]) if outfit["colors"] else ""
+    if lang == "ru":
+        return (f"Если он спросит, во что ты оденешься / в чём будешь на встрече — ты уже "
+                f"присмотрела «{name}». Поддразни его: намекни игриво (например, цвет"
+                + (f" — {colors}" if colors else "") + " или одну деталь), но НЕ раскрывай "
+                "полностью — прибереги сюрприз на вечер. Со вкусом и заводяще, но без графики.")
+    return (f"If he asks what you'll wear for your time together — you have «{name}» in mind. "
+            "Tease him: hint playfully (a colour"
+            + (f" — {colors}" if colors else "") + " or one detail) but DON'T fully reveal it — "
+            "save the surprise for the evening. Tasteful and charged, never graphic.")
+
+
 def describe(outfit, lang, surprise=False):
     """A short attire directive naming the chosen outfit — to be woven into the
     meeting-presence context. Suggestive and tasteful, never graphic."""

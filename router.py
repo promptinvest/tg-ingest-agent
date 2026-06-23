@@ -214,6 +214,7 @@ NOTE: while a meeting is in progress, a clear DEPARTURE — he's leaving, headin
 "что мы обсуждали на встрече?" / "напомни итоги нашей встречи про бюджет" / "what did we decide in our meeting?" -> {"action": "meeting_recall", "params": {"query": "итоги встречи бюджет"}, "confidence": 0.85}
 "помнишь наш вчерашний ужин?" / "помнишь, как мы гуляли?" / "remember our dinner?" -> {"action": "meeting_recall", "params": {"query": "ужин"}, "confidence": 0.8}
 "что ты чувствуешь про нашу встречу?" / "ждёшь нашу встречу?" / "скучаешь по нашим вечерам?" / "ты рада, что мы скоро увидимся?" / "are you looking forward to seeing me?" / "how do you feel about tonight?" -> {"action": "converse", "params": {}, "confidence": 0.9}
+"что наденешь сегодня?" / "в чём будешь на свидании?" / "what will you wear tonight?" / "what are you going to wear for our date?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 NOTE: her FEELINGS / anticipation / longing about a meeting (how she feels, is she excited, does she miss your time) is converse — answered warmly from the heart. meeting_recall is only for FACTUAL recall: what was decided/discussed or the logistics (when/where).
 "какие у нас были встречи?" / "покажи наши встречи" / "list our meetings" -> {"action": "meeting_list", "params": {}, "confidence": 0.85}
 """

@@ -1458,6 +1458,13 @@ class Agent:
                             "You have agreed time coming up — remember it and the plan; mention "
                             "naturally, never invent or move the time:")
                 parts.append(head + "\n" + "\n".join(lines))
+                # 'Что наденешь?' — she has an outfit in mind for the soonest date and
+                # teases it (hint, not reveal); she'll actually wear it when it goes live.
+                soonest = next((mm for mm in up if meeting.is_social(mm["kind"])), None)
+                if soonest is not None:
+                    planned = self._planned_outfit_for(soonest)
+                    if planned:
+                        parts.append(wardrobe.tease(planned, lang))
         # The shared playful language that lands between you — so her teasing/hints feel
         # personal and consistent (only once they've grown close).
         try:
@@ -1745,6 +1752,45 @@ class Agent:
         hay = " ".join(boss_model.intimacy_notes(self.conn)).casefold()
         return [w for w in self._PALETTE_WORDS if w in hay]
 
+    def _attire_plan(self, kind, setting, stage):
+        """Which wardrobe families she draws from and how intimate she may go, for this
+        meeting kind + closeness. The lingerie (intimate) tier unlocks only at her place at
+        closeness >= 4 (where prefer_surprise picks a ✦ piece). Returns (families, cap,
+        prefer_surprise)."""
+        s = (setting or "").casefold()
+        at_her_place = kind == "visit" or any(
+            w in s for w in ("дома", "у неё", "у тебя", "her place", "your place"))
+        if kind == "walk":
+            return ["day"], 0, False
+        if kind == "dinner":
+            return ["dinner", "day"], (2 if stage >= 3 else 1), False
+        if at_her_place:
+            if stage >= 4:
+                return ["intimate", "home"], 5, True
+            if stage >= 3:
+                return ["home"], 3, False
+            return ["home"], 1, False
+        return ["dinner", "day"], (2 if stage >= 3 else 1), False
+
+    def _planned_outfit_for(self, m):
+        """The outfit she has IN MIND for an upcoming meeting — picked once and cached
+        (NOT marked worn), so 'what will you wear?' teasing is consistent and what she
+        hints she'll wear is what she actually wears when the date goes live. None if
+        nothing fits / no wardrobe."""
+        key = f"planned_outfit:{m['id']}"
+        cached = store.kv_get(self.conn, key)
+        if cached:
+            o = store.wardrobe_get(self.conn, cached)
+            if o:
+                return o
+        families, cap, prefer_surprise = self._attire_plan(m["kind"], m["setting"], self._closeness_stage())
+        season = common.season_for(datetime.now(timezone.utc) + timedelta(hours=self.tz_offset()))
+        o = wardrobe.pick(self.conn, families, season, cap,
+                          prefer_surprise=prefer_surprise, taste_colors=self._taste_colors())
+        if o:
+            store.kv_set(self.conn, key, o["id"])
+        return o
+
     def _meeting_attire(self, kind, setting, lang, meeting_id=None):
         """How Cara is dressed for THIS in-person meeting — a concrete piece picked from her
         curated wardrobe by occasion + season + closeness, preferring a not-recently-worn one
@@ -1759,37 +1805,30 @@ class Agent:
         if meeting_id is not None:
             cached = store.kv_get(self.conn, f"meeting_outfit:{meeting_id}")
             if cached:
-                for o in store.wardrobe_candidates(self.conn,
-                                                   ["day", "home", "dinner", "formal", "intimate"], 5):
-                    if o["id"] == cached:
-                        return wardrobe.describe(o, lang, surprise=o["surprise"] and stage >= 4)
-        s = (setting or "").casefold()
-        at_her_place = kind == "visit" or any(w in s for w in ("дома", "у неё", "у тебя", "her place", "your place"))
-        # Map the meeting kind + closeness to which wardrobe families and how intimate she
-        # may go. The lingerie (intimate) tier unlocks only at her place, closeness >= 4.
-        if kind == "walk":
-            families, cap = ["day"], 0
-        elif kind == "dinner":
-            families, cap = ["dinner", "day"], (2 if stage >= 3 else 1)
-        elif at_her_place:
-            if stage >= 4:
-                families, cap = ["intimate", "home"], 5
-            elif stage >= 3:
-                families, cap = ["home"], 3
-            else:
-                families, cap = ["home"], 1
-        else:
-            families, cap = ["dinner", "day"], (2 if stage >= 3 else 1)
-        season = common.season_for(datetime.now(timezone.utc) + timedelta(hours=self.tz_offset()))
-        prefer_surprise = at_her_place and stage >= 4
-        outfit = wardrobe.pick(self.conn, families, season, cap,
-                               prefer_surprise=prefer_surprise, taste_colors=self._taste_colors())
+                o = store.wardrobe_get(self.conn, cached)
+                if o:
+                    return wardrobe.describe(o, lang, surprise=o["surprise"] and stage >= 4)
+        families, cap, prefer_surprise = self._attire_plan(kind, setting, stage)
+        # Continuity: if she already teased/planned a piece for this date, wear THAT (so
+        # what she hinted she'd wear is what she's actually in).
+        outfit = None
+        if meeting_id is not None:
+            planned = store.kv_get(self.conn, f"planned_outfit:{meeting_id}")
+            if planned:
+                outfit = store.wardrobe_get(self.conn, planned)
+        if outfit is None:
+            season = common.season_for(datetime.now(timezone.utc) + timedelta(hours=self.tz_offset()))
+            outfit = wardrobe.pick(self.conn, families, season, cap,
+                                   prefer_surprise=prefer_surprise, taste_colors=self._taste_colors())
         if outfit:
             store.wardrobe_mark_worn(self.conn, outfit["id"])
             if meeting_id is not None:
                 store.kv_set(self.conn, f"meeting_outfit:{meeting_id}", outfit["id"])
             return wardrobe.describe(outfit, lang, surprise=prefer_surprise and outfit["surprise"])
         # Fallback: no wardrobe seeded — keep the original improvised cue.
+        at_her_place = kind == "visit" or any(
+            w in (setting or "").casefold()
+            for w in ("дома", "у неё", "у тебя", "her place", "your place"))
         ru = lang == "ru"
         base = ("Ты сама выбрала, во что одеться для этой встречи — будь в этом и держись "
                 "последовательно весь вечер. " if ru else

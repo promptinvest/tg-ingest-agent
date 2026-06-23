@@ -356,6 +356,13 @@ proactively like real memory. Design decisions and why:
   empty wardrobe falls back to the old improvised cue. **Explicit-display (crotchless/cupless/
   pasties/near-nude) and fetish/BDSM gear are deliberately excluded** from the seed — the same
   non-graphic ceiling held in words and roleplay.
+- **Outfit anticipation ("что наденешь?").** For an upcoming social meeting `_planned_outfit_for`
+  picks a candidate via the shared `_attire_plan` (same families/cap as live attire) and caches
+  it (`kv planned_outfit:<id>`) WITHOUT marking it worn; `converse_context` injects
+  `wardrobe.tease` so if he asks what she'll wear she hints (colour/detail) but keeps the
+  surprise. When the date goes live `_meeting_attire` prefers the planned piece — so what she
+  teased is what she wears — then marks it worn. Still suggestive, never graphic; the
+  explicit/fetish exclusion is unchanged regardless of how it's asked for.
 - **Episodic memory is kept SEPARATE on purpose.** Meetings never enter the notes
   inbox or the `ask` KB: that keeps note-numbers and the KB clean, and matches the
   boss's "separate long-term memory" ask. `meeting_chunks` mirror the notes `chunks`
