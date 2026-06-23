@@ -651,6 +651,18 @@ class MeetingDispatchTests(unittest.TestCase):
         sent = self._run_outreach(now, stage=3, last_msg_hours=10)
         self.assertEqual(len(sent), 0)
 
+    def test_date_presence_unlocks_roleplay_when_close(self):
+        # On a social date, once close, presence includes the imaginative roleplay layer
+        # (scenes/roles, her own desires) — still non-graphic, no asterisk stage-directions.
+        mid = store.meeting_start(self.conn, 111, kind="dinner", setting="у неё")
+        m = store.meeting_active(self.conn, 111)
+        store.kv_set(self.conn, "closeness_stage", "0")
+        self.assertNotIn("PLAY", self.agent._meeting_presence("en", m))
+        store.kv_set(self.conn, "closeness_stage", "3")
+        pres = self.agent._meeting_presence("en", m)
+        self.assertIn("take on a role", pres)
+        self.assertIn("never graphic", pres.lower())
+
     def test_shared_intimacy_facts_uses_learned_likings(self):
         # Intimacy is grounded in what she's learned about HIM (relationship_note shelf).
         store.boss_add(self.conn, "relationship_note", "любит, когда она в красном",

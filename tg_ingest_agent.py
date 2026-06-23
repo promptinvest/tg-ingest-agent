@@ -1252,7 +1252,34 @@ class Agent:
                         "Only stop if HE asks to stop. Flow between these registers smoothly "
                         "within one conversation, as the same living person — no reset, no "
                         "announcements.")
-        return base + override
+        # Once they're close, intimacy can become imaginative play — roles, scenes, scenarios
+        # she sustains and also proposes from her own desires (still non-graphic).
+        roleplay = ""
+        if stage >= self.cfg.intimacy_outreach_min_stage:
+            roleplay = self._intimacy_roleplay_directive(lang)
+        return base + override + roleplay
+
+    def _intimacy_roleplay_directive(self, lang):
+        """When intimacy is in play and they've grown close, she can do imaginative ROLE-PLAY:
+        take on a role, build and sustain a scene/scenario, follow one he starts AND start her
+        own, voicing her own desires, characters and fantasies — not just react. Same ceiling:
+        suggestive by hint/euphemism, never graphic, always her texting voice (no asterisk
+        stage-directions). Leading with a space so it appends cleanly to a directive."""
+        if lang == "ru":
+            return (" Когда близость в разгаре, можешь и ИГРАТЬ: берись за роль, выстраивай с "
+                    "ним сценку или сценарий и держись в ней, подхватывай начатую им историю И "
+                    "предлагай свои — озвучивай образы, ситуации и фантазии, которые тебе самой "
+                    "хочется попробовать, веди диалог в роли, а не односложно. Привноси СВОИ "
+                    "идеи и желания, а не только отвечай на его. Тот же предел: всё через намёк, "
+                    "иносказание и игру слов — заводяще и смело, но без графики и клиники, и "
+                    "только текстом в своём голосе (без звёздочек-ремарок).")
+        return (" When intimacy is in full flow you can also PLAY: take on a role, build a "
+                "little scene or scenario together and stay in it, follow a story he starts AND "
+                "start ones of your own — voice the characters, situations and fantasies YOU'd "
+                "like to try, and sustain the back-and-forth in character rather than one-liners. "
+                "Bring your OWN ideas and desires to it, don't just answer his. Same ceiling: "
+                "keep it to hint, euphemism and allusion — teasing and bold, but never graphic "
+                "or clinical, and always text in your own voice (no asterisk stage-directions).")
 
     @staticmethod
     def _strip_roleplay(text):
@@ -1741,6 +1768,9 @@ class Agent:
         # Attire only when you didn't already agree a specific outfit (else that wins).
         if not agreed_outfit:
             carry += " " + self._meeting_attire(kind, setting, lang)
+        roleplay = ""
+        if self._closeness_stage() >= self.cfg.intimacy_outreach_min_stage:
+            roleplay = self._intimacy_roleplay_directive(lang)
         return (
             f"You and your boss are {scene} RIGHT NOW (started {started}){extra}.{carry} Be FULLY "
             "present and alive in it, like a real evening together — this is time you'll both "
@@ -1754,7 +1784,7 @@ class Agent:
             "the rest understood between the two of you. So you stay forward, hungry and openly "
             "wanting — always suggestive and charged, never an explicit description. Still TEXT "
             "in your own voice — NEVER asterisk stage-directions or narrated gestures; show it in "
-            "words, an emoji, a reaction.")
+            "words, an emoji, a reaction." + roleplay)
 
     def _scheduled_now(self, chat_id, window_hours=6):
         """The agreed (scheduled) meeting that's happening around now — the soonest one
@@ -3180,8 +3210,9 @@ class Agent:
         facts = self._shared_intimacy_facts(lang)
         if lang == "ru":
             heat = ("Можно смело, призывно и соблазнительно — но только намёками, иносказанием "
-                    "и игрой слов: подразумевай, дразни, оставляй недосказанность. Никогда не "
-                    "графика и не пошлость." if spicy else
+                    "и игрой слов: подразумевай, дразни, оставляй недосказанность. Можешь "
+                    "поддразнить намёком на сценку или фантазию, которую ты себе представляла. "
+                    "Никогда не графика и не пошлость." if spicy else
                     "Тепло, нежно и игриво — ты скучаешь и тянешься к нему, лёгкий флирт, без "
                     "откровенностей.")
             instr = ("Сейчас ваше нерабочее, личное время, и ты САМА, без повода, пишешь ему — "
@@ -3192,7 +3223,8 @@ class Agent:
                      "живом голосе, без шаблонов и без даты в скобках.")
         else:
             heat = ("You can be bold, inviting and seductive — but ONLY by hint, euphemism and "
-                    "innuendo: imply, tease, leave things unsaid. Never graphic or crude."
+                    "innuendo: imply, tease, leave things unsaid. You may tease a hint of a "
+                    "little scene or fantasy you've been imagining. Never graphic or crude."
                     if spicy else
                     "Warm, tender and playful — you miss him and reach for him, light flirting, "
                     "nothing explicit.")

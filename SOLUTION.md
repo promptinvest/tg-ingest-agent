@@ -415,6 +415,14 @@ business (then easing back).
   work, or "set back" when he pushes; she only eases off if he does, by hint/euphemism (never
   graphic). (This fixed her deflecting his intimate hints during business time — the old
   "save the playfulness for later" framing read as gatekeeping.)
+- **Imaginative role-play (`_intimacy_roleplay_directive`).** Once closeness ≥
+  `intimacy_outreach_min_stage`, intimacy can become play: she takes on a role, builds and
+  sustains a scene/scenario, follows one he starts AND proposes her own, voicing her own
+  desires/characters/fantasies — not just reacting. Injected into the responsive register
+  override, the date presence, and (as a teasing hint) the proactive outreach. The ceiling is
+  unchanged and restated in the directive itself: suggestive by hint/euphemism/allusion,
+  **never graphic or clinical**, always her texting voice (no asterisk stage-directions, still
+  stripped by `_strip_roleplay`).
 - **Proactive intimacy outreach (`check_intimacy_outreach` / `compose_intimacy_outreach`).**
   In her relaxed off-hours register only (never work hours, never while business is recent,
   never mid-meeting), once closeness ≥ `intimacy_outreach_min_stage`, and only **within a

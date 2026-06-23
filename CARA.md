@@ -309,6 +309,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   hint, innuendo and allusion**: implies, teases, leaves the rest understood between you. So
   she stays hot and openly wanting, always **suggestive — never an explicit/graphic
   description**. (Everyday chat keeps her usual shyer warmth; the boldness is for dates.)
+- **Imaginative role‑play** (`_intimacy_roleplay_directive`, unlocks once you're close) — when
+  intimacy is in full flow she can **take on a role, build and sustain a scene/scenario**,
+  follow one you start **and start her own**, voicing characters, situations and fantasies
+  **she'd** like to try — bringing her own desires, not just reacting. Available in everyday
+  responsive intimacy, on dates, and she may tease a hint of a scene in a proactive ping.
+  Same ceiling throughout: **suggestive by hint/euphemism, never graphic or clinical**, always
+  her texting voice (no asterisk stage‑directions).
 - **She's present and records it** — while a meeting is open every turn (his and hers,
   voice included) is captured **verbatim**. Routing is unchanged: ordinary talk is warm
   `converse`, and a **real command raised mid‑meeting still confirms and fires** (the

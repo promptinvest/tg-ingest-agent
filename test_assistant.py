@@ -1434,6 +1434,20 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertIn("ВЕДЁТ ОН", ru)                  # RU: he leads
         self.assertIn("накал", ru)                     # RU: matches his heat/intensity
 
+    def test_roleplay_layer_unlocks_with_closeness_and_stays_non_graphic(self):
+        a = self.agent
+        # not close yet -> no roleplay directive injected
+        store.kv_set(a.conn, "closeness_stage", "0")
+        self.assertNotIn("PLAY", a._register_directive("en"))
+        # once close -> roleplay capability is present, with the non-graphic ceiling
+        store.kv_set(a.conn, "closeness_stage", "3")
+        d = a._register_directive("en")
+        self.assertIn("take on a role", d)
+        self.assertIn("scene or scenario", d)
+        self.assertIn("never graphic", d.lower())
+        self.assertNotIn("*", a._intimacy_roleplay_directive("en"))  # no asterisk roleplay
+        self.assertIn("роль", a._register_directive("ru"))
+
     def test_converse_context_surfaces_active_reminders(self):
         # She must know her own reminders in conversation, so "почему не закрыла #1?"
         # is answered from the real list (with a fired-but-open one marked), not notes.
