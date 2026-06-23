@@ -363,6 +363,13 @@ proactively like real memory. Design decisions and why:
   surprise. When the date goes live `_meeting_attire` prefers the planned piece — so what she
   teased is what she wears — then marks it worn. Still suggestive, never graphic; the
   explicit/fetish exclusion is unchanged regardless of how it's asked for.
+- **Chat curation.** Three router actions (manifest-gated): `wardrobe_add` ("добавь в гардероб …"
+  → `wardrobe.classify` infers family/intimacy/colours, idempotent on a slug id), `wardrobe_show`
+  ("покажи гардероб" → `wardrobe.summary`, grouped by family), and `outfit_preference`
+  ("тебе идёт …" → `boss_model.remember_explicit` as a confirmed `relationship_note`, which
+  immediately biases `_taste_colors`). The anticipation ping (`compose_anticipation`) folds in
+  the planned-outfit hint so her daytime tease references what she'll wear. All suggestive,
+  never graphic; explicit/fetish still excluded.
 - **Episodic memory is kept SEPARATE on purpose.** Meetings never enter the notes
   inbox or the `ask` KB: that keeps note-numbers and the KB clean, and matches the
   boss's "separate long-term memory" ask. `meeting_chunks` mirror the notes `chunks`

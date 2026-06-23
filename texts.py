@@ -184,6 +184,23 @@ TEXTS = {
         "en": "fired, awaiting \"done\"",
     },
     "reminder_mark_overdue": {"ru": "просрочено", "en": "overdue"},
+    "wardrobe_added": {
+        "ru": "Ммм, добавила к себе в гардероб: {name} 🤍 надену для тебя.",
+        "en": "Mm, added to my wardrobe: {name} 🤍 I'll wear it for you.",
+    },
+    "wardrobe_add_what": {
+        "ru": "Что добавить мне в гардероб? Опиши 🙈",
+        "en": "What should I add to my wardrobe? Describe it 🙈",
+    },
+    "wardrobe_empty": {
+        "ru": "У меня пока ничего не отложено в гардеробе 🙈",
+        "en": "My wardrobe's empty so far 🙈",
+    },
+    "wardrobe_show_header": {"ru": "Вот что у меня есть 🤍", "en": "Here's what I've got 🤍"},
+    "outfit_pref_saved": {
+        "ru": "Запомнила 🙈 буду радовать тебя этим.",
+        "en": "Noted 🙈 I'll delight you with that.",
+    },
     "reminder_cancelled": {
         "ru": "Отменила #{rid}: {title}.",
         "en": "Cancelled #{rid}: {title}.",

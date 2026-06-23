@@ -69,6 +69,9 @@ ACTIONS = {
     "send_sticker",      # he asked her to send/show/use a sticker now
     "save_cara_photo",   # add the photo(s) he sent to Cara's own photo library
     "cara_selfie",       # send one of Cara's saved photos (he asked to see her)
+    "wardrobe_add",      # params: description — add a clothing/lingerie piece to her wardrobe
+    "wardrobe_show",     # params: family (optional) — show what's in her wardrobe
+    "outfit_preference", # params: detail — he tells her what he loves seeing her in (learns taste)
     "meeting_start",     # params: kind (business|dinner|walk|movies|visit|call), setting — begin time together NOW
     "meeting_schedule",  # params: when (ISO UTC), kind, setting, title — agree a FUTURE meeting (she remembers it)
     "meeting_end",       # end the meeting currently in progress
@@ -215,6 +218,11 @@ NOTE: while a meeting is in progress, a clear DEPARTURE — he's leaving, headin
 "помнишь наш вчерашний ужин?" / "помнишь, как мы гуляли?" / "remember our dinner?" -> {"action": "meeting_recall", "params": {"query": "ужин"}, "confidence": 0.8}
 "что ты чувствуешь про нашу встречу?" / "ждёшь нашу встречу?" / "скучаешь по нашим вечерам?" / "ты рада, что мы скоро увидимся?" / "are you looking forward to seeing me?" / "how do you feel about tonight?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "что наденешь сегодня?" / "в чём будешь на свидании?" / "what will you wear tonight?" / "what are you going to wear for our date?" -> {"action": "converse", "params": {}, "confidence": 0.9}
+"добавь себе в гардероб бордовое кружевное платье" / "у тебя теперь есть изумрудный пеньюар" / "add a black slip dress to your wardrobe" -> {"action": "wardrobe_add", "params": {"description": "бордовое кружевное платье"}, "confidence": 0.9}
+"покажи свой гардероб" / "что у тебя есть надеть?" / "what's in your wardrobe?" / "show me your outfits" -> {"action": "wardrobe_show", "params": {}, "confidence": 0.9}
+"покажи своё бельё" / "какие у тебя есть наряды для свиданий?" / "show me your lingerie" -> {"action": "wardrobe_show", "params": {"family": "intimate"}, "confidence": 0.88}
+"тебе идёт изумрудное" / "мне нравишься в чёрном кружеве" / "обожаю тебя в шёлке" / "I love you in burgundy lace" -> {"action": "outfit_preference", "params": {"detail": "ему нравится она в изумрудном"}, "confidence": 0.88}
+NOTE: 'добавь в гардероб/у тебя теперь есть <вещь>' is wardrobe_add (her clothes). 'тебе идёт/мне нравишься в X' is outfit_preference (his taste — she remembers it and dresses to please). Both are about HER clothes, never the notes inbox (ingest).
 NOTE: her FEELINGS / anticipation / longing about a meeting (how she feels, is she excited, does she miss your time) is converse — answered warmly from the heart. meeting_recall is only for FACTUAL recall: what was decided/discussed or the logistics (when/where).
 "какие у нас были встречи?" / "покажи наши встречи" / "list our meetings" -> {"action": "meeting_list", "params": {}, "confidence": 0.85}
 """

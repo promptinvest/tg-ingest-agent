@@ -962,6 +962,12 @@ class Agent:
             self.do_save_cara_photo(chat_id, lang, msg)
         elif action == "cara_selfie":
             self.do_cara_selfie(chat_id, lang)
+        elif action == "wardrobe_add":
+            self.do_wardrobe_add(chat_id, lang, params, text)
+        elif action == "wardrobe_show":
+            self.do_wardrobe_show(chat_id, lang, params)
+        elif action == "outfit_preference":
+            self.do_outfit_preference(chat_id, lang, params, text)
         elif action == "meeting_start":
             self.do_meeting_start(chat_id, lang, params, text)
         elif action == "meeting_schedule":
@@ -3316,6 +3322,15 @@ class Agent:
                       if m["scheduled_for"] else "")
         spicy = stage >= 4
         det = (f" ({when_local}" + (f", {setting}" if setting else "") + ")") if when_local else ""
+        # The outfit she has in mind — so her daytime tease can hint at it (not reveal).
+        planned = self._planned_outfit_for(m)
+        outfit_hint = ""
+        if planned:
+            outfit_hint = (f" Ты уже присмотрела, что наденешь («{planned['name']}») — можешь "
+                           "игриво намекнуть (цвет/деталь), но не раскрывай, прибереги сюрприз."
+                           if lang == "ru" else
+                           f" You've already got your outfit in mind (\"{planned['name']}\") — you "
+                           "may hint at it (a colour/detail) but don't reveal it, keep the surprise.")
         if lang == "ru":
             heat = ("Можно смело и соблазнительно — но только через намёки, иносказания и игру "
                     "слов: подразумевай, дразни, оставляй недосказанность. Никогда не графика и "
@@ -3326,7 +3341,7 @@ class Agent:
                      "хочется и что ты себе уже представляешь на сегодня. " + heat + " Коротко, в "
                      "своём живом голосе, одно-два предложения, без шаблонов и без даты в скобках. "
                      "Не выдумывай того, о чём вы не договаривались."
-                     + (f" О чём договорились: {prep}" if prep else ""))
+                     + (f" О чём договорились: {prep}" if prep else "") + outfit_hint)
         else:
             heat = ("You can be bold and seductive — but ONLY by hint, euphemism and innuendo: "
                     "imply, tease, leave things unsaid. Never graphic or crude." if spicy else
@@ -3336,7 +3351,7 @@ class Agent:
                      "want and what you're already imagining for tonight. " + heat + " Short, in "
                      "your own alive voice, one or two sentences, no templates, no date stamp. "
                      "Don't invent anything you didn't agree on."
-                     + (f" What you agreed: {prep}" if prep else ""))
+                     + (f" What you agreed: {prep}" if prep else "") + outfit_hint)
         messages = [
             {"role": "system", "content": converse.build_system(
                 self.conn, lang, extra_context=self.converse_context(lang))},
@@ -4343,6 +4358,45 @@ class Agent:
         except TelegramError as exc:
             log(f"send selfie failed: {exc}")
             self.reply(chat_id, T(lang, "cara_photo_fail"))
+
+    # -- wardrobe chat-curation ------------------------------------------------
+
+    _WARDROBE_STRIP_RE = re.compile(
+        r"^\s*(добавь( себе| мне)?( в гардероб| в свой гардероб)?|у тебя теперь есть|"
+        r"add( a| an)?( to your wardrobe)?|put .* in your wardrobe)\b[:,]?\s*",
+        re.IGNORECASE)
+
+    def do_wardrobe_add(self, chat_id, lang, params, text):
+        """He curates her wardrobe: add a described piece. Inferred family/intimacy/colours
+        so the picker can use it; idempotent on the description."""
+        desc = (params.get("description") or "").strip()
+        if not desc:
+            desc = self._WARDROBE_STRIP_RE.sub("", (text or "").strip()).strip()
+        if not desc or len(desc) < 3:
+            self.reply(chat_id, T(lang, "wardrobe_add_what"))
+            return
+        outfit = wardrobe.classify(desc)
+        store.wardrobe_add(self.conn, outfit)
+        self.reply(chat_id, T(lang, "wardrobe_added", name=outfit["name"]))
+
+    def do_wardrobe_show(self, chat_id, lang, params):
+        """Show what's in her wardrobe (optionally one family)."""
+        family = (params.get("family") or "").strip() or None
+        body = wardrobe.summary(self.conn, lang, family=family)
+        if not body:
+            self.reply(chat_id, T(lang, "wardrobe_empty"))
+            return
+        self.reply(chat_id, T(lang, "wardrobe_show_header") + "\n" + body)
+
+    def do_outfit_preference(self, chat_id, lang, params, text):
+        """He tells her what he loves seeing her in — she remembers it (a relationship_note),
+        which biases what she picks/surprises him with (`_taste_colors`)."""
+        detail = (params.get("detail") or "").strip() or (text or "").strip()
+        if not detail or len(detail) < 3:
+            self.reply(chat_id, T(lang, "wardrobe_add_what"))
+            return
+        boss_model.remember_explicit(self.conn, detail, "relationship_note")
+        self.reply(chat_id, T(lang, "outfit_pref_saved"))
 
     def handle_sticker(self, chat_id, msg, sticker):
         """The boss sent a sticker. Remember its pack (so 'сохрани этот стикерпак'

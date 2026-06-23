@@ -126,6 +126,12 @@ SKILLS = {
                         "title": {"en": "Save Cara photo", "ru": "Сохранить фото Кары"}},
     "cara_selfie": {"risk": "read_only", "title": {"en": "Send a photo of herself",
                                                    "ru": "Прислать своё фото"}},
+    "wardrobe_add": {"risk": "state_write", "writes_state": True,
+                     "title": {"en": "Add to wardrobe", "ru": "Добавить в гардероб"}},
+    "wardrobe_show": {"risk": "read_only",
+                      "title": {"en": "Show wardrobe", "ru": "Показать гардероб"}},
+    "outfit_preference": {"risk": "state_write", "writes_state": True,
+                          "title": {"en": "Learn outfit taste", "ru": "Запомнить вкус в одежде"}},
     # -- shared-time meetings + relationship storyline (benign session toggles;
     #    they open/close a meeting and recall it — no destructive data change,
     #    no typed confirmation, real commands raised mid-meeting still confirm).

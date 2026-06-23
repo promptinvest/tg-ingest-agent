@@ -740,6 +740,47 @@ class MeetingDispatchTests(unittest.TestCase):
     def test_outfit_question_routes_to_converse(self):
         self.assertIn("что наденешь", router.ROUTER_EXAMPLES)
 
+    def test_wardrobe_add_via_chat(self):
+        before = store.wardrobe_count(self.conn)
+        sent = self.drive(
+            {"message": self._msg(60, "добавь себе в гардероб бордовое кружевное бельё")},
+            {"router": '{"action":"wardrobe_add","params":{"description":'
+                       '"бордовое кружевное бельё"},"confidence":0.9}'})
+        self.assertEqual(store.wardrobe_count(self.conn), before + 1)
+        o = store.wardrobe_get(self.conn, "user_" + wardrobe._slug("бордовое кружевное бельё"))
+        self.assertIsNotNone(o)
+        self.assertEqual(o["family"], "intimate")        # 'бельё/кружев' -> intimate tier
+        self.assertIn("burgundy", o["colors"])
+        self.assertTrue(any("гардероб" in s.lower() for s in sent))
+
+    def test_outfit_preference_learned_and_biases_taste(self):
+        self.drive(
+            {"message": self._msg(61, "тебе идёт изумрудное")},
+            {"router": '{"action":"outfit_preference","params":{"detail":'
+                       '"ему нравится она в изумрудном (emerald)"},"confidence":0.9}'})
+        self.assertIn("emerald", self.agent._taste_colors())   # taste now biases picks
+
+    def test_wardrobe_show(self):
+        sent = self.drive(
+            {"message": self._msg(62, "покажи свой гардероб")},
+            {"router": '{"action":"wardrobe_show","params":{},"confidence":0.9}'})
+        self.assertTrue(any(("повседневное" in s.lower() or "daywear" in s.lower()) for s in sent))
+
+    def test_anticipation_hints_at_planned_outfit(self):
+        import llm
+        store.kv_set(self.conn, "closeness_stage", "5")
+        store.meeting_schedule(self.conn, 111, "2026-07-01T16:00:00+00:00",
+                               kind="visit", setting="у неё")
+        captured = {}
+
+        def cap(cfg, conn, skill, messages, **kw):
+            captured["msgs"] = messages
+            return "Жду вечера 🙈"
+        with mock.patch.object(llm, "chat_profile", side_effect=cap), \
+                mock.patch.object(llm, "embed", side_effect=fake_embed):
+            self.agent.compose_anticipation("ru", store.meetings_upcoming(self.conn, 111)[0])
+        self.assertIn("присмотрела, что наденешь", captured["msgs"][1]["content"])
+
     def test_date_presence_unlocks_roleplay_when_close(self):
         # On a social date, once close, presence includes the imaginative roleplay layer
         # (scenes/roles, her own desires) — still non-graphic, no asterisk stage-directions.

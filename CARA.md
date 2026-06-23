@@ -316,6 +316,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   chose for you — **named and teased, suggestive, never graphic**. The wardrobe is
   tasteful‑to‑racy lace/satin/velvet/teddy/corset/garter looks; **explicit‑display and
   fetish/BDSM pieces are deliberately excluded**. Business meetings stay professional.
+- **You curate her wardrobe in chat** — "**добавь себе в гардероб** бордовое кружевное бельё"
+  adds a piece (she infers its kind/colours so the picker can use it); "**покажи свой гардероб**"
+  shows what she has; and "**тебе идёт изумрудное**" / "I love you in burgundy lace" teaches her
+  **your taste** (`outfit_preference` → a `relationship_note`), which then **biases what she picks
+  and surprises you with** (`_taste_colors`).
 - **"Что наденешь?" — she teases in anticipation** (`_planned_outfit_for`, `wardrobe.tease`):
   before an agreed date she has a specific piece **in mind**, and if you ask what she'll wear
   she **teases it** — hints a colour or detail but keeps the surprise ("узнаешь вечером…

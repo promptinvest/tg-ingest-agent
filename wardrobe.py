@@ -126,6 +126,60 @@ WARDROBE_SEED = [
 ]
 
 
+_INTIMATE_HINTS = ("бель", "кружев", "пеньюар", "корсет", "чулк", "подвяз", "комбинаци",
+                   "ночнуш", "бра ", "lingerie", "lace", "teddy", "corset", "garter",
+                   "stocking", "babydoll", "chemise", "negligee", "bodysuit", "bustier",
+                   "boudoir", "slip set")
+_DRESS_HINTS = ("плать", "пеньюар", "dress", "gown", "slip dress", "сарафан", "комбинаци")
+_PALETTE = {"emerald": ["emerald", "изумруд"], "burgundy": ["burgundy", "бордов", "вин"],
+            "rust": ["rust", "ржав", "терракот"], "cream": ["cream", "крем", "молочн"],
+            "charcoal": ["charcoal", "графит", "серый", "grey", "gray"],
+            "black": ["black", "чёрн", "черн"], "champagne": ["champagne", "шампан"],
+            "gold": ["gold", "золот"], "camel": ["camel", "кэмел", "верблюж"],
+            "ivory": ["ivory", "слоновая"], "red": ["red", "красн"], "white": ["white", "бел"],
+            "blue": ["blue", "син", "голуб"], "pink": ["pink", "розов"]}
+
+
+def _slug(text):
+    keep = [c if c.isalnum() else "-" for c in (text or "").casefold()]
+    s = "".join(keep).strip("-").replace("--", "-")
+    return s[:48] or "piece"
+
+
+def classify(description):
+    """Turn a free-text 'add this to your wardrobe' description into a wardrobe row,
+    inferring family / intimacy / colours so the picker can use it. Intimate pieces are
+    flagged surprise (the reveal tier). Deterministic id (slug) -> idempotent on re-add."""
+    text = (description or "").strip()
+    low = text.casefold()
+    colors = [name for name, kw in _PALETTE.items() if any(k in low for k in kw)]
+    if any(h in low for h in _INTIMATE_HINTS):
+        family, intimacy, surprise = "intimate", 4, True
+    elif any(h in low for h in _DRESS_HINTS):
+        family, intimacy, surprise = "dinner", 1, False
+    else:
+        family, intimacy, surprise = "day", 0, False
+    return {"id": f"user_{_slug(text)}", "name": text[:80], "family": family,
+            "season": [], "intimacy": intimacy, "colors": colors, "pieces": [text[:120]],
+            "footwear": None, "signature": False, "surprise": surprise}
+
+
+def summary(conn, lang, family=None):
+    """A tasteful, grouped listing of her wardrobe for 'show me your wardrobe'."""
+    fams = [family] if family else ["day", "home", "dinner", "formal", "intimate"]
+    titles = {"day": ("Повседневное", "Daywear"), "home": ("Домашнее", "Loungewear"),
+              "dinner": ("На выход / свидание", "Dinner & dates"),
+              "formal": ("Вечернее", "Formal"), "intimate": ("Для особых вечеров", "For special evenings")}
+    blocks = []
+    for f in fams:
+        items = store.wardrobe_candidates(conn, [f], 5)
+        if not items:
+            continue
+        names = "; ".join(o["name"] for o in items)
+        blocks.append(f"**{titles.get(f, (f, f))[0 if lang == 'ru' else 1]}**: {names}")
+    return "\n".join(blocks)
+
+
 def seed(conn):
     """Plant Cara's style + wardrobe once (idempotent)."""
     if not store.cara_style_get(conn):
