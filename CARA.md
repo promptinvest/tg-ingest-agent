@@ -218,6 +218,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     закрыла #1?", "что там с напоминаниями?" — is answered from the **real active list**
     (she explains a fired one is still open until "готово" and offers to close it), **not**
     by searching your notes. (An explicit "закрой #1" cancels it.)
+  - **Held during intimate / together moments.** A due reminder (and proactive nudges) will
+    **not interrupt** a live date/visit or an intimate exchange — it's held and delivered
+    once the moment passes (`intimate_quiet_minutes`), so a gratitude reminder never lands
+    mid‑intimacy. A reminder overdue past `reminder_max_defer_hours` is delivered anyway so
+    it's never lost.
   - **Rename** a reminder's title in place ("переименуй #2 в «Иван Доронин»").
   - **Reschedule / undo:** "перенеси напоминание про банк на пятницу" moves it; an
     explicit title that matches nothing active is reported (never silently moves a

@@ -1448,6 +1448,48 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertNotIn("*", a._intimacy_roleplay_directive("en"))  # no asterisk roleplay
         self.assertIn("роль", a._register_directive("ru"))
 
+    def test_intimate_moment_detection(self):
+        from datetime import datetime, timezone, timedelta
+        a = self.agent
+        self.assertTrue(a._is_intimate_message("возьми меня, я твоя"))
+        self.assertTrue(a._is_intimate_message("I want you, hold me close"))
+        self.assertFalse(a._is_intimate_message("во сколько встреча завтра?"))
+        store.kv_set(a.conn, "last_intimate_at", "")
+        self.assertFalse(a._in_intimate_moment())
+        store.kv_set(a.conn, "last_intimate_at", datetime.now(timezone.utc).isoformat())
+        self.assertTrue(a._in_intimate_moment())
+        store.kv_set(a.conn, "last_intimate_at",
+                     (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
+        self.assertFalse(a._in_intimate_moment())   # window passed
+
+    def test_reminder_held_during_intimacy_then_delivered(self):
+        from datetime import datetime, timezone, timedelta
+        conn = self.agent.conn
+        due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        store.reminder_add(conn, 1, "благодарности", due, "none")
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, *a, **k: sent.append(text)):
+            store.kv_set(conn, "last_intimate_at", datetime.now(timezone.utc).isoformat())
+            self.agent.fire_due_reminders()
+            self.assertEqual(sent, [])                       # held mid-intimacy
+            store.kv_set(conn, "last_intimate_at",
+                         (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
+            self.agent.fire_due_reminders()
+        self.assertTrue(any("благодарности" in s for s in sent))   # delivered once it passed
+
+    def test_reminder_fires_when_overdue_beyond_max_defer(self):
+        from datetime import datetime, timezone, timedelta
+        conn = self.agent.conn
+        due = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()  # > 2h max defer
+        store.reminder_add(conn, 1, "оплатить счёт", due, "none")
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, *a, **k: sent.append(text)):
+            store.kv_set(conn, "last_intimate_at", datetime.now(timezone.utc).isoformat())
+            self.agent.fire_due_reminders()
+        self.assertTrue(any("оплатить счёт" in s for s in sent))   # too overdue to keep holding
+
     def test_converse_context_surfaces_active_reminders(self):
         # She must know her own reminders in conversation, so "почему не закрыла #1?"
         # is answered from the real list (with a fired-but-open one marked), not notes.

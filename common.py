@@ -347,6 +347,13 @@ def load_config(env=None):
     # exchange, so it reads as keeping-in-touch, not pestering an absent boss.
     cfg.intimacy_outreach_after_contact_hours = float(
         env.get("INTIMACY_OUTREACH_AFTER_CONTACT_HOURS") or "6")
+    # Don't interrupt an intimate / together moment with business pings. While a social
+    # meeting is live, or for this many minutes after a clearly intimate message, a due
+    # reminder (and proactive nudges) are HELD and delivered once the moment passes — so a
+    # gratitude reminder never lands mid-intimacy. A reminder overdue beyond the max-defer
+    # is delivered anyway so it's never lost to a long evening.
+    cfg.intimate_quiet_minutes = int(env.get("INTIMATE_QUIET_MINUTES") or "25")
+    cfg.reminder_max_defer_hours = float(env.get("REMINDER_MAX_DEFER_HOURS") or "2")
     # Personality intensity (0 neutral .. 3 max; selects template variants only)
     cfg.personality_intensity = int(env.get("PERSONALITY_INTENSITY") or "2")
     # Knowledge Q&A (ask): semantic retrieval over the KB

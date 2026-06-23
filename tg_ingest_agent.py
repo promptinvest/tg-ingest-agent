@@ -345,8 +345,18 @@ class Agent:
     # -- Scheduler ticks
 
     def fire_due_reminders(self):
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        defer = self._in_intimate_moment(now)
         for row in store.reminders_due(self.conn, now_iso):
+            # Hold a due reminder during an intimate/together moment so it doesn't break it
+            # — it stays due and fires on a later tick once the moment passes. A reminder
+            # overdue past the max-defer fires anyway so it's never lost.
+            if defer:
+                due = reminders.parse_iso_utc(row["due_utc"])
+                if due is not None and (now - due).total_seconds() < \
+                        self.cfg.reminder_max_defer_hours * 3600:
+                    continue
             lang = self.lang()
             self.reply(row["chat_id"], T(lang, "reminder_fired",
                                          name=self.owner_name(), title=row["title"]))
@@ -704,6 +714,10 @@ class Agent:
         # When he last reached out — so proactive intimacy outreach stays within a live
         # exchange (keeping-in-touch), never pesters a long silence.
         store.kv_set(self.conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
+        # Mark an intimate moment so business pings (reminders/nudges) hold off and don't
+        # land mid-intimacy (the boss flagged a gratitude reminder interrupting).
+        if self._is_intimate_message(text):
+            store.kv_set(self.conn, "last_intimate_at", datetime.now(timezone.utc).isoformat())
         msg_id = msg.get("message_id")
         # If a meeting is in progress, every message he sends is part of it —
         # capture his turn verbatim into the meeting record. Routing is unchanged:
@@ -1523,6 +1537,43 @@ class Agent:
     def _is_relational_message(self, text):
         t = (text or "").casefold()
         return any(c in t for c in self._RELATIONAL_CUES)
+
+    # Stronger cues that he's in an INTIMATE moment right now (desire / roleplay /
+    # physical closeness) — used only to HOLD business pings so a reminder doesn't land
+    # mid-intimacy. Deferral is low-stakes, so a loose match is fine.
+    _INTIMACY_CUES = (
+        "хочу тебя", "возьми меня", "я твоя", "я твой", "обними меня", "прижми", "прижмись",
+        "поцелу", "целу", "разден", "твоё тело", "твое тело", "моё тело", "мое тело",
+        "губы", "кожа", "ласк", "стону", "до дрожи", "до безумия", "не отпускай",
+        "останься со мной", "сожми", "пульсаци", "сладк", "млею", "want you", "take me",
+        "i'm yours", "im yours", "kiss me", "kissing", "your body", "my body", "your lips",
+        "your skin", "touch me", "hold me close", "moan", "don't let go", "press against",
+        "crave you", "i'm aching", "make me",
+    )
+
+    def _is_intimate_message(self, text):
+        t = (text or "").casefold()
+        return any(c in t for c in self._INTIMACY_CUES)
+
+    def _in_intimate_moment(self, now=None):
+        """True when business pings should be HELD — a live social/personal meeting, or
+        within `intimate_quiet_minutes` of a clearly intimate message. So a reminder /
+        nudge waits and lands after the moment, never in the middle of it."""
+        now = now or datetime.now(timezone.utc)
+        owner = self._owner_chat()
+        if owner is not None:
+            live = store.meeting_active(self.conn, owner)
+            if live and meeting.is_social(live["kind"]):
+                return True
+        last = store.kv_get(self.conn, "last_intimate_at")
+        if last:
+            try:
+                if (now - datetime.fromisoformat(last)).total_seconds() < \
+                        self.cfg.intimate_quiet_minutes * 60:
+                    return True
+            except (ValueError, TypeError):
+                pass
+        return False
 
     def _closeness_stage(self):
         try:
@@ -3393,6 +3444,8 @@ class Agent:
         now = time.time()
         if now - self.last_proactive < self.cfg.proactive_interval:
             return
+        if self._in_intimate_moment():
+            return  # don't interrupt an intimate/together moment with a nudge
         self.last_proactive = now
         self.turn_lang = None  # scheduler context -> stored preference language
         chat_id = next(iter(self.cfg.allowed_chat_ids))
@@ -3465,6 +3518,8 @@ class Agent:
         s = proactive.settings(self.conn, self.cfg)
         if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
             return
+        if self._in_intimate_moment(now):
+            return  # hold the brief until an intimate/together morning passes
         store.kv_set(self.conn, "morning_brief_day", local.strftime("%Y-%m-%d"))  # once/day
         self.turn_lang = None
         lang = self.lang()
