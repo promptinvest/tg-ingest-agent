@@ -293,6 +293,9 @@ def load_config(env=None):
     # Shared-time meetings: auto-end a meeting left open and idle this long (a
     # forgotten-open meeting must not silently swallow later chat).
     cfg.meeting_idle_hours = float(env.get("MEETING_IDLE_HOURS") or "3")
+    # Social/personal time (a visit, a date, staying over) gets a far longer idle leash so
+    # an overnight stay survives till morning instead of silently auto-ending at 3h.
+    cfg.meeting_social_idle_hours = float(env.get("MEETING_SOCIAL_IDLE_HOURS") or "16")
     # Proactive day-after afterglow (the morning after a personal meeting she may,
     # occasionally, open with warm afterglow). Gentle: one-shot per meeting,
     # probability-gated, quiet-hours/proactive-prefs aware. Never clingy.

@@ -269,8 +269,15 @@ def idle_sweep(conn, cfg, now=None):
     from datetime import datetime, timezone, timedelta
     now = now or datetime.now(timezone.utc)
     cutoff = (now - timedelta(hours=cfg.meeting_idle_hours)).isoformat()
+    social_hours = getattr(cfg, "meeting_social_idle_hours", cfg.meeting_idle_hours)
+    social_cutoff = (now - timedelta(hours=social_hours)).isoformat()
     ended = []
     for m in store.meetings_idle(conn, cutoff):
+        # A visit/date/staying-over gets the longer leash, so an overnight stay survives
+        # till morning (he's still there); only end it past the social cutoff.
+        last = m["last_turn_at"] or m["started_at"] or ""
+        if is_social(m["kind"]) and last >= social_cutoff:
+            continue
         row, recap = end(conn, cfg, m["chat_id"], auto=True)
         if row:
             ended.append((row, recap))

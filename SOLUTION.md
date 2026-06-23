@@ -329,9 +329,17 @@ proactively like real memory. Design decisions and why:
   the boss's turn is teed into `meeting_turns` at the top of `dispatch` and Cara's
   into the same record from `reply()`. The router still runs, so **a real command
   raised mid-meeting still previews and confirms** — the safety spine is never
-  bypassed for the sake of the "session". Only an explicit wrap-up is `meeting_end`;
-  a forgotten-open meeting **idle-auto-ends** on the sweep tick (a stale session must
-  never silently swallow later chat).
+  bypassed for the sake of the "session". A wrap-up OR a clear **departure** ("я поехал",
+  "I'm heading out", "уже на работе") is `meeting_end`; a morning message that implies he's
+  STILL there continues it. A forgotten-open meeting **idle-auto-ends** on the sweep tick —
+  but a **social/visit/date meeting gets a long (overnight-surviving) leash**
+  (`meeting_social_idle_hours`, default 16h vs 3h for business), so **a stay-over isn't
+  silently ended while he sleeps** and the morning together continues. Background **memory
+  curation is paused while a meeting is live** — that intimate roleplay is captured by the
+  meeting's own end-summary, not mined for "behavioral corrections" (which mis-learned).
+- **She arrives consistent and dresses to please.** Attire scales with the setting and the
+  closeness stage, and **leans into what he's said he loves seeing her in** — to surprise
+  and please him next time. Tasteful and at most suggestive — never explicit.
 - **Episodic memory is kept SEPARATE on purpose.** Meetings never enter the notes
   inbox or the `ask` KB: that keeps note-numbers and the KB clean, and matches the
   boss's "separate long-term memory" ask. `meeting_chunks` mirror the notes `chunks`

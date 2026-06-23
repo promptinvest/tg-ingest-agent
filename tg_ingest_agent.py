@@ -1509,7 +1509,13 @@ class Agent:
             lvl = "Тепло и мило, немного для него." if ru else "Warm and pretty, a little for him."
         else:
             lvl = "Скромно и просто." if ru else "Modest and simple."
-        return base + scene + lvl
+        # Please him with what HE loves: if he's told you what he likes seeing you in,
+        # lean into that and surprise him with something in that spirit.
+        pref = (" Если он говорил, в чём ему нравится тебя видеть — учти это и порадуй его "
+                "чем-то в том же духе." if ru else
+                " If he's told you what he loves seeing you in, lean into that and surprise "
+                "him with something in that spirit.")
+        return base + scene + lvl + (pref if stage >= 3 else "")
 
     def _meeting_presence(self, lang, m):
         """The kind-aware 'you're together right now' context. Business stays
@@ -1871,6 +1877,12 @@ class Agent:
 
         When a correction is learned she TELLS him; when a learned correction
         recurs she tells him it needs a code fix."""
+        # NOT during a live meeting: that conversation is intimate roleplay/time together,
+        # not feedback about Cara's behaviour — mining it for "corrections" mis-learns
+        # garbled rules (and could pull intimate content into durable memory). The meeting
+        # has its own end-summary; normal curation resumes once it's over.
+        if store.meeting_active(self.conn, chat_id):
+            return
         key = f"converse_since_curate:{chat_id}"
         if not force:
             n = int(store.kv_get(self.conn, key, "0") or 0) + 1

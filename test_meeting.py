@@ -184,7 +184,8 @@ class MeetingLifecycleTests(unittest.TestCase):
     def test_idle_sweep_auto_ends(self):
         meeting.start(self.conn, 111, kind="dinner")
         m = meeting.active(self.conn, 111)
-        old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+        # a social meeting now has a long (overnight-surviving) leash — idle PAST it to end
+        old = (datetime.now(timezone.utc) - timedelta(hours=20)).isoformat()
         self.conn.execute("UPDATE meetings SET last_turn_at = ? WHERE id = ?", (old, m["id"]))
         store.meeting_turn_add(self.conn, m["id"], "boss", "вино у реки")
         # meeting_turn_add bumped last_turn_at; force it stale again

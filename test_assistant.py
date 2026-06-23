@@ -2475,6 +2475,40 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertIn(a, ids)            # richest kept
         self.assertNotIn(b, ids)         # duplicate deleted
 
+    def test_social_meeting_survives_overnight_idle_business_does_not(self):
+        import meeting
+        from datetime import datetime, timezone, timedelta
+        c = self.agent.conn
+        now = datetime.now(timezone.utc)
+        self.agent.cfg.meeting_idle_hours = 3
+        self.agent.cfg.meeting_social_idle_hours = 16
+        five_ago = (now - timedelta(hours=5)).isoformat()
+        v = store.meeting_schedule(c, 1, five_ago, kind="visit")     # a stay-over
+        store.meeting_activate(c, v)
+        b = store.meeting_schedule(c, 2, five_ago, kind="business")
+        store.meeting_activate(c, b)
+        for mid in (v, b):
+            c.execute("UPDATE meetings SET last_turn_at=? WHERE id=?", (five_ago, mid))
+        c.commit()
+        meeting.idle_sweep(c, self.agent.cfg, now=now)
+        self.assertIsNotNone(store.meeting_active(c, 1))   # visit survives 5h idle (overnight)
+        self.assertIsNone(store.meeting_active(c, 2))      # business ended at the 3h cap
+
+    def test_no_curation_during_active_meeting(self):
+        import memory_curator
+        c = self.agent.conn
+        store.meeting_activate(c, store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00",
+                                                         kind="visit"))
+        with mock.patch.object(memory_curator, "curate_conversation") as cur:
+            self.agent.maybe_curate_conversation(1, "ru", force=True)
+        cur.assert_not_called()   # in-meeting roleplay is never mined for "corrections"
+
+    def test_attire_leans_into_his_preferences_when_close(self):
+        c = self.agent.conn
+        store.kv_set(c, "closeness_stage", 5)
+        attire = self.agent._meeting_attire("visit", "у неё дома", "ru")
+        self.assertIn("в том же духе", attire)   # please him with what he loves
+
     def test_date_presence_is_bold_but_not_graphic(self):
         c = self.agent.conn
         mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
