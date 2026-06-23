@@ -388,6 +388,15 @@ CREATE TABLE IF NOT EXISTS meeting_chunks (
 -- she'll wear, what he brings, the plan) and emotional beats (her anticipation,
 -- longing). Accumulated during the lead-up, surfaced while planning AND carried into
 -- the live meeting so she stays consistent ("she's in that dress") and never surprised.
+-- The shared intimate LANGUAGE that lands between them: pet-names, terms of endearment,
+-- favoured playful/euphemistic phrasings (NON-explicit — style only). Injected so her
+-- teasing and hints feel personal and consistent over time.
+CREATE TABLE IF NOT EXISTS intimacy_style (
+  id INTEGER PRIMARY KEY,
+  text TEXT NOT NULL UNIQUE,
+  added_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS meeting_prep (
   id INTEGER PRIMARY KEY,
   meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
@@ -784,6 +793,26 @@ def meetings_upcoming(conn, chat_id, limit=10):
         "SELECT * FROM meetings WHERE chat_id = ? AND status = 'scheduled'"
         " ORDER BY scheduled_for LIMIT ?", (chat_id, limit),
     ).fetchall()
+
+
+def intimacy_style_add(conn, text):
+    """Remember one shared pet-name / endearment / favoured playful phrasing (style only,
+    non-explicit). Idempotent via UNIQUE(text); capped softly. Returns the id or None."""
+    text = str(text or "").strip()[:120]
+    if not text:
+        return None
+    try:
+        cur = conn.execute(
+            "INSERT INTO intimacy_style (text, added_at) VALUES (?, ?)", (text, _now()))
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.IntegrityError:
+        return None
+
+
+def intimacy_style_list(conn, limit=12):
+    return [r["text"] for r in conn.execute(
+        "SELECT text FROM intimacy_style ORDER BY id DESC LIMIT ?", (limit,))]
 
 
 def meeting_prep_add(conn, meeting_id, detail, kind="detail"):

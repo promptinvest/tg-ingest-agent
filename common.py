@@ -303,6 +303,13 @@ def load_config(env=None):
     cfg.afterglow_probability = float(env.get("AFTERGLOW_PROBABILITY") or "0.5")
     cfg.afterglow_window_hours = float(env.get("AFTERGLOW_WINDOW_HOURS") or "36")
     cfg.afterglow_min_age_hours = float(env.get("AFTERGLOW_MIN_AGE_HOURS") or "8")
+    # Proactive ANTICIPATION: in the lead-up to an agreed DATE she may, occasionally,
+    # tease him about what she's looking forward to (by hint/euphemism). Gentle: capped
+    # per meeting + once/day, probability-gated, quiet-hours/proactive-prefs aware.
+    cfg.anticipation_enabled = (env.get("ANTICIPATION_ENABLED") or "true").strip().lower() == "true"
+    cfg.anticipation_probability = float(env.get("ANTICIPATION_PROBABILITY") or "0.5")
+    cfg.anticipation_window_hours = float(env.get("ANTICIPATION_WINDOW_HOURS") or "12")
+    cfg.anticipation_max_per_meeting = int(env.get("ANTICIPATION_MAX_PER_MEETING") or "2")
     # Personality intensity (0 neutral .. 3 max; selects template variants only)
     cfg.personality_intensity = int(env.get("PERSONALITY_INTENSITY") or "2")
     # Knowledge Q&A (ask): semantic retrieval over the KB

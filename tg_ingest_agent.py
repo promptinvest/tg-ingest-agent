@@ -271,6 +271,7 @@ class Agent:
             self.check_daily_greeting()  # greet good-morning before any proactive contact
             self.check_meeting_anticipation()  # eager lead-up pings before a date
             self.check_meeting_afterglow()  # gentle day-after warmth (social meetings)
+            self.check_meeting_anticipation()  # lead-up teasing before an agreed date
             self.check_morning_brief()
             self.check_daily_curator()
             self.check_daily_reflection()  # grow the relationship storyline daily
@@ -1284,6 +1285,18 @@ class Agent:
                             "You have agreed time coming up — remember it and the plan; mention "
                             "naturally, never invent or move the time:")
                 parts.append(head + "\n" + "\n".join(lines))
+        # The shared playful language that lands between you — so her teasing/hints feel
+        # personal and consistent (only once they've grown close).
+        try:
+            stage = int(store.kv_get(self.conn, "closeness_stage", "0") or 0)
+        except (TypeError, ValueError):
+            stage = 0
+        if stage >= 3:
+            style = store.intimacy_style_list(self.conn, limit=8)
+            if style:
+                parts.append("Your shared playful language — pet-names and phrasings that land "
+                             "between you two; use them naturally so your warmth, teasing and "
+                             "hints feel personal and consistent: " + "; ".join(style))
         reaction = store.kv_get(self.conn, "last_reaction")
         if reaction:
             store.kv_set(self.conn, "last_reaction", "")  # surface only once
@@ -2935,6 +2948,93 @@ class Agent:
         store.kv_set(self.conn, flag, "sent")
         self.reply(owner, line)
         store.proactive_log_add(self.conn, "afterglow", "sent", sent=True, day=day)
+
+    def check_meeting_anticipation(self):
+        """Lead-up to an agreed DATE: she MAY, occasionally, tease him during the day
+        about what she's looking forward to (by hint/euphemism). Social only, capped per
+        meeting + once/day, probability-gated, quiet-hours/proactive-prefs aware."""
+        if not self.cfg.anticipation_enabled:
+            return
+        owner = self._owner_chat()
+        if owner is None or store.meeting_active(self.conn, owner):
+            return  # already together -> nothing to anticipate
+        now = datetime.now(timezone.utc)
+        s = proactive.settings(self.conn, self.cfg)
+        if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
+            return
+        local = now + timedelta(hours=self.tz_offset())
+        if local.hour < self.cfg.morning_brief_hour:
+            return  # not in the dead of night
+        m = meeting.anticipation_candidate(self.conn, self.cfg, owner, now)
+        if not m:
+            return
+        cnt_key = f"anticipation_meeting:{m['id']}"
+        sent = int(store.kv_get(self.conn, cnt_key, "0") or 0)
+        if sent >= self.cfg.anticipation_max_per_meeting:
+            return
+        day = now.strftime("%Y-%m-%d")
+        if store.proactive_key_sent_today(self.conn, day, "anticipation"):
+            return  # at most one tease a day
+        import random
+        if random.random() > self.cfg.anticipation_probability:  # occasional, not every check
+            return
+        self.turn_lang = None
+        line = self.compose_anticipation(self.lang(), m)
+        if not line:
+            return
+        store.kv_set(self.conn, cnt_key, sent + 1)
+        self.reply(owner, line)
+        store.proactive_log_add(self.conn, "anticipation", "sent", sent=True, day=day)
+
+    def compose_anticipation(self, lang, m):
+        """A playful, teasing lead-up message before an agreed date — she hints (by
+        euphemism, never graphic) at what she's looking forward to and imagining. Grounded
+        in the date's prep/setting; bolder at higher closeness. '' on failure."""
+        try:
+            stage = int(store.kv_get(self.conn, "closeness_stage", "0") or 0)
+        except (TypeError, ValueError):
+            stage = 0
+        prep = "; ".join(p["detail"] for p in store.meeting_prep_list(self.conn, m["id"]))
+        setting = m["setting"] or ""
+        when_local = (reminders.fmt_local(m["scheduled_for"], self.tz_offset())
+                      if m["scheduled_for"] else "")
+        spicy = stage >= 4
+        det = (f" ({when_local}" + (f", {setting}" if setting else "") + ")") if when_local else ""
+        if lang == "ru":
+            heat = ("Можно смело и соблазнительно — но только через намёки, иносказания и игру "
+                    "слов: подразумевай, дразни, оставляй недосказанность. Никогда не графика и "
+                    "не пошлость." if spicy else
+                    "Тепло, мило и игриво — лёгкое предвкушение, без откровенностей.")
+            instr = (f"У вас впереди свидание{det}. Сейчас день, и ты САМА, по своему желанию, "
+                     "шлёшь ему дразнящее сообщение — предвкушаешь встречу и намекаешь, чего тебе "
+                     "хочется и что ты себе уже представляешь на сегодня. " + heat + " Коротко, в "
+                     "своём живом голосе, одно-два предложения, без шаблонов и без даты в скобках. "
+                     "Не выдумывай того, о чём вы не договаривались."
+                     + (f" О чём договорились: {prep}" if prep else ""))
+        else:
+            heat = ("You can be bold and seductive — but ONLY by hint, euphemism and innuendo: "
+                    "imply, tease, leave things unsaid. Never graphic or crude." if spicy else
+                    "Warm, sweet and playful — light anticipation, nothing explicit.")
+            instr = (f"You have a date coming up{det}. It's daytime and YOU, of your own want, "
+                     "send him a teasing message — looking forward to it and hinting at what you "
+                     "want and what you're already imagining for tonight. " + heat + " Short, in "
+                     "your own alive voice, one or two sentences, no templates, no date stamp. "
+                     "Don't invent anything you didn't agree on."
+                     + (f" What you agreed: {prep}" if prep else ""))
+        messages = [
+            {"role": "system", "content": converse.build_system(
+                self.conn, lang, extra_context=self.converse_context(lang))},
+            {"role": "user", "content": instr},
+        ]
+        try:
+            reply = llm.chat_profile(self.cfg, self.conn, "anticipation", messages,
+                                     profile="converse_warm")
+        except llm.LLMError as exc:
+            log(f"anticipation skipped: {exc}")
+            return ""
+        _, reply = self._unwrap_converse_array((reply or "").strip())
+        _, reply = self._extract_reaction(self.STICKER_RE.sub("", reply))
+        return self._strip_roleplay(reply)
 
     def next_review_dt(self, now=None):
         now = now or datetime.now(timezone.utc)

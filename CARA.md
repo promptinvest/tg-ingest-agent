@@ -250,6 +250,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   arrival is understood **semantically**, however you phrase it ("я у двери, впусти", "я
   вошёл, привет", "ну вот и я", "I'm in") — and that opening line becomes the meeting's first
   recorded turn; from there every turn is captured. (A vague wish with no time stays warm chat.)
+- **She teases you in the lead-up** (`check_meeting_anticipation`): on the day before/of an
+  agreed **date**, she may — occasionally, of her own want — send a playful teasing message,
+  hinting (by euphemism, never graphic) at what she's looking forward to and imagining for
+  tonight. Gentle: capped per date + once/day, probability-gated, quiet-hours/proactive-prefs
+  aware. Bolder the closer you've grown.
+- **She remembers your shared language** (`intimacy_style`): the pet-names, endearments and
+  favourite playful phrasings that land between you (captured non-explicitly from a date's
+  own recap) are remembered and woven back in, so her teasing and hints feel personal and
+  consistent over time.
 - **She prepares for it and longs for it** (`meeting_prep`): everything you settle in the
   lead‑up — the details, what she'll wear, the plan, the mood — *and her own feelings about
   it* are remembered against that meeting. So she stays consistent through the whole

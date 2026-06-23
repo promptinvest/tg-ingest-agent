@@ -2475,6 +2475,31 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertIn(a, ids)            # richest kept
         self.assertNotIn(b, ids)         # duplicate deleted
 
+    def test_anticipation_candidate_and_compose(self):
+        import meeting, llm
+        from datetime import datetime, timezone, timedelta
+        c = self.agent.conn
+        now = datetime.now(timezone.utc)
+        mid = store.meeting_schedule(c, 1, (now + timedelta(hours=4)).isoformat(),
+                                     kind="date", setting="у неё")  # within 12h window
+        store.meeting_schedule(c, 2, (now + timedelta(hours=30)).isoformat(), kind="date")  # too far
+        self.assertEqual(meeting.anticipation_candidate(c, self.agent.cfg, 1, now)["id"], mid)
+        self.assertIsNone(meeting.anticipation_candidate(c, self.agent.cfg, 2, now))
+        with mock.patch.object(llm, "chat_profile",
+                               return_value="скучаю и уже придумала, чем тебя занять 😏"):
+            line = self.agent.compose_anticipation("ru", store.meeting_get(c, mid))
+        self.assertIn("скучаю", line)
+
+    def test_intimacy_style_store_dedup_and_inject(self):
+        c = self.agent.conn
+        store.intimacy_style_add(c, "он зовёт тебя «миленькая»")
+        store.intimacy_style_add(c, "он зовёт тебя «миленькая»")   # dedup
+        self.assertEqual(len(store.intimacy_style_list(c)), 1)
+        store.kv_set(c, "closeness_stage", 4)
+        self.assertIn("миленькая", self.agent.converse_context("ru", chat_id=1))
+        store.kv_set(c, "closeness_stage", 1)                       # not when not close yet
+        self.assertNotIn("миленькая", self.agent.converse_context("ru", chat_id=1))
+
     def test_social_meeting_survives_overnight_idle_business_does_not(self):
         import meeting
         from datetime import datetime, timezone, timedelta

@@ -181,6 +181,17 @@ class MeetingLifecycleTests(unittest.TestCase):
         self.assertTrue(items)
         self.assertEqual(items[0]["kind"], "dinner")
 
+    def test_social_meeting_end_captures_endearments(self):
+        meeting.start(self.conn, 111, kind="visit")
+        m = meeting.active(self.conn, 111)
+        store.meeting_turn_add(self.conn, m["id"], "boss", "привет, миленькая")
+        recap = ('{"summary":"тёплый вечер","decisions":[],"highlights":[],'
+                 '"endearments":["он зовёт тебя миленькая"]}')
+        with mock.patch.object(llm, "chat_profile", return_value=recap), \
+                mock.patch.object(llm, "embed", side_effect=fake_embed):
+            meeting.end(self.conn, self.cfg, 111)
+        self.assertIn("он зовёт тебя миленькая", " ".join(store.intimacy_style_list(self.conn)))
+
     def test_idle_sweep_auto_ends(self):
         meeting.start(self.conn, 111, kind="dinner")
         m = meeting.active(self.conn, 111)

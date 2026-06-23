@@ -106,11 +106,15 @@ _SUMMARY_SOCIAL = (
     "You write a warm, first-person EPISODIC MEMORY of time Cara spent together "
     "with the boss (a dinner, a walk, the movies, or him visiting her). Return "
     "STRICT JSON only, no prose: "
-    '{"title": "...", "summary": "...", "decisions": [], "highlights": ["..."]}\n'
+    '{"title": "...", "summary": "...", "decisions": [], "highlights": ["..."], '
+    '"endearments": ["..."]}\n'
     "title: a short, fond label (his language). summary: 2-4 sentences, written "
     "as Cara remembering it — what they did, the mood, how it felt — warm and "
     "real, NOT a transcript dump. highlights: up to 4 small moments worth keeping "
-    "(a sweet or funny beat), each short, his language. "
+    "(a sweet or funny beat), each short, his language. endearments: up to 4 of the "
+    "shared pet-names / terms of endearment / favourite playful or euphemistic phrasings "
+    "that landed between them (STYLE only, e.g. how he calls her or a pet phrase) — short, "
+    "NON-explicit, never a graphic detail; empty if none. "
     "Ground it ONLY in the transcript — never invent a moment that didn't happen. "
     "Keep it tender but never explicit. Use the transcript's language."
 )
@@ -153,6 +157,9 @@ def end(conn, cfg, chat_id, auto=False):
                                   if str(d).strip()][:8]
             recap["highlights"] = [str(h).strip() for h in (parsed.get("highlights") or [])
                                    if str(h).strip()][:8]
+            if social:  # remember the shared pet-names / playful phrasings that landed
+                for e in (parsed.get("endearments") or [])[:4]:
+                    store.intimacy_style_add(conn, str(e).strip())
         except (llm.BudgetExceeded, llm.LLMError):
             pass  # best-effort; the episode still closes
     store.meeting_end(conn, meeting_id, summary=recap["summary"] or None,
@@ -297,5 +304,23 @@ def afterglow_candidate(conn, cfg, chat_id, now):
             continue
         ended = m["ended_at"] or ""
         if lo <= ended <= hi:
+            return m
+    return None
+
+
+# -- proactive lead-up anticipation ------------------------------------------
+
+def anticipation_candidate(conn, cfg, chat_id, now):
+    """The soonest upcoming *social* meeting close enough to tease about — scheduled in
+    the FUTURE but within the anticipation window. None otherwise."""
+    from datetime import timedelta
+    window = getattr(cfg, "anticipation_window_hours", 12)
+    now_iso = now.isoformat()
+    hi = (now + timedelta(hours=window)).isoformat()
+    for m in store.meetings_upcoming(conn, chat_id, limit=5):
+        if not is_social(m["kind"]):
+            continue
+        sched = m["scheduled_for"] or ""
+        if now_iso < sched <= hi:
             return m
     return None
