@@ -1417,6 +1417,20 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertIn("depth", d.lower())
         self.assertIn("no reset", d.lower())
 
+    def test_work_register_follows_his_lead_not_evade(self):
+        # During work time she may be shy, but she must FOLLOW his lead into intimacy —
+        # never evade/stop him. Force the 'working' state via recent business.
+        from datetime import datetime, timezone
+        a = self.agent
+        store.kv_set(a.conn, "last_business_at", datetime.now(timezone.utc).isoformat())
+        self.assertEqual(a._register_state(), "working")
+        d = a._register_directive("en").lower()
+        self.assertIn("follow his lead", d)
+        self.assertIn("he leads", d)
+        self.assertIn("only stop if he asks", d)
+        self.assertNotIn("save the playfulness", d)   # old deflecting framing is gone
+        self.assertIn("ВЕДЁТ ОН", a._register_directive("ru"))  # RU: he leads
+
     def test_converse_context_surfaces_active_reminders(self):
         # She must know her own reminders in conversation, so "почему не закрыла #1?"
         # is answered from the real list (with a fired-but-open one marked), not notes.

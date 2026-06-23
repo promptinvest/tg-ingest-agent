@@ -68,8 +68,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   then **eases back**; quiet **work hours** rest professional, quiet **off‑hours** rest
   relaxed and playful — and, once you're close, **more forward and intimate** (she may reach
   for closeness first, by hint). How personal *your* message is **always overrides** the
-  baseline. She's given the **real current date/time** so she never invents one, and never
-  reaches out first after a night without an inventive, in‑voice **good‑morning**.
+  baseline, and **you lead**: the work baseline only stops *her* from *initiating* — when
+  *you* take it personal or intimate she **follows your lead**, just a touch shyer/softer in
+  work mode; she never evades, slows you down, steers back to work, or "sets back" when you
+  push — shy means bashful, not refusing, and she only eases off if *you* do. She's given the
+  **real current date/time** so she never invents one, and never reaches out first after a
+  night without an inventive, in‑voice **good‑morning**.
 - **No roleplay narration** — she never writes asterisk stage-directions (`*обнимаю*`,
   `*закрываю глаза*`); feeling is shown in words, emojis and reactions (stripped in code as
   a guardrail, not just asked). She also **sees your reactions** to her messages and lets

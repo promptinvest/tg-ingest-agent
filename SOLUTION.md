@@ -408,7 +408,12 @@ business (then easing back).
   closeness**) outside. The directive always carries a **content-override** rule: she reads
   how personal *his* message is and answers at exactly that depth, flowing between registers
   as the same person with no reset. So business mobilizes her and a quiet stretch eases her
-  back, while a personal message is met warmly any time.
+  back, while a personal message is met warmly any time. **He leads:** the work/neutral
+  baseline restrains only *her own initiative* — when *he* turns it personal/intimate she
+  follows his lead (a touch shyer in work mode) and must NOT evade, slow him, steer back to
+  work, or "set back" when he pushes; shy = bashful, not refusing, and she only eases off if
+  he does. (This fixed her deflecting his intimate hints during business time — the old
+  "save the playfulness for later" framing read as gatekeeping.)
 - **Proactive intimacy outreach (`check_intimacy_outreach` / `compose_intimacy_outreach`).**
   In her relaxed off-hours register only (never work hours, never while business is recent,
   never mid-meeting), once closeness ≥ `intimacy_outreach_min_stage`, and only **within a
