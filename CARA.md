@@ -201,7 +201,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   - **A fired reminder stays open** (visible, still pending) until you explicitly say
     "готово" — she never auto‑closes it on a misread. **Snooze** by minutes, hours, or an
     absolute time ("через полчаса", "отложи на час", "до завтра в 9") **re‑arms the same
-    reminder** (keeps its id, recurrence and history — no orphaned new row).
+    reminder** (keeps its id, recurrence and history — no orphaned new row). The reminder
+    **list marks status** — a one‑shot that already fired shows *"⚠️ сработало, ждёт «готово»"*
+    and a past‑due one *"⚠️ просрочено"*, so an old reminder never looks like a future one.
+  - **She knows her own reminders in conversation.** Asking *about* a reminder — "почему не
+    закрыла #1?", "что там с напоминаниями?" — is answered from the **real active list**
+    (she explains a fired one is still open until "готово" and offers to close it), **not**
+    by searching your notes. (An explicit "закрой #1" cancels it.)
   - **Rename** a reminder's title in place ("переименуй #2 в «Иван Доронин»").
   - **Reschedule / undo:** "перенеси напоминание про банк на пятницу" moves it; an
     explicit title that matches nothing active is reported (never silently moves a

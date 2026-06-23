@@ -253,6 +253,13 @@ class RouterTests(unittest.TestCase):
         self.assertIn("pending action awaiting", prompt2)
         self.assertIn("reminder", prompt2)
 
+    def test_reminder_status_question_steers_to_converse(self):
+        # "почему не закрыла #1?" must NOT route to ask (notes) — it's about her own
+        # reminders, answered in converse from the real reminder list.
+        prompt = router.build_system_prompt(self.cfg, None)
+        self.assertIn("HER REMINDERS", prompt)
+        self.assertIn("почему не закрыла #1", router.ROUTER_EXAMPLES)
+
     def test_detect_smalltalk(self):
         self.assertEqual(router.detect_smalltalk("кто ты?"), "who_are_you")
         self.assertEqual(router.detect_smalltalk("Are you human?"), "who_are_you")
@@ -335,6 +342,25 @@ class RemindersTests(unittest.TestCase):
         listing = reminders.format_list(rows, 3, "ru")
         self.assertIn("#1 2026-06-13 10:00", listing)
         self.assertIn("еженедельно", listing)
+
+    def test_list_marks_fired_and_overdue(self):
+        now = datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc)
+        rows = [
+            # a one-shot that already fired but wasn't confirmed -> still open
+            {"id": 1, "title": "пиво", "due_utc": "2026-06-22T18:31:00Z",
+             "recurrence": "none", "last_fired_at": "2026-06-22T18:31:05Z"},
+            # a future one-shot -> no marker
+            {"id": 2, "title": "Азербайджан", "due_utc": "2026-06-24T15:00:00Z",
+             "recurrence": "none", "last_fired_at": None},
+        ]
+        out = reminders.format_list(rows, 3, "ru", now=now)
+        self.assertIn("ждёт «готово»", out)          # fired one-shot is marked
+        self.assertNotIn("просрочено", out)           # the fired one isn't double-marked
+        # the future reminder line carries no status marker
+        self.assertNotIn("Азербайджан — ⚠️", out)
+        # status helper directly: fired vs overdue vs clean
+        self.assertEqual(reminders.reminder_status_mark(rows[0], "en", now), 'fired, awaiting "done"')
+        self.assertEqual(reminders.reminder_status_mark(rows[1], "en", now), "")
 
 
 class SpendTests(unittest.TestCase):
@@ -1390,6 +1416,21 @@ class ConversationDispatchTests(unittest.TestCase):
         d = a._register_directive("en")
         self.assertIn("depth", d.lower())
         self.assertIn("no reset", d.lower())
+
+    def test_converse_context_surfaces_active_reminders(self):
+        # She must know her own reminders in conversation, so "почему не закрыла #1?"
+        # is answered from the real list (with a fired-but-open one marked), not notes.
+        from datetime import datetime, timezone
+        conn = self.agent.conn
+        # a one-shot that already fired but wasn't confirmed -> still active/open
+        rid = store.reminder_add(conn, 1, "пиво для Наташа", "2026-06-22T18:31:00+00:00", "none")
+        conn.execute("UPDATE reminders SET last_fired_at = ? WHERE id = ?",
+                     ("2026-06-22T18:31:05+00:00", rid))
+        conn.commit()
+        ctx = self.agent.converse_context("ru", 1)
+        self.assertIn("пиво для Наташа", ctx)
+        self.assertIn("ждёт «готово»", ctx)               # fired one-shot marked open
+        self.assertIn("НАСТОЯЩИЙ список", ctx)             # answer from reminders, not notes
 
     def test_is_reminder_ack(self):
         import tg_ingest_agent

@@ -144,6 +144,7 @@ NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and
 "сделай отчёт файлом" / "export the review as md" -> {"action": "review", "params": {"period": "week", "export": true}, "confidence": 0.9}
 "когда мой рейс?" / "when is my flight?" -> {"action": "ask", "params": {"question": "когда мой рейс?"}, "confidence": 0.9}
 "что у нас по плану на сегодня?" / "what's the plan for today?" -> {"action": "ask", "params": {"question": "что у нас по плану на сегодня?"}, "confidence": 0.9}
+"почему не закрыла #1?" / "почему #2 ещё не закрыто?" / "что с напоминанием про банк?" / "why didn't you close #1?" (asking about one of HER reminders) -> {"action": "converse", "params": {}, "confidence": 0.9}
 "во сколько выезд в аэропорт?" -> {"action": "ask", "params": {"question": "во сколько выезд в аэропорт?"}, "confidence": 0.85}
 "как ты устроена?" / "из чего ты сделана?" / "ты на каком ИИ работаешь?" / "how are you built?" / "are you built on GPT?" -> {"action": "self_query", "params": {}, "confidence": 0.85}
 "расскажи о себе" / "какая ты?" / "как твои дела?" / "что делаешь?" / "как прошёл день?" / "tell me about yourself" / "how was your day?" -> {"action": "converse", "params": {}, "confidence": 0.9}
@@ -265,6 +266,12 @@ def build_system_prompt(cfg, pending, now_utc=None):
         "But a question about CARA herself — her behaviour, feelings, or whether SHE will"
         " do/use something ('ты используешь это?', 'тебе нравится?', 'будешь пользоваться?',"
         " 'do you like it?') — is NOT 'ask'; it's 'converse' (she answers warmly herself).\n"
+        "A question about one of HER REMINDERS — its status or why it isn't closed/done"
+        " ('почему не закрыла #1?', 'почему #2 не закрыто?', 'что с напоминанием про X?',"
+        " 'why didn't you close #1?') — is 'converse' (she knows her own active reminders"
+        " and answers from them); it is NOT 'ask' (his saved notes) and NOT reminder_cancel"
+        " (he's asking WHY, not telling her to cancel). An explicit 'закрой #1'/'close #1'"
+        " IS reminder_cancel.\n"
         "A question about what she KNOWS about HIM as facts ('что ты обо мне знаешь?',"
         " 'what do you know about me?') is 'boss_query'. But a question about US — their"
         " RELATIONSHIP, how the two of them are together, their shared story or how she"

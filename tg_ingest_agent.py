@@ -1278,6 +1278,33 @@ class Agent:
                     return common.to_reaction(emo), rest.lstrip()
         return None, reply
 
+    def _active_reminders_context(self, chat_id, lang, limit=10):
+        """Compact view of her own active reminders (display #, local time, title and
+        status) for the converse prompt, so a question about a reminder is answered from
+        the real list — including that a fired one-shot stays OPEN until he says «готово»
+        — never by hallucinating over his notes. '' when there are none."""
+        rows = store.reminders_active(self.conn, chat_id)
+        if not rows:
+            return ""
+        now = datetime.now(timezone.utc)
+        lines = []
+        for i, row in enumerate(rows[:limit], start=1):
+            when = reminders.fmt_local(row["due_utc"], self.tz_offset())
+            mark = reminders.reminder_status_mark(row, lang, now)
+            recur = "" if row["recurrence"] == "none" else f" ({T(lang, 'recurrence_' + row['recurrence'])})"
+            lines.append(f"  #{i} {when} — {row['title']}{recur}"
+                         + (f" [{mark}]" if mark else ""))
+        head = ("Твои активные напоминания прямо сейчас (это НАСТОЯЩИЙ список — отвечай про "
+                "напоминания только по нему, не из заметок). Разовое напоминание после "
+                "срабатывания остаётся ОТКРЫТЫМ, пока он не подтвердит «готово»; если он "
+                "спрашивает, почему оно не закрыто — объясни это и предложи закрыть:"
+                if lang == "ru" else
+                "Your active reminders right now (this is the REAL list — answer reminder "
+                "questions from it, never from his notes). A one-shot reminder stays OPEN "
+                "after it fires until he confirms 'done'; if he asks why one isn't closed, "
+                "explain that and offer to close it:")
+        return head + "\n" + "\n".join(lines)
+
     def converse_context(self, lang, chat_id=None):
         """Live context for the conversation prompt: time of day (boss's, and
         Cara's own if her timezone differs), the review schedule, the relationship
@@ -1303,9 +1330,16 @@ class Agent:
         threads = relationship.ongoing_threads(self.conn, lang)
         if threads:
             parts.append("Open threads right now (mention only if it fits): " + "; ".join(threads))
+        owner_chat = chat_id if chat_id is not None else self._owner_chat()
+        # Her own active reminders — so when he asks about one ("почему не закрыла #1?",
+        # "что там с напоминаниями?") she answers from the REAL list and its status, not
+        # by searching his notes. A fired one-shot stays open until he confirms "готово".
+        if owner_chat is not None:
+            rem = self._active_reminders_context(owner_chat, lang)
+            if rem:
+                parts.append(rem)
         # The relationship storyline backbone — injected every turn so her baseline
         # warmth/closeness tracks how the relationship has actually developed.
-        owner_chat = chat_id if chat_id is not None else self._owner_chat()
         arc = relationship.arc_context(self.conn, lang, owner_chat)
         if arc:
             parts.append(arc)

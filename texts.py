@@ -179,6 +179,11 @@ TEXTS = {
         "en": "No active reminders — all clear 🌿",
     },
     "reminder_list_header": {"ru": "Ваши напоминания:", "en": "Your reminders:"},
+    "reminder_mark_fired": {
+        "ru": "сработало, ждёт «готово»",
+        "en": "fired, awaiting \"done\"",
+    },
+    "reminder_mark_overdue": {"ru": "просрочено", "en": "overdue"},
     "reminder_cancelled": {
         "ru": "Отменила #{rid}: {title}.",
         "en": "Cancelled #{rid}: {title}.",

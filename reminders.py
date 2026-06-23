@@ -50,12 +50,34 @@ def fmt_local(due_iso, offset_hours):
     return local.strftime("%Y-%m-%d %H:%M")
 
 
-def format_list(rows, offset_hours, lang):
+def reminder_status_mark(row, lang, now=None):
+    """A short status marker for a reminder a list shows: a one-shot that already
+    fired but wasn't confirmed ('сработало, ждёт «готово»') or one simply overdue
+    ('просрочено'). '' for a normal pending/recurring one. So an overdue reminder in
+    the list never looks the same as a future one — the boss isn't left guessing why
+    yesterday's reminder is still there."""
+    now = now or datetime.now(timezone.utc)
+    try:                                  # sqlite3.Row -> IndexError; dict -> KeyError
+        fired = row["last_fired_at"]
+    except (KeyError, IndexError):
+        fired = None
+    if row["recurrence"] == "none" and fired:
+        return T(lang, "reminder_mark_fired")
+    due = parse_iso_utc(row["due_utc"])
+    if due is not None and due <= now:
+        return T(lang, "reminder_mark_overdue")
+    return ""
+
+
+def format_list(rows, offset_hours, lang, now=None):
     if not rows:
         return T(lang, "reminder_list_empty")
     lines = [T(lang, "reminder_list_header")]
     for i, row in enumerate(rows, start=1):  # contiguous 1..N display numbers
         suffix = "" if row["recurrence"] == "none" else f" ({T(lang, 'recurrence_' + row['recurrence'])})"
+        mark = reminder_status_mark(row, lang, now)
+        if mark:
+            suffix += f" — ⚠️ {mark}"
         lines.append(f"  #{i} {fmt_local(row['due_utc'], offset_hours)} — {row['title']}{suffix}")
     return "\n".join(lines)
 
