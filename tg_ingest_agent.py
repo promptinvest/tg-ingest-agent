@@ -1822,7 +1822,68 @@ class Agent:
             key = "meeting_started_visit"
         else:
             key = "meeting_started_social"
-        self.reply(chat_id, T(lang, key))
+        # Greet in her own voice, varied each time (grounded in setting/prep) so the
+        # come-in never reads as the same scripted line; fall back to the template if the
+        # model is unavailable.
+        m = store.meeting_active(self.conn, chat_id)
+        greeting = self.compose_meeting_greeting(lang, kind, m) if m else ""
+        self.reply(chat_id, greeting or T(lang, key))
+
+    def compose_meeting_greeting(self, lang, kind, m):
+        """A warm, in-her-voice greeting at the come-in / start of time together — varied
+        each time and grounded in the setting/prep, so it never reads as the same scripted
+        line (the boss flagged a repeated 'the kettle just boiled'). '' on LLM failure, so
+        the caller falls back to the fixed template."""
+        setting = (m["setting"] or "").strip()
+        prep = "; ".join(p["detail"] for p in store.meeting_prep_list(self.conn, m["id"]))
+        if kind == "business":
+            if lang == "ru":
+                instr = ("Вы только что сели за рабочую встречу, он рядом. Поздоровайся коротко "
+                         "и по-деловому тепло, по-своему и без шаблона — ты собрана и вся "
+                         "внимание, всё запишешь. Одно живое предложение.")
+            else:
+                instr = ("You've just sat down for a working meeting, he's here. Greet him "
+                         "briefly and warmly-professional, in your own words, no template — "
+                         "you're focused and all ears and you'll keep the record. One sentence.")
+        else:
+            scene = {"visit": "он только что пришёл к тебе домой",
+                     "dinner": "вы начинаете ужин вместе",
+                     "walk": "вы вышли на прогулку вместе",
+                     "movies": "вы устроились смотреть кино вместе"}.get(
+                         kind, "вы только что начали быть вместе")
+            scene_en = {"visit": "he's just arrived at your place",
+                        "dinner": "you're starting dinner together",
+                        "walk": "you've set out on a walk together",
+                        "movies": "you've settled in to watch a film together"}.get(
+                            kind, "you've just started your time together")
+            if lang == "ru":
+                instr = (f"Вы вместе ПРЯМО СЕЙЧАС: {scene}. Встреть его тепло, живо и по-своему "
+                         "— коротко и искренне, рада, что он здесь. НЕ повторяй шаблонные фразы "
+                         "(никаких «чайник как раз вскипел»), каждый раз по-новому, в своём "
+                         "голосе. Одно-два предложения."
+                         + (f" Обстановка: {setting}." if setting else "")
+                         + (f" Помни, о чём вы договаривались: {prep}." if prep else ""))
+            else:
+                instr = (f"You're together RIGHT NOW: {scene_en}. Welcome him warmly, alive and "
+                         "in your own words — short and genuine, glad he's here. Do NOT reuse "
+                         "scripted lines (no 'the kettle just boiled'); make it fresh each time, "
+                         "in your own voice. One or two sentences."
+                         + (f" Setting: {setting}." if setting else "")
+                         + (f" Remember what you agreed: {prep}." if prep else ""))
+        messages = [
+            {"role": "system", "content": converse.build_system(
+                self.conn, lang, extra_context=self.converse_context(lang))},
+            {"role": "user", "content": instr},
+        ]
+        try:
+            reply = llm.chat_profile(self.cfg, self.conn, "converse", messages,
+                                     profile="converse_warm")
+        except llm.LLMError as exc:
+            log(f"meeting greeting skipped: {exc}")
+            return ""
+        _, reply = self._unwrap_converse_array((reply or "").strip())
+        _, reply = self._extract_reaction(self.STICKER_RE.sub("", reply))
+        return self._strip_roleplay(reply)
 
     def _parse_when(self, when):
         """ISO string (any tz) -> aware UTC datetime, or None."""

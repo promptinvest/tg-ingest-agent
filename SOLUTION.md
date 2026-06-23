@@ -316,7 +316,13 @@ proactively like real memory. Design decisions and why:
   hasn't shown up, a poll-loop tick **pings/waits** ("я жду, ты собирался зайти") rather than
   silently going live — and HIS *come-in* ("я у двери, впусти" / "я пришёл") activates the
   agreed scheduled meeting (carrying its setting + prep), via `_scheduled_now`, instead of
-  spinning up a blank one. A vague timeless wish stays `converse`.
+  spinning up a blank one. **En route is not arrival:** the router routes "я еду к тебе" /
+  "on my way" / "almost there" to `converse` (eager waiting), NOT `meeting_start` — only an
+  actually-here signal is the come-in (fixed a bug where she replied "заходи… я рада, что ты
+  пришёл" while he was still on the way). The come-in welcome is **LLM-composed and varied**
+  (`compose_meeting_greeting`, grounded in setting/prep, falls back to the fixed template only
+  on model failure) — replacing the static `meeting_started_*` line that read as a script
+  ("чайник как раз вскипел" every time). A vague timeless wish stays `converse`.
 - **Prep continuity + anticipation for an upcoming meeting (`meeting_prep`).** While a
   date/meeting is being set up, agreed details/logistics and **emotional beats** (her
   longing, nerves) are extracted from the lead-up conversation (a small pass on the curator

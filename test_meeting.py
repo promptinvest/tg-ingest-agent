@@ -104,6 +104,13 @@ class RouterMeetingTests(unittest.TestCase):
         self.assertIn("про нас", router.ROUTER_EXAMPLES)
         self.assertIn("what do you remember about us?", router.ROUTER_EXAMPLES)
 
+    def test_en_route_is_not_arrival(self):
+        # "я еду к тебе" / "on my way" must NOT become a come-in (meeting_start) — he
+        # hasn't arrived; it's converse (she waits, eager). Guards the screenshot bug.
+        self.assertIn("EN ROUTE", router.ROUTER_EXAMPLES)
+        self.assertIn("я еду к тебе", router.ROUTER_EXAMPLES)
+        self.assertIn("ARRIVAL means he is HERE NOW", router.ROUTER_EXAMPLES)
+
     def test_personal_spectrum_steering_present(self):
         # The full personal/intimate spectrum — even mid-work — must route to
         # converse, and feelings-about-a-meeting must NOT collapse into a
@@ -353,7 +360,8 @@ class MeetingDispatchTests(unittest.TestCase):
         # 1. start a dinner
         sent = self.drive({"message": self._msg(1, "пойдём поужинаем?")},
                           {"router": '{"action":"meeting_start","params":{"kind":"dinner"},'
-                                     '"confidence":0.9}'})
+                                     '"confidence":0.9}',
+                           "converse": "Как же я рада 🤍 идём, сядем поудобнее."})
         self.assertTrue(sent)
         m = self._active()
         self.assertIsNotNone(m)
@@ -474,7 +482,8 @@ class MeetingDispatchTests(unittest.TestCase):
         soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         mid = store.meeting_schedule(self.conn, 111, soon, kind="visit", setting="у тебя дома")
         store.meeting_prep_add(self.conn, mid, "ты в синем платье", kind="agreement")
-        with mock.patch.object(self.agent, "reply"):
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "compose_meeting_greeting", return_value=""):
             self.agent.do_meeting_start(111, "ru", {"kind": "visit"})
         active = store.meeting_active(self.conn, 111)
         self.assertIsNotNone(active)
@@ -486,7 +495,8 @@ class MeetingDispatchTests(unittest.TestCase):
         # His varied arrival line ("я вошёл, привет") becomes the meeting's first turn.
         soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         mid = store.meeting_schedule(self.conn, 111, soon, kind="visit", setting="у тебя дома")
-        with mock.patch.object(self.agent, "reply"):
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "compose_meeting_greeting", return_value=""):
             self.agent.do_meeting_start(111, "ru", {"kind": "visit"}, "я вошёл, привет")
         turns = store.meeting_turns(self.conn, mid)
         self.assertTrue(any(t["role"] == "boss" and "вошёл" in t["text"] for t in turns))
@@ -522,9 +532,28 @@ class MeetingDispatchTests(unittest.TestCase):
         self.assertEqual(len(sent), 0)              # business gets no anticipation pings
 
     def test_spontaneous_meeting_starts_new_when_nothing_scheduled(self):
-        with mock.patch.object(self.agent, "reply"):
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "compose_meeting_greeting", return_value=""):
             self.agent.do_meeting_start(111, "ru", {"kind": "walk"})
         self.assertIsNotNone(store.meeting_active(self.conn, 111))        # fresh meeting
+
+    def test_come_in_greeting_is_composed_not_scripted(self):
+        # The come-in greeting is LLM-composed in her voice, not the fixed kettle template.
+        sent = self.drive(
+            {"message": self._msg(7, "я вошёл, привет")},
+            {"router": '{"action":"meeting_start","params":{"kind":"visit"},"confidence":0.9}',
+             "converse": "Ну наконец-то ты тут 🤍 я тебя заждалась."})
+        self.assertTrue(any("заждалась" in s.lower() for s in sent))   # her composed line
+        self.assertFalse(any("чайник" in s.lower() for s in sent))     # not the scripted template
+
+    def test_come_in_greeting_falls_back_to_template_on_llm_failure(self):
+        import llm
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, *a, **k: sent.append(text)), \
+                mock.patch.object(llm, "chat_profile", side_effect=llm.LLMError("down")):
+            self.agent.do_meeting_start(111, "ru", {"kind": "visit"})
+        self.assertTrue(any("Заходи" in s for s in sent))   # fixed template fallback
 
     def test_recall_surfaces_upcoming(self):
         store.meeting_schedule(self.conn, 111, "2026-06-22T16:00:00+00:00",

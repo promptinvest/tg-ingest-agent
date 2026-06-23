@@ -272,7 +272,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **"come in"** starts the agreed meeting (carrying its setting + prep), not a blank one. The
   arrival is understood **semantically**, however you phrase it ("я у двери, впусти", "я
   вошёл, привет", "ну вот и я", "I'm in") — and that opening line becomes the meeting's first
-  recorded turn; from there every turn is captured. (A vague wish with no time stays warm chat.)
+  recorded turn; from there every turn is captured. **Being *en route* is not arrival** — "я
+  еду к тебе", "уже в пути", "almost there" do **not** start the meeting; she stays in warm
+  anticipation and waits for you to actually be there. Her welcome at the come‑in is **composed
+  in her own voice and varied each time** (grounded in the setting/prep), not a fixed script.
+  (A vague wish with no time stays warm chat.)
 - **She teases you in the lead-up** (`check_meeting_anticipation`): on the day before/of an
   agreed **date**, she may — occasionally, of her own want — send a playful teasing message,
   hinting (by euphemism, never graphic) at what she's looking forward to and imagining for
