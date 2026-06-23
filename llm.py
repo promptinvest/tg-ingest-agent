@@ -187,20 +187,36 @@ def model_ok(cfg, conn, model):
         return False, str(exc)[:140]
 
 
-def describe_image(cfg, conn, skill, model, image_path, lang="ru"):
+def _sniff_image_mime(data):
+    """Best-effort image MIME from magic bytes — so a WEBP sticker isn't mislabeled
+    as JPEG (vision models reject a wrong content-type). Defaults to image/jpeg."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return "image/jpeg"
+
+
+def describe_image(cfg, conn, skill, model, image_path, lang="ru", prompt=None):
     """Use a vision-capable model to produce a short text description of an image,
-    so a non-vision text model can still categorize a photo post. '' on failure."""
+    so a non-vision text model can still categorize a photo post (or know what a
+    sticker depicts). '' on failure."""
     try:
         data = Path(image_path).read_bytes()
     except OSError:
         return ""
     b64 = base64.b64encode(data).decode("ascii")
-    prompt = ("Опиши коротко, что на изображении: текст, объекты, суть."
-              if lang == "ru" else
-              "Briefly describe this image: any text, objects, and the gist.")
+    mime = _sniff_image_mime(data)
+    prompt = prompt or ("Опиши коротко, что на изображении: текст, объекты, суть."
+                        if lang == "ru" else
+                        "Briefly describe this image: any text, objects, and the gist.")
     messages = [{"role": "user", "content": [
         {"type": "text", "text": prompt},
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
     ]}]
     try:
         return (chat(cfg, conn, skill, messages, max_tokens=400, model=model) or "").strip()

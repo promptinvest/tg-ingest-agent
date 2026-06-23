@@ -87,6 +87,10 @@ class Agent:
                          lambda ctx, conn, payload, job: {"removed": ctx.housekeep()})
         runtime.register("maintenance", "pending_expire",
                          lambda ctx, conn, payload, job: {"expired": store.pending_expire(conn)})
+        # Give Cara real eyes on her stickers: a background job vision-describes saved
+        # stickers so she sends one that fits the moment's MEANING, not a blind emoji.
+        runtime.register("stickers", "describe",
+                         lambda ctx, conn, payload, job: ctx.run_describe_stickers())
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0
@@ -655,6 +659,11 @@ class Agent:
         for action in ("retry_sweep", "media_cleanup", "pending_expire"):
             if not jobs.has_pending(self.conn, "maintenance", action):
                 jobs.add_job(self.conn, "maintenance", action)
+        # Backfill: describe any saved stickers that still lack an image description
+        # (e.g. packs saved before she could see them), one bounded pass at a time.
+        if (self.cfg.vision_model and not jobs.has_pending(self.conn, "stickers", "describe")
+                and store.stickers_undescribed(self.conn, limit=1)):
+            jobs.add_job(self.conn, "stickers", "describe")
 
     # -- Router dispatch
 
@@ -1407,9 +1416,22 @@ class Agent:
                 "and let it shape your reply: if it's warm/positive, lean into that closeness; "
                 "if it's cool or negative, notice it and adjust — don't ignore how he felt.")
         if store.sticker_count(self.conn):
-            parts.append("You have saved stickers — RARELY, when it genuinely fits the "
-                         "mood, you may end your reply with [[sticker:emoji]] (e.g. "
-                         "[[sticker:😍]]) to send one. Don't overuse them.")
+            described = store.stickers_described(self.conn, limit=30)
+            catalog = []
+            for s in described:
+                desc = (s["description"] or "").strip()
+                emo = (s["emoji"] or "").strip()
+                if desc:
+                    catalog.append(f"{emo} — {desc}" if emo else desc)
+            hint = ("You have saved stickers — RARELY, when it genuinely fits the moment, "
+                    "you may end your reply with [[sticker:emoji]] to send the saved sticker "
+                    "tagged with that emoji. Don't overuse them, and don't send the same one "
+                    "twice in a row.")
+            if catalog:
+                hint += (" Here is what your stickers ACTUALLY show (emoji — picture) — pick "
+                         "by the real picture so it fits the meaning, not just the emoji:\n"
+                         + "\n".join(f"  {c}" for c in catalog))
+            parts.append(hint)
         if store.cara_photo_count(self.conn):
             parts.append("If you want to send him a photo of YOURSELF, end your reply with "
                          "the tag [[selfie]] — it sends a real saved photo. Never write a "
@@ -1932,13 +1954,16 @@ class Agent:
         return self._strip_roleplay(reply)
 
     def send_sticker_for(self, chat_id, emoji):
-        """Send one of Cara's saved stickers matching `emoji` (best-effort, only if
-        she has a matching one). Silent no-op otherwise."""
-        fid = store.sticker_for_emoji(self.conn, emoji)
-        if not fid:
+        """Send one of Cara's saved stickers matching `emoji` (best-effort, only if she
+        has a matching one). Avoids re-sending the immediately-previous sticker so the
+        same one never goes twice in a row. Silent no-op otherwise."""
+        last = store.kv_get(self.conn, "last_sticker_uid")
+        row = store.sticker_pick(self.conn, emoji, exclude_uid=last)
+        if not row:
             return
         try:
-            tg_send_sticker(self.cfg.token, chat_id, fid)
+            tg_send_sticker(self.cfg.token, chat_id, row["file_id"])
+            store.kv_set(self.conn, "last_sticker_uid", row["file_unique_id"] or "")
         except TelegramError as exc:
             log(f"sendSticker failed: {exc}")
 
@@ -3957,15 +3982,84 @@ class Agent:
         title = res.get("title") or set_name
         n = store.stickers_add(self.conn, set_name, res.get("stickers") or [])
         self.reply(chat_id, T(lang, "sticker_saved", name=title, n=n))
+        # Look at the actual sticker images in the background (vision), so she later
+        # picks one that fits the meaning — not just whatever emoji Telegram tagged it.
+        if self.cfg.vision_model and store.stickers_undescribed(self.conn, limit=1):
+            jobs.add_job(self.conn, "stickers", "describe")
+
+    def _backfill_sticker_thumbs(self, rows):
+        """Animated/video stickers (.tgs/.webm) can't be vision-read, but their static
+        THUMBNAIL can. Rows saved before thumbnails were captured have no thumb_file_id —
+        refetch each involved set once and fill it in."""
+        sets = {r["set_name"] for r in rows if not r["thumb_file_id"] and r["set_name"]}
+        for name in sets:
+            try:
+                res = tg_call(self.cfg.token, "getStickerSet", {"name": name})
+            except TelegramError as exc:
+                log(f"sticker thumb backfill: getStickerSet {name} failed: {exc}")
+                continue
+            for s in res.get("stickers") or []:
+                thumb = (s.get("thumbnail") or s.get("thumb") or {}).get("file_id")
+                uid = s.get("file_unique_id")
+                if thumb and uid:
+                    store.sticker_set_thumb(self.conn, uid, thumb)
+
+    def run_describe_stickers(self, max_items=10):
+        """Background: vision-describe saved stickers Cara hasn't looked at yet, so she
+        knows what each one actually DEPICTS and can send one that fits the moment's
+        meaning. Animated stickers are read via their static thumbnail. Best-effort +
+        budget-aware; every sticker is attempted exactly once (a failure stores '' so it
+        isn't retried forever), and the job re-queues only while unattempted ones remain."""
+        if not self.cfg.vision_model:
+            return {"described": 0}
+        rows = store.stickers_undescribed(self.conn, limit=max_items)
+        if not rows:
+            return {"described": 0}
+        self._backfill_sticker_thumbs(rows)
+        rows = store.stickers_undescribed(self.conn, limit=max_items)  # refresh thumbs
+        prompt = ("Это стикер из Telegram. Опиши очень коротко (до ~10 слов), что на нём: "
+                  "персонаж, выражение/эмоция, действие, любой текст. Только описание."
+                  if self.lang() == "ru" else
+                  "This is a Telegram sticker. In ~10 words, describe what it shows: the "
+                  "character, expression/emotion, action, and any text. Description only.")
+        described = 0
+        for r in rows:
+            # The .tgs/.webm is already cached under the sticker's uid — give the static
+            # thumbnail its own cache key so download_file doesn't return the animation.
+            if r["thumb_file_id"]:
+                img_id, key = r["thumb_file_id"], (r["file_unique_id"] or "") + "_t"
+            else:
+                img_id, key = r["file_id"], r["file_unique_id"]
+            desc = ""
+            try:
+                path = self.download_file(img_id, key, ".webp")
+                desc = llm.describe_image(self.cfg, self.conn, "ingest",
+                                          self.cfg.vision_model, path, self.lang(),
+                                          prompt=prompt) or ""
+            except llm.BudgetExceeded:
+                break  # leave it unattempted (NULL); the re-queued job retries later
+            except (TelegramError, llm.LLMError) as exc:
+                log(f"sticker describe failed ({r['file_unique_id']}): {exc}")
+            # Mark attempted either way ('' on failure) so an unreadable one never loops.
+            store.sticker_set_description(self.conn, r["file_unique_id"], desc[:300])
+            if desc:
+                described += 1
+        if store.stickers_undescribed(self.conn, limit=1):
+            jobs.add_job(self.conn, "stickers", "describe")  # more unattempted -> next pass
+        log(f"sticker describe: +{described} described this pass")
+        return {"described": described}
 
     def do_send_sticker(self, chat_id, lang):
-        """He asked to see her use a sticker — send one of her saved ones now."""
-        fid = store.sticker_random(self.conn)
-        if not fid:
+        """He asked to see her use a sticker — send one of her saved ones now (not the
+        one she just sent)."""
+        last = store.kv_get(self.conn, "last_sticker_uid")
+        row = store.sticker_random_row(self.conn, exclude_uid=last)
+        if not row:
             self.reply(chat_id, T(lang, "sticker_none"))
             return
         try:
-            tg_send_sticker(self.cfg.token, chat_id, fid)
+            tg_send_sticker(self.cfg.token, chat_id, row["file_id"])
+            store.kv_set(self.conn, "last_sticker_uid", row["file_unique_id"] or "")
         except TelegramError as exc:
             log(f"send sticker failed: {exc}")
             self.reply(chat_id, T(lang, "sticker_fail"))

@@ -75,7 +75,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   a guardrail, not just asked). She also **sees your reactions** to her messages and lets
   them shape her next reply — leaning into a warm one, noticing and adjusting to a cool one.
 - **Stickers & her photo library** — she reacts to your stickers and, sparingly, sends one
-  of her own (a `[[sticker:emoji]]` tag → a matching saved sticker). Her *reaction* to a
+  of her own (a `[[sticker:emoji]]` tag → a matching saved sticker). **She actually *sees*
+  her stickers:** when a pack is saved a background job vision‑describes each one (reading the
+  **static thumbnail**, so even animated `.tgs` stickers are understood), and those real
+  descriptions are surfaced to her — so she picks one whose *picture* fits the moment, not
+  just whatever emoji Telegram tagged it with. She also **never sends the same sticker twice
+  in a row** (the last‑sent one is remembered and skipped). Her *reaction* to a
   message is recognised however the model formats it — `[[react:X]]`, `[[реакция: X]]`,
   `[[X]]`, or a bare emoji on its own first line are all lifted into a real Telegram
   reaction and never shipped as text (format-agnostic, not a per-shape regex). An emoji

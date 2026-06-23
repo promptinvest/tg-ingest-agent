@@ -338,6 +338,8 @@ CREATE TABLE IF NOT EXISTS stickers (
   file_id TEXT NOT NULL,
   file_unique_id TEXT UNIQUE,
   emoji TEXT,
+  thumb_file_id TEXT,
+  description TEXT,
   added_at TEXT NOT NULL
 );
 
@@ -1083,6 +1085,14 @@ def _migrate(conn):
     cat_columns = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
     if "kind" not in cat_columns:
         conn.execute("ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'inbox'")
+    try:
+        stk_columns = {row["name"] for row in conn.execute("PRAGMA table_info(stickers)")}
+        if stk_columns and "description" not in stk_columns:
+            conn.execute("ALTER TABLE stickers ADD COLUMN description TEXT")
+        if stk_columns and "thumb_file_id" not in stk_columns:
+            conn.execute("ALTER TABLE stickers ADD COLUMN thumb_file_id TEXT")
+    except sqlite3.OperationalError:
+        pass
     try:
         mtg_columns = {row["name"] for row in conn.execute("PRAGMA table_info(meetings)")}
         if mtg_columns and "scheduled_for" not in mtg_columns:
@@ -1973,16 +1983,24 @@ def reminder_close(conn, rid, status="done"):
 # -- Stickers (packs Cara may use in conversation) ---------------------------
 
 def stickers_add(conn, set_name, stickers):
-    """Insert each sticker of a set (dicts with file_id/file_unique_id/emoji).
-    Idempotent via UNIQUE(file_unique_id). Returns how many are now saved for it."""
+    """Insert each sticker of a set (dicts with file_id/file_unique_id/emoji and,
+    optionally, thumb_file_id/description). Idempotent via UNIQUE(file_unique_id):
+    a re-save updates a now-known thumbnail/description for an existing row.
+    Returns how many are now saved for the set."""
     for s in stickers:
         fid = s.get("file_id")
         if not fid:
             continue
+        thumb = (s.get("thumbnail") or s.get("thumb") or {})
+        thumb_id = s.get("thumb_file_id") or thumb.get("file_id")
         conn.execute(
-            "INSERT OR IGNORE INTO stickers (set_name, file_id, file_unique_id, emoji,"
-            " added_at) VALUES (?, ?, ?, ?, ?)",
-            (set_name, fid, s.get("file_unique_id"), s.get("emoji"), _now()),
+            "INSERT INTO stickers (set_name, file_id, file_unique_id, emoji, thumb_file_id,"
+            " description, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(file_unique_id) DO UPDATE SET"
+            "   thumb_file_id = COALESCE(excluded.thumb_file_id, thumb_file_id),"
+            "   description   = COALESCE(excluded.description, description)",
+            (set_name, fid, s.get("file_unique_id"), s.get("emoji"), thumb_id,
+             s.get("description"), _now()),
         )
     conn.commit()
     return conn.execute(
@@ -1994,26 +2012,82 @@ def sticker_count(conn):
     return conn.execute("SELECT COUNT(*) FROM stickers").fetchone()[0]
 
 
-def sticker_random(conn):
-    row = conn.execute("SELECT file_id FROM stickers ORDER BY RANDOM() LIMIT 1").fetchone()
+def sticker_random_row(conn, exclude_uid=None):
+    """A random saved sticker as {file_id, file_unique_id}, avoiding `exclude_uid`
+    when another is available (so the same one isn't sent twice in a row)."""
+    row = conn.execute(
+        "SELECT file_id, file_unique_id FROM stickers WHERE file_unique_id IS NOT ?"
+        " ORDER BY RANDOM() LIMIT 1", (exclude_uid,)
+    ).fetchone()
+    if not row:  # only the excluded one exists -> allow it
+        row = conn.execute(
+            "SELECT file_id, file_unique_id FROM stickers ORDER BY RANDOM() LIMIT 1"
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def sticker_random(conn):  # back-compat: file_id only
+    row = sticker_random_row(conn)
     return row["file_id"] if row else None
 
 
-def sticker_for_emoji(conn, emoji):
-    """A saved sticker file_id whose emoji matches `emoji` (exact first, then any
-    that contains it); None if none saved match."""
+def sticker_pick(conn, emoji, exclude_uid=None):
+    """A saved sticker {file_id, file_unique_id} whose emoji matches `emoji` (exact
+    first, then any that contains it), preferring one that isn't `exclude_uid` so the
+    identical sticker isn't repeated back-to-back. None if none match."""
     emoji = (emoji or "").strip()
     if not emoji:
         return None
-    row = conn.execute(
-        "SELECT file_id FROM stickers WHERE emoji = ? ORDER BY RANDOM() LIMIT 1", (emoji,)
-    ).fetchone()
-    if not row:
+    for clause, arg in (("emoji = ?", emoji), ("emoji LIKE ?", f"%{emoji}%")):
         row = conn.execute(
-            "SELECT file_id FROM stickers WHERE emoji LIKE ? ORDER BY RANDOM() LIMIT 1",
-            (f"%{emoji}%",),
+            f"SELECT file_id, file_unique_id FROM stickers WHERE {clause}"
+            " AND file_unique_id IS NOT ? ORDER BY RANDOM() LIMIT 1", (arg, exclude_uid)
         ).fetchone()
+        if row:
+            return dict(row)
+        row = conn.execute(  # fall back to the excluded one if it's the only match
+            f"SELECT file_id, file_unique_id FROM stickers WHERE {clause}"
+            " ORDER BY RANDOM() LIMIT 1", (arg,)
+        ).fetchone()
+        if row:
+            return dict(row)
+    return None
+
+
+def sticker_for_emoji(conn, emoji):  # back-compat: file_id only
+    row = sticker_pick(conn, emoji)
     return row["file_id"] if row else None
+
+
+def stickers_described(conn, limit=40):
+    """Saved stickers that HAVE a real image description, as (emoji, description), for
+    the converse prompt — so she picks one whose actual picture fits the moment."""
+    return conn.execute(
+        "SELECT emoji, description FROM stickers"
+        " WHERE description IS NOT NULL AND description != ''"
+        " ORDER BY RANDOM() LIMIT ?", (limit,)
+    ).fetchall()
+
+
+def stickers_undescribed(conn, limit=12):
+    """Stickers not yet ATTEMPTED for description (description IS NULL). A failed attempt
+    stores '' so it isn't retried forever; a successful one stores the text."""
+    return conn.execute(
+        "SELECT id, set_name, file_id, file_unique_id, thumb_file_id, emoji FROM stickers"
+        " WHERE description IS NULL LIMIT ?", (limit,)
+    ).fetchall()
+
+
+def sticker_set_description(conn, file_unique_id, description):
+    conn.execute("UPDATE stickers SET description = ? WHERE file_unique_id = ?",
+                 (description, file_unique_id))
+    conn.commit()
+
+
+def sticker_set_thumb(conn, file_unique_id, thumb_file_id):
+    conn.execute("UPDATE stickers SET thumb_file_id = ? WHERE file_unique_id = ?",
+                 (thumb_file_id, file_unique_id))
+    conn.commit()
 
 
 # -- Cara's photo library (her own pictures to send in chat) -----------------

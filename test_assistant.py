@@ -1554,6 +1554,68 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertFalse(ss2.called)  # nothing to send
         self.assertTrue(r.called)     # warm 'none yet' reply
 
+    def test_sticker_pick_anti_repeat(self):
+        c = self.agent.conn
+        store.stickers_add(c, "p", [
+            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"},
+            {"file_id": "F2", "file_unique_id": "u2", "emoji": "😍"}])
+        # excluding one of two matches returns the OTHER
+        self.assertEqual(store.sticker_pick(c, "😍", exclude_uid="u1")["file_unique_id"], "u2")
+        # if the only match is excluded, it's allowed (better a repeat than nothing)
+        store.stickers_add(c, "p", [{"file_id": "F3", "file_unique_id": "u3", "emoji": "🔥"}])
+        self.assertEqual(store.sticker_pick(c, "🔥", exclude_uid="u3")["file_unique_id"], "u3")
+
+    def test_send_sticker_for_avoids_immediate_repeat(self):
+        import tg_ingest_agent
+        c = self.agent.conn
+        store.stickers_add(c, "p", [
+            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"},
+            {"file_id": "F2", "file_unique_id": "u2", "emoji": "😍"}])
+        sent = []
+        with mock.patch.object(tg_ingest_agent, "tg_send_sticker",
+                               side_effect=lambda *a, **k: sent.append(a[2])):
+            self.agent.send_sticker_for(1, "😍")
+            self.agent.send_sticker_for(1, "😍")     # must not repeat the first
+        self.assertEqual(len(sent), 2)
+        self.assertNotEqual(sent[0], sent[1])
+        self.assertEqual(store.kv_get(c, "last_sticker_uid"), "u2"
+                         if sent[1] == "F2" else "u1")
+
+    def test_sticker_descriptions_store_and_surface(self):
+        c = self.agent.conn
+        store.stickers_add(c, "p", [
+            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍",
+             "description": "девушка краснеет и шлёт сердечко"},
+            {"file_id": "F2", "file_unique_id": "u2", "emoji": "🔥"}])
+        und = store.stickers_undescribed(c)
+        self.assertEqual([r["file_unique_id"] for r in und], ["u2"])
+        store.sticker_set_description(c, "u2", "огонь, всё горит")
+        self.assertEqual(store.stickers_undescribed(c), [])
+        ctx = self.agent.converse_context("ru", 1)
+        self.assertIn("девушка краснеет", ctx)            # real picture surfaced
+        self.assertIn("real picture", ctx)                # instruction to pick by meaning
+
+    def test_run_describe_stickers_uses_vision(self):
+        import tg_ingest_agent
+        c = self.agent.conn
+        self.agent.cfg.vision_model = "vmodel"
+        store.stickers_add(c, "p", [
+            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍",
+             "thumbnail": {"file_id": "T1"}}])
+        with mock.patch.object(self.agent, "download_file", return_value="/tmp/x.webp"), \
+                mock.patch.object(llm, "describe_image",
+                                  return_value="девушка целует воздух") as di:
+            res = self.agent.run_describe_stickers()
+        self.assertEqual(res["described"], 1)
+        di.assert_called()                                 # vision actually consulted
+        row = c.execute("SELECT description FROM stickers WHERE file_unique_id='u1'").fetchone()
+        self.assertIn("целует", row["description"])
+
+    def test_describe_image_sniffs_webp_mime(self):
+        webp = b"RIFF\x00\x00\x00\x00WEBPVP8 "
+        self.assertEqual(llm._sniff_image_mime(webp), "image/webp")
+        self.assertEqual(llm._sniff_image_mime(b"\xff\xd8\xff\xe0xx"), "image/jpeg")
+
     def test_cara_photo_library_save_and_selfie(self):
         import tg_ingest_agent
         with mock.patch.object(self.agent, "reply"):
