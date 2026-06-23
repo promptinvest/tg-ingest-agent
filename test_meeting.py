@@ -23,6 +23,7 @@ import meeting
 import relationship
 import router
 import store
+import wardrobe
 
 
 def make_config(**overrides):
@@ -506,6 +507,7 @@ class MeetingDispatchTests(unittest.TestCase):
         store.pref_set(self.conn, "proactive_enabled", "true")
         store.pref_set(self.conn, "quiet_start", "0")
         store.pref_set(self.conn, "quiet_end", "0")   # no quiet window
+        self.agent.cfg.morning_brief_hour = 0   # deterministic: bypass the "not before morning" gate
         soon = (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat()
         store.meeting_schedule(self.conn, 111, soon, kind="date", setting="у неё")
         sent = []
@@ -679,6 +681,43 @@ class MeetingDispatchTests(unittest.TestCase):
         # last heard from him 10h ago (> after_contact window) -> don't pester
         sent = self._run_outreach(now, stage=3, last_msg_hours=10)
         self.assertEqual(len(sent), 0)
+
+    def test_wardrobe_seeded(self):
+        self.assertGreater(store.wardrobe_count(self.conn), 10)
+        self.assertTrue(store.cara_style_get(self.conn))
+
+    def test_wardrobe_pick_gates_intimacy_and_rotates(self):
+        conn = self.conn
+        # cap 1 -> never returns an intimate (>=3) piece
+        o = wardrobe.pick(conn, ["intimate", "home"], "summer", 1)
+        self.assertTrue(o is None or o["intimacy"] <= 1)
+        # cap 5 + prefer_surprise -> a surprise lingerie piece
+        o2 = wardrobe.pick(conn, ["intimate"], "summer", 5, prefer_surprise=True)
+        self.assertIsNotNone(o2)
+        self.assertTrue(o2["surprise"])
+        # rotation: once worn, the next pick differs (least-recently-worn first)
+        store.wardrobe_mark_worn(conn, o2["id"])
+        o3 = wardrobe.pick(conn, ["intimate"], "summer", 5, prefer_surprise=True)
+        self.assertNotEqual(o3["id"], o2["id"])
+
+    def test_meeting_attire_intimate_surprise_when_close_and_private(self):
+        store.kv_set(self.conn, "closeness_stage", "5")
+        txt = self.agent._meeting_attire("visit", "у неё", "en", meeting_id=901)
+        self.assertIn("surprise", txt.lower())                 # a ✦ reveal
+        cached = store.kv_get(self.conn, "meeting_outfit:901")
+        self.assertTrue(cached)
+        # stable per meeting: a second call keeps the same outfit (no 'changing clothes')
+        txt2 = self.agent._meeting_attire("visit", "у неё", "en", meeting_id=901)
+        self.assertEqual(txt, txt2)
+
+    def test_meeting_attire_modest_when_not_close(self):
+        store.kv_set(self.conn, "closeness_stage", "1")
+        self.agent._meeting_attire("visit", "у неё", "ru", meeting_id=902)
+        cached = store.kv_get(self.conn, "meeting_outfit:902")
+        chosen = next(o for o in store.wardrobe_candidates(
+            self.conn, ["day", "home", "dinner", "formal", "intimate"], 5) if o["id"] == cached)
+        self.assertNotEqual(chosen["family"], "intimate")      # lingerie locked when not close
+        self.assertLessEqual(chosen["intimacy"], 1)
 
     def test_date_presence_unlocks_roleplay_when_close(self):
         # On a social date, once close, presence includes the imaginative roleplay layer

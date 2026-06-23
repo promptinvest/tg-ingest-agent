@@ -343,9 +343,19 @@ proactively like real memory. Design decisions and why:
   silently ended while he sleeps** and the morning together continues. Background **memory
   curation is paused while a meeting is live** — that intimate roleplay is captured by the
   meeting's own end-summary, not mined for "behavioral corrections" (which mis-learned).
-- **She arrives consistent and dresses to please.** Attire scales with the setting and the
-  closeness stage, and **leans into what he's said he loves seeing her in** — to surprise
-  and please him next time. Tasteful and at most suggestive — never explicit.
+- **She has a real wardrobe and dresses from it (`wardrobe.py` + `cara_wardrobe`).** A
+  curated, persona-true library (her aesthetic + palette) seeded once (idempotent, like
+  `seed_life`). `_meeting_attire` maps meeting kind + `closeness_stage` → wardrobe families +
+  an intimacy cap, then `wardrobe.pick` chooses one piece (season-appropriate, **prefer
+  not-recently-worn** via `last_worn_at`, **lean to his taste** via `_taste_colors` over
+  `intimacy_notes`). The pick is **cached per meeting** (`kv meeting_outfit:<id>`) and
+  marked worn once, so she doesn't "change clothes" each turn. Daywear/dinner/formal are
+  ungated; the **lingerie/intimate tier unlocks only at her place at `closeness_stage` ≥ 4**,
+  where `prefer_surprise` selects a `surprise` piece she reveals/teases — `wardrobe.describe`
+  keeps it **named and suggestive, never graphic**. An agreed-in-prep outfit still wins;
+  empty wardrobe falls back to the old improvised cue. **Explicit-display (crotchless/cupless/
+  pasties/near-nude) and fetish/BDSM gear are deliberately excluded** from the seed — the same
+  non-graphic ceiling held in words and roleplay.
 - **Episodic memory is kept SEPARATE on purpose.** Meetings never enter the notes
   inbox or the `ask` KB: that keeps note-numbers and the KB clean, and matches the
   boss's "separate long-term memory" ask. `meeting_chunks` mirror the notes `chunks`

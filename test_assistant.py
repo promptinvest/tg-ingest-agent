@@ -2722,9 +2722,10 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
 
     def test_attire_leans_into_his_preferences_when_close(self):
         c = self.agent.conn
-        store.kv_set(c, "closeness_stage", 5)
-        attire = self.agent._meeting_attire("visit", "у неё дома", "ru")
-        self.assertIn("в том же духе", attire)   # please him with what he loves
+        # the picker leans toward colours he's told her he loves (_taste_colors)
+        store.boss_add(c, "relationship_note", "ему нравится она в изумрудном (emerald)",
+                       status="confirmed", confidence=1.0)
+        self.assertIn("emerald", self.agent._taste_colors())
 
     def test_date_presence_is_bold_but_not_graphic(self):
         c = self.agent.conn
@@ -2739,12 +2740,11 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
     def test_meeting_attire_scales_with_setting_and_stage(self):
         c = self.agent.conn
         store.kv_set(c, "closeness_stage", 5)
-        hi = self.agent._meeting_attire("visit", "у неё дома", "ru").lower()
-        self.assertIn("бель", hi)            # may surprise with lingerie at high closeness + home
+        hi = self.agent._meeting_attire("visit", "у неё дома", "ru", meeting_id=21).lower()
+        self.assertIn("сюрприз", hi)         # a lingerie surprise at high closeness + home
         store.kv_set(c, "closeness_stage", 1)
-        lo = self.agent._meeting_attire("dinner", "ресторан", "ru").lower()
-        self.assertIn("скромно", lo)
-        self.assertNotIn("бель", lo)
+        lo = self.agent._meeting_attire("dinner", "ресторан", "ru", meeting_id=22).lower()
+        self.assertNotIn("сюрприз", lo)      # no lingerie surprise when not close
 
     def test_meeting_presence_attire_vs_agreed_outfit(self):
         c = self.agent.conn
@@ -2752,11 +2752,11 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="visit", setting="у неё")
         store.meeting_activate(c, mid)
         pres = self.agent._meeting_presence("ru", store.meeting_active(c, 1))
-        self.assertIn("одеться", pres)               # attire chosen by setting/stage
+        self.assertIn("на тебе", pres.lower())       # a concrete wardrobe piece is chosen
         store.meeting_prep_add(c, mid, "ты в синем платье", kind="agreement")
         pres2 = self.agent._meeting_presence("ru", store.meeting_active(c, 1))
         self.assertIn("синем платье", pres2)         # the agreed outfit wins
-        self.assertNotIn("одеться", pres2)           # generic attire skipped
+        self.assertNotIn("на тебе", pres2.lower())   # generic wardrobe attire skipped
 
     def test_memory_consolidate_marks_duplicates_merged(self):
         import memory_curator, boss_model, llm

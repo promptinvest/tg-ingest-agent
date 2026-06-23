@@ -350,6 +350,24 @@ CREATE TABLE IF NOT EXISTS cara_photos (
   added_at TEXT NOT NULL
 );
 
+-- Cara's wardrobe: curated, persona-true outfits she picks from for in-person
+-- meetings. The intimate tier is tasteful/suggestive only (gated by closeness +
+-- occasion). List fields (season/colors/pieces) are stored as JSON text.
+CREATE TABLE IF NOT EXISTS cara_wardrobe (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  family TEXT NOT NULL,
+  season TEXT,
+  intimacy INTEGER NOT NULL DEFAULT 0,
+  colors TEXT,
+  pieces TEXT,
+  footwear TEXT,
+  signature INTEGER NOT NULL DEFAULT 0,
+  surprise INTEGER NOT NULL DEFAULT 0,
+  last_worn_at TEXT,
+  added_at TEXT NOT NULL
+);
+
 -- Shared-time meetings (business OR social/personal) + their separate episodic
 -- memory. A meeting is a stateful session: while active, every turn is captured
 -- verbatim in meeting_turns; on end it is summarized and embedded into
@@ -2087,6 +2105,69 @@ def sticker_set_description(conn, file_unique_id, description):
 def sticker_set_thumb(conn, file_unique_id, thumb_file_id):
     conn.execute("UPDATE stickers SET thumb_file_id = ? WHERE file_unique_id = ?",
                  (thumb_file_id, file_unique_id))
+    conn.commit()
+
+
+# -- Cara's wardrobe / style -------------------------------------------------
+
+def cara_style_get(conn):
+    return kv_get(conn, "cara_style")
+
+
+def cara_style_set(conn, text):
+    kv_set(conn, "cara_style", text)
+
+
+def _wardrobe_row(row):
+    """Decode a cara_wardrobe row into a dict with JSON list fields parsed."""
+    def _list(v):
+        try:
+            return json.loads(v) if v else []
+        except (TypeError, ValueError):
+            return []
+    return {
+        "id": row["id"], "name": row["name"], "family": row["family"],
+        "season": _list(row["season"]), "intimacy": row["intimacy"],
+        "colors": _list(row["colors"]), "pieces": _list(row["pieces"]),
+        "footwear": row["footwear"], "signature": bool(row["signature"]),
+        "surprise": bool(row["surprise"]), "last_worn_at": row["last_worn_at"] or "",
+    }
+
+
+def wardrobe_add(conn, o):
+    """Insert one outfit (dict from wardrobe.WARDROBE_SEED). Idempotent on id."""
+    conn.execute(
+        "INSERT OR IGNORE INTO cara_wardrobe (id, name, family, season, intimacy, colors,"
+        " pieces, footwear, signature, surprise, added_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (o["id"], o["name"], o["family"], json.dumps(o.get("season") or []),
+         int(o.get("intimacy") or 0), json.dumps(o.get("colors") or []),
+         json.dumps(o.get("pieces") or []), o.get("footwear"),
+         1 if o.get("signature") else 0, 1 if o.get("surprise") else 0, _now()),
+    )
+    conn.commit()
+
+
+def wardrobe_count(conn):
+    return conn.execute("SELECT COUNT(*) FROM cara_wardrobe").fetchone()[0]
+
+
+def wardrobe_candidates(conn, families, max_intimacy):
+    """Outfits in any of `families` with intimacy <= max_intimacy, least-recently-worn
+    first (never-worn first). Returns decoded dicts."""
+    if not families:
+        return []
+    marks = ",".join("?" for _ in families)
+    rows = conn.execute(
+        f"SELECT * FROM cara_wardrobe WHERE family IN ({marks}) AND intimacy <= ?"
+        " ORDER BY (last_worn_at IS NULL) DESC, last_worn_at ASC",
+        (*families, int(max_intimacy)),
+    ).fetchall()
+    return [_wardrobe_row(r) for r in rows]
+
+
+def wardrobe_mark_worn(conn, outfit_id):
+    conn.execute("UPDATE cara_wardrobe SET last_worn_at = ? WHERE id = ?", (_now(), outfit_id))
     conn.commit()
 
 

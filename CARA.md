@@ -306,12 +306,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   language) so it's about *you two*, not generic. Conservative & bounded: only within a live
   exchange (not a long silence), closeness‑gated, capped per day, probability‑ and
   quiet‑hours‑aware (`INTIMACY_OUTREACH_*`).
-- **She dresses for the setting and for how close you are** — when no outfit was agreed,
-  her attire tracks the **setting** (her place → cosy/informal; dinner → a touch dressed;
-  a walk → casual) and the **closeness stage**: the further along you've grown, the freer
-  and more for‑you she dresses, and at the highest closeness she may surprise you with
-  something special (tasteful, suggestive at most — never explicit). Business meetings stay
-  professional.
+- **She has a real wardrobe and dresses from it** (`wardrobe.py`, `cara_wardrobe`) — a
+  curated, persona‑true library in her own aesthetic (emerald/burgundy/cream/charcoal, soft
+  vintage). When no outfit was agreed, she **picks a concrete piece** by **occasion + season +
+  closeness**, prefers one she hasn't worn recently (so she varies), and **leans toward what
+  you've said you love**. The pick is **stable for the whole meeting** (she doesn't change
+  mid‑date). Daywear/dinner/formal are ungated; the **lingerie tier unlocks only at her place
+  once you're close** (`closeness_stage` ≥ 4), where she may reveal a **✦ surprise** set she
+  chose for you — **named and teased, suggestive, never graphic**. The wardrobe is
+  tasteful‑to‑racy lace/satin/velvet/teddy/corset/garter looks; **explicit‑display and
+  fetish/BDSM pieces are deliberately excluded**. Business meetings stay professional.
 - **On a date she's not shy — she's bold and open** — openly seductive and forward, and
   **open about her OWN wishes and asks** (she says what she wants, asks for things, leads).
   At the explicit edge she **neither goes graphic nor goes shy** — she pivots to **euphemism,

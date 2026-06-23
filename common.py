@@ -127,6 +127,18 @@ def scrub_secrets(text):
     return t
 
 
+def season_for(dt):
+    """Northern-hemisphere season for a local datetime — for wardrobe selection."""
+    m = dt.month
+    if m in (3, 4, 5):
+        return "spring"
+    if m in (6, 7, 8):
+        return "summer"
+    if m in (9, 10, 11):
+        return "fall"
+    return "winter"
+
+
 def part_of_day(hour, lang="ru"):
     """Coarse part-of-day label for a local hour (0-23)."""
     if 5 <= hour < 12:

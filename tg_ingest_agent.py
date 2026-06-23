@@ -44,6 +44,7 @@ import store
 import sysinfo
 import texts
 import trace
+import wardrobe
 from common import Config, ShutdownInterrupt, current_trace, load_config, log  # noqa: F401
 from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
                     tg_send_document_file_id, tg_send_photo, tg_send_sticker,
@@ -67,6 +68,7 @@ class Agent:
                 store.ensure_category(self.conn, normalized)
         self_model.seed(self.conn)  # Cara's deterministic self-knowledge
         converse.seed_life(self.conn)  # Cara's starting private life (grows over time)
+        wardrobe.seed(self.conn)  # Cara's style + curated wardrobe (idempotent)
         self._migrate_owner_name()  # split a legacy combined name into ru/en forms
         texts.set_intensity(cfg.personality_intensity)  # template variant warmth
         # The memory curator runs as a background job (no proactive nudge):
@@ -1732,19 +1734,62 @@ class Agent:
     _CLOTHING_HINTS = ("плать", "бель", "наряд", "одет", "пижам", "халат", "юбк", "топ",
                        "джинс", "dress", "lingerie", "outfit", "wear", "robe", "skirt")
 
-    def _meeting_attire(self, kind, setting, lang):
-        """How Cara is dressed for THIS in-person meeting. Varies with the SETTING (her
-        place → cosy/informal; out → a touch dressed) and with how close they've grown
-        (closeness_stage): the further along, the freer and more for-him she dresses, and
-        at the highest closeness she may surprise him with something special. Tasteful and
-        at most suggestive — never explicit/graphic. (Skipped for business / when an outfit
-        was already agreed.)"""
-        try:
-            stage = int(store.kv_get(self.conn, "closeness_stage", "0") or 0)
-        except (TypeError, ValueError):
-            stage = 0
+    _PALETTE_WORDS = ("emerald", "изумруд", "burgundy", "бордов", "rust", "cream", "крем",
+                      "charcoal", "black", "чёрн", "черн", "champagne", "шампан", "gold",
+                      "золот", "camel", "ivory", "lace", "кружев", "satin", "атлас",
+                      "velvet", "бархат", "silk", "шёлк", "шелк", "красн", "red")
+
+    def _taste_colors(self):
+        """Colours/fabrics he's told her he loves seeing her in — scanned from what she's
+        learned about him — so the wardrobe picker can lean toward pleasing him."""
+        hay = " ".join(boss_model.intimacy_notes(self.conn)).casefold()
+        return [w for w in self._PALETTE_WORDS if w in hay]
+
+    def _meeting_attire(self, kind, setting, lang, meeting_id=None):
+        """How Cara is dressed for THIS in-person meeting — a concrete piece picked from her
+        curated wardrobe by occasion + season + closeness, preferring a not-recently-worn one
+        and a colour he loves; on a private date once they're close she may pick a ✦ surprise
+        lingerie look (tasteful/suggestive, NEVER graphic). Falls back to a descriptive cue if
+        the wardrobe is empty. (Skipped for business / when an outfit was already agreed.)
+
+        The pick is cached per meeting (so she doesn't 'change clothes' every turn) — chosen
+        and marked-worn once, then reused for the rest of that meeting."""
+        stage = self._closeness_stage()
+        # Reuse the outfit already chosen for this meeting, if any.
+        if meeting_id is not None:
+            cached = store.kv_get(self.conn, f"meeting_outfit:{meeting_id}")
+            if cached:
+                for o in store.wardrobe_candidates(self.conn,
+                                                   ["day", "home", "dinner", "formal", "intimate"], 5):
+                    if o["id"] == cached:
+                        return wardrobe.describe(o, lang, surprise=o["surprise"] and stage >= 4)
         s = (setting or "").casefold()
         at_her_place = kind == "visit" or any(w in s for w in ("дома", "у неё", "у тебя", "her place", "your place"))
+        # Map the meeting kind + closeness to which wardrobe families and how intimate she
+        # may go. The lingerie (intimate) tier unlocks only at her place, closeness >= 4.
+        if kind == "walk":
+            families, cap = ["day"], 0
+        elif kind == "dinner":
+            families, cap = ["dinner", "day"], (2 if stage >= 3 else 1)
+        elif at_her_place:
+            if stage >= 4:
+                families, cap = ["intimate", "home"], 5
+            elif stage >= 3:
+                families, cap = ["home"], 3
+            else:
+                families, cap = ["home"], 1
+        else:
+            families, cap = ["dinner", "day"], (2 if stage >= 3 else 1)
+        season = common.season_for(datetime.now(timezone.utc) + timedelta(hours=self.tz_offset()))
+        prefer_surprise = at_her_place and stage >= 4
+        outfit = wardrobe.pick(self.conn, families, season, cap,
+                               prefer_surprise=prefer_surprise, taste_colors=self._taste_colors())
+        if outfit:
+            store.wardrobe_mark_worn(self.conn, outfit["id"])
+            if meeting_id is not None:
+                store.kv_set(self.conn, f"meeting_outfit:{meeting_id}", outfit["id"])
+            return wardrobe.describe(outfit, lang, surprise=prefer_surprise and outfit["surprise"])
+        # Fallback: no wardrobe seeded — keep the original improvised cue.
         ru = lang == "ru"
         base = ("Ты сама выбрала, во что одеться для этой встречи — будь в этом и держись "
                 "последовательно весь вечер. " if ru else
@@ -1818,7 +1863,7 @@ class Agent:
                 carry += " Coming into it you've been feeling: " + "; ".join(feelings) + "."
         # Attire only when you didn't already agree a specific outfit (else that wins).
         if not agreed_outfit:
-            carry += " " + self._meeting_attire(kind, setting, lang)
+            carry += " " + self._meeting_attire(kind, setting, lang, meeting_id=m["id"])
         roleplay = ""
         if self._closeness_stage() >= self.cfg.intimacy_outreach_min_stage:
             roleplay = self._intimacy_roleplay_directive(lang)
