@@ -1427,9 +1427,12 @@ class ConversationDispatchTests(unittest.TestCase):
         d = a._register_directive("en").lower()
         self.assertIn("follow his lead", d)
         self.assertIn("he leads", d)
+        self.assertIn("match his intensity", d)        # rises to his energy, not held back
         self.assertIn("only stop if he asks", d)
-        self.assertNotIn("save the playfulness", d)   # old deflecting framing is gone
-        self.assertIn("ВЕДЁТ ОН", a._register_directive("ru"))  # RU: he leads
+        self.assertNotIn("save the playfulness", d)    # old deflecting framing is gone
+        ru = a._register_directive("ru")
+        self.assertIn("ВЕДЁТ ОН", ru)                  # RU: he leads
+        self.assertIn("накал", ru)                     # RU: matches his heat/intensity
 
     def test_converse_context_surfaces_active_reminders(self):
         # She must know her own reminders in conversation, so "почему не закрыла #1?"
