@@ -287,6 +287,7 @@ class Agent:
             if now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
                 self.check_meeting_idle()  # auto-end a forgotten-open meeting
+                self.check_reminder_expiry()  # clear the stale 'ждёт готово' pile
                 self.enqueue_maintenance_jobs()
                 runtime.drain(self.conn, self)  # runs due jobs (curator + maintenance + reflection)
             poll_timeout = 2 if self.albums else self.cfg.poll_timeout
@@ -349,12 +350,17 @@ class Agent:
     def fire_due_reminders(self):
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
-        defer = self._in_intimate_moment(now)
+        in_quiet = proactive.in_quiet_hours(self.cfg, self.conn, now)
+        in_intimate = self._in_intimate_moment(now)
         for row in store.reminders_due(self.conn, now_iso):
-            # Hold a due reminder during an intimate/together moment so it doesn't break it
-            # — it stays due and fires on a later tick once the moment passes. A reminder
-            # overdue past the max-defer fires anyway so it's never lost.
-            if defer:
+            # Never fire late at night: hold a reminder due in quiet hours until the window
+            # ends (next civil morning) — it stays due and fires then, never lost.
+            if in_quiet:
+                continue
+            # Hold a reminder due during an intimate/together moment so it doesn't break it
+            # — fires on a later tick once the moment passes; overdue past the max-defer
+            # fires anyway so it's never lost.
+            if in_intimate:
                 due = reminders.parse_iso_utc(row["due_utc"])
                 if due is not None and (now - due).total_seconds() < \
                         self.cfg.reminder_max_defer_hours * 3600:
@@ -821,6 +827,9 @@ class Agent:
             ))
         elif action == "reminder_list":
             rows = store.reminders_active(self.conn, chat_id)
+            # Mark that reminders were just shown, so a follow-up "удали/закрой #N" targets
+            # a REMINDER (reminder_cancel), not a saved note (item_delete).
+            store.kv_set(self.conn, "reminders_listed_at", datetime.now(timezone.utc).isoformat())
             self.reply(chat_id, reminders.format_list(rows, self.tz_offset(), lang))
         elif action == "reminder_cancel":
             rows = store.reminders_active(self.conn, chat_id)
@@ -3230,6 +3239,21 @@ class Agent:
             self.turn_lang = None
             self.reply(row["chat_id"], T(self.lang(), "meeting_auto_ended"))
 
+    def check_reminder_expiry(self):
+        """Auto-close fired one-shot reminders left unacked past the expiry window, so the
+        'ждёт готово' list doesn't pile up forever. (0 disables.)"""
+        days = self.cfg.reminder_fired_expire_days
+        if not days or days <= 0:
+            return
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        try:
+            n = store.reminders_expire_stale(self.conn, cutoff)
+        except Exception as exc:  # noqa: BLE001 — must not kill the loop
+            log(f"reminder expiry sweep error: {exc!r}")
+            return
+        if n:
+            log(f"auto-expired {n} stale fired reminder(s)")
+
     def check_meeting_afterglow(self):
         """Gentle, occasional day-after warmth: the morning after a personal
         meeting she MAY open with afterglow ('it was so good, I already miss
@@ -3690,6 +3714,12 @@ class Agent:
         if due is None:
             self.reply(chat_id, T(lang, "reschedule_when"))
             return
+        # A reschedule must land in the FUTURE — if the parsed time is already past (a
+        # misparsed 'today' at a late hour), roll it to the next occurrence of that local
+        # time so it doesn't immediately re-fire (the 'rescheduled into the past' bug).
+        now = datetime.now(timezone.utc)
+        if due <= now:
+            due = reminders.roll_forward(due, now)
         row = self._resolve_reminder_target(
             chat_id, lang, params, op={"op": "reschedule", "due_utc": due.isoformat()})
         if row is None:

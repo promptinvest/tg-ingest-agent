@@ -97,7 +97,7 @@ ROUTER_EXAMPLES = """Examples:
 "верни предыдущее время напоминания #9" / "отмени перенос" / "верни как было" / "undo the reschedule" -> {"action": "reminder_undo", "params": {"id": 9}, "confidence": 0.9}
 "поменяй название этого напоминания на «Иван Доронин»" / "переименуй напоминание 2 в «Иван Доронин»" / "rename reminder #2 to «Ivan»" -> {"action": "reminder_rename", "params": {"id": 2, "new_title": "Иван Доронин"}, "confidence": 0.9}
 "в напоминании про Марину поменяй название на «Иван Доронин»" / "переименуй напоминание про банк в «звонок Ире»" -> {"action": "reminder_rename", "params": {"title_query": "Марина", "new_title": "Иван Доронин"}, "confidence": 0.88}
-NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сдвинь/move/reschedule). A bare subject or a fresh "напомни/поставь напоминание про X в TIME" is reminder_create, NOT reschedule — never reschedule a reminder whose title the user did not name.
+NOTE: reminder_reschedule REQUIRES an explicit move verb (перенеси/сдвинь/move/reschedule). A fresh "напомни/поставь напоминание про X в TIME" (NO move verb) is reminder_create. BUT a bare "перенеси на TIME" with NO named title IS still reminder_reschedule — it targets the reminder he's dealing with right now (the one that JUST fired, the only active one, or the last he touched); put the time in due_utc and leave title/id empty, and the engine binds it safely (it asks "which?" only if genuinely ambiguous). Do NOT send a bare "перенеси на 12:00" to converse/clarify.
 NOTE: reminder_rename changes a REMINDER's TITLE — put the NEW name in new_title and identify the target with id or title_query (the current/old title); NEVER put the new name in title. It is NOT recategorize (that re-files a saved NOTE's category) and NOT reschedule (that changes the time).
 "покажи файлы" / "какие у меня файлы?" / "список файлов" / "show my files" / "what files do I have" -> {"action": "list_files", "params": {}, "confidence": 0.92}
 "веди Благодарности как дневник" / "сделай X журналом" / "храни эту категорию долгосрочно" / "keep Gratitude as a journal" -> {"action": "set_journal", "params": {"category": "Благодарности", "on": true}, "confidence": 0.9}
@@ -392,6 +392,24 @@ def route(cfg, conn, chat_id, text, pending):
             user_content += (f"The item he most recently saved is #{r['id']} [{cat}] {summ}. "
                              f"If this message is an instruction about it ('это'/'this'), target "
                              f"#{r['id']}.\n\n")
+    # Just showed the active reminders? Then a bare "удали/закрой/убери #N" targets that
+    # REMINDER (reminder_cancel by display number), not a saved note (item_delete).
+    listed = store.kv_get(conn, "reminders_listed_at")
+    if listed:
+        try:
+            recent_list = (datetime.now(timezone.utc)
+                           - datetime.fromisoformat(listed)).total_seconds() < 300
+        except (TypeError, ValueError):
+            recent_list = False
+        if recent_list:
+            n = len(store.reminders_active(conn, chat_id))
+            if n:
+                user_content += (
+                    f"You JUST showed the boss his {n} active reminder(s), numbered #1..#{n}. "
+                    "So a bare 'удали #N' / 'закрой #N' / 'убери #N' / 'delete #N' here means "
+                    "reminder_cancel that reminder (params id=N, its display number) — NOT "
+                    "item_delete (a saved note). 'готово' / 'done' on a fired reminder is still "
+                    "amend.\n\n")
     user_content += f"<user_request>\n{text}\n</user_request>"
     messages = [
         {"role": "system", "content": system},

@@ -218,11 +218,18 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     закрыла #1?", "что там с напоминаниями?" — is answered from the **real active list**
     (she explains a fired one is still open until "готово" and offers to close it), **not**
     by searching your notes. (An explicit "закрой #1" cancels it.)
-  - **Held during intimate / together moments.** A due reminder (and proactive nudges) will
-    **not interrupt** a live date/visit or an intimate exchange — it's held and delivered
-    once the moment passes (`intimate_quiet_minutes`), so a gratitude reminder never lands
-    mid‑intimacy. A reminder overdue past `reminder_max_defer_hours` is delivered anyway so
-    it's never lost.
+  - **Never fires late at night or mid‑intimacy.** A reminder due in **quiet hours** is held
+    until the window ends and delivered the next morning; one due during an **intimate /
+    together moment** is held until it passes (`intimate_quiet_minutes`, overdue past
+    `reminder_max_defer_hours` fires anyway so it's never lost). So a gratitude reminder never
+    lands at 1 AM or in the middle of a date.
+  - **Rescheduling never lands in the past.** "перенеси на 12:00" right after a reminder fires
+    binds to **that** reminder (no need to re‑name it); and if a parsed time is already past
+    (a misdated "today"), it **rolls forward to the next occurrence** instead of re‑firing
+    immediately. "удали #N" right after you've **shown the reminders** cancels that reminder,
+    not a saved note.
+  - **The "ждёт готово" list self‑clears.** A fired one‑shot left unacked **auto‑closes** after
+    `reminder_fired_expire_days` so the list never piles up.
   - **Rename** a reminder's title in place ("переименуй #2 в «Иван Доронин»").
   - **Reschedule / undo:** "перенеси напоминание про банк на пятницу" moves it; an
     explicit title that matches nothing active is reported (never silently moves a

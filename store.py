@@ -1930,6 +1930,18 @@ def reminders_active(conn, chat_id):
     ).fetchall()
 
 
+def reminders_expire_stale(conn, cutoff_iso):
+    """Auto-close one-shot reminders that fired but were never acked and whose fire time is
+    older than the cutoff — so the 'ждёт готово' list doesn't grow forever. Returns count."""
+    cur = conn.execute(
+        "UPDATE reminders SET status = 'expired' WHERE status = 'active'"
+        " AND recurrence = 'none' AND last_fired_at IS NOT NULL AND last_fired_at < ?",
+        (cutoff_iso,),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def reminder_display_no(conn, chat_id, rid):
     """1..N position of an active reminder in the boss-facing (due-ordered) list,
     or None if it isn't active. The number compacts as reminders fire/cancel; the

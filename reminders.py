@@ -44,6 +44,19 @@ def next_due(due_iso, recurrence, now=None):
     return due.isoformat()
 
 
+def roll_forward(due, now, max_days=400):
+    """Push a past `due` forward by whole days until it's in the future (preserving the
+    local time-of-day, since a whole-day step keeps UTC↔local aligned). Used when a
+    reschedule resolves to a time that's already passed (e.g. a misparsed 'today' at a
+    late hour) so the reminder lands in the future instead of re-firing immediately."""
+    d = due
+    for _ in range(max_days):
+        if d > now:
+            return d
+        d += timedelta(days=1)
+    return d
+
+
 def fmt_local(due_iso, offset_hours):
     due = parse_iso_utc(due_iso)
     local = due + timedelta(hours=offset_hours)

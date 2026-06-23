@@ -329,6 +329,16 @@ class RemindersTests(unittest.TestCase):
         weekly = reminders.parse_iso_utc(reminders.next_due("2026-06-12T07:00:00Z", "weekly", now))
         self.assertEqual(weekly, datetime(2026, 6, 19, 7, 0, tzinfo=timezone.utc))
 
+    def test_roll_forward_past_to_future(self):
+        now = datetime(2026, 6, 24, 1, 0, tzinfo=timezone.utc)
+        # 'today 12:00' that the router misdated to yesterday -> rolls to the next noon (future)
+        rolled = reminders.roll_forward(datetime(2026, 6, 23, 9, 0, tzinfo=timezone.utc), now)
+        self.assertGreater(rolled, now)
+        self.assertEqual(rolled.hour, 9)                       # local time-of-day preserved
+        self.assertEqual(rolled.date(), now.date())            # next occurrence = today
+        future = datetime(2026, 6, 25, 9, 0, tzinfo=timezone.utc)
+        self.assertEqual(reminders.roll_forward(future, now), future)  # already future -> unchanged
+
     def test_fmt_local_and_find(self):
         self.assertEqual(reminders.fmt_local("2026-06-13T07:00:00Z", 3), "2026-06-13 10:00")
         rows = [
@@ -1170,6 +1180,10 @@ class ConversationDispatchTests(unittest.TestCase):
         cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "pd.db"),
                           MEDIA_DIR=str(Path(self.tmp.name) / "m"))
         self.agent = tg_ingest_agent.Agent(cfg)
+        # Disable quiet hours so reminder-firing tests are deterministic regardless of the
+        # wall-clock when the suite runs (the quiet-hours test mocks in_quiet_hours itself).
+        store.pref_set(self.agent.conn, "quiet_start", "0")
+        store.pref_set(self.agent.conn, "quiet_end", "0")
 
     def tearDown(self):
         self.agent.conn.close()
@@ -1461,6 +1475,61 @@ class ConversationDispatchTests(unittest.TestCase):
         store.kv_set(a.conn, "last_intimate_at",
                      (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
         self.assertFalse(a._in_intimate_moment())   # window passed
+
+    def test_reschedule_rolls_past_time_into_future(self):
+        from datetime import datetime, timezone
+        conn = self.agent.conn
+        rid = store.reminder_add(conn, 1, "Рим Airbnb",
+                                 (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(), "none")
+        store.kv_set(conn, "last_reminder_id", str(rid))
+        past = (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat()
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reschedule(1, "ru", {"due_utc": past})   # bare 'перенеси на <past>'
+        row = store.reminder_get(conn, rid)
+        self.assertGreater(reminders.parse_iso_utc(row["due_utc"]), datetime.now(timezone.utc))
+
+    def test_reminder_held_during_quiet_hours(self):
+        import proactive
+        conn = self.agent.conn
+        due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        store.reminder_add(conn, 1, "благодарности", due, "none")
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, *a, **k: sent.append(text)), \
+                mock.patch.object(proactive, "in_quiet_hours", return_value=True):
+            self.agent.fire_due_reminders()
+        self.assertEqual(sent, [])                          # held through the night
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, *a, **k: sent.append(text)), \
+                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
+            self.agent.fire_due_reminders()
+        self.assertTrue(any("благодарности" in s for s in sent))  # fires once it's morning
+
+    def test_stale_fired_reminders_auto_expire(self):
+        from datetime import datetime, timezone
+        conn = self.agent.conn
+        rid = store.reminder_add(conn, 1, "старое", "2026-06-20T10:00:00+00:00", "none")
+        conn.execute("UPDATE reminders SET last_fired_at = ? WHERE id = ?",
+                     ("2026-06-20T10:00:05+00:00", rid))   # fired days ago, never acked
+        conn.commit()
+        self.agent.check_reminder_expiry()
+        self.assertEqual(len(store.reminders_active(conn, 1)), 0)   # cleared from the list
+        self.assertEqual(store.reminder_get(conn, rid)["status"], "expired")
+
+    def test_delete_after_reminder_list_hints_reminder_cancel(self):
+        from datetime import datetime, timezone
+        import llm
+        conn = self.agent.conn
+        store.reminder_add(conn, 1, "пиво", (datetime.now(timezone.utc)).isoformat(), "none")
+        store.kv_set(conn, "reminders_listed_at", datetime.now(timezone.utc).isoformat())
+        captured = {}
+
+        def cap(cfg, c, skill, messages, **kw):
+            captured["user"] = messages[1]["content"]
+            return '{"action":"reminder_cancel","params":{"id":1},"confidence":0.9}'
+        with mock.patch.object(llm, "chat_profile", side_effect=cap):
+            router.route(self.agent.cfg, conn, 1, "удали #1", None)
+        self.assertIn("reminder_cancel that reminder", captured["user"])
 
     def test_reminder_held_during_intimacy_then_delivered(self):
         from datetime import datetime, timezone, timedelta
