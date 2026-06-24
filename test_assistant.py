@@ -276,7 +276,9 @@ class RouterTests(unittest.TestCase):
                      "stats_text", "overview_text", "items_text", "do_show_media", "do_discard",
                      "do_purge", "resolve_purge", "resolve_item", "resolve_items", "note_no",
                      "item_detail_text", "do_item_detail", "do_recategorize", "do_merge_categories",
-                     "issues_text", "files_text", "categories_text"):
+                     "issues_text", "files_text", "categories_text",
+                     # stage 3 — KB / fetch
+                     "do_ask", "do_fetch", "ingest_fetched", "_keyword_context"):
             self.assertIn(name, hermes.HermesMixin.__dict__)         # physically in hermes
             self.assertNotIn(name, tg_ingest_agent.Agent.__dict__)   # not duplicated on Agent
             self.assertTrue(hasattr(tg_ingest_agent.Agent, name))    # still available via the mixin

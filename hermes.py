@@ -19,12 +19,16 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import fetch
 import ingest
 import llm
 import reminders
 import store
 from common import log
 from texts import T
+# NOTE: `knowledge` and `persona` are imported LOCALLY inside do_ask/_keyword_context —
+# `knowledge` imports `hermes` (for the Hermes register), so a top-level import here would
+# be a cycle. Call-time local imports keep it clean.
 
 # The Hermes domain — the business/assistant actions Cara delegates to her work
 # register. Routing one of these means "he's working": it sets the businesslike
@@ -756,3 +760,96 @@ class HermesMixin:
         lines = [T(lang, "categories_header")]
         lines.extend(f"  {row['name']}: {row['n']}" for row in rows)
         return "\n".join(lines)
+
+    # -- knowledge base / remote fetch (stage 3) ------------------------------
+
+    def do_fetch(self, chat_id, lang, params):
+        if not self.cfg.fetch_enabled:
+            self.reply(chat_id, T(lang, "fetch_disabled"))
+            return
+        url = str(params.get("url") or "").strip()
+        if not url:
+            self.reply(chat_id, T(lang, "fetch_no_url"))
+            return
+        self.reply(chat_id, T(lang, "fetch_reading"), record=False)
+        try:
+            final_url, title, text = fetch.fetch(
+                url, timeout=self.cfg.fetch_timeout, max_bytes=self.cfg.fetch_max_bytes)
+        except fetch.FetchError as exc:
+            log(f"fetch failed for {url}: {exc}")
+            store.issue_add(self.conn, chat_id, "fetch_failed", f"{url}: {exc}")
+            key = exc.reason if exc.reason in ("fetch_blocked", "fetch_private") else "fetch_failed"
+            self.reply(chat_id, T(lang, key, error=str(exc)) if key == "fetch_failed"
+                       else T(lang, key))
+            return
+        self.ingest_fetched(chat_id, lang, final_url, title, text)
+
+    def ingest_fetched(self, chat_id, lang, url, title, text):
+        """Store fetched remote content as an inbox item and suggest a
+        category — same suggest-and-confirm flow as a forwarded post."""
+        from urllib.parse import urlparse
+        source = title or urlparse(url).hostname or "web"
+        row_id = store.insert_message(self.conn, {
+            "chat_id": chat_id,
+            "tg_message_id": -int(datetime.now(timezone.utc).timestamp()),  # synthetic, unique
+            "forward_origin_type": "web",
+            "forward_origin_title": source[:200],
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": text,
+        })
+        if row_id is None:
+            return
+        store.insert_url(self.conn, row_id, url)
+        suggestion = self.suggest_row(store.get_message(self.conn, row_id))
+        if not suggestion:
+            self.reply(chat_id, T(lang, "stored_retry", row_id=self.note_no(row_id)))
+            return
+        category, alternatives, summary = suggestion
+        counts = T(lang, "counts", row_id=self.note_no(row_id), images=0, files=0, urls=1)
+        self.present_suggestion(row_id, chat_id, None, category, alternatives, summary, counts)
+
+    def do_ask(self, chat_id, lang, params, text):
+        import knowledge
+        import persona
+        question = str(params.get("question") or "").strip() or text.strip()
+        if not question:
+            self.reply(chat_id, T(lang, "clarify"))
+            return
+        try:
+            qvec = llm.embed(self.cfg, self.conn, "ask", [question])[0]
+            rows = store.all_embedded_chunks(self.conn)
+            context = knowledge.rank_chunks(qvec, rows, self.cfg.ask_top_k,
+                                            self.cfg.ask_context_chars)
+            if not context:  # nothing indexed/matched -> keyword fallback
+                context = self._keyword_context(question)
+            hint = persona.boss_preference_hint(self.conn)
+            answer = llm.chat_profile(self.cfg, self.conn, "ask",
+                                      knowledge.build_ask_messages(question, context, hint),
+                                      profile="ask_grounded")
+        except llm.BudgetExceeded as exc:
+            store.issue_add(self.conn, chat_id, "budget_stop", question[:200])
+            self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
+                                  period=T(lang, f"period_{exc.period}")))
+            return
+        except llm.LLMError as exc:
+            log(f"ask failed: {exc}")
+            store.issue_add(self.conn, chat_id, "llm_error", f"ask: {exc}")
+            self.reply(chat_id, T(lang, "llm_error"))
+            return
+        if not context:
+            store.issue_add(self.conn, chat_id, "ask_no_context", question[:200])
+        self.reply(chat_id, answer.strip()[:4000])
+
+    def _keyword_context(self, question):
+        import knowledge
+        items = []
+        for term in knowledge.salient_terms(question):
+            for row in store.list_messages(self.conn, query=term, limit=3):
+                if not any(c["message_id"] == row["id"] for c in items):
+                    items.append({"message_id": row["id"],
+                                  "text": (row["raw_text"] or row["summary"] or "")[:1500],
+                                  "category": row["category"] or row["suggested_category"] or "?",
+                                  "title": row["forward_origin_title"]})
+            if len(items) >= self.cfg.ask_top_k:
+                break
+        return items[:self.cfg.ask_top_k]
