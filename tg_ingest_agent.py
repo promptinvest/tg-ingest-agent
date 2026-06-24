@@ -23,6 +23,7 @@ import converse
 import events
 import fetch
 import gcal
+import hermes
 import ingest
 import jobs  # noqa: F401 (job helpers used by registered handlers)
 import knowledge
@@ -706,19 +707,12 @@ class Agent:
                 "ok", "окей", "да", "yes", "yep", "ага", "+", "✅", "👍", "закры")
         return len(t) <= 25 and any(w in t for w in acks)
 
-    # Actions that mean "he's working" — they mobilize Cara's resting register to a
-    # business tone for a while (see _register_state). Personal/companion actions
-    # (converse, smalltalk, meetings, persona, memory, stickers…) deliberately do NOT,
-    # so a personal aside never reads as work and her warmth eases back when tasks stop.
-    BUSINESS_REGISTER_ACTIONS = frozenset({
-        "ingest", "reminder_create", "reminder_list", "reminder_cancel",
-        "reminder_reschedule", "reminder_rename", "reminder_undo", "list_files",
-        "calendar_add", "spend", "budget_set", "stats", "categories", "overview",
-        "list_items", "item_detail", "item_delete", "recategorize", "merge_categories",
-        "show_media", "vps_stats", "purge", "fetch", "ask", "issues_report",
-        "report_problem", "multi_action", "set_journal", "journal_show", "export",
-        "working_history", "review",
-    })
+    # The Hermes (business) domain — routing one of these means "he's working": it
+    # mobilizes Cara's resting register to a business tone (see _register_state) and is
+    # answered in the Hermes voice. Personal/companion actions (converse, smalltalk,
+    # meetings, persona, memory, stickers…) deliberately are NOT in it, so a personal
+    # aside never reads as work and her warmth eases back when tasks stop.
+    BUSINESS_REGISTER_ACTIONS = hermes.ACTIONS
 
     def dispatch(self, chat_id, msg, text):
         lang = self.lang()

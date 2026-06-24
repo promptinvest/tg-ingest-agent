@@ -253,6 +253,16 @@ class RouterTests(unittest.TestCase):
         self.assertIn("pending action awaiting", prompt2)
         self.assertIn("reminder", prompt2)
 
+    def test_hermes_domain_is_business_only(self):
+        import hermes, tg_ingest_agent
+        # Business actions belong to Hermes; personal/companion ones never do.
+        for a in ("reminder_create", "ask", "ingest", "spend", "review"):
+            self.assertTrue(hermes.is_business(a))
+        for a in ("converse", "smalltalk", "meeting_start", "cara_selfie", "persona"):
+            self.assertFalse(hermes.is_business(a))
+        # The dispatcher's business-register set IS the Hermes domain (single source).
+        self.assertIs(tg_ingest_agent.Agent.BUSINESS_REGISTER_ACTIONS, hermes.ACTIONS)
+
     def test_reminder_status_question_steers_to_converse(self):
         # "почему не закрыла #1?" must NOT route to ask (notes) — it's about her own
         # reminders, answered in converse from the real reminder list.
@@ -1820,15 +1830,17 @@ class ConversationDispatchTests(unittest.TestCase):
             self.agent.do_cara_selfie(1, "ru")
         self.assertEqual(sp.call_args[0][2], "P1")  # sent the saved file_id
 
-    def test_ask_prompt_is_in_persona_not_assistant(self):
+    def test_ask_prompt_uses_hermes_business_register(self):
         import knowledge
         msgs = knowledge.build_ask_messages(
             "когда рейс?", [{"message_id": 1, "text": "рейс в 10:00", "category": "Travel",
                             "title": None}])
         sys = msgs[0]["content"]
-        self.assertNotIn("personal assistant", sys.lower())
-        self.assertIn("NEVER an AI", sys)
-        self.assertIn("рейс в 10:00", sys)  # grounding still present
+        self.assertIn("HERMES", sys)                          # business register, not warm persona
+        self.assertIn("crisp", sys.lower())
+        self.assertNotIn("personal assistant", sys.lower())  # still not a generic 'assistant'
+        self.assertIn("Never call yourself an AI", sys)      # no AI/bot disclaimer
+        self.assertIn("рейс в 10:00", sys)                   # grounding still present
 
     def test_converse_grounding_uses_stored_facts(self):
         # The guardrail: converse is GIVEN the boss's real saved entries so it can use

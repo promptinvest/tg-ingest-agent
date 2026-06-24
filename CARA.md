@@ -63,6 +63,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   intimate aside dropped into a work thread ("скучаю", "что ты чувствуешь про нашу встречу?")
   reaches her **warm/companion** side instantly, and a task reaches her **crisp assistant**
   side — she flows between them within one conversation as the **same person, no reset**.
+  The business side is **Hermes** (`hermes.py`) — *not* a separate agent/bot/memory, but a
+  bounded **domain** (the work actions: reminders/notes/KB/spend/…) plus a distinct
+  **businesslike voice** (crisp, structured, factual — no warmth/flirtation bleed, still her
+  «ты», never an "I'm an AI assistant" disclaimer) that she governs. One Cara; Hermes is her
+  work register. (The KB `ask`, fetched‑page summaries and reviews answer in the Hermes voice.)
   Her *resting* tone is a baseline, not a gate: when you've been **doing business** she
   mobilizes to a working style (any hour) and stays there for `WORK_REGISTER_HOLD_MINUTES`,
   then **eases back**; quiet **work hours** rest professional, quiet **off‑hours** rest

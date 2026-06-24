@@ -418,6 +418,15 @@ proactively like real memory. Design decisions and why:
 
 ### 5a. Smooth register switching + off-hours intimacy
 
+- **Hermes — the business subsystem (`hermes.py`).** Not a separate agent/bot/process/memory:
+  a bounded **domain** (`hermes.ACTIONS` — the work actions; `Agent.BUSINESS_REGISTER_ACTIONS`
+  is now an alias) plus a distinct **register** (`hermes.PERSONA`) for LLM-generated business
+  replies (the KB `ask`, fetched-page summaries, reviews/working-history). Crisp, structured,
+  factual — no warmth/flirtation/roleplay bleed, still her «ты», never an AI/assistant
+  disclaimer. The closed-world router is the single delegation hop: business → Hermes register,
+  personal → the companion (`converse.py`). One Cara governs both.
+
+
 The boss wanted Cara to be one person who flows between her **assistant** and **companion**
 sides smoothly, 24/7 — *no* mode commands, *no* rigid day/night tone gate — and to lean
 playful/intimate in her personal time while mobilizing to a working style when he's heavy on
