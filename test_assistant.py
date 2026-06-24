@@ -263,6 +263,19 @@ class RouterTests(unittest.TestCase):
         # The dispatcher's business-register set IS the Hermes domain (single source).
         self.assertIs(tg_ingest_agent.Agent.BUSINESS_REGISTER_ACTIONS, hermes.ACTIONS)
 
+    def test_business_handlers_relocated_to_hermes_mixin(self):
+        # The extraction (#2): the business handlers physically live in hermes.HermesMixin,
+        # are NOT duplicated on Agent, yet still resolve on Agent via inheritance.
+        import hermes, tg_ingest_agent
+        self.assertTrue(issubclass(tg_ingest_agent.Agent, hermes.HermesMixin))
+        for name in ("do_reschedule", "do_rename_reminder", "_resolve_reminder_target",
+                     "_resolve_reminder_op", "_parse_reminder_selector", "do_reminder_undo",
+                     "continue_partial_reminder", "start_partial_reminder", "_note_reminder_title",
+                     "do_journal_show", "do_set_journal", "do_report_problem"):
+            self.assertIn(name, hermes.HermesMixin.__dict__)         # physically in hermes
+            self.assertNotIn(name, tg_ingest_agent.Agent.__dict__)   # not duplicated on Agent
+            self.assertTrue(hasattr(tg_ingest_agent.Agent, name))    # still available via the mixin
+
     def test_reminder_status_question_steers_to_converse(self):
         # "почему не закрыла #1?" must NOT route to ask (notes) — it's about her own
         # reminders, answered in converse from the real reminder list.

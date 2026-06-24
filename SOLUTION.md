@@ -420,11 +420,22 @@ proactively like real memory. Design decisions and why:
 
 - **Hermes — the business subsystem (`hermes.py`).** Not a separate agent/bot/process/memory:
   a bounded **domain** (`hermes.ACTIONS` — the work actions; `Agent.BUSINESS_REGISTER_ACTIONS`
-  is now an alias) plus a distinct **register** (`hermes.PERSONA`) for LLM-generated business
-  replies (the KB `ask`, fetched-page summaries, reviews/working-history). Crisp, structured,
-  factual — no warmth/flirtation/roleplay bleed, still her «ты», never an AI/assistant
-  disclaimer. The closed-world router is the single delegation hop: business → Hermes register,
-  personal → the companion (`converse.py`). One Cara governs both.
+  is now an alias), a distinct **register** (`hermes.PERSONA`) for LLM-generated business
+  replies (the KB `ask`, fetched-page summaries, reviews/working-history), and the business
+  **handler code** (`hermes.HermesMixin`). Crisp, structured, factual — no warmth/flirtation/
+  roleplay bleed, still her «ты», never an AI/assistant disclaimer. The closed-world router is
+  the single delegation hop: business → Hermes register, personal → the companion
+  (`converse.py`). One Cara governs both.
+- **Handler extraction (`HermesMixin`, mixed into `Agent`).** The business handlers physically
+  live in `hermes.py` but run on the SAME object (`class Agent(hermes.HermesMixin)`), so `self`
+  is the Agent and every `self.reply`/`self.conn`/`self.reminder_no` resolves exactly as before
+  — **pure relocation, zero behaviour change** (the full suite is the regression net). Done in
+  safe stages: **stage 1** moved the reminder-targeting + journal/problem handlers
+  (`do_reschedule`/`do_rename_reminder`/`do_reminder_undo`/`_resolve_reminder_target`/
+  `_resolve_reminder_op`/`_parse_reminder_selector`/partial-reminder/`do_set_journal`/
+  `do_journal_show`/`do_report_problem`). Later stages move notes/inbox, KB/fetch, spend/review.
+  Scattered handlers that stay on the Agent (e.g. `fire_due_reminders`) still resolve via the
+  mixin and move in a later stage.
 
 
 The boss wanted Cara to be one person who flows between her **assistant** and **companion**
