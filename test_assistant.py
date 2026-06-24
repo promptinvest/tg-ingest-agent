@@ -1505,6 +1505,58 @@ class ConversationDispatchTests(unittest.TestCase):
             self.agent.fire_due_reminders()
         self.assertTrue(any("благодарности" in s for s in sent))  # fires once it's morning
 
+    def test_reschedule_ordinal_targets_position_not_last_touched(self):
+        from datetime import datetime, timezone
+        conn = self.agent.conn
+        now = datetime.now(timezone.utc)
+        r1 = store.reminder_add(conn, 1, "Азербайджан", (now + timedelta(hours=1)).isoformat(), "none")
+        r2 = store.reminder_add(conn, 1, "Рим", (now + timedelta(hours=2)).isoformat(), "none")
+        store.kv_set(conn, "last_reminder_id", str(r1))   # last touched = the FIRST one
+        newt = (now + timedelta(hours=5)).isoformat()
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reschedule(1, "ru", {"due_utc": newt}, "перенеси второе на 17:00")
+        # "второе" -> the SECOND reminder moved, not the last-touched first one
+        self.assertEqual(store.reminder_get(conn, r2)["due_utc"], newt)
+        self.assertNotEqual(store.reminder_get(conn, r1)["due_utc"], newt)
+
+    def test_reschedule_clears_fired_marker(self):
+        from datetime import datetime, timezone
+        conn = self.agent.conn
+        rid = store.reminder_add(conn, 1, "пиво", "2026-06-22T18:31:00+00:00", "none")
+        conn.execute("UPDATE reminders SET last_fired_at = ? WHERE id = ?",
+                     ("2026-06-22T18:31:05+00:00", rid))
+        conn.commit()
+        self.assertIn("сработало", reminders.reminder_status_mark(store.reminder_get(conn, rid), "ru"))
+        store.kv_set(conn, "last_reminder_id", str(rid))
+        future = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reschedule(1, "ru", {"due_utc": future}, "перенеси на 12:00")
+        row = store.reminder_get(conn, rid)
+        self.assertIsNone(row["last_fired_at"])                              # re-armed
+        self.assertEqual(reminders.reminder_status_mark(row, "ru"), "")     # marker gone
+
+    def test_meeting_holds_business_notices(self):
+        import proactive
+        conn = self.agent.conn
+        owner = self.agent._owner_chat()
+        store.meeting_start(conn, owner, kind="visit")            # a live date
+        # a reminder 5h overdue (well past the max-defer) is STILL held for the whole date
+        store.reminder_add(conn, owner, "оплата",
+                           (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(), "none")
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, *a, **k: sent.append(text)), \
+                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
+            self.agent.fire_due_reminders()
+        self.assertEqual(sent, [])                                # not interrupted
+        # a build/deploy notice is also held (and not marked seen -> announces later)
+        store.kv_set(conn, "deployed_version", "old")
+        with mock.patch.object(self.agent, "build_version", return_value="new"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.announce_deploy_if_changed()
+        r.assert_not_called()
+        self.assertEqual(store.kv_get(conn, "deployed_version"), "old")
+
     def test_stale_fired_reminders_auto_expire(self):
         from datetime import datetime, timezone
         conn = self.agent.conn

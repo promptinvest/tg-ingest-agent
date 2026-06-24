@@ -1971,10 +1971,13 @@ def reminder_touch_fired(conn, rid, when=None):
 
 
 def reminder_update_due(conn, rid, due_utc):
-    """Move a reminder, remembering its current time in prev_due_utc so a
-    reschedule can be undone ('верни предыдущее время')."""
+    """Move a reminder, remembering its current time in prev_due_utc so a reschedule can
+    be undone ('верни предыдущее время'). Clears last_fired_at — a reschedule/snooze
+    RE-ARMS the reminder, so it's a fresh future reminder, not one still 'сработало, ждёт
+    готово' (the marker must not linger after it's moved to a new time)."""
     conn.execute(
-        "UPDATE reminders SET prev_due_utc = due_utc, due_utc = ? WHERE id = ?",
+        "UPDATE reminders SET prev_due_utc = due_utc, due_utc = ?, last_fired_at = NULL"
+        " WHERE id = ?",
         (due_utc, rid),
     )
     conn.commit()

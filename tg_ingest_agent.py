@@ -247,6 +247,10 @@ class Agent:
         version = self.build_version()
         if not version or store.kv_get(self.conn, "deployed_version") == version:
             return
+        # Never break a meeting / intimate moment with a build notice — hold it (don't
+        # mark the version seen) and announce on a later tick once they're free.
+        if self._in_intimate_moment():
+            return
         store.kv_set(self.conn, "deployed_version", version)
         for chat_id in self.cfg.allowed_chat_ids:
             self.reply(chat_id, T(self.lang(), "deploy_notice"))
@@ -270,6 +274,7 @@ class Agent:
             now = time.time()
             self.turn_lang = None  # scheduler replies use the stored preference
             self.flush_albums(now)
+            self.announce_deploy_if_changed()  # held during a date -> posts once it's free
             self.fire_due_reminders()
             self.check_scheduled_meetings()  # agreed meeting time arrived -> go live
             self.check_budget_notice()
@@ -351,16 +356,15 @@ class Agent:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         in_quiet = proactive.in_quiet_hours(self.cfg, self.conn, now)
-        in_intimate = self._in_intimate_moment(now)
+        in_meeting = self._in_social_meeting()
+        in_window = self._recent_intimate_msg(now)
         for row in store.reminders_due(self.conn, now_iso):
-            # Never fire late at night: hold a reminder due in quiet hours until the window
-            # ends (next civil morning) — it stays due and fires then, never lost.
-            if in_quiet:
+            # Hold for the WHOLE date and through quiet hours (never lost — fires once the
+            # meeting ends / the window closes). A live meeting holds indefinitely; a bare
+            # intimate-message window holds only up to the max-defer so nothing's stranded.
+            if in_meeting or in_quiet:
                 continue
-            # Hold a reminder due during an intimate/together moment so it doesn't break it
-            # — fires on a later tick once the moment passes; overdue past the max-defer
-            # fires anyway so it's never lost.
-            if in_intimate:
+            if in_window:
                 due = reminders.parse_iso_utc(row["due_utc"])
                 if due is not None and (now - due).total_seconds() < \
                         self.cfg.reminder_max_defer_hours * 3600:
@@ -841,9 +845,9 @@ class Agent:
             else:
                 self.reply(chat_id, T(lang, "reminder_not_found"))
         elif action == "reminder_reschedule":
-            self.do_reschedule(chat_id, lang, params)
+            self.do_reschedule(chat_id, lang, params, text)
         elif action == "reminder_rename":
-            self.do_rename_reminder(chat_id, lang, params)
+            self.do_rename_reminder(chat_id, lang, params, text)
         elif action == "reminder_undo":
             self.do_reminder_undo(chat_id, lang, params)
         elif action == "list_files":
@@ -1579,25 +1583,31 @@ class Agent:
         t = (text or "").casefold()
         return any(c in t for c in self._INTIMACY_CUES)
 
+    def _in_social_meeting(self):
+        """True if a live social/personal meeting (date/visit/…) is in progress."""
+        owner = self._owner_chat()
+        if owner is None:
+            return False
+        live = store.meeting_active(self.conn, owner)
+        return bool(live and meeting.is_social(live["kind"]))
+
+    def _recent_intimate_msg(self, now=None):
+        """True within `intimate_quiet_minutes` of a clearly intimate message (no meeting
+        needed) — the short window where a business ping should hold."""
+        now = now or datetime.now(timezone.utc)
+        last = store.kv_get(self.conn, "last_intimate_at")
+        if not last:
+            return False
+        try:
+            return (now - datetime.fromisoformat(last)).total_seconds() < \
+                self.cfg.intimate_quiet_minutes * 60
+        except (ValueError, TypeError):
+            return False
+
     def _in_intimate_moment(self, now=None):
         """True when business pings should be HELD — a live social/personal meeting, or
-        within `intimate_quiet_minutes` of a clearly intimate message. So a reminder /
-        nudge waits and lands after the moment, never in the middle of it."""
-        now = now or datetime.now(timezone.utc)
-        owner = self._owner_chat()
-        if owner is not None:
-            live = store.meeting_active(self.conn, owner)
-            if live and meeting.is_social(live["kind"]):
-                return True
-        last = store.kv_get(self.conn, "last_intimate_at")
-        if last:
-            try:
-                if (now - datetime.fromisoformat(last)).total_seconds() < \
-                        self.cfg.intimate_quiet_minutes * 60:
-                    return True
-            except (ValueError, TypeError):
-                pass
-        return False
+        within `intimate_quiet_minutes` of a clearly intimate message."""
+        return self._in_social_meeting() or self._recent_intimate_msg(now)
 
     def _closeness_stage(self):
         try:
@@ -3593,6 +3603,10 @@ class Agent:
         if now - self.last_model_health < self.cfg.model_health_interval:
             return
         self.last_model_health = now
+        # Don't fire a model up/down alert into a date / intimate moment (it shattered the
+        # mood). Re-checks next interval and posts the current state once they're free.
+        if self._in_intimate_moment():
+            return
         # A budget stop blocks every model call before it leaves the box, so the
         # probes below would all "fail" — but that's a SPEND condition, not a
         # model outage. Don't masquerade it as "model down" (the budget guard has
@@ -3705,7 +3719,7 @@ class Agent:
             self.reply(chat_id, T(lang, "llm_error"))
         log(f"review exported: {reviews_dir / filename}")
 
-    def do_reschedule(self, chat_id, lang, params):
+    def do_reschedule(self, chat_id, lang, params, text=None):
         """Move an existing reminder to a new time (applied immediately, like
         cancel). Targets by id/title; a bare 'это/последнее' reference uses the
         sole active reminder, but never silently picks one when an explicit
@@ -3721,7 +3735,8 @@ class Agent:
         if due <= now:
             due = reminders.roll_forward(due, now)
         row = self._resolve_reminder_target(
-            chat_id, lang, params, op={"op": "reschedule", "due_utc": due.isoformat()})
+            chat_id, lang, params,
+            op={"op": "reschedule", "due_utc": due.isoformat(), "text": text})
         if row is None:
             return  # _resolve_reminder_target already replied (not found / which?)
         store.reminder_update_due(self.conn, row["id"], due.isoformat())
@@ -3730,7 +3745,7 @@ class Agent:
                               rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
                               when_local=reminders.fmt_local(due.isoformat(), self.tz_offset())))
 
-    def do_rename_reminder(self, chat_id, lang, params):
+    def do_rename_reminder(self, chat_id, lang, params, text=None):
         """Retitle an existing reminder IN PLACE (keeps id/time/recurrence/history).
         The new name is params['new_title']; the target is resolved by id/title_query/
         'это' through the shared guard, so it never renames the wrong reminder. (Note
@@ -3745,7 +3760,7 @@ class Agent:
             self.reply(chat_id, T(lang, "reminder_rename_what"))
             return
         row = self._resolve_reminder_target(
-            chat_id, lang, params, op={"op": "rename", "new_title": new_title})
+            chat_id, lang, params, op={"op": "rename", "new_title": new_title, "text": text})
         if row is None:
             return  # _resolve_reminder_target already replied (not found / which?)
         store.reminder_rename(self.conn, row["id"], new_title)
@@ -4015,6 +4030,15 @@ class Agent:
             self.reply(chat_id, T(lang, "reminder_not_found") + "\n"
                        + reminders.format_list(rows, self.tz_offset(), lang))
             return None
+        if row is None and op is not None and op.get("text") and len(rows) > 1:
+            # An ordinal word ("первое"/"второе"/"third") names a POSITION in the shown
+            # list — resolve it BEFORE the bare last-touched fallback, so "перенеси второе"
+            # moves the 2nd reminder, not the one he just touched. (Only ordinal STEMS, not
+            # bare numbers — a time like "12:15" must not be read as reminder #12.)
+            t = (op.get("text") or "").casefold()
+            for stem, n in self._ORDINALS.items():
+                if stem in t and 1 <= n <= len(rows):
+                    return rows[n - 1]
         if row is None:  # bare "это/последнее/это напоминание" reference
             last_id = store.kv_get(self.conn, "last_reminder_id")
             if last_id:
