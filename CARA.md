@@ -236,6 +236,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     limit. A past‑resolved time **rolls forward**; once moved it's **re‑armed** and shown as
     **"🔄 перенесено"** (re‑scheduled) — *not* the "⚠️ сработало" warning. "удали #N" right after
     you've **shown the reminders** cancels that reminder, not a saved note.
+  - **Move several at once.** "перенеси **первые две / обе / все** на 17:00" moves every named
+    reminder in one go and confirms once ("перенесла N напоминания") — it is **one** reschedule,
+    not a "давай по одному" split. (That split used to drop the request on the floor and let her
+    *say* she'd moved them while nothing actually changed.)
   - **The "ждёт готово" list self‑clears.** A fired one‑shot left unacked **auto‑closes** after
     `reminder_fired_expire_days` so the list never piles up.
   - **Rename** a reminder's title in place ("переименуй #2 в «Иван Доронин»").

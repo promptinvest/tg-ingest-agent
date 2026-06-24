@@ -1536,7 +1536,9 @@ class Agent(hermes.HermesMixin):
         "останься со мной", "сожми", "пульсаци", "сладк", "млею", "want you", "take me",
         "i'm yours", "im yours", "kiss me", "kissing", "your body", "my body", "your lips",
         "your skin", "touch me", "hold me close", "moan", "don't let go", "press against",
-        "crave you", "i'm aching", "make me",
+        "crave you", "i'm aching", "make me", "трах", "займёмся любов", "займемся любов",
+        "предадимся", "набросим", "ненасытн", "оседла", "сверху на тебе", "войди в меня",
+        "make love", "ravish", "all over me", "inside me",
     )
 
     def _is_intimate_message(self, text):

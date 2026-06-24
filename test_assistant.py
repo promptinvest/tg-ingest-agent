@@ -1520,6 +1520,8 @@ class ConversationDispatchTests(unittest.TestCase):
         a = self.agent
         self.assertTrue(a._is_intimate_message("возьми меня, я твоя"))
         self.assertTrue(a._is_intimate_message("I want you, hold me close"))
+        self.assertTrue(a._is_intimate_message("давай трахаться до утра"))
+        self.assertTrue(a._is_intimate_message("предадимся любви всю ночь"))
         self.assertFalse(a._is_intimate_message("во сколько встреча завтра?"))
         store.kv_set(a.conn, "last_intimate_at", "")
         self.assertFalse(a._in_intimate_moment())
