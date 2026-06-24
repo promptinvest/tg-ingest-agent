@@ -276,6 +276,15 @@ class RouterTests(unittest.TestCase):
             self.assertNotIn(name, tg_ingest_agent.Agent.__dict__)   # not duplicated on Agent
             self.assertTrue(hasattr(tg_ingest_agent.Agent, name))    # still available via the mixin
 
+    def test_ordinal_reschedule_routes_to_action_not_converse(self):
+        import converse
+        # "перенеси первое/его на TIME" must reschedule (the action), not fall to converse.
+        self.assertIn("перенеси первое на 12:16", router.ROUTER_EXAMPLES)
+        self.assertIn("перенеси его на 12:20", router.ROUTER_EXAMPLES)
+        self.assertIn("move verb + a time is ALWAYS reminder_reschedule", router.ROUTER_EXAMPLES)
+        # and the persona must not invent a fake "system won't allow" limitation
+        self.assertIn("система не даст", converse.CHARACTER)
+
     def test_reminder_status_question_steers_to_converse(self):
         # "почему не закрыла #1?" must NOT route to ask (notes) — it's about her own
         # reminders, answered in converse from the real reminder list.
@@ -386,14 +395,20 @@ class RemindersTests(unittest.TestCase):
             {"id": 2, "title": "Азербайджан", "due_utc": "2026-06-24T15:00:00Z",
              "recurrence": "none", "last_fired_at": None},
         ]
+        # a reschedule-moved one-shot (re-armed, future) -> 'перенесено', NOT a warning
+        rows.append({"id": 3, "title": "Рим", "due_utc": "2026-06-25T15:00:00Z",
+                     "recurrence": "none", "last_fired_at": None,
+                     "prev_due_utc": "2026-06-22T10:00:00Z"})
         out = reminders.format_list(rows, 3, "ru", now=now)
         self.assertIn("ждёт «готово»", out)          # fired one-shot is marked
         self.assertNotIn("просрочено", out)           # the fired one isn't double-marked
-        # the future reminder line carries no status marker
-        self.assertNotIn("Азербайджан — ⚠️", out)
-        # status helper directly: fired vs overdue vs clean
-        self.assertEqual(reminders.reminder_status_mark(rows[0], "en", now), 'fired, awaiting "done"')
+        self.assertIn("🔄 перенесено", out)           # the rescheduled one shows re-scheduled
+        self.assertNotIn("Азербайджан — ⚠️", out)     # the fresh future reminder has no marker
+        self.assertNotIn("Рим — ⚠️", out)             # rescheduled is NOT a ⚠️ warning
+        # status helper directly: fired / rescheduled / clean (each with its own icon)
+        self.assertEqual(reminders.reminder_status_mark(rows[0], "en", now), '⚠️ fired, awaiting "done"')
         self.assertEqual(reminders.reminder_status_mark(rows[1], "en", now), "")
+        self.assertEqual(reminders.reminder_status_mark(rows[2], "en", now), "🔄 rescheduled")
 
 
 class SpendTests(unittest.TestCase):
@@ -1556,7 +1571,9 @@ class ConversationDispatchTests(unittest.TestCase):
             self.agent.do_reschedule(1, "ru", {"due_utc": future}, "перенеси на 12:00")
         row = store.reminder_get(conn, rid)
         self.assertIsNone(row["last_fired_at"])                              # re-armed
-        self.assertEqual(reminders.reminder_status_mark(row, "ru"), "")     # marker gone
+        mark = reminders.reminder_status_mark(row, "ru")
+        self.assertNotIn("сработало", mark)                                 # no longer 'fired'
+        self.assertIn("перенесено", mark)                                   # shows 're-scheduled'
 
     def test_meeting_holds_business_notices(self):
         import proactive

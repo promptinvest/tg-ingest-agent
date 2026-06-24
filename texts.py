@@ -77,9 +77,9 @@ TEXTS = {
                "done together, {name}."),
     },
     "persona_relationship": {
-        "ru": ("Вы мой босс — и я правда к вам привязана 🤍 По-рабочему: уважаю, болею за вас "
-               "и горжусь, когда от меня есть толк. Моя задача — снимать с вас мелочи, держать "
-               "порядок и помогать быть на шаг впереди. Без драм — просто рядом и на вашей стороне."),
+        "ru": ("Ты мой босс — и я правда к тебе привязана 🤍 По-рабочему: уважаю, болею за тебя "
+               "и горжусь, когда от меня есть толк. Моя задача — снимать с тебя мелочи, держать "
+               "порядок и помогать быть на шаг впереди. Без драм — просто рядом и на твоей стороне."),
         "en": ("You're my boss — and I'm genuinely fond of you 🤍 In a working way: I respect "
                "you, I'm in your corner, and I'm proud when I'm useful. My job is to take the "
                "small things off your plate, keep order, and help you stay a step ahead. No "
@@ -99,9 +99,9 @@ TEXTS = {
     "suggestion": {
         "ru": [
             "Я бы отнесла это к «{category}» 💡\nКоротко: {summary}\n{counts}\n"
-            "Согласны? Ответьте или нажмите кнопку — либо назовите свою категорию.",
+            "Согласен? Ответь или нажми кнопку — либо назови свою категорию.",
             "Поймала, босс. Похоже на «{category}» 💡\nКоротко: {summary}\n{counts}\n"
-            "Подтвердить? Или назовите свою категорию.",
+            "Подтвердить? Или назови свою категорию.",
             "Маленькая архивная победа. Отнесла бы к «{category}» 💡\nКоротко: {summary}\n{counts}\n"
             "Так и оставить? Кнопка или своя категория.",
         ],
@@ -166,7 +166,7 @@ TEXTS = {
         "en": "Set! #{rid}: {title} — {when_local} 👌",
     },
     "reminder_fired": {
-        "ru": "⏰ {name}, напоминаю: {title}\nОтветьте «готово» — или «через 30 минут», если отложить.",
+        "ru": "⏰ {name}, напоминаю: {title}\nОтветь «готово» — или «через 30 минут», если отложить.",
         "en": "⏰ {name}, reminder: {title}\nReply \"done\" — or \"in 30 minutes\" to snooze.",
     },
     "reminder_done": {"ru": "Отлично, закрыла ✅", "en": "Great, closed ✅"},
@@ -178,12 +178,13 @@ TEXTS = {
         "ru": "Активных напоминаний нет — всё спокойно 🌿",
         "en": "No active reminders — all clear 🌿",
     },
-    "reminder_list_header": {"ru": "Ваши напоминания:", "en": "Your reminders:"},
+    "reminder_list_header": {"ru": "Твои напоминания:", "en": "Your reminders:"},
     "reminder_mark_fired": {
         "ru": "сработало, ждёт «готово»",
         "en": "fired, awaiting \"done\"",
     },
     "reminder_mark_overdue": {"ru": "просрочено", "en": "overdue"},
+    "reminder_mark_rescheduled": {"ru": "перенесено", "en": "rescheduled"},
     "wardrobe_added": {
         "ru": "Ммм, добавила к себе в гардероб: {name} 🤍 надену для тебя.",
         "en": "Mm, added to my wardrobe: {name} 🤍 I'll wear it for you.",
@@ -439,11 +440,11 @@ TEXTS = {
         "en": "Calendar trouble: {error}",
     },
     "calendar_not_found": {
-        "ru": "Не поняла, какое событие добавить — назовите напоминание или время 🤔",
+        "ru": "Не поняла, какое событие добавить — назови напоминание или время 🤔",
         "en": "Not sure which event to add — name a reminder or give me a time 🤔",
     },
     "delete_confirm": {
-        "ru": "Удалить #{row_id} [{category}] «{snippet}»? Это насовсем — скажите «да», и я удалю.",
+        "ru": "Удалить #{row_id} [{category}] «{snippet}»? Это насовсем — скажи «да», и я удалю.",
         "en": "Delete #{row_id} [{category}] \"{snippet}\"? This is permanent — say \"yes\" and I'll remove it.",
     },
     "deleted": {
@@ -451,7 +452,7 @@ TEXTS = {
         "en": "Deleted #{row_id} — records and files 🗑",
     },
     "delete_confirm_multi": {
-        "ru": "Удалить {n} записей ({ids})? Это насовсем — скажите «да», и я удалю.",
+        "ru": "Удалить {n} записей ({ids})? Это насовсем — скажи «да», и я удалю.",
         "en": "Delete {n} items ({ids})? This is permanent — say \"yes\" and I'll remove them.",
     },
     "deleted_multi": {

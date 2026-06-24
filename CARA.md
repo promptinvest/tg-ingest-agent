@@ -229,11 +229,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     so a reminder never lands at 1 AM or in the middle of a date. **System notices, too** — a
     **build/deploy announcement** and **model up/down alerts** are held during a meeting /
     intimate moment and posted once you're free, so nothing breaks the mood.
-  - **Rescheduling never lands in the past, and re‑arms cleanly.** "перенеси на 12:00" right
-    after a reminder fires binds to **that** reminder; a past‑resolved time **rolls forward**;
-    an **ordinal** ("перенеси **второе** на 12:15") moves the *N‑th* shown reminder, not the
-    last one you touched; and once moved, it's **re‑armed** — the "⚠️ сработало, ждёт «готово»"
-    marker clears (it's a fresh future reminder again, not a stuck one). "удали #N" right after
+  - **Rescheduling never lands in the past, and re‑arms cleanly.** A **move verb + a time** is
+    always a reschedule — even named only by an **ordinal** ("перенеси **первое/второе** на
+    12:16", moves the *N‑th* shown one) or **"его/это"** (the one you're dealing with) — it's
+    done directly, never bounced to chat and never refused with a made‑up "too close in time"
+    limit. A past‑resolved time **rolls forward**; once moved it's **re‑armed** and shown as
+    **"🔄 перенесено"** (re‑scheduled) — *not* the "⚠️ сработало" warning. "удали #N" right after
     you've **shown the reminders** cancels that reminder, not a saved note.
   - **The "ждёт готово" list self‑clears.** A fired one‑shot left unacked **auto‑closes** after
     `reminder_fired_expire_days` so the list never piles up.

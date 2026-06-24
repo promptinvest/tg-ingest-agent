@@ -63,22 +63,30 @@ def fmt_local(due_iso, offset_hours):
     return local.strftime("%Y-%m-%d %H:%M")
 
 
-def reminder_status_mark(row, lang, now=None):
-    """A short status marker for a reminder a list shows: a one-shot that already
-    fired but wasn't confirmed ('сработало, ждёт «готово»') or one simply overdue
-    ('просрочено'). '' for a normal pending/recurring one. So an overdue reminder in
-    the list never looks the same as a future one — the boss isn't left guessing why
-    yesterday's reminder is still there."""
-    now = now or datetime.now(timezone.utc)
+def _row_get(row, key):
     try:                                  # sqlite3.Row -> IndexError; dict -> KeyError
-        fired = row["last_fired_at"]
+        return row[key]
     except (KeyError, IndexError):
-        fired = None
+        return None
+
+
+def reminder_status_mark(row, lang, now=None):
+    """A short status marker (with its own icon) for a reminder a list shows:
+    a fired-but-unconfirmed one-shot ('⚠️ сработало, ждёт «готово»'), one moved by a
+    reschedule and re-armed ('🔄 перенесено' — NOT a warning), or one simply overdue
+    ('⚠️ просрочено'). '' for a normal pending/recurring one. So a moved/overdue reminder
+    never looks the same as a fresh future one, and a reschedule reads as done — not as
+    'сработало'."""
+    now = now or datetime.now(timezone.utc)
+    fired = _row_get(row, "last_fired_at")
     if row["recurrence"] == "none" and fired:
-        return T(lang, "reminder_mark_fired")
+        return "⚠️ " + T(lang, "reminder_mark_fired")
     due = parse_iso_utc(row["due_utc"])
+    # Moved by a reschedule (prev_due_utc set), re-armed (not fired) and still ahead.
+    if _row_get(row, "prev_due_utc") and not fired and due is not None and due > now:
+        return "🔄 " + T(lang, "reminder_mark_rescheduled")
     if due is not None and due <= now:
-        return T(lang, "reminder_mark_overdue")
+        return "⚠️ " + T(lang, "reminder_mark_overdue")
     return ""
 
 
@@ -90,7 +98,7 @@ def format_list(rows, offset_hours, lang, now=None):
         suffix = "" if row["recurrence"] == "none" else f" ({T(lang, 'recurrence_' + row['recurrence'])})"
         mark = reminder_status_mark(row, lang, now)
         if mark:
-            suffix += f" — ⚠️ {mark}"
+            suffix += f" — {mark}"   # mark carries its own icon (⚠️ / 🔄)
         lines.append(f"  #{i} {fmt_local(row['due_utc'], offset_hours)} — {row['title']}{suffix}")
     return "\n".join(lines)
 
