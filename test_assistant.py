@@ -271,7 +271,12 @@ class RouterTests(unittest.TestCase):
         for name in ("do_reschedule", "do_rename_reminder", "_resolve_reminder_target",
                      "_resolve_reminder_op", "_parse_reminder_selector", "do_reminder_undo",
                      "continue_partial_reminder", "start_partial_reminder", "_note_reminder_title",
-                     "do_journal_show", "do_set_journal", "do_report_problem"):
+                     "do_journal_show", "do_set_journal", "do_report_problem",
+                     # stage 2 — notes/inbox
+                     "stats_text", "overview_text", "items_text", "do_show_media", "do_discard",
+                     "do_purge", "resolve_purge", "resolve_item", "resolve_items", "note_no",
+                     "item_detail_text", "do_item_detail", "do_recategorize", "do_merge_categories",
+                     "issues_text", "files_text", "categories_text"):
             self.assertIn(name, hermes.HermesMixin.__dict__)         # physically in hermes
             self.assertNotIn(name, tg_ingest_agent.Agent.__dict__)   # not duplicated on Agent
             self.assertTrue(hasattr(tg_ingest_agent.Agent, name))    # still available via the mixin

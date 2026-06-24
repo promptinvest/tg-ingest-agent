@@ -430,12 +430,14 @@ proactively like real memory. Design decisions and why:
   live in `hermes.py` but run on the SAME object (`class Agent(hermes.HermesMixin)`), so `self`
   is the Agent and every `self.reply`/`self.conn`/`self.reminder_no` resolves exactly as before
   — **pure relocation, zero behaviour change** (the full suite is the regression net). Done in
-  safe stages: **stage 1** moved the reminder-targeting + journal/problem handlers
-  (`do_reschedule`/`do_rename_reminder`/`do_reminder_undo`/`_resolve_reminder_target`/
-  `_resolve_reminder_op`/`_parse_reminder_selector`/partial-reminder/`do_set_journal`/
-  `do_journal_show`/`do_report_problem`). Later stages move notes/inbox, KB/fetch, spend/review.
-  Scattered handlers that stay on the Agent (e.g. `fire_due_reminders`) still resolve via the
-  mixin and move in a later stage.
+  safe stages: **stage 1** moved the reminder-targeting + journal/problem handlers;
+  **stage 2** moved the notes/inbox handlers (`stats_text`/`overview_text`/`items_text`/
+  `item_detail_text`/`do_item_detail`/`do_show_media`/`do_discard`/`do_recategorize`/
+  `do_merge_categories`/`do_purge`/`resolve_purge`/`resolve_item(s)`/`note_no`/`issues_text`/
+  `files_text`/`categories_text`). Shared helpers (`send_attachments`, `_fmt_*`,
+  `apply_category_confirm`, `present_suggestion`) stay on the Agent and resolve via the mixin.
+  Later stages move KB/fetch and spend/review; scattered reminder bits (e.g. `fire_due_reminders`)
+  follow too.
 
 
 The boss wanted Cara to be one person who flows between her **assistant** and **companion**
