@@ -185,6 +185,10 @@ TEXTS = {
     },
     "reminder_mark_overdue": {"ru": "просрочено", "en": "overdue"},
     "reminder_mark_rescheduled": {"ru": "перенесено", "en": "rescheduled"},
+    "reminders_rescheduled_multi": {
+        "ru": "Готово 🔄 перенесла {n} напоминания на {when_local}.",
+        "en": "Done 🔄 moved {n} reminders to {when_local}.",
+    },
     "wardrobe_added": {
         "ru": "Ммм, добавила к себе в гардероб: {name} 🤍 надену для тебя.",
         "en": "Mm, added to my wardrobe: {name} 🤍 I'll wear it for you.",

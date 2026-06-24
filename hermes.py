@@ -92,6 +92,26 @@ class HermesMixin:
         now = datetime.now(timezone.utc)
         if due <= now:
             due = reminders.roll_forward(due, now)
+        # Same op on SEVERAL reminders ("перенеси первые две / #1 и #2 / обе / все на 17:00")
+        # — one reschedule across multiple targets, NOT a per-one back-and-forth.
+        active = store.reminders_active(self.conn, chat_id)
+        targets = []
+        if params.get("all"):
+            targets = list(active)
+        else:
+            ids = params.get("ids")
+            if isinstance(ids, list) and len(ids) > 1:
+                for i in ids:
+                    r = reminders.find_by_query(active, {"id": i})  # display position
+                    if r is not None and r["id"] not in {t["id"] for t in targets}:
+                        targets.append(r)
+        if len(targets) > 1:
+            for r in targets:
+                store.reminder_update_due(self.conn, r["id"], due.isoformat())
+            self._remember_reminder(targets[-1]["id"])
+            self.reply(chat_id, T(lang, "reminders_rescheduled_multi", n=len(targets),
+                                  when_local=reminders.fmt_local(due.isoformat(), self.tz_offset())))
+            return
         row = self._resolve_reminder_target(
             chat_id, lang, params,
             op={"op": "reschedule", "due_utc": due.isoformat(), "text": text})

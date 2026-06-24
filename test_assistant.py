@@ -1572,6 +1572,29 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertEqual(store.reminder_get(conn, r2)["due_utc"], newt)
         self.assertNotEqual(store.reminder_get(conn, r1)["due_utc"], newt)
 
+    def test_reschedule_multiple_reminders_at_once(self):
+        from datetime import datetime, timezone
+        conn = self.agent.conn
+        now = datetime.now(timezone.utc)
+        r1 = store.reminder_add(conn, 1, "Азербайджан", (now + timedelta(hours=1)).isoformat(), "none")
+        r2 = store.reminder_add(conn, 1, "Рим", (now + timedelta(hours=2)).isoformat(), "none")
+        newt = (now + timedelta(hours=6)).isoformat()
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, *a, **k: sent.append(text)):
+            self.agent.do_reschedule(1, "ru", {"ids": [1, 2], "due_utc": newt},
+                                     "перенеси первые две на 17:00")
+        self.assertEqual(store.reminder_get(conn, r1)["due_utc"], newt)   # BOTH moved
+        self.assertEqual(store.reminder_get(conn, r2)["due_utc"], newt)
+        self.assertEqual(len(sent), 1)                                    # one combined confirm
+        self.assertIn("2", sent[0])
+        # the 'all' form moves every active reminder
+        later = (now + timedelta(hours=8)).isoformat()
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reschedule(1, "ru", {"all": True, "due_utc": later}, "перенеси все")
+        self.assertEqual(store.reminder_get(conn, r1)["due_utc"], later)
+        self.assertEqual(store.reminder_get(conn, r2)["due_utc"], later)
+
     def test_reschedule_clears_fired_marker(self):
         from datetime import datetime, timezone
         conn = self.agent.conn
