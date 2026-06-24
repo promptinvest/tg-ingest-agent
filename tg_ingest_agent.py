@@ -353,40 +353,6 @@ class Agent(hermes.HermesMixin):
 
     # -- Scheduler ticks
 
-    def fire_due_reminders(self):
-        now = datetime.now(timezone.utc)
-        now_iso = now.isoformat()
-        in_quiet = proactive.in_quiet_hours(self.cfg, self.conn, now)
-        in_meeting = self._in_social_meeting()
-        in_window = self._recent_intimate_msg(now)
-        for row in store.reminders_due(self.conn, now_iso):
-            # Hold for the WHOLE date and through quiet hours (never lost — fires once the
-            # meeting ends / the window closes). A live meeting holds indefinitely; a bare
-            # intimate-message window holds only up to the max-defer so nothing's stranded.
-            if in_meeting or in_quiet:
-                continue
-            if in_window:
-                due = reminders.parse_iso_utc(row["due_utc"])
-                if due is not None and (now - due).total_seconds() < \
-                        self.cfg.reminder_max_defer_hours * 3600:
-                    continue
-            lang = self.lang()
-            self.reply(row["chat_id"], T(lang, "reminder_fired",
-                                         name=self.owner_name(), title=row["title"]))
-            store.pending_set(
-                self.conn, row["chat_id"], "reminder_fired",
-                {"reminder_id": row["id"], "title": row["title"]}, ttl_seconds=1800,
-            )
-            following = reminders.next_due(row["due_utc"], row["recurrence"])
-            if following:
-                store.reminder_update_due(self.conn, row["id"], following)  # recurring: re-arm
-            # B5: a fired ONE-SHOT is NOT auto-closed — it stays active/visible until the
-            # boss explicitly acks ('готово') or cancels it; last_fired_at stops it
-            # re-firing. (Old behavior closed it here, which read as 'why did you close it'.)
-            store.reminder_touch_fired(self.conn, row["id"])
-            self._remember_reminder(row["id"])  # "готово/перенеси это" binds to the just-fired one
-            log(f"reminder #{row['id']} fired")
-
     def check_budget_notice(self):
         state, period, spent, limit = llm.budget_state(self.cfg, self.conn)
         if state == "ok":
@@ -2513,32 +2479,6 @@ class Agent(hermes.HermesMixin):
             store.pref_set(self.conn, "tone", "neutral")
             self.reply(chat_id, T(lang, "style_neutral"))
 
-    def do_export(self, chat_id, lang, params):
-        what = str(params.get("what") or "review").strip().lower()
-        if what in ("last_trace", "trace_timeline", "trace_steps"):
-            filename, md = self._last_trace_markdown(chat_id)
-            if not md:
-                self.reply(chat_id, T(lang, "trace_none"))
-                return
-        elif what not in review.EXPORT_KINDS:
-            filename, md = review.export_document(self.conn, self.cfg, "review", lang,
-                                                  params.get("period") or "week")
-        else:
-            filename, md = review.export_document(self.conn, self.cfg, what, lang,
-                                                  params.get("period") or "week")
-        exports_dir = self.cfg.db_path.parent / "exports"
-        exports_dir.mkdir(parents=True, exist_ok=True)
-        (exports_dir / filename).write_text(md, encoding="utf-8")
-        try:
-            tg_send_document(self.cfg.token, chat_id, filename, md.encode("utf-8"),
-                             caption=T(lang, "review_file_caption"), content_type="text/markdown")
-            relationship.log_event(self.conn, "export_created",
-                                   f"exported {what} to {filename}", importance=1,
-                                   title=filename)
-        except TelegramError as exc:
-            log(f"export send failed: {exc}")
-            self.reply(chat_id, T(lang, "llm_error"))
-
     def show_memory_review(self, chat_id, lang):
         pending = store.candidates_pending(self.conn)
         if not pending:
@@ -2714,12 +2654,6 @@ class Agent(hermes.HermesMixin):
             pass
         return total
 
-    def reminder_no(self, chat_id, rid):
-        """User-facing display number (1..N) for an active reminder; falls back
-        to the id if it isn't active (already fired/cancelled)."""
-        n = store.reminder_display_no(self.conn, chat_id, rid)
-        return n if n is not None else rid
-
     def _fmt_ts_local(self, ts):
         """Unix timestamp -> 'DD.MM.YYYY, HH:MM' in the boss's local time."""
         local = datetime.fromtimestamp(int(ts), tz=timezone.utc) + timedelta(hours=self.tz_offset())
@@ -2824,21 +2758,6 @@ class Agent(hermes.HermesMixin):
             self._after_meeting(row, recap)
             self.turn_lang = None
             self.reply(row["chat_id"], T(self.lang(), "meeting_auto_ended"))
-
-    def check_reminder_expiry(self):
-        """Auto-close fired one-shot reminders left unacked past the expiry window, so the
-        'ждёт готово' list doesn't pile up forever. (0 disables.)"""
-        days = self.cfg.reminder_fired_expire_days
-        if not days or days <= 0:
-            return
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        try:
-            n = store.reminders_expire_stale(self.conn, cutoff)
-        except Exception as exc:  # noqa: BLE001 — must not kill the loop
-            log(f"reminder expiry sweep error: {exc!r}")
-            return
-        if n:
-            log(f"auto-expired {n} stale fired reminder(s)")
 
     def check_meeting_afterglow(self):
         """Gentle, occasional day-after warmth: the morning after a personal
@@ -3265,57 +3184,6 @@ class Agent(hermes.HermesMixin):
         for chat_id in self.cfg.allowed_chat_ids:
             self.reply(chat_id, T(lang, "review_weekly_intro", name=self.owner_name())
                        + "\n" + report)
-
-    def do_review(self, chat_id, lang, params):
-        if str(params.get("focus") or "").strip().lower() == "corrections":
-            self.reply(chat_id, review.corrections_report(self.conn, lang))
-            return
-        if params.get("schedule") or str(params.get("when") or "").strip().lower() in (
-            "when", "schedule", "next"
-        ):
-            self.reply(chat_id, self.review_schedule_text(lang))
-            return
-        period = review.normalize_period(params.get("period"))
-        self.reply(chat_id, review.chat_text(self.conn, self.cfg, lang, period))
-        if not params.get("export"):
-            return
-        md = review.markdown(self.conn, self.cfg, period)
-        reviews_dir = self.cfg.db_path.parent / "reviews"
-        reviews_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-        filename = f"cara-review-{period}-{stamp}.md"
-        (reviews_dir / filename).write_text(md, encoding="utf-8")
-        try:
-            tg_send_document(self.cfg.token, chat_id, filename, md.encode("utf-8"),
-                             caption=T(lang, "review_file_caption"),
-                             content_type="text/markdown")
-            store.convo_add(self.conn, chat_id, "bot", f"[review file: {filename}]")
-        except TelegramError as exc:
-            log(f"review export send failed: {exc}")
-            self.reply(chat_id, T(lang, "llm_error"))
-        log(f"review exported: {reviews_dir / filename}")
-
-    def do_budget_set(self, chat_id, lang, params):
-        """Change the AI spend cap on the boss's explicit request — a runtime
-        override stored in preferences and enforced by the budget gateway."""
-        raw = str(params.get("amount") or "").replace("$", "").replace(",", ".").strip()
-        try:
-            amount = round(float(raw), 2)
-        except (TypeError, ValueError):
-            self.reply(chat_id, T(lang, "budget_set_unclear"))
-            return
-        if not 0 <= amount <= 1000:  # sane bounds; 0 disables the cap
-            self.reply(chat_id, T(lang, "budget_set_unclear"))
-            return
-        period = str(params.get("period") or "day").strip().lower()
-        if period in ("month", "monthly", "месяц", "месячный"):
-            store.pref_set(self.conn, "budget_monthly_usd", amount)
-            plabel = "месяц" if lang == "ru" else "month"
-        else:
-            store.pref_set(self.conn, "budget_daily_usd", amount)
-            plabel = "день" if lang == "ru" else "day"
-        log(f"budget override set: {period}=${amount}")
-        self.reply(chat_id, T(lang, "budget_set_done", period=plabel, amount=f"{amount:.2f}"))
 
     # -- Buttons (fallback confirmation path)
 

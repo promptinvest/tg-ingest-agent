@@ -436,8 +436,13 @@ proactively like real memory. Design decisions and why:
   `do_merge_categories`/`do_purge`/`resolve_purge`/`resolve_item(s)`/`note_no`/`issues_text`/
   `files_text`/`categories_text`). Shared helpers (`send_attachments`, `_fmt_*`,
   `apply_category_confirm`, `present_suggestion`) stay on the Agent and resolve via the mixin.
-  Later stages move KB/fetch and spend/review; scattered reminder bits (e.g. `fire_due_reminders`)
-  follow too.
+  **Stage 3** moved the KB/fetch handlers (`do_ask`/`do_fetch`/`ingest_fetched`/`_keyword_context`;
+  `knowledge`/`persona` are local-imported inside the methods to avoid a cycle, since `knowledge`
+  imports `hermes`). **Stage 4** moved `fire_due_reminders`/`check_reminder_expiry`/`reminder_no`
+  and the spend/review/export handlers (`do_budget_set`/`do_review`/`do_export`). The business
+  handler surface now lives in `hermes.py`; the Agent keeps routing/dispatch, shared infra, and
+  the companion. The relocation test asserts each handler is in `HermesMixin.__dict__`, not on
+  the Agent.
 
 
 The boss wanted Cara to be one person who flows between her **assistant** and **companion**

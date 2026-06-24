@@ -82,8 +82,11 @@ def reminder_status_mark(row, lang, now=None):
     if row["recurrence"] == "none" and fired:
         return "⚠️ " + T(lang, "reminder_mark_fired")
     due = parse_iso_utc(row["due_utc"])
-    # Moved by a reschedule (prev_due_utc set), re-armed (not fired) and still ahead.
-    if _row_get(row, "prev_due_utc") and not fired and due is not None and due > now:
+    # Moved by a reschedule (prev_due_utc set), re-armed (not fired) and still ahead. Only
+    # for one-shots — a recurring reminder sets prev_due_utc every time it auto-re-arms,
+    # which is NOT a reschedule and must not read as 'перенесено'.
+    if (row["recurrence"] == "none" and _row_get(row, "prev_due_utc")
+            and not fired and due is not None and due > now):
         return "🔄 " + T(lang, "reminder_mark_rescheduled")
     if due is not None and due <= now:
         return "⚠️ " + T(lang, "reminder_mark_overdue")

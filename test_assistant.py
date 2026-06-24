@@ -278,7 +278,10 @@ class RouterTests(unittest.TestCase):
                      "item_detail_text", "do_item_detail", "do_recategorize", "do_merge_categories",
                      "issues_text", "files_text", "categories_text",
                      # stage 3 — KB / fetch
-                     "do_ask", "do_fetch", "ingest_fetched", "_keyword_context"):
+                     "do_ask", "do_fetch", "ingest_fetched", "_keyword_context",
+                     # stage 4 — reminders firing/expiry + spend/review/export
+                     "fire_due_reminders", "check_reminder_expiry", "reminder_no",
+                     "do_budget_set", "do_review", "do_export"):
             self.assertIn(name, hermes.HermesMixin.__dict__)         # physically in hermes
             self.assertNotIn(name, tg_ingest_agent.Agent.__dict__)   # not duplicated on Agent
             self.assertTrue(hasattr(tg_ingest_agent.Agent, name))    # still available via the mixin
@@ -416,6 +419,11 @@ class RemindersTests(unittest.TestCase):
         self.assertEqual(reminders.reminder_status_mark(rows[0], "en", now), '⚠️ fired, awaiting "done"')
         self.assertEqual(reminders.reminder_status_mark(rows[1], "en", now), "")
         self.assertEqual(reminders.reminder_status_mark(rows[2], "en", now), "🔄 rescheduled")
+        # a RECURRING reminder re-arms (prev_due_utc set) every fire — that is NOT 'перенесено'
+        recurring = {"id": 4, "title": "благодарности", "due_utc": "2026-06-25T19:00:00Z",
+                     "recurrence": "daily", "last_fired_at": None,
+                     "prev_due_utc": "2026-06-24T19:00:00Z"}
+        self.assertEqual(reminders.reminder_status_mark(recurring, "en", now), "")
 
 
 class SpendTests(unittest.TestCase):
