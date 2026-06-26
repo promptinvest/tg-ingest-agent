@@ -790,18 +790,17 @@ class Agent(hermes.HermesMixin):
                 recurrence=T(lang, "recurrence_" + draft["recurrence"]),
             ))
         elif action == "reminder_list":
-            rows = store.reminders_active(self.conn, chat_id)
-            # Mark that reminders were just shown, so a follow-up "удали/закрой #N" targets
-            # a REMINDER (reminder_cancel), not a saved note (item_delete).
-            store.kv_set(self.conn, "reminders_listed_at", datetime.now(timezone.utc).isoformat())
-            self.reply(chat_id, reminders.format_list(rows, self.tz_offset(), lang))
+            self.reply(chat_id, self._reminder_list_body(chat_id, lang))
         elif action == "reminder_cancel":
             rows = store.reminders_active(self.conn, chat_id)
             row = reminders.find_by_query(rows, params)
             if row:
                 disp = self.reminder_no(chat_id, row["id"])  # capture before it leaves the active list
                 store.reminder_close(self.conn, row["id"], "cancelled")
-                self.reply(chat_id, T(lang, "reminder_cancelled", rid=disp, title=row["title"]))
+                # Auto-show what's left, re-numbered, so the next "удали #N" reads off a
+                # current list — closing the back-to-back-delete renumbering hazard.
+                self.reply(chat_id, T(lang, "reminder_cancelled", rid=disp, title=row["title"])
+                           + "\n\n" + self._reminder_list_body(chat_id, lang))
             else:
                 self.reply(chat_id, T(lang, "reminder_not_found"))
         elif action == "reminder_reschedule":
@@ -1328,6 +1327,15 @@ class Agent(hermes.HermesMixin):
                 if rest == "" or rest[0] == "\n":
                     return common.to_reaction(emo), rest.lstrip()
         return None, reply
+
+    def _reminder_list_body(self, chat_id, lang):
+        """Freshly-numbered active reminders, and stamp that they were JUST shown — so a
+        follow-up '#N' targets a reminder (not a note) AND maps to this current list. Used
+        both for an explicit list request and to auto-refresh after a delete, so the numbers
+        the boss sees never go stale under a back-to-back delete."""
+        rows = store.reminders_active(self.conn, chat_id)
+        store.kv_set(self.conn, "reminders_listed_at", datetime.now(timezone.utc).isoformat())
+        return reminders.format_list(rows, self.tz_offset(), lang)
 
     def _active_reminders_context(self, chat_id, lang, limit=10):
         """Compact view of her own active reminders (display #, local time, title and

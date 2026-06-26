@@ -1359,6 +1359,35 @@ class ConversationDispatchTests(unittest.TestCase):
         active = [r["title"] for r in store.reminders_active(self.agent.conn, 1)]
         self.assertEqual(active, ["первая"])          # #2 (due-ordered) closed
 
+    def test_cancel_auto_shows_refreshed_list(self):
+        # After deleting any reminder, Cara auto-shows the remaining ones, freshly numbered,
+        # so the next "удали #N" reads off a current list (kills the back-to-back stale-number
+        # delete hazard). And the list is stamped just-shown so the follow-up targets a reminder.
+        for t, due in (("первая", "10:00"), ("вторая", "12:00"), ("третья", "14:00")):
+            store.reminder_add(self.agent.conn, 1, t, f"2026-06-24T{due}:00+00:00")
+        with mock.patch.object(router, "route",
+                               return_value={"action": "reminder_cancel",
+                                             "params": {"id": 1}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {}, "удали первое")
+        sent = r.call_args[0][1]
+        confirm, _, listing = sent.partition("\n\n")
+        self.assertIn("первая", confirm)              # confirmation names what was deleted
+        self.assertIn("вторая", listing)              # remaining ones auto-shown...
+        self.assertIn("третья", listing)
+        self.assertIn("#1", listing)                  # ...re-numbered from 1
+        self.assertNotIn("первая", listing)           # the deleted one is gone from the list
+        self.assertTrue(store.kv_get(self.agent.conn, "reminders_listed_at"))
+
+    def test_cancel_last_reminder_shows_empty(self):
+        store.reminder_add(self.agent.conn, 1, "единственная", "2026-06-24T10:00:00+00:00")
+        with mock.patch.object(router, "route",
+                               return_value={"action": "reminder_cancel",
+                                             "params": {"id": 1}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {}, "удали единственную")
+        self.assertIn(texts.T(self.agent.lang(), "reminder_list_empty"), r.call_args[0][1])
+
     def test_overdue_nudge_stamps_kv_for_show_routing(self):
         # When an overdue nudge fires, stamp kv so a bare follow-up "покажи их" routes to
         # the deterministic reminder list (exact titles) instead of free-text converse.

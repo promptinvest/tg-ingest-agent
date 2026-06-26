@@ -240,6 +240,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     reminder in one go and confirms once ("перенесла N напоминания") — it is **one** reschedule,
     not a "давай по одному" split. (That split used to drop the request on the floor and let her
     *say* she'd moved them while nothing actually changed.)
+  - **After deleting any reminder she re-shows the list, re-numbered.** Delete one and Cara
+    immediately lists what's left with fresh #1..#N — so a rapid "удали #1", "удали #2" always
+    reads off the *current* numbering, never a stale screenshot. (Reminder numbers are positions,
+    not IDs: the list compacts when something leaves, so a captured #N goes stale instantly.)
   - **The "ждёт готово" list self‑clears.** A fired one‑shot left unacked **auto‑closes** after
     `reminder_fired_expire_days` so the list never piles up.
   - **Plain-language commands land, whatever the word order.** A close verb naming one
