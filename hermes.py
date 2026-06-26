@@ -204,12 +204,35 @@ class HermesMixin:
             self.reply(chat_id, T(lang, "reminder_need_" + need))
         return True
 
+    # Bare triggers ("запиши в проблемы") carry NO problem of their own — the problem
+    # is whatever he just said. Detecting one means we pull the preceding turn as the body.
+    _REPORT_TRIGGERS = (
+        "запиши в проблем", "добавь в проблем", "запиши проблем", "в проблемы",
+        "добавь в ошибк", "запиши в ошибк", "это ошибк", "была ошибка", "запиши ошибк",
+        "log this as a problem", "log as a problem", "report a problem", "add to issues",
+        "log this issue", "note this problem",
+    )
+
     def do_report_problem(self, chat_id, lang, params, text):
         """Record a boss-reported problem ('запиши в проблемы', 'добавь в
         ошибки') in the issues log so it surfaces in the weekly review —
-        distinct from issues_report, which only shows the report."""
-        detail = str(params.get("detail") or "").strip() or (text or "").strip()
-        store.issue_add(self.conn, chat_id, "boss_reported", detail)
+        distinct from issues_report, which only shows the report. A bare trigger
+        ('запиши в проблемы') has no content of its own — the problem is what he
+        said just before — so we capture the preceding turn as the body instead
+        of logging the command back to itself."""
+        detail = str(params.get("detail") or "").strip()
+        cur = (text or "").strip()
+        low = detail.casefold() or cur.casefold()
+        # The router often echoes the trigger (or a stale example) as 'detail'; treat any
+        # trigger-only detail as empty and reach back into the conversation for the real issue.
+        if not detail or any(t in low for t in self._REPORT_TRIGGERS):
+            prior = [r["text"].strip() for r in store.convo_recent(self.conn, chat_id, limit=8)
+                     if r["role"] == "user" and r["text"].strip()
+                     and r["text"].strip().casefold() != cur.casefold()
+                     and not any(t in r["text"].strip().casefold() for t in self._REPORT_TRIGGERS)]
+            context = prior[-1] if prior else ""
+            detail = (f"{cur} | {context}" if context else cur)
+        store.issue_add(self.conn, chat_id, "boss_reported", detail[:500])
         self.reply(chat_id, T(lang, "problem_logged"))
 
     def do_set_journal(self, chat_id, lang, params):

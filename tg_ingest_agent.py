@@ -3084,6 +3084,11 @@ class Agent(hermes.HermesMixin):
         try:
             sent = proactive.run(self.conn, self.cfg, lang,
                                  lambda text: self.reply(chat_id, text))
+            # Remember an overdue nudge so a bare follow-up "покажи их" routes to the real
+            # reminder list (deterministic, exact titles) instead of free-text converse.
+            if sent == "overdue":
+                store.kv_set(self.conn, "overdue_nudge_at",
+                             datetime.now(timezone.utc).isoformat())
             trace.finish(self.conn, tid, "finished", summary=f"nudge={sent or '-'}")
         except Exception as exc:  # a heartbeat hiccup must never crash the loop
             log(f"proactive check failed: {exc}")

@@ -242,6 +242,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     *say* she'd moved them while nothing actually changed.)
   - **The "ждёт готово" list self‑clears.** A fired one‑shot left unacked **auto‑closes** after
     `reminder_fired_expire_days` so the list never piles up.
+  - **Plain-language commands land, whatever the word order.** A close verb naming one
+    reminder — "**Азербайджан закрой**" as well as "закрой Азербайджан", "первое закрой",
+    "убери третье" — closes it; "**передвинь**/сдвинь" reads the same as "перенеси"; "покажи
+    напоминания / покажи просроченные" shows the list. These used to fall through to
+    "не поняла" and quietly land in the problem log instead of running.
+  - **"Покажи их" right after an overdue nudge** shows the **real list** (exact titles), not a
+    free-text retelling that could blank the names out.
+  - **"Запиши в проблемы" logs the actual problem.** A bare report captures *what you just
+    said*, not the words "запиши в проблемы" echoed back at itself.
   - **Rename** a reminder's title in place ("переименуй #2 в «Иван Доронин»").
   - **Reschedule / undo:** "перенеси напоминание про банк на пятницу" moves it; an
     explicit title that matches nothing active is reported (never silently moves a

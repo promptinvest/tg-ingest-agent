@@ -100,6 +100,11 @@ ROUTER_EXAMPLES = """Examples:
 "перенеси обе на 17:00" / "перенеси все напоминания на 17:00" / "move them all to 17:00" -> {"action": "reminder_reschedule", "params": {"all": true, "due_utc": "<that time, local, in UTC>"}, "confidence": 0.9}
 NOTE: rescheduling SEVERAL reminders to the SAME time ("первые две", "#1 и #2", "обе", "все") is ONE reminder_reschedule (params.ids=[positions] or params.all=true + due_utc) — it is NOT multi_action. multi_action is only for two or more DIFFERENT commands (e.g. "закрой первое, второе перенеси на 14").
 NOTE: a move verb + a time is ALWAYS reminder_reschedule, even when the reminder is named only by an ordinal ("первое"/"второе") or "его"/"это"/"это напоминание" — put just the due_utc in params and let the engine resolve WHICH from the ordinal/reference. NEVER send such a reschedule to converse or clarify, and never refuse it (there is no "too close in time" limit — the engine just sets it).
+"передвинь благодарности на 22:00 каждый день" / "сдвинь напоминание про банк на 22:00" / "move the gratitude reminder to 22:00 every day" ("передвинь"/"сдвинь" mean the SAME as "перенеси"; a recurring reminder simply keeps recurring at the new time) -> {"action": "reminder_reschedule", "params": {"title_query": "благодарности", "due_utc": "<22:00 local in UTC>"}, "confidence": 0.9}
+"покажи напоминания" / "мои напоминания" / "покажи просроченные" / "какие у меня напоминания?" / "show my reminders" / "list reminders" -> {"action": "reminder_list", "params": {}, "confidence": 0.92}
+"закрой напоминание про Рим" / "Азербайджан закрой" / "убери напоминание Азербайджан" / "close the Rome reminder" (close ONE reminder named by TITLE, in any word order) -> {"action": "reminder_cancel", "params": {"title_query": "Рим"}, "confidence": 0.9}
+"первое закрой" / "закрой второе" / "удали первое напоминание" / "убери третье" / "close the first reminder" (a LONE close naming ONE reminder by ordinal position) -> {"action": "reminder_cancel", "params": {"id": 1}, "confidence": 0.88}
+NOTE: a close verb ("закрой"/"удали"/"убери"/"close"/"delete") naming ONE reminder — by title OR by ordinal, in ANY word order ("Азербайджан закрой" == "закрой Азербайджан") — is reminder_cancel, NEVER clarify/converse. Only a message bundling two+ DIFFERENT commands ("закрой первое, второе перенеси") is multi_action.
 "верни предыдущее время напоминания #9" / "отмени перенос" / "верни как было" / "undo the reschedule" -> {"action": "reminder_undo", "params": {"id": 9}, "confidence": 0.9}
 "поменяй название этого напоминания на «Иван Доронин»" / "переименуй напоминание 2 в «Иван Доронин»" / "rename reminder #2 to «Ivan»" -> {"action": "reminder_rename", "params": {"id": 2, "new_title": "Иван Доронин"}, "confidence": 0.9}
 "в напоминании про Марину поменяй название на «Иван Доронин»" / "переименуй напоминание про банк в «звонок Ире»" -> {"action": "reminder_rename", "params": {"title_query": "Марина", "new_title": "Иван Доронин"}, "confidence": 0.88}
@@ -416,6 +421,22 @@ def route(cfg, conn, chat_id, text, pending):
                     "reminder_cancel that reminder (params id=N, its display number) — NOT "
                     "item_delete (a saved note). 'готово' / 'done' on a fired reminder is still "
                     "amend.\n\n")
+    # Just sent an overdue-reminders nudge? Then a bare "покажи их / покажи / какие / which
+    # ones / show them" means reminder_list (show the real list) — NOT converse (which would
+    # free-text the titles and can mangle them) and NOT a notes/journal lookup.
+    nudged = store.kv_get(conn, "overdue_nudge_at")
+    if nudged:
+        try:
+            recent_nudge = (datetime.now(timezone.utc)
+                            - datetime.fromisoformat(nudged)).total_seconds() < 600
+        except (TypeError, ValueError):
+            recent_nudge = False
+        if recent_nudge:
+            user_content += (
+                "You JUST nudged the boss that some reminders are OVERDUE. So a bare "
+                "'покажи их' / 'покажи' / 'какие' / 'show them' / 'which ones' here means "
+                "reminder_list (show the real reminder list) — NOT converse and NOT ask "
+                "(his notes/journal).\n\n")
     user_content += f"<user_request>\n{text}\n</user_request>"
     messages = [
         {"role": "system", "content": system},

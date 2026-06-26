@@ -1319,6 +1319,56 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertIn("заметку 11", rows[0]["detail"])
         self.assertTrue(skill_manifest.known("report_problem"))
 
+    def test_report_problem_captures_preceding_context(self):
+        # A bare "запиши в проблемы" carries no problem of its own — the body must be
+        # the preceding turn, not the trigger command logged back to itself (the recorded
+        # bug: the issue body was literally "Запиши в проблемы").
+        store.convo_add(self.agent.conn, 1, "user", "Напоминания показываются без названий, одни звёздочки")
+        store.convo_add(self.agent.conn, 1, "bot", "Сейчас гляну")
+        store.convo_add(self.agent.conn, 1, "user", "Запиши в проблемы")
+        with mock.patch.object(router, "route",
+                               return_value={"action": "report_problem",
+                                             "params": {"detail": "Запиши в проблемы"}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {}, "Запиши в проблемы")
+        detail = self.agent.conn.execute(
+            "SELECT detail FROM issues WHERE kind='boss_reported' ORDER BY rowid DESC").fetchone()["detail"]
+        self.assertIn("без названий", detail)        # the REAL problem, not the trigger phrase
+
+    def test_reminder_cancel_by_title_any_word_order(self):
+        # "Азербайджан закрой" (object-first) closes the named reminder — it used to fall
+        # through to 'clarify' and get dropped into the unclear-request log.
+        store.reminder_add(self.agent.conn, 1, "Азербайджан", "2026-06-24T15:30:00+00:00")
+        store.reminder_add(self.agent.conn, 1, "Рим Флоренция", "2026-06-24T15:30:00+00:00")
+        with mock.patch.object(router, "route",
+                               return_value={"action": "reminder_cancel",
+                                             "params": {"title_query": "Азербайджан"}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {}, "Азербайджан закрой")
+        active = [r["title"] for r in store.reminders_active(self.agent.conn, 1)]
+        self.assertEqual(active, ["Рим Флоренция"])   # only the named one closed
+
+    def test_reminder_cancel_by_ordinal(self):
+        store.reminder_add(self.agent.conn, 1, "первая", "2026-06-24T10:00:00+00:00")
+        store.reminder_add(self.agent.conn, 1, "вторая", "2026-06-24T12:00:00+00:00")
+        with mock.patch.object(router, "route",
+                               return_value={"action": "reminder_cancel",
+                                             "params": {"id": 2}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {}, "закрой второе")
+        active = [r["title"] for r in store.reminders_active(self.agent.conn, 1)]
+        self.assertEqual(active, ["первая"])          # #2 (due-ordered) closed
+
+    def test_overdue_nudge_stamps_kv_for_show_routing(self):
+        # When an overdue nudge fires, stamp kv so a bare follow-up "покажи их" routes to
+        # the deterministic reminder list (exact titles) instead of free-text converse.
+        import proactive
+        self.agent.last_proactive = 0
+        with mock.patch.object(self.agent, "_in_intimate_moment", return_value=False), \
+                mock.patch.object(proactive, "run", return_value="overdue"):
+            self.agent.check_proactive()
+        self.assertTrue(store.kv_get(self.agent.conn, "overdue_nudge_at"))
+
     def test_referential_save_pulls_conversation_subject(self):
         # "Сохрани заметку про этот фильм" must capture the film named earlier
         # (the recorded bug: the saved note lost the movie name).
