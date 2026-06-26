@@ -3129,19 +3129,34 @@ class Agent(hermes.HermesMixin):
             except Exception as exc:  # never crash the loop on a health check
                 log(f"model health check error for {model}: {exc}")
                 continue
-            state = "ok" if ok else "down"
+            # `mh:` holds the last ANNOUNCED state ("ok"/"down"/None), NOT the raw probe —
+            # so a transient blip that never crossed the alert threshold leaves it untouched
+            # and no "back" is sent for an outage we never reported.
             prev = store.kv_get(self.conn, f"mh:{model}")
-            if prev == state:
+            if ok:
+                store.kv_set(self.conn, f"mh_fail:{model}", "0")
+                if prev == "down":
+                    store.kv_set(self.conn, f"mh:{model}", "ok")
+                    log(f"model health: {model} down -> ok ({reason})")
+                    for chat_id in self.cfg.allowed_chat_ids:
+                        self.reply(chat_id, T(lang, "model_back", model=model))
+                elif prev is None:
+                    store.kv_set(self.conn, f"mh:{model}", "ok")  # first sighting, healthy: quiet
                 continue
-            store.kv_set(self.conn, f"mh:{model}", state)
-            if prev is None and ok:
-                continue  # first sighting, healthy -> record quietly
-            log(f"model health: {model} {prev or '?'} -> {state} ({reason})")
+            # Down: debounce. A single failed probe is almost always a transient 429/overload,
+            # not a real outage — only announce once it stays down for `model_health_confirm`
+            # consecutive checks, so a momentary blip that recovers next probe stays silent.
+            try:
+                fails = int(store.kv_get(self.conn, f"mh_fail:{model}") or "0") + 1
+            except (TypeError, ValueError):
+                fails = 1
+            store.kv_set(self.conn, f"mh_fail:{model}", str(fails))
+            if prev == "down" or fails < self.cfg.model_health_confirm:
+                continue  # already announced, or not yet confirmed (likely transient)
+            store.kv_set(self.conn, f"mh:{model}", "down")
+            log(f"model health: {model} ok -> down ({reason}) after {fails} checks")
             for chat_id in self.cfg.allowed_chat_ids:
-                if ok:
-                    self.reply(chat_id, T(lang, "model_back", model=model))
-                else:
-                    self.reply(chat_id, T(lang, "model_down", model=model, reason=reason))
+                self.reply(chat_id, T(lang, "model_down", model=model, reason=reason))
 
     def check_morning_brief(self):
         """Opt-in daily brief (off unless the boss turned it on): once a day at/

@@ -434,7 +434,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Model‑health monitor:** every `MODEL_HEALTH_INTERVAL_SECONDS` (default 30 min) she
   checks her models (chat, conversation, vision) are reachable and **messages the boss the
   moment one becomes inaccessible** (e.g. a provider/tier 403) — and again when it
-  recovers. Alerts only on a state change, so it never spams.
+  recovers. **Debounced:** a model must fail `MODEL_HEALTH_CONFIRM_CHECKS` checks in a row
+  (default 2) before she says "down", so a transient 429/overload blip that clears by the
+  next probe stays silent — and "back" only fires if she actually announced "down". No more
+  down/back flapping.
 
 ---
 

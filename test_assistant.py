@@ -1470,13 +1470,37 @@ class ConversationDispatchTests(unittest.TestCase):
                 self.agent.check_model_health()
             return r
 
-        r = run(False, "403 tier")              # first check: down -> alert
+        self.agent.cfg.model_health_confirm = 2
+        r = run(False, "403 tier")              # first failed probe: debounced, no alert yet
+        self.assertFalse(r.called)
+        r = run(False, "403 tier")              # second consecutive: confirmed down -> alert
         self.assertTrue(r.called)
         self.assertIn("deepseek-4-flash", r.call_args[0][1])
-        r = run(True)                           # recovered -> alert
+        r = run(True)                           # recovered (we DID announce down) -> alert
         self.assertTrue(r.called)
         r = run(True)                           # still up -> no alert
         self.assertFalse(r.called)
+
+    def test_model_health_suppresses_transient_flap(self):
+        # A single failed probe that recovers by the next check (a 429/overload blip) must
+        # produce NO chatter — neither "down" nor "back" (the recorded noise: deepseek-4-flash
+        # flapping down/back every interval).
+        import llm
+        self.agent.cfg.model_health_interval = 1
+        self.agent.cfg.model_health_confirm = 2
+        self.agent.cfg.do_model = "deepseek-4-flash"
+        self.agent.cfg.vision_model = ""
+
+        def run(ok, reason=""):
+            self.agent.last_model_health = 0
+            with mock.patch.object(llm, "model_ok", return_value=(ok, reason)), \
+                    mock.patch.object(self.agent, "reply") as r:
+                self.agent.check_model_health()
+            return r
+
+        run(True)                                # healthy baseline, recorded quietly
+        self.assertFalse(run(False, "429 overloaded").called)   # one blip -> silent
+        self.assertFalse(run(True).called)                       # recovered -> still silent
 
     def test_model_health_skips_when_budget_stopped(self):
         # A budget stop blocks every model call before it leaves the box, so the

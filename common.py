@@ -313,6 +313,11 @@ def load_config(env=None):
     # Model-health monitor: how often to check Cara's models are reachable and
     # alert the boss the moment one becomes inaccessible (0 disables).
     cfg.model_health_interval = int(env.get("MODEL_HEALTH_INTERVAL_SECONDS") or "1800")
+    # Debounce: how many CONSECUTIVE failed probes before announcing "model down". A
+    # single failed probe is usually a transient 429/overload that clears by the next
+    # check; requiring >=2 suppresses the down/back flap noise (only a sustained outage
+    # is announced, and "back" only fires if we actually announced "down").
+    cfg.model_health_confirm = max(1, int(env.get("MODEL_HEALTH_CONFIRM_CHECKS") or "2"))
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
     # Shared-time meetings: auto-end a meeting left open and idle this long (a
