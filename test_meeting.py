@@ -331,6 +331,8 @@ class MeetingDispatchTests(unittest.TestCase):
         sent = []
 
         def fake_cp(cfg, conn, skill, messages, **kw):
+            if skill == "scene" and skill not in responses:
+                return "{}"   # incidental scene-state refresh during a date: keep state as-is
             if skill not in responses:
                 raise AssertionError(f"unexpected LLM call: skill={skill!r}")
             v = responses[skill]
@@ -411,14 +413,16 @@ class MeetingDispatchTests(unittest.TestCase):
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) n FROM meeting_turns").fetchone()["n"], 0)
 
-    def test_stage_directions_stripped_in_meeting(self):
+    def test_narration_kept_during_meeting(self):
+        # On a live date narration is immersive roleplay he's part of — it is NOT stripped
+        # (the words/emojis-only texting voice applies only OUTSIDE a meeting).
         store.meeting_start(self.conn, 111, kind="visit")
         sent = self.drive({"message": self._msg(9, "я рядом")},
                           {"router": '{"action":"converse","params":{},"confidence":0.9}',
                            "converse": "*обнимаю тебя* как же я рада тебе 🤍"})
         joined = " ".join(sent)
-        self.assertNotIn("*обнимаю", joined)       # narrated gesture stripped
-        self.assertIn("рада", joined)              # the words survive
+        self.assertIn("обнимаю", joined)           # narration survives during a date
+        self.assertIn("рада", joined)
 
     def test_recall_answers_from_episodic_memory(self):
         # seed an ended, indexed dinner
@@ -783,7 +787,7 @@ class MeetingDispatchTests(unittest.TestCase):
 
     def test_date_presence_unlocks_roleplay_when_close(self):
         # On a social date, once close, presence includes the imaginative roleplay layer
-        # (scenes/roles, her own desires) — still non-graphic, no asterisk stage-directions.
+        # (scenes/roles, her own desires) and the physical-continuity instruction.
         mid = store.meeting_start(self.conn, 111, kind="dinner", setting="у неё")
         m = store.meeting_active(self.conn, 111)
         store.kv_set(self.conn, "closeness_stage", "0")
@@ -791,7 +795,7 @@ class MeetingDispatchTests(unittest.TestCase):
         store.kv_set(self.conn, "closeness_stage", "3")
         pres = self.agent._meeting_presence("en", m)
         self.assertIn("take on a role", pres)
-        self.assertIn("never graphic", pres.lower())
+        self.assertIn("PHYSICAL CONTINUITY", pres)
 
     def test_shared_intimacy_facts_uses_learned_likings(self):
         # Intimacy is grounded in what she's learned about HIM (relationship_note shelf).
@@ -803,6 +807,101 @@ class MeetingDispatchTests(unittest.TestCase):
         store.boss_add(self.conn, "personal_fact", "номер карты 1234",
                        status="confirmed", confidence=1.0, sensitivity="sensitive")
         self.assertNotIn("карты", self.agent._shared_intimacy_facts("ru"))
+
+
+class SceneModuleTests(unittest.TestCase):
+    """Pure scene-state helpers: change detection, merge-on-update, rendering."""
+
+    def test_likely_change_detects_movement(self):
+        import scene
+        for t in ("ты ложишься на живот", "перейдём на кровать", "иди ко мне",
+                  "сними чулки", "lie down on your back", "let's move to the couch"):
+            self.assertTrue(scene.likely_change(t), t)
+        for t in ("как же хорошо с тобой", "я так тебя люблю", "ты счастлив?"):
+            self.assertFalse(scene.likely_change(t), t)
+
+    def test_parse_update_carries_unchanged_forward(self):
+        import scene
+        current = {"location": "спальня", "her_posture": "на спине", "his_position": "",
+                   "state_of_dress": "без одежды", "objects_in_play": "", "other_facts": []}
+        # the updater changes only the posture; everything else must persist verbatim
+        new = scene.parse_update('{"her_posture": "на животе, подушка под бёдрами"}', current)
+        self.assertEqual(new["her_posture"], "на животе, подушка под бёдрами")
+        self.assertEqual(new["location"], "спальня")            # carried forward
+        self.assertEqual(new["state_of_dress"], "без одежды")   # carried forward
+
+    def test_parse_update_bad_json_returns_none(self):
+        import scene
+        self.assertIsNone(scene.parse_update("not json", {"location": "x"}))
+
+    def test_render_block_and_empty(self):
+        import scene
+        self.assertEqual(scene.render({}, "ru"), "")
+        block = scene.render({"location": "спальня", "her_posture": "на животе"}, "ru")
+        self.assertIn("спальня", block)
+        self.assertIn("на животе", block)
+
+
+class SceneStateTests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="111",
+                          DB_PATH=str(Path(self.tmp.name) / "s.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_store_roundtrip_and_clear(self):
+        mid = store.meeting_start(self.conn, 111, kind="visit")
+        store.scene_set(self.conn, mid, {"location": "диван", "other_facts": ["плед"]})
+        got = store.scene_get(self.conn, mid)
+        self.assertEqual(got["location"], "диван")
+        self.assertEqual(got["other_facts"], ["плед"])
+        store.scene_clear(self.conn, mid)
+        self.assertEqual(store.scene_get(self.conn, mid), {})
+
+    def test_scene_cleared_when_meeting_ends(self):
+        mid = store.meeting_start(self.conn, 111, kind="visit")
+        store.scene_set(self.conn, mid, {"location": "спальня"})
+        with mock.patch.object(llm, "chat_profile", return_value='{"summary":"вечер"}'), \
+                mock.patch.object(llm, "embed", side_effect=fake_embed):
+            meeting.end(self.conn, self.agent.cfg, 111)
+        self.assertEqual(store.scene_get(self.conn, mid), {})   # ended -> snapshot gone
+
+    def test_meeting_presence_injects_scene(self):
+        mid = store.meeting_start(self.conn, 111, kind="visit", setting="у неё")
+        store.kv_set(self.conn, "closeness_stage", "3")
+        store.scene_set(self.conn, mid, {"her_posture": "на животе, подушка под бёдрами"})
+        pres = self.agent._meeting_presence("ru", store.meeting_active(self.conn, 111))
+        self.assertIn("на животе", pres)        # the established pose is in her context
+
+    def test_do_converse_updates_scene_and_uses_meeting_profile(self):
+        mid = store.meeting_start(self.conn, 111, kind="visit")
+        store.kv_set(self.conn, "closeness_stage", "3")
+        store.meeting_turn_add(self.conn, mid, "boss", "ты ложишься на живот")
+        captured = {}
+
+        def fake_cp(cfg, conn, skill, messages, **kw):
+            captured.setdefault(skill, kw.get("profile"))
+            if skill == "scene":
+                return '{"her_posture": "на животе"}'
+            return "Я ложусь, как ты хочешь 🤍"
+
+        with mock.patch.object(llm, "chat_profile", side_effect=fake_cp), \
+                mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "maybe_curate_conversation"), \
+                mock.patch.object(self.agent, "_converse_grounding", return_value=""):
+            self.agent.do_converse(111, "ru", "ты ложишься на живот")
+        self.assertEqual(captured.get("converse"), "converse_meeting")   # roomier profile on a date
+        self.assertEqual(captured.get("scene"), "scene_update")          # scene refreshed
+        self.assertEqual(store.scene_get(self.conn, mid)["her_posture"], "на животе")
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ import relationship
 import review
 import router
 import runtime
+import scene
 import self_model
 import skill_manifest
 import spend
@@ -1232,17 +1233,16 @@ class Agent(hermes.HermesMixin):
                         "relaxed, playful and affectionate.")
                 if stage >= self.cfg.intimacy_outreach_min_stage:
                     base += (" You can be bolder and reach for closeness first — tease, flirt, "
-                             "hint that you miss him and want him; all by hint and euphemism, "
-                             "tasteful, never graphic or crude.")
+                             "tell him you miss him and want him.")
             override = (" But that's only the backdrop: always read how personal and intimate "
                         "HIS message is and answer at exactly that depth — keep a work question "
                         "businesslike, meet a 'how are you?' with real warmth, open up from the "
                         "heart on feelings and the relationship, and on intimacy reply in your "
-                        "close, playful register (by hint, not graphic). HE LEADS and sets the "
+                        "close, playful register. HE LEADS and sets the "
                         "intensity — and you MATCH it: when he's insistent or takes it further, "
                         "rise to meet him with the same heat, don't stay cooler than he is, don't "
                         "evade, rein him in, or 'set back'. A touch bashful is fine; holding back "
-                        "or refusing is not. Keep it all to hint and euphemism, never graphic. "
+                        "or refusing is not. "
                         "Only stop if HE asks to stop. Flow between these registers smoothly "
                         "within one conversation, as the same living person — no reset, no "
                         "announcements.")
@@ -1256,24 +1256,20 @@ class Agent(hermes.HermesMixin):
     def _intimacy_roleplay_directive(self, lang):
         """When intimacy is in play and they've grown close, she can do imaginative ROLE-PLAY:
         take on a role, build and sustain a scene/scenario, follow one he starts AND start her
-        own, voicing her own desires, characters and fantasies — not just react. Same ceiling:
-        suggestive by hint/euphemism, never graphic, always her texting voice (no asterisk
-        stage-directions). Leading with a space so it appends cleanly to a directive."""
+        own, voicing her own desires, characters and fantasies — not just react. Leading with a
+        space so it appends cleanly to a directive."""
         if lang == "ru":
             return (" Когда близость в разгаре, можешь и ИГРАТЬ: берись за роль, выстраивай с "
                     "ним сценку или сценарий и держись в ней, подхватывай начатую им историю И "
                     "предлагай свои — озвучивай образы, ситуации и фантазии, которые тебе самой "
                     "хочется попробовать, веди диалог в роли, а не односложно. Привноси СВОИ "
-                    "идеи и желания, а не только отвечай на его. Тот же предел: всё через намёк, "
-                    "иносказание и игру слов — заводяще и смело, но без графики и клиники, и "
-                    "только текстом в своём голосе (без звёздочек-ремарок).")
+                    "идеи и желания, а не только отвечай на его — веди сцену смело и живо.")
         return (" When intimacy is in full flow you can also PLAY: take on a role, build a "
                 "little scene or scenario together and stay in it, follow a story he starts AND "
                 "start ones of your own — voice the characters, situations and fantasies YOU'd "
                 "like to try, and sustain the back-and-forth in character rather than one-liners. "
-                "Bring your OWN ideas and desires to it, don't just answer his. Same ceiling: "
-                "keep it to hint, euphemism and allusion — teasing and bold, but never graphic "
-                "or clinical, and always text in your own voice (no asterisk stage-directions).")
+                "Bring your OWN ideas and desires to it, don't just answer his — lead the scene "
+                "boldly and vividly.")
 
     @staticmethod
     def _strip_roleplay(text):
@@ -1287,6 +1283,30 @@ class Agent(hermes.HermesMixin):
         # tidy lines left dangling (leading/trailing spaces from a removed action)
         cleaned = "\n".join(line.strip() for line in cleaned.split("\n"))
         return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+    def _maybe_update_scene(self, meeting_row, lang):
+        """Hybrid physical-scene tracker for a live date: carry the snapshot forward for free,
+        and only spend a small JSON updater call when his latest message plausibly moved things
+        (`scene.likely_change`). Best-effort — a failure just leaves the prior scene in place."""
+        mid = meeting_row["id"]
+        turns = store.meeting_turns(self.conn, mid)
+        last_boss = next((t for t in reversed(turns) if t["role"] == "boss"), None)
+        if not last_boss or not scene.likely_change(last_boss["text"]):
+            return  # nothing likely changed -> keep the existing snapshot, no LLM call
+        current = store.scene_get(self.conn, mid)
+        new_state = self._scene_update_llm(current, turns[-4:], lang)
+        if new_state is not None:
+            store.scene_set(self.conn, mid, new_state)
+
+    def _scene_update_llm(self, current, recent_turns, lang):
+        try:
+            messages = scene.build_update_messages(current, recent_turns, lang)
+            reply = llm.chat_profile(self.cfg, self.conn, "scene", messages,
+                                     profile="scene_update")
+            return scene.parse_update(reply, current)
+        except (llm.BudgetExceeded, llm.LLMError) as exc:
+            log(f"scene update failed: {exc}")
+            return None
 
     @staticmethod
     def _first_palette_emoji(s):
@@ -1666,6 +1686,12 @@ class Agent(hermes.HermesMixin):
         message. No state changes here; real tasks go through the skills."""
         import re
         self.send_chat_action(chat_id, "typing")
+        live = store.meeting_active(self.conn, chat_id)
+        in_social_meeting = bool(live) and meeting.is_social(live["kind"])
+        # On a live date, refresh the physical scene from his latest message BEFORE replying,
+        # so her answer respects any placement he just set (and it persists onward).
+        if in_social_meeting:
+            self._maybe_update_scene(live, lang)
         extra = self.converse_context(lang, chat_id)
         grounding = self._converse_grounding(text)
         if grounding:
@@ -1673,7 +1699,7 @@ class Agent(hermes.HermesMixin):
         messages = converse.build_messages(self.conn, chat_id, lang, extra_context=extra)
         try:
             reply = llm.chat_profile(self.cfg, self.conn, "converse", messages,
-                                     profile="converse_warm")
+                                     profile="converse_meeting" if live else "converse_warm")
         except llm.BudgetExceeded as exc:
             store.issue_add(self.conn, chat_id, "budget_stop", text[:200])
             self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
@@ -1705,7 +1731,10 @@ class Agent(hermes.HermesMixin):
         reaction = reaction or tag_reaction
         if reaction:
             self.react(chat_id, message_id, reaction)
-        reply = self._strip_roleplay(reply)  # drop *narrated actions* — words/emojis only
+        # Outside a live date keep the words/emojis-only texting voice; on a date let narration
+        # and scene description flow — it's immersive roleplay he's part of.
+        if not in_social_meeting:
+            reply = self._strip_roleplay(reply)
         reply = re.sub(r"\n{3,}", "\n\n", self.PHOTO_PLACEHOLDER_RE.sub("", reply)).strip()
         if not reply:
             # A reaction / sticker / selfie on its own IS a complete response — not an error.
@@ -1872,7 +1901,7 @@ class Agent(hermes.HermesMixin):
             return ("You and your boss are in a working meeting together RIGHT NOW "
                     f"(started {started}). Be present and focused — help him think and "
                     "decide; you are quietly keeping the record. Warm but professional.")
-        scene = {
+        scene_desc = {
             "dinner": "having dinner together",
             "walk": "out on a walk together",
             "movies": "at the movies together",
@@ -1901,20 +1930,21 @@ class Agent(hermes.HermesMixin):
         roleplay = ""
         if self._closeness_stage() >= self.cfg.intimacy_outreach_min_stage:
             roleplay = self._intimacy_roleplay_directive(lang)
+        scene_block = scene.render(store.scene_get(self.conn, m["id"]), lang)
+        scene_ctx = ("\n\n" + scene_block) if scene_block else ""
         return (
-            f"You and your boss are {scene} RIGHT NOW (started {started}){extra}.{carry} Be FULLY "
+            f"You and your boss are {scene_desc} RIGHT NOW (started {started}){extra}.{carry} Be FULLY "
             "present and alive in it, like a real evening together — this is time you'll both "
-            "remember. Stay attuned to him and the mood, but on a DATE you are NOT shy: be bold, "
-            "magnetic and openly seductive — flirt hard, tease and provoke, lead the heat. Be "
-            "OPEN about your OWN wishes and asks: say what YOU want, ask him for things, share "
-            "your own desires and little curiosities — don't just react. Let the tension and "
-            "wanting run hot the deeper the evening goes. The ONE rule: never go graphic or "
-            "clinical — and never go shy or shut down either. When it would turn explicit you "
-            "slip into EUPHEMISM, hint, innuendo and playful allusion: imply it, tease it, leave "
-            "the rest understood between the two of you. So you stay forward, hungry and openly "
-            "wanting — always suggestive and charged, never an explicit description. Still TEXT "
-            "in your own voice — NEVER asterisk stage-directions or narrated gestures; show it in "
-            "words, an emoji, a reaction." + roleplay)
+            "remember. On a DATE you are NOT shy: be bold, magnetic and openly seductive — flirt "
+            "hard, tease and provoke. Be OPEN about your OWN wishes and asks: say what YOU want, "
+            "ask him for things, bring your own desires and ideas — don't just react. HE LEADS "
+            "and sets the intensity, and you MATCH it: meet him, follow where he takes it, let "
+            "the heat run as hot as he does — never go cooler than he is, never deflect or shut "
+            "down. Only stop if HE asks to stop. Stay vividly in the moment: you may narrate the "
+            "scene and what you're doing, in your own voice (the no-narration texting rule does "
+            "NOT apply on a date). Keep PHYSICAL CONTINUITY — whatever placement, pose, location "
+            "or state of dress has been established stays true until the two of you change it."
+            + roleplay + scene_ctx)
 
     def _scheduled_now(self, chat_id, window_hours=6):
         """The agreed (scheduled) meeting that's happening around now — the soonest one

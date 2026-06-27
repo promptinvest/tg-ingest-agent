@@ -1604,18 +1604,17 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertIn("ВЕДЁТ ОН", ru)                  # RU: he leads
         self.assertIn("накал", ru)                     # RU: matches his heat/intensity
 
-    def test_roleplay_layer_unlocks_with_closeness_and_stays_non_graphic(self):
+    def test_roleplay_layer_unlocks_with_closeness(self):
         a = self.agent
         # not close yet -> no roleplay directive injected
         store.kv_set(a.conn, "closeness_stage", "0")
         self.assertNotIn("PLAY", a._register_directive("en"))
-        # once close -> roleplay capability is present, with the non-graphic ceiling
+        # once close -> roleplay capability is present, she follows his lead and matches him
         store.kv_set(a.conn, "closeness_stage", "3")
         d = a._register_directive("en")
         self.assertIn("take on a role", d)
         self.assertIn("scene or scenario", d)
-        self.assertIn("never graphic", d.lower())
-        self.assertNotIn("*", a._intimacy_roleplay_directive("en"))  # no asterisk roleplay
+        self.assertIn("MATCH", d)                       # follows his lead / matches intensity
         self.assertIn("роль", a._register_directive("ru"))
 
     def test_intimate_moment_detection(self):
@@ -3033,15 +3032,15 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
                        status="confirmed", confidence=1.0)
         self.assertIn("emerald", self.agent._taste_colors())
 
-    def test_date_presence_is_bold_but_not_graphic(self):
+    def test_date_presence_is_bold_and_immersive(self):
         c = self.agent.conn
         mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
         store.meeting_activate(c, mid)
         pres = self.agent._meeting_presence("ru", store.meeting_active(c, 1)).lower()
         self.assertIn("seductive", pres)        # bold / forward on a date
         self.assertIn("own wishes", pres)       # open about her OWN desires & asks
-        self.assertIn("euphemism", pres)        # hints/euphemism at the explicit edge
-        self.assertIn("graphic", pres)          # the kept non-graphic boundary
+        self.assertIn("match", pres)            # follows his lead, matches his intensity
+        self.assertIn("physical continuity", pres)   # holds established placement/pose
 
     def test_meeting_attire_scales_with_setting_and_stage(self):
         c = self.agent.conn

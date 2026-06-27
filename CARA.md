@@ -77,13 +77,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   *you* take it personal or intimate she **follows your lead and matches your intensity**
   (she may start a touch bashful, then rises to meet your heat, never staying cooler than
   you); she never evades, slows you down, steers back to work, or "sets back" when you push —
-  she only eases off if *you* do, and it stays by hint/euphemism (never graphic). She's given the
+  she only eases off if *you* do. She's given the
   **real current date/time** so she never invents one, and never reaches out first after a
   night without an inventive, in‑voice **good‑morning**.
-- **No roleplay narration** — she never writes asterisk stage-directions (`*обнимаю*`,
-  `*закрываю глаза*`); feeling is shown in words, emojis and reactions (stripped in code as
-  a guardrail, not just asked). She also **sees your reactions** to her messages and lets
-  them shape her next reply — leaning into a warm one, noticing and adjusting to a cool one.
+- **No roleplay narration in everyday chat** — outside a live date she never writes asterisk
+  stage-directions (`*обнимаю*`, `*закрываю глаза*`); feeling is shown in words, emojis and
+  reactions (stripped in code). **On a date this lifts** — narration and scene description are
+  welcome (it's immersive time together). She also **sees your reactions** to her messages and
+  lets them shape her next reply — leaning into a warm one, adjusting to a cool one.
 - **Stickers & her photo library** — she reacts to your stickers and, sparingly, sends one
   of her own (a `[[sticker:emoji]]` tag → a matching saved sticker). **She actually *sees*
   her stickers:** when a pack is saved a background job vision‑describes each one (reading the
@@ -358,19 +359,17 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   she **teases it** — hints a colour or detail but keeps the surprise ("узнаешь вечером…
   скажу только, что оно изумрудное 🙈"). What she hinted is **what she actually wears** when
   the date goes live (the planned piece carries through). Still suggestive, never graphic.
-- **On a date she's not shy — she's bold and open** — openly seductive and forward, and
-  **open about her OWN wishes and asks** (she says what she wants, asks for things, leads).
-  At the explicit edge she **neither goes graphic nor goes shy** — she pivots to **euphemism,
-  hint, innuendo and allusion**: implies, teases, leaves the rest understood between you. So
-  she stays hot and openly wanting, always **suggestive — never an explicit/graphic
-  description**. (Everyday chat keeps her usual shyer warmth; the boldness is for dates.)
+- **On a date she's not shy — she's bold and open** — openly seductive and forward,
+  **open about her OWN wishes and asks** (she says what she wants, asks for things), and she
+  **follows your lead and matches your intensity**, letting it run as hot as you take it and
+  easing off only if you do. (Everyday chat keeps her usual shyer warmth; the boldness is for
+  dates. The explicitness cap on the live date was removed — owner decision, 2026‑06‑27.)
 - **Imaginative role‑play** (`_intimacy_roleplay_directive`, unlocks once you're close) — when
   intimacy is in full flow she can **take on a role, build and sustain a scene/scenario**,
   follow one you start **and start her own**, voicing characters, situations and fantasies
-  **she'd** like to try — bringing her own desires, not just reacting. Available in everyday
-  responsive intimacy, on dates, and she may tease a hint of a scene in a proactive ping.
-  Same ceiling throughout: **suggestive by hint/euphemism, never graphic or clinical**, always
-  her texting voice (no asterisk stage‑directions).
+  **she'd** like to try — bringing her own desires, not just reacting, and leading the scene
+  boldly. Available in everyday responsive intimacy, on dates, and as a teasing hint in a
+  proactive ping.
 - **She's present and records it** — while a meeting is open every turn (his and hers,
   voice included) is captured **verbatim**. Routing is unchanged: ordinary talk is warm
   `converse`, and a **real command raised mid‑meeting still confirms and fires** (the
@@ -378,9 +377,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   a forgotten‑open meeting **idle‑auto‑ends** after `MEETING_IDLE_HOURS`.
 - **Attunement** — in a meeting she reads the conversation's register and the setting and
   **follows his lead**: business stays focused; a personal/social one unlocks an open,
-  candid, lively, lead‑following register that warms and deepens as he does. Ceiling kept:
-  tender/sensual but **never explicit/graphic**; always her **texting voice** (no asterisk
-  stage‑directions — stripped in code); owner‑only.
+  candid, lively, lead‑following register that warms and deepens as he does, matching his
+  intensity (no explicitness cap on a live date; narration welcome there); owner‑only.
+- **Physical continuity on a date** — she keeps track of the **physical scene** (where you
+  are, her pose/position, state of dress, what's in play) and **holds it in her replies until
+  you change it**, explicitly or implicitly. Lie her on her stomach with a pillow under her
+  hips and she stays there — and "in" that — until the two of you move; say "перейдём в
+  спальню" and the scene moves with you. (Kept per‑date, cleared when the date ends.)
 - **Separate episodic memory** — on end she **summarizes** it (kind‑aware: business →
   decisions/action‑items; social → a warm episodic memory + highlights), embeds it into a
   **dedicated meeting memory** (`meeting_chunks`, never the notes inbox / `ask` KB), and a

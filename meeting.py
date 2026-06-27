@@ -166,6 +166,7 @@ def end(conn, cfg, chat_id, auto=False):
                       decisions=json.dumps(recap["decisions"] or recap["highlights"],
                                            ensure_ascii=False),
                       title=recap["title"])
+    store.scene_clear(conn, meeting_id)   # the live physical snapshot ends with the meeting
     _index(conn, cfg, meeting_id, recap, transcript)
     return store.meeting_get(conn, meeting_id), recap
 

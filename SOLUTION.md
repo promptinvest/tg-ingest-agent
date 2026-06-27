@@ -381,11 +381,30 @@ proactively like real memory. Design decisions and why:
   summarizes into a warm episodic memory and **feeds `cara_life` + `relationship_events`**
   so dates actually deepen the bond. For a *visit* the scene is grounded in her
   existing fictional life (the riverside flat), not invented fresh.
-- **Lead-following attunement, with the ceiling kept.** In a meeting a kind-aware
-  presence line tells her to read the register and follow his lead — opening up,
-  warmer and more alive as he gets personal/intimate — but the persona ceiling holds:
-  sensual/tender, **never explicit/graphic**, always her texting voice (the existing
-  `_strip_roleplay` guard keeps narrated stage-directions out even here), owner-only.
+- **Lead-following attunement (live-date ceiling lifted).** In a meeting a kind-aware
+  presence line tells her to read the register and follow his lead — opening up, warmer and
+  more alive as he gets personal/intimate, **matching his intensity** without an explicitness
+  cap (owner decision, 2026-06-27: the non-graphic/euphemism ceiling that the model ignored
+  anyway was removed for the live-date path so prompt and behavior agree). On a date she may
+  **narrate the scene and her actions** in her own voice — `_strip_roleplay` and the
+  no-narration texting rule apply only OUTSIDE a live social meeting. (The non-graphic ceiling
+  is still kept for the *separate* contexts: the wardrobe library, proactive outreach pings,
+  the day-after afterglow, and what gets written into episodic-memory/arc summaries.)
+- **Physical scene continuity (`scene.py` + `meeting_scene`).** During a live social meeting
+  Cara keeps a compact, persistent snapshot of the PHYSICAL situation — `location`,
+  `her_posture`, `his_position`, `state_of_dress`, `objects_in_play`, `other_facts[]` — so a
+  pose/placement established earlier stays true turn to turn instead of drifting as the scene
+  scrolls out of the context window. **Hybrid update:** a deterministic cue check
+  (`scene.likely_change` — movement/position/location/(un)dressing words, RU+EN) gates a tiny
+  JSON-only `scene_update` LLM call that re-derives the state from the latest turns, *carrying
+  unchanged facts forward verbatim* and changing a field only when the dialogue changes it
+  (explicitly or implicitly); most turns cost nothing. The snapshot is rendered into
+  `_meeting_presence` ("the physical scene RIGHT NOW — stay consistent until his message
+  changes it"), updated from his message **before** her reply, and `store.scene_clear`ed when
+  the meeting ends. Content-agnostic — it tracks whatever physical facts get established.
+- **Live-date replies get room (`converse_meeting` profile).** While any meeting is active,
+  converse runs at `max_tokens=800` (vs 320 for `converse_warm`) so an immersive reply isn't
+  truncated mid-sentence.
 - **The storyline arc is the backbone, not just episodic recall.** Recall alone
   retrieves a *similar* past meeting; it doesn't give a sense of *where we are*. So a
   versioned `relationship_arc` holds an evolving, synthesized narrative of "us",
@@ -469,17 +488,16 @@ business (then easing back).
   baseline restrains only *her own initiative* — when *he* turns it personal/intimate she
   follows his lead and **matches his intensity** (she may start a touch bashful, then rises to
   meet his heat, never staying cooler than he is) and must NOT evade, slow him, steer back to
-  work, or "set back" when he pushes; she only eases off if he does, by hint/euphemism (never
-  graphic). (This fixed her deflecting his intimate hints during business time — the old
-  "save the playfulness for later" framing read as gatekeeping.)
+  work, or "set back" when he pushes; she only eases off if he does. (This fixed her deflecting
+  his intimate hints during business time — the old "save the playfulness for later" framing
+  read as gatekeeping.)
 - **Imaginative role-play (`_intimacy_roleplay_directive`).** Once closeness ≥
   `intimacy_outreach_min_stage`, intimacy can become play: she takes on a role, builds and
   sustains a scene/scenario, follows one he starts AND proposes her own, voicing her own
   desires/characters/fantasies — not just reacting. Injected into the responsive register
-  override, the date presence, and (as a teasing hint) the proactive outreach. The ceiling is
-  unchanged and restated in the directive itself: suggestive by hint/euphemism/allusion,
-  **never graphic or clinical**, always her texting voice (no asterisk stage-directions, still
-  stripped by `_strip_roleplay`).
+  override, the date presence, and (as a teasing hint) the proactive outreach. The explicitness
+  cap was removed here too (2026-06-27); in the live-date context narration is welcome and not
+  stripped — the proactive-outreach hint stays tasteful per that context's own framing.
 - **Proactive intimacy outreach (`check_intimacy_outreach` / `compose_intimacy_outreach`).**
   In her relaxed off-hours register only (never work hours, never while business is recent,
   never mid-meeting), once closeness ≥ `intimacy_outreach_min_stage`, and only **within a
@@ -560,6 +578,7 @@ Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity
 Meetings & storyline: `meetings` (kind · setting · status · summary · decisions ·
 last_turn_at for idle auto-end) · `meeting_turns` (verbatim, cascade-deleted) ·
 `meeting_chunks` (BGE-M3 episodic index, **separate** from notes `chunks`) ·
+`meeting_scene` (live physical-scene snapshot per active meeting, cleared on end) ·
 `relationship_arc` (versioned storyline; latest = current).
 
 Embedding storage (retrieval): vectors in `chunks`/`meeting_chunks` are stored as

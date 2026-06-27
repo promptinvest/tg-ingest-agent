@@ -404,6 +404,15 @@ CREATE TABLE IF NOT EXISTS meeting_chunks (
   embedding TEXT
 );
 
+-- Live physical scene snapshot for an active meeting (placement, postures, state of
+-- dress, props). One row per meeting; carried forward turn to turn so Cara stays
+-- physically consistent, cleared when the meeting ends.
+CREATE TABLE IF NOT EXISTS meeting_scene (
+  meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+  state TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Preparation agreed for an UPCOMING meeting: logistical details/agreements (what
 -- she'll wear, what he brings, the plan) and emotional beats (her anticipation,
 -- longing). Accumulated during the lead-up, surfaced while planning AND carried into
@@ -892,6 +901,33 @@ def meeting_turns(conn, meeting_id, limit=500):
         "SELECT role, text, ts FROM meeting_turns WHERE meeting_id = ? ORDER BY id LIMIT ?",
         (meeting_id, limit),
     ).fetchall()
+
+
+def scene_get(conn, meeting_id):
+    """The active meeting's physical scene snapshot as a dict ({} if none/unparseable)."""
+    row = conn.execute(
+        "SELECT state FROM meeting_scene WHERE meeting_id = ?", (meeting_id,)).fetchone()
+    if not row:
+        return {}
+    try:
+        data = json.loads(row["state"])
+        return data if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def scene_set(conn, meeting_id, state):
+    conn.execute(
+        "INSERT INTO meeting_scene (meeting_id, state, updated_at) VALUES (?, ?, ?)"
+        " ON CONFLICT(meeting_id) DO UPDATE SET state = excluded.state,"
+        " updated_at = excluded.updated_at",
+        (meeting_id, json.dumps(state, ensure_ascii=False), _now()))
+    conn.commit()
+
+
+def scene_clear(conn, meeting_id):
+    conn.execute("DELETE FROM meeting_scene WHERE meeting_id = ?", (meeting_id,))
+    conn.commit()
 
 
 def meeting_turn_count(conn, meeting_id):

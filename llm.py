@@ -240,6 +240,13 @@ def default_profiles(cfg):
         # alive rather than canned; a fallback so a chat never dead-ends.
         "converse_warm": {"primary": primary, "fallbacks": fb, "max_tokens": 320,
                           "json_required": False, "temperature": 0.7},
+        # Conversation while a meeting/date is live: same voice, much more room so an
+        # immersive reply isn't truncated mid-sentence.
+        "converse_meeting": {"primary": primary, "fallbacks": fb, "max_tokens": 800,
+                             "json_required": False, "temperature": 0.7},
+        # Tiny JSON-only updater for the live physical scene snapshot (placement/poses).
+        "scene_update": {"primary": primary, "fallbacks": fb, "max_tokens": 250,
+                         "json_required": True, "temperature": 0},
         "memory_curator": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
         "review_balanced": {"primary": primary, "fallbacks": [], "max_tokens": 900, "json_required": False},
         # meeting end-recap: JSON {title, summary, decisions/highlights}
