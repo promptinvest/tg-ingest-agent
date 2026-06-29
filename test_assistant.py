@@ -1412,6 +1412,38 @@ class ConversationDispatchTests(unittest.TestCase):
             self.agent.dispatch(1, {}, "удали единственную")
         self.assertIn(texts.T(self.agent.lang(), "reminder_list_empty"), r.call_args[0][1])
 
+    def test_cohabiting_flag_and_pref_override(self):
+        a = self.agent
+        a.cfg.cohabiting = False
+        self.assertFalse(a._cohabiting())
+        a.cfg.cohabiting = True
+        self.assertTrue(a._cohabiting())
+        store.pref_set(a.conn, "cohabiting", "false")   # runtime pref overrides config
+        self.assertFalse(a._cohabiting())
+        store.pref_set(a.conn, "cohabiting", "on")
+        self.assertTrue(a._cohabiting())
+
+    def test_converse_context_includes_living_together(self):
+        a = self.agent
+        a.cfg.cohabiting = False
+        self.assertNotIn("LIVE TOGETHER", a.converse_context("en", 1))
+        a.cfg.cohabiting = True
+        self.assertIn("LIVE TOGETHER", a.converse_context("en", 1))
+
+    def test_morning_greeting_wakes_together_when_cohabiting(self):
+        a = self.agent
+        a.cfg.cohabiting = True
+        store.meeting_start(a.conn, a._owner_chat(), kind="visit")   # overnight meeting still open
+        captured = {}
+
+        def fake_cp(cfg, conn, skill, messages, **kw):
+            captured["instr"] = messages[1]["content"]
+            return "м-м, привет, ты тёплый 🤍"
+
+        with mock.patch.object(llm, "chat_profile", side_effect=fake_cp):
+            a.compose_morning_greeting("en")
+        self.assertIn("waking up together", captured["instr"])   # not "the night has passed"
+
     def test_overdue_nudge_stamps_kv_for_show_routing(self):
         # When an overdue nudge fires, stamp kv so a bare follow-up "покажи их" routes to
         # the deterministic reminder list (exact titles) instead of free-text converse.

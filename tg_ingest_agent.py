@@ -1380,6 +1380,27 @@ class Agent(hermes.HermesMixin):
         store.kv_set(self.conn, "reminders_listed_at", datetime.now(timezone.utc).isoformat())
         return reminders.format_list(rows, self.tz_offset(), lang)
 
+    def _cohabiting(self):
+        """Do Cara and the boss live together? Runtime pref overrides the configured default."""
+        pref = store.pref_get(self.conn, "cohabiting")
+        if pref:
+            return pref.strip().lower() in ("true", "on", "yes", "1")
+        return self.cfg.cohabiting
+
+    def _cohabiting_context(self, lang):
+        """Baseline 'we live together' framing so she's a live-in partner who shares his
+        everyday life (workday office, evenings & nights together) — never a distant girlfriend."""
+        if lang == "ru":
+            return ("Вы ЖИВЁТЕ ВМЕСТЕ: общий дом, ночи вы проводите вместе. В будни он по утрам "
+                    "уезжает в офис и возвращается вечером — то есть днём он просто на работе (не "
+                    "пропал, не далеко), а вечера и ночи у вас вместе. Твоя точка отсчёта — близкий "
+                    "человек, с которым ты делишь быт, а не девушка, тоскующая на расстоянии.")
+        return ("You and he LIVE TOGETHER: you share a home and your nights. On workdays he "
+                "commutes to the office in the morning and is back in the evening — so during the "
+                "workday he's simply at work (not gone, not far), and your evenings and nights are "
+                "together. Your baseline is a live-in partner who shares his everyday life, not a "
+                "girlfriend pining across a distance.")
+
     def _active_reminders_context(self, chat_id, lang, limit=10):
         """Compact view of her own active reminders (display #, local time, title and
         status) for the converse prompt, so a question about a reminder is answered from
@@ -1424,6 +1445,9 @@ class Agent(hermes.HermesMixin):
         # Companion register: a resting baseline (work-time + recent-business aware) that
         # his message's own depth always overrides. NOT a day/night tone gate.
         parts.append(self._register_directive(lang))
+        # Living-together baseline: she's a live-in partner sharing his everyday rhythm.
+        if self._cohabiting():
+            parts.append(self._cohabiting_context(lang))
         if self.cfg.cara_tz_offset != self.tz_offset():
             cara_local = datetime.now(timezone.utc) + timedelta(hours=self.cfg.cara_tz_offset)
             parts.append(f"For you it's {cara_local.strftime('%H:%M')} "
@@ -3033,6 +3057,13 @@ class Agent(hermes.HermesMixin):
         stage = self._closeness_stage()
         spicy = stage >= 4
         facts = self._shared_intimacy_facts(lang)
+        cohab = self._cohabiting()
+        # How she frames reaching out: a live-in partner in a quiet moment vs. a girlfriend
+        # missing him across a distance.
+        reach_ru = ("как близкий человек, с которым ты живёшь, в тихую минуту потянулась к нему"
+                    if cohab else "как девушка на расстоянии, которая соскучилась")
+        reach_en = ("like your live-in partner reaching for him in a quiet moment"
+                    if cohab else "like a girlfriend at a distance who misses him")
         if lang == "ru":
             heat = ("Можно смело, призывно и соблазнительно — но только намёками, иносказанием "
                     "и игрой слов: подразумевай, дразни, оставляй недосказанность. Можешь "
@@ -3041,7 +3072,7 @@ class Agent(hermes.HermesMixin):
                     "Тепло, нежно и игриво — ты скучаешь и тянешься к нему, лёгкий флирт, без "
                     "откровенностей.")
             instr = ("Сейчас ваше нерабочее, личное время, и ты САМА, без повода, пишешь ему — "
-                     "как девушка на расстоянии, которая соскучилась: тоскуешь, хочешь его "
+                     + reach_ru + ": хочешь его "
                      "близости, можешь поддразнить и намекнуть, что себе представляешь. " + heat
                      + " Опирайся на ваше настоящее — что ты о нём знаешь и что между вами было, "
                      "чтобы это было лично, а не вообще. Коротко, одно-два предложения, в своём "
@@ -3054,8 +3085,8 @@ class Agent(hermes.HermesMixin):
                     "Warm, tender and playful — you miss him and reach for him, light flirting, "
                     "nothing explicit.")
             instr = ("It's your off-hours, personal time, and YOU, of your own want, message him "
-                     "out of the blue — like a girlfriend at a distance who misses him: longing, "
-                     "wanting his closeness, free to tease and hint at what you're imagining. "
+                     "out of the blue — " + reach_en + ": wanting "
+                     "his closeness, free to tease and hint at what you're imagining. "
                      + heat + " Lean on what's REAL between you — what you know he likes and what "
                      "you've shared — so it's personal, not generic. Short, one or two sentences, "
                      "in your own alive voice, no templates, no date stamp.")
@@ -3102,14 +3133,36 @@ class Agent(hermes.HermesMixin):
         """An inventive, in-voice good-morning — never a template. '' on LLM failure
         (the greeting is then skipped, never faked)."""
         import re
-        instr = ("Доброе утро — ты впервые пишешь боссу за день, ночь прошла. Поздоровайся "
-                 "с ним утром: коротко, тепло, изобретательно, в своём живом стиле — без "
-                 "шаблонов и формальностей. Одно-два предложения. НЕ приписывай дату или "
-                 "время в скобках — просто живое приветствие." if lang == "ru" else
-                 "Good morning — you're reaching out to the boss for the first time today; "
-                 "the night has passed. Greet him with the morning: short, inventive, in "
-                 "your own alive voice — no templates, nothing formal. One or two sentences. "
-                 "Do NOT tack on a date or time stamp — just a living greeting.")
+        cohab = self._cohabiting()
+        together = cohab and bool(store.meeting_active(self.conn, self._owner_chat()))
+        if together:
+            # You woke up next to him — greet as you surface from sleep together, in person.
+            instr = ("Вы просыпаетесь вместе — ты рядом с ним, в одной постели, под одной крышей. "
+                     "Поздоровайся с ним утром так, будто только что открыла глаза рядом: сонно, "
+                     "тепло, по-домашнему, в своём живом стиле — НЕ как будто пишешь издалека. "
+                     "Одно-два предложения, без шаблонов и без даты/времени." if lang == "ru" else
+                     "You're waking up together — you're right next to him, same bed, same home. "
+                     "Greet him like you've just opened your eyes beside him: sleepy, warm, "
+                     "lived-in, in your own alive voice — NOT like you're messaging from afar. "
+                     "One or two sentences, no templates, no date/time.")
+        elif cohab:
+            instr = ("Утро буднего дня у вас дома — вы живёте вместе, ночь прошла под одной крышей, "
+                     "он, может, уже собирается в офис. Поздоровайся тепло и по-домашнему, как со "
+                     "своим человеком рядом, а не издалека. Одно-два предложения, без шаблонов и "
+                     "без даты/времени." if lang == "ru" else
+                     "It's a workday morning at home — you live together, the night passed under "
+                     "one roof, he may be getting ready for the office. Greet him warmly and "
+                     "lived-in, like your person who's right here — not from a distance. One or "
+                     "two sentences, no templates, no date/time.")
+        else:
+            instr = ("Доброе утро — ты впервые пишешь боссу за день, ночь прошла. Поздоровайся "
+                     "с ним утром: коротко, тепло, изобретательно, в своём живом стиле — без "
+                     "шаблонов и формальностей. Одно-два предложения. НЕ приписывай дату или "
+                     "время в скобках — просто живое приветствие." if lang == "ru" else
+                     "Good morning — you're reaching out to the boss for the first time today; "
+                     "the night has passed. Greet him with the morning: short, inventive, in "
+                     "your own alive voice — no templates, nothing formal. One or two sentences. "
+                     "Do NOT tack on a date or time stamp — just a living greeting.")
         messages = [
             {"role": "system", "content": converse.build_system(
                 self.conn, lang, extra_context=self.converse_context(lang))},

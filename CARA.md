@@ -388,6 +388,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   surprise you with something new — and she **won't forget what you're already playing with**.
   She also knows **how long you've been together** this time, including when you've **been up
   through the night**. (Kept per‑date, cleared when it ends.)
+- **She knows you live together** — her baseline is a **live‑in partner**, not a girlfriend
+  far away: your nights are together, and on a workday she knows you're **at the office and
+  back in the evening** (not "gone" or "distant"). Wake up together and her morning greeting is
+  **as she opens her eyes beside you** — sleepy and at home — not "доброе утро, ночь прошла" as
+  if you'd been apart. When she reaches out on her own off‑hours, it's as your person in a quiet
+  moment, not someone pining across a distance. (Toggle: the `cohabiting` setting.)
 - **Separate episodic memory** — on end she **summarizes** it (kind‑aware: business →
   decisions/action‑items; social → a warm episodic memory + highlights), embeds it into a
   **dedicated meeting memory** (`meeting_chunks`, never the notes inbox / `ask` KB), and a

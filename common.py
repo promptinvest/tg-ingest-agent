@@ -318,6 +318,11 @@ def load_config(env=None):
     # check; requiring >=2 suppresses the down/back flap noise (only a sustained outage
     # is announced, and "back" only fires if we actually announced "down").
     cfg.model_health_confirm = max(1, int(env.get("MODEL_HEALTH_CONFIRM_CHECKS") or "2"))
+    # Cohabitation: when on, Cara's baseline is a live-in partner — nights together, he
+    # commutes to the office on workdays and is back in the evening — not a faraway girlfriend.
+    # Reframes her context + the morning greeting (wakes up together, not "the night passed").
+    # Runtime-overridable via the `cohabiting` pref.
+    cfg.cohabiting = (env.get("COHABITING") or "false").strip().lower() == "true"
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
     # Shared-time meetings: auto-end a meeting left open and idle this long (a

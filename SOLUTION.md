@@ -381,6 +381,16 @@ proactively like real memory. Design decisions and why:
   summarizes into a warm episodic memory and **feeds `cara_life` + `relationship_events`**
   so dates actually deepen the bond. For a *visit* the scene is grounded in her
   existing fictional life (the riverside flat), not invented fresh.
+- **Cohabitation baseline (`COHABITING` / `cohabiting` pref; `_cohabiting`).** When on (owner
+  decision, 2026-06-29 — persistent default), Cara's baseline is a **live-in partner**: nights
+  together, he commutes to the office on workdays and is back in the evening. `_cohabiting_context`
+  is injected into `converse_context` every turn so the workday daytime reads as "he's at work,
+  home tonight" rather than "we're apart" — and `compose_morning_greeting` switches framing:
+  **waking up together** when a social meeting is still open in the morning ("you've just opened
+  your eyes beside him", not "the night has passed"), a lived-in workday-morning greeting when
+  cohabiting without an open meeting, and the old distance framing only when cohabitation is off.
+  The proactive intimacy outreach reaches out as a live-in partner ("in a quiet moment"), not a
+  girlfriend across a distance. Runtime-toggleable via the `cohabiting` pref.
 - **Lead-following attunement (live-date ceiling lifted).** In a meeting a kind-aware
   presence line tells her to read the register and follow his lead — opening up, warmer and
   more alive as he gets personal/intimate, **matching his intensity** without an explicitness
