@@ -1519,6 +1519,15 @@ def recent_files(conn, limit=20):
     ).fetchall()
 
 
+def files_recent_full(conn, chat_id, limit=5):
+    """Recent stored files (full rows incl. tg_file_id) for a chat, newest first — so a
+    forwarded voice/document can be re-fetched and read on demand."""
+    return conn.execute(
+        "SELECT f.* FROM files f JOIN messages m ON m.id = f.message_id"
+        " WHERE m.chat_id = ? ORDER BY f.id DESC LIMIT ?", (chat_id, limit),
+    ).fetchall()
+
+
 def set_chunks(conn, message_id, chunks):
     """Replace a message's embedding chunks (idempotent for re-indexing).
     chunks: list of (text, embedding_list_or_None). Embeddings are stored as

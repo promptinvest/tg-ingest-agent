@@ -3193,6 +3193,24 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             memory_curator.consolidate(c, self.agent.cfg)
         self.assertEqual(store.boss_get(c, inf)["status"], "merged")   # inferred кофе demoted
 
+    def test_read_media_transcribes_forwarded_voice(self):
+        # P5: a FORWARDED voice note is stored unparsed; "что в этом голосовом?" transcribes it
+        # on demand and shows the content (not metadata/trace ids).
+        c = self.agent.conn
+        mid = store.insert_message(c, {"chat_id": 1, "tg_message_id": 10,
+                                       "received_at": "2026-06-29T10:00:00Z", "raw_text": ""})
+        store.insert_file(c, mid, 10, {"file_id": "F1", "file_unique_id": "U1",
+                                       "file_name": "voice.oga", "mime_type": "audio/ogg",
+                                       "file_size": 1234})
+        with mock.patch.object(router, "route",
+                               return_value={"action": "read_media", "params": {}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "download_file", return_value="/tmp/x.oga"), \
+                mock.patch.object(llm, "transcribe", return_value="Привет, это пересланное голосовое."), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply_chunks") as rc:
+            self.agent.dispatch(1, {}, "что в этом голосовом?")
+        self.assertIn("пересланное голосовое", rc.call_args[0][1])
+
     def test_merge_categories_folds_and_deletes_duplicate(self):
         c = self.agent.conn
         a = store.insert_message(c, {"chat_id": 1, "tg_message_id": 1,

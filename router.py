@@ -34,6 +34,7 @@ ACTIONS = {
     "recategorize",      # params: id/ids/query/count + category — change a saved item's category
     "merge_categories",  # params: from + into — fold a duplicate category into another, delete the empty one
     "show_media",        # params: id OR query — re-send the stored photo(s)
+    "read_media",        # params: id? — transcribe a forwarded voice / read a file's CONTENT
     "discard",           # decline adding the just-suggested item (deletes it)
     "vps_stats",         # read-only host resource usage report
     "purge",             # params: scope in all|category|stats|reminders, category — BULK delete (typed confirm)
@@ -142,6 +143,7 @@ NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and
 "сотри заметки" / "удали все заметки" / "почисти заметки" / "delete all notes" -> {"action": "purge", "params": {"scope": "messages"}, "confidence": 0.9}
 "покажи фото" / "show the photo" / "покажи картинку из #2" -> {"action": "show_media", "params": {"id": 2}, "confidence": 0.9}
 "покажи файл" / "пришли документ" / "скинь вложение из #1" / "send me the file" / "show the attachment" -> {"action": "show_media", "params": {}, "confidence": 0.9}
+"что в этом голосовом?" / "расшифруй голосовое" / "разбери файл" / "что там в документе?" / "прочитай что в файле" / "what's in this voice message?" / "transcribe it" / "read me this file" (he wants the CONTENT of a forwarded voice/file, not the file re-sent) -> {"action": "read_media", "params": {}, "confidence": 0.9}
 "не сохраняй это" / "не надо сохранять" / "discard" / "don't save this" -> {"action": "discard", "params": {}, "confidence": 0.9}
 "загрузка сервера" / "сколько ресурсов занято" / "vps status" / "how's the server?" -> {"action": "vps_stats", "params": {}, "confidence": 0.9}
 "удали всё что у тебя есть" / "wipe everything" -> {"action": "purge", "params": {"scope": "all"}, "confidence": 0.9}

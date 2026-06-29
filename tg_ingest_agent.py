@@ -871,6 +871,8 @@ class Agent(hermes.HermesMixin):
                 self.reply(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
         elif action == "show_media":
             self.do_show_media(chat_id, lang, params)
+        elif action == "read_media":
+            self.do_read_media(chat_id, lang, params)
         elif action == "discard":
             self.do_discard(chat_id, lang, pending)
         elif action == "vps_stats":
@@ -3797,6 +3799,62 @@ class Agent(hermes.HermesMixin):
             except (TelegramError, OSError) as exc:
                 log(f"document read failed: {exc}")
         return None, None
+
+    _AUDIO_EXTS = (".oga", ".ogg", ".mp3", ".m4a", ".wav", ".opus")
+
+    def do_read_media(self, chat_id, lang, params):
+        """Open a FORWARDED voice/file the boss asked about and show its CONTENT — transcribe a
+        voice/audio note, or extract a document's text. (His OWN voice notes are transcribed on
+        arrival; forwarded ones are stored unparsed until he asks for the content.) Targets the
+        most recent stored file, or the one on note #id if given."""
+        rows = store.files_recent_full(self.conn, chat_id, limit=5)
+        if params.get("id"):
+            row = self.resolve_item(params)                        # the note he points at
+            mfiles = store.message_files(self.conn, row["id"]) if row else []
+            rows = mfiles or rows
+        if not rows:
+            self.reply(chat_id, T(lang, "read_media_none"))
+            return
+        f = rows[0]
+        name = f["file_name"] or "файл"
+        mime = (f["mime_type"] or "").lower()
+        low = name.lower()
+        is_audio = mime.startswith("audio/") or "voice" in mime or low.endswith(self._AUDIO_EXTS)
+        is_pdf = mime == "application/pdf" or low.endswith(".pdf")
+        is_text = (mime.startswith("text/") or mime == "application/markdown"
+                   or low.endswith(self.TEXT_DOC_EXTS))
+        if not (is_audio or is_pdf or is_text):
+            self.reply(chat_id, T(lang, "read_media_unsupported", name=name))
+            return
+        self.send_chat_action(chat_id, "typing")
+        ext = Path(name).suffix or (".oga" if is_audio else ".pdf" if is_pdf else ".txt")
+        path = None
+        try:
+            path = self.download_file(f["tg_file_id"], f["tg_file_unique_id"], ext)
+            if is_audio:
+                content = llm.transcribe(self.cfg, self.conn, "stt", path, 0) or ""
+            elif is_pdf:
+                import pdftext
+                content = pdftext.extract_text(Path(path).read_bytes(), self.MAX_DOC_CHARS)
+            else:
+                content = Path(path).read_text(encoding="utf-8", errors="replace")[:self.MAX_DOC_CHARS]
+        except (TelegramError, OSError) as exc:
+            log(f"read_media failed for {name}: {exc}")
+            self.reply(chat_id, T(lang, "read_media_fail"))
+            return
+        except Exception as exc:  # transcription/extraction hiccup — never crash the handler
+            log(f"read_media extraction failed for {name}: {exc}")
+            self.reply(chat_id, T(lang, "read_media_fail"))
+            return
+        finally:
+            if path:
+                Path(path).unlink(missing_ok=True)  # transient artifact
+        content = (content or "").strip()
+        if not content or (is_audio and common.is_stt_noise(content)):
+            self.reply(chat_id, T(lang, "read_media_empty", name=name))
+            return
+        self.reply_chunks(chat_id, T(lang, "read_media_result", name=name,
+                                     content=content[:1500]))
 
     def finalize(self, parts):
         lang = self.lang()

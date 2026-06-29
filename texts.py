@@ -371,6 +371,26 @@ TEXTS = {
         "ru": "У #{row_id} нет сохранённых фото.",
         "en": "#{row_id} has no stored photos.",
     },
+    "read_media_none": {
+        "ru": "Не вижу пересланного голосового или файла, чтобы разобрать. Перешли — и я гляну, что внутри.",
+        "en": "I don't see a forwarded voice note or file to open. Forward one and I'll tell you what's inside.",
+    },
+    "read_media_fail": {
+        "ru": "Не получилось открыть это — что-то пошло не так при загрузке. Попробуй ещё раз?",
+        "en": "Couldn't open that — something went wrong fetching it. Try again?",
+    },
+    "read_media_unsupported": {
+        "ru": "«{name}» я не умею прочитать (это не голос, не PDF и не текст). Могу переслать тебе сам файл.",
+        "en": "I can't read \"{name}\" (it's not a voice note, PDF, or text). I can send you the file itself.",
+    },
+    "read_media_empty": {
+        "ru": "Открыла «{name}», но содержимого не разобрать (пусто или не распознаётся).",
+        "en": "I opened \"{name}\" but couldn't make out any content (empty or unreadable).",
+    },
+    "read_media_result": {
+        "ru": "📄 Вот что в «{name}»:\n\n{content}",
+        "en": "📄 Here's what's in \"{name}\":\n\n{content}",
+    },
     "fetch_reading": {
         "ru": "Читаю ссылку, секунду… 📖",
         "en": "Reading the link, one moment… 📖",

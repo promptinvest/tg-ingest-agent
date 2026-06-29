@@ -543,8 +543,11 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   the box env; the code defaults are `remote` / `auto`.) a non‑speech
   hallucination filter ("[Subscribe]", "[Music]", "Спасибо за просмотр"…) and a
   too‑big (>20 MB) message keep garbage out of dispatch.
-- Only the **boss's own voice notes** are transcribed (commands/questions); forwarded
-  voice/audio is stored, not transcribed.
+- Only the **boss's own voice notes** are transcribed on arrival (commands/questions);
+  forwarded voice/audio/files are stored unparsed — **but on request** ("что в этом голосовом?",
+  "разбери файл", "read this file") the **`read_media`** action fetches the most recent
+  forwarded voice/file and shows its **content**: a voice/audio note is transcribed (whisper),
+  a PDF/text file's text is extracted — never metadata or trace ids.
 
 ### Durable runtime & observability
 - **Permission manifest** (`skill_manifest`) is enforced live: startup fails fast if a

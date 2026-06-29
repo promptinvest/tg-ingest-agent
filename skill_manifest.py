@@ -31,6 +31,7 @@ SKILLS = {
     "list_items": {"risk": "read_only", "title": {"en": "Browse saved", "ru": "Просмотр сохранённого"}},
     "item_detail": {"risk": "read_only", "title": {"en": "Item detail", "ru": "Детали записи"}},
     "show_media": {"risk": "read_only", "title": {"en": "Show photos", "ru": "Показ фото"}},
+    "read_media": {"risk": "read_only", "title": {"en": "Read a voice/file", "ru": "Прочитать голос/файл"}},
     "categories": {"risk": "read_only", "title": {"en": "Categories", "ru": "Категории"}},
     "discard": {"risk": "state_write", "writes_state": True,
                 "title": {"en": "Discard suggestion", "ru": "Отклонить запись"}},
