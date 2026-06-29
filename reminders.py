@@ -27,8 +27,16 @@ def validate_draft(params, now=None):
     recurrence = str(params.get("recurrence") or "none").strip().lower()
     if recurrence not in RECURRENCES:
         recurrence = "none"
-    if not title or due is None or due < now - timedelta(minutes=1):
+    if not title or due is None:
         return None
+    if due < now - timedelta(minutes=1):
+        # A RECURRING reminder whose time-of-day has already passed today starts at the NEXT
+        # occurrence, not rejected as "past" — fixes a daily "на 22:00" set after 22:00 that
+        # looped asking for the time. A one-shot in the past is still unusable.
+        if recurrence in ("daily", "weekly"):
+            due = parse_iso_utc(next_due(due.isoformat(), recurrence, now))
+        else:
+            return None
     return {"title": title, "due_utc": due.isoformat(), "recurrence": recurrence}
 
 

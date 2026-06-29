@@ -376,6 +376,16 @@ class RemindersTests(unittest.TestCase):
             {"title": "x", "due_utc": "2026-06-13T07:00:00Z", "recurrence": "hourly"}, now
         )
         self.assertEqual(bad_rec["recurrence"], "none")
+        # A DAILY reminder whose time-of-day already passed today rolls to the next
+        # occurrence instead of being rejected as past (the "ежедневно на 22:00" loop).
+        rolled = reminders.validate_draft(
+            {"title": "благодарности", "due_utc": "2026-06-12T07:00:00Z", "recurrence": "daily"}, now)
+        self.assertIsNotNone(rolled)
+        self.assertEqual(rolled["recurrence"], "daily")
+        self.assertGreater(reminders.parse_iso_utc(rolled["due_utc"]), now)   # future, not rejected
+        # a one-shot in the past is still unusable
+        self.assertIsNone(reminders.validate_draft(
+            {"title": "x", "due_utc": "2026-06-12T07:00:00Z", "recurrence": "none"}, now))
 
     def test_next_due(self):
         now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
