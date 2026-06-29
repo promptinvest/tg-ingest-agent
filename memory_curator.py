@@ -79,7 +79,8 @@ _EXTRACT_SYSTEM = (
     '"boss_facts": [{"kind": "...", "text": "..."}], '
     '"corrections": [{"kind": "...", "text": "..."}], '
     '"people": [{"name": "...", "role": "..."}], '
-    '"promises": ["..."], "milestones": ["..."]}\n'
+    '"promises": ["..."], "milestones": ["..."], '
+    '"body_changes": [{"feature": "...", "permanence": "...", "note": "..."}]}\n'
     "people: NAMED persons who recur — real acquaintances OR roleplay characters — with their "
     "RELATIONSHIP/role to the boss or to Cara, including how they bond and any background "
     "relationship. role is a short phrase in his language, e.g. {\"name\": \"Иван Доронин\", "
@@ -89,6 +90,10 @@ _EXTRACT_SYSTEM = (
     "Short, in his language. Skip vague intentions.\n"
     "milestones: a MAJOR relationship/life development worth remembering (moving in together, "
     "someone moving in with you, an anniversary, a big decision). Short, in his language.\n"
+    "body_changes: a LASTING change to CARA's body to remember going forward — a mark he left "
+    "(hickey/bruise → permanence \"mark\", fades), an add-on she now wears (collar/jewelry → "
+    "\"lasting\"), or a permanent change (piercing/tattoo → \"permanent\"). {\"feature\": short, "
+    "\"permanence\": mark|lasting|permanent, \"note\": brief}. Only real, lasting ones.\n"
     "cara_life: NEW, lasting details Cara revealed about HER OWN life (a hobby, a "
     "friend, a place, a plan, a taste). Each a short statement addressed to Cara in "
     "her language, e.g. 'Ты любишь джаз.' / 'You're learning to bake.' Skip anything "
@@ -218,6 +223,13 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
             world_added += 1
     for t in (parsed.get("milestones") or [])[:5]:
         if str(t).strip() and store.world_add(conn, "milestone", str(t).strip()):
+            world_added += 1
+    for b in (parsed.get("body_changes") or [])[:5]:
+        if isinstance(b, dict) and str(b.get("feature") or "").strip():
+            perm = str(b.get("permanence") or "lasting").strip().lower()
+            store.body_add(conn, str(b["feature"]).strip(), perm,
+                           note=str(b.get("note") or "").strip() or None,
+                           fade_days=cfg.body_mark_fade_days if perm == "mark" else 0)
             world_added += 1
 
     return {"life": life_added, "boss": boss_added, "corrections": corrections_added,

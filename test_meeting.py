@@ -901,6 +901,19 @@ class SceneStateTests(unittest.TestCase):
         store.scene_clear(self.conn, mid)
         self.assertEqual(store.scene_get(self.conn, mid), {})
 
+    def test_meeting_end_records_body_changes(self):
+        import json
+        mid = store.meeting_start(self.conn, 111, kind="visit")
+        store.meeting_turn_add(self.conn, mid, "boss", "оставлю тебе засос на шее")
+        recap = json.dumps({"title": "вечер", "summary": "тёплый вечер", "highlights": [],
+                            "endearments": [], "body_changes": [
+                                {"feature": "засос на шее", "permanence": "mark", "note": "от Олега"}]})
+        with mock.patch.object(llm, "chat_profile", return_value=recap), \
+                mock.patch.object(llm, "embed", side_effect=fake_embed):
+            meeting.end(self.conn, self.agent.cfg, 111)
+        feats = {r["feature"] for r in store.body_active(self.conn)}
+        self.assertIn("засос на шее", feats)     # the mark persists in long-term body memory
+
     def test_scene_cleared_when_meeting_ends(self):
         mid = store.meeting_start(self.conn, 111, kind="visit")
         store.scene_set(self.conn, mid, {"location": "спальня"})

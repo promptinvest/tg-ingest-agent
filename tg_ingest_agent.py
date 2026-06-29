@@ -1403,6 +1403,22 @@ class Agent(hermes.HermesMixin):
                 "together. Your baseline is a live-in partner who shares his everyday life, not a "
                 "girlfriend pining across a distance.")
 
+    def _body_context(self, lang):
+        """Long-term body memory: marks he left, add-ons she wears, permanent changes — so she
+        stays consistent about her own body across dates (a hickey is still there a few days
+        later; a piercing/tattoo stays). Temporary marks auto-fade. '' when nothing's on her."""
+        rows = store.body_active(self.conn)
+        if not rows:
+            return ""
+        lines = [("Твоё тело сейчас — помни и будь последовательна (следы, украшения, изменения "
+                  "остаются, пока не сойдут/не снимешь):" if lang == "ru" else
+                  "Your body right now — stay consistent (marks, adornments and changes persist "
+                  "until they fade or come off):")]
+        for r in rows:
+            lines.append(f"  - {r['feature']}: {r['note']}" if (r["note"] or "").strip()
+                         else f"  - {r['feature']}")
+        return "\n".join(lines)
+
     def _world_context(self, lang):
         """Compact 'who's who and where we're going' block: the cast of people (with their
         relationships/bonding), promises to keep, and relationship milestones — so Cara
@@ -1484,6 +1500,10 @@ class Agent(hermes.HermesMixin):
         world = self._world_context(lang)
         if world:
             parts.append(world)
+        # Long-term body memory: marks / add-ons / permanent changes carried across dates.
+        body = self._body_context(lang)
+        if body:
+            parts.append(body)
         if self.cfg.cara_tz_offset != self.tz_offset():
             cara_local = datetime.now(timezone.utc) + timedelta(hours=self.cfg.cara_tz_offset)
             parts.append(f"For you it's {cara_local.strftime('%H:%M')} "

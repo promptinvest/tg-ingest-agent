@@ -323,6 +323,9 @@ def load_config(env=None):
     # Reframes her context + the morning greeting (wakes up together, not "the night passed").
     # Runtime-overridable via the `cohabiting` pref.
     cfg.cohabiting = (env.get("COHABITING") or "false").strip().lower() == "true"
+    # Long-term body memory: a temporary mark (hickey/bruise/scratch) auto-fades after this many
+    # days; piercings/tattoos/worn add-ons persist until explicitly removed.
+    cfg.body_mark_fade_days = int(env.get("BODY_MARK_FADE_DAYS") or "12")
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
     # Shared-time meetings: auto-end a meeting left open and idle this long (a

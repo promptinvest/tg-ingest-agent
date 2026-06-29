@@ -388,6 +388,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   surprise you with something new — and she **won't forget what you're already playing with**.
   She also knows **how long you've been together** this time, including when you've **been up
   through the night**. (Kept per‑date, cleared when it ends.)
+- **Her body remembers — across dates** — lasting changes to Cara's body persist beyond the
+  evening: a **mark** you leave (a hickey/bruise — still there days later, then it fades on its
+  own), an **add-on** she wears (a collar, jewelry she keeps on), or a **permanent** change (a
+  piercing, a tattoo). She's reminded of her current body every turn, so she stays consistent —
+  she won't forget the mark you left last night, and a piercing doesn't vanish between dates.
+  (Learned from your dates and chat; temporary marks fade after ~`BODY_MARK_FADE_DAYS` days.)
 - **She remembers your world — people, promises, milestones** — Cara keeps a durable ledger of
   **the people in your life** (real acquaintances *and* recurring roleplay characters, each with
   who they are to you and to her — including anyone you two share a background with), the

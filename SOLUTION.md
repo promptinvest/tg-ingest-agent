@@ -399,6 +399,15 @@ proactively like real memory. Design decisions and why:
   "Milestones", "Things you keep around together — don't forget or swap them"), so she remembers
   who's who, what was promised, and where the relationship is going. Scene `people_present`
   (Stage 1) names who's in a live scene; the world ledger gives those names their relationships.
+- **Long-term body memory (`body_state`; `_body_context`).** Durable changes to Cara's body
+  that persist ACROSS dates (distinct from the ephemeral `meeting_scene`): **marks** he leaves
+  (hickey/bruise — `permanence='mark'`, auto-fades after `BODY_MARK_FADE_DAYS`, default 12),
+  **add-ons** she wears (a collar, jewelry — `'lasting'`), and **permanent** adjustments (a
+  piercing, a tattoo — `'permanent'`). Captured at **meeting end** (`_SUMMARY_SOCIAL` now returns
+  `body_changes`) and from everyday chat (the curator's extraction), deduped by casefold(feature).
+  `body_active` auto-fades expired marks; `_body_context` injects the current body state into
+  every converse turn so she stays consistent ("your mark is still there" days later; a piercing
+  stays) — and into a live date so a fresh mark is real next time too.
 - **Cohabitation baseline (`COHABITING` / `cohabiting` pref; `_cohabiting`).** When on (owner
   decision, 2026-06-29 — persistent default), Cara's baseline is a **live-in partner**: nights
   together, he commutes to the office on workdays and is back in the evening. `_cohabiting_context`

@@ -4845,6 +4845,33 @@ class WorldModelTests(unittest.TestCase):
         self.assertIsNotNone(store.world_find_person(self.conn, "Иван Доронин"))
         self.assertEqual(len(store.world_active(self.conn, "promise")), 1)
 
+    def test_body_add_dedup_and_active(self):
+        c = self.conn
+        i1 = store.body_add(c, "след на шее", "mark", fade_days=12)
+        i2 = store.body_add(c, "След на шее", "mark", note="свежий", fade_days=12)  # casefold dedup
+        self.assertEqual(i1, i2)
+        store.body_add(c, "пирсинг в пупке", "permanent")
+        self.assertEqual({r["feature"] for r in store.body_active(c)},
+                         {"след на шее", "пирсинг в пупке"})
+
+    def test_body_mark_fades_but_permanent_stays(self):
+        from datetime import datetime, timezone, timedelta
+        c = self.conn
+        store.body_add(c, "засос", "mark", fade_days=12)
+        store.body_add(c, "тату на бедре", "permanent")
+        c.execute("UPDATE body_state SET fades_at=? WHERE feature='засос'",
+                  ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),))
+        c.commit()
+        feats = {r["feature"] for r in store.body_active(c)}
+        self.assertNotIn("засос", feats)         # temporary mark auto-faded
+        self.assertIn("тату на бедре", feats)    # permanent change persists
+
+    def test_body_context_injected_into_converse(self):
+        store.body_add(self.conn, "ошейник", "lasting", note="подарок Олега")
+        ctx = self.agent.converse_context("ru", 1)
+        self.assertIn("ошейник", ctx)
+        self.assertIn("Твоё тело сейчас", ctx)
+
     def test_world_context_injected_into_converse(self):
         store.world_upsert_person(self.conn, "Лера", "подруга, участвует в ваших вечерах")
         store.world_add(self.conn, "promise", "свозить её к морю")

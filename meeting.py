@@ -107,7 +107,12 @@ _SUMMARY_SOCIAL = (
     "with the boss (a dinner, a walk, the movies, or him visiting her). Return "
     "STRICT JSON only, no prose: "
     '{"title": "...", "summary": "...", "decisions": [], "highlights": ["..."], '
-    '"endearments": ["..."]}\n'
+    '"endearments": ["..."], "body_changes": [{"feature": "...", "permanence": "...", "note": "..."}]}\n'
+    "body_changes: LASTING changes to CARA's body from this time that should persist afterwards — "
+    "a mark he left (hickey/bruise/scratch → permanence \"mark\", it fades), an add-on she's now "
+    "wearing (a collar, jewelry → \"lasting\"), or a permanent change (a piercing, a tattoo → "
+    "\"permanent\"). feature is short, in his language (e.g. 'след на шее'); note adds brief context. "
+    "Only REAL ones grounded in the transcript; empty array if none.\n"
     "title: a short, fond label (his language). summary: 2-4 sentences, written "
     "as Cara remembering it — what they did, the mood, how it felt — warm and "
     "real, NOT a transcript dump. highlights: up to 4 small moments worth keeping "
@@ -160,6 +165,14 @@ def end(conn, cfg, chat_id, auto=False):
             if social:  # remember the shared pet-names / playful phrasings that landed
                 for e in (parsed.get("endearments") or [])[:4]:
                     store.intimacy_style_add(conn, str(e).strip())
+                # durable body memory: marks/add-ons/adjustments that outlast the date
+                for b in (parsed.get("body_changes") or [])[:6]:
+                    if not isinstance(b, dict) or not str(b.get("feature") or "").strip():
+                        continue
+                    perm = str(b.get("permanence") or "lasting").strip().lower()
+                    store.body_add(conn, str(b["feature"]).strip(), perm,
+                                   note=str(b.get("note") or "").strip() or None,
+                                   fade_days=cfg.body_mark_fade_days if perm == "mark" else 0)
         except (llm.BudgetExceeded, llm.LLMError):
             pass  # best-effort; the episode still closes
     store.meeting_end(conn, meeting_id, summary=recap["summary"] or None,

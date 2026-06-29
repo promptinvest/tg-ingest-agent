@@ -11,7 +11,7 @@ messages.status lifecycle:
 import json
 import sqlite3
 from array import array
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCHEMA = """
@@ -428,6 +428,21 @@ CREATE TABLE IF NOT EXISTS world_facts (
   last_seen_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_world_kind ON world_facts(kind, status);
+
+-- Long-term BODY memory for Cara: durable changes to her body that persist ACROSS dates and
+-- into everyday talk — marks he left (hickeys/bruises, which fade), add-ons she now wears
+-- (a collar, jewelry), and permanent adjustments (a piercing, a tattoo). Distinct from the
+-- ephemeral meeting_scene: this is who her body IS over time, not the live pose.
+CREATE TABLE IF NOT EXISTS body_state (
+  id INTEGER PRIMARY KEY,
+  feature TEXT NOT NULL,                   -- "след на шее", "ошейник", "пирсинг в пупке"
+  permanence TEXT NOT NULL DEFAULT 'lasting',  -- mark (fades) | lasting (worn) | permanent
+  note TEXT,                               -- context (who/when/why)
+  added_at TEXT NOT NULL,
+  fades_at TEXT,                           -- when a temporary mark should be gone (marks only)
+  status TEXT NOT NULL DEFAULT 'active'    -- active | faded | removed
+);
+CREATE INDEX IF NOT EXISTS idx_body_status ON body_state(status);
 
 -- Preparation agreed for an UPCOMING meeting: logistical details/agreements (what
 -- she'll wear, what he brings, the plan) and emotional beats (her anticipation,
@@ -1006,6 +1021,52 @@ def world_find_person(conn, name, kind="person"):
 
 def world_set_status(conn, fact_id, status):
     conn.execute("UPDATE world_facts SET status=? WHERE id=?", (status, fact_id))
+    conn.commit()
+
+
+# -- long-term body memory (marks / add-ons / adjustments) --------------------
+
+def body_add(conn, feature, permanence="lasting", note=None, fade_days=0):
+    """Record a durable body change, deduped by casefold(feature) among active ones (refreshes
+    its note/timestamp). A 'mark' with fade_days>0 gets a fades_at so it auto-fades. Returns id."""
+    feature = (feature or "").strip()
+    if not feature:
+        return None
+    permanence = permanence if permanence in ("mark", "lasting", "permanent") else "lasting"
+    note = (note or "").strip() or None
+    now = _now()
+    fades_at = None
+    if permanence == "mark" and fade_days > 0:
+        fades_at = (datetime.now(timezone.utc) + timedelta(days=fade_days)).isoformat()
+    key = feature.casefold()
+    for row in conn.execute("SELECT id, feature FROM body_state WHERE status='active'").fetchall():
+        if (row["feature"] or "").casefold() == key:
+            conn.execute(
+                "UPDATE body_state SET permanence=?, note=?, added_at=?, fades_at=? WHERE id=?",
+                (permanence, note, now, fades_at, row["id"]))
+            conn.commit()
+            return row["id"]
+    cur = conn.execute(
+        "INSERT INTO body_state (feature, permanence, note, added_at, fades_at, status)"
+        " VALUES (?, ?, ?, ?, ?, 'active')", (feature, permanence, note, now, fades_at))
+    conn.commit()
+    return cur.lastrowid
+
+
+def body_active(conn, now=None, limit=20):
+    """Active body features, after auto-fading any temporary mark past its fades_at."""
+    now = now or _now()
+    conn.execute(
+        "UPDATE body_state SET status='faded' WHERE status='active' AND permanence='mark'"
+        " AND fades_at IS NOT NULL AND fades_at < ?", (now,))
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM body_state WHERE status='active' ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+
+
+def body_set_status(conn, body_id, status):
+    conn.execute("UPDATE body_state SET status=? WHERE id=?", (status, body_id))
     conn.commit()
 
 
