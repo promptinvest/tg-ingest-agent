@@ -18,7 +18,8 @@ so most turns cost nothing and only a turn that plausibly moved things re-derive
 """
 
 STR_SLOTS = ("location", "her_posture", "his_position", "configuration", "accessibility")
-LIST_SLOTS = ("her_clothing", "removed_clothing", "items_in_play", "people_present", "other_facts")
+LIST_SLOTS = ("contact_map", "her_clothing", "removed_clothing", "items_in_play",
+              "people_present", "other_facts")
 SLOTS = STR_SLOTS + LIST_SLOTS
 
 # Cues that a turn likely CHANGED the physical scene — movement/position/location, (un)dressing,
@@ -77,8 +78,8 @@ _UPDATER_SYSTEM = (
     "(and anyone else present). Given the CURRENT state and the latest messages, return the "
     "UPDATED state as STRICT JSON only — no prose, no code fences. Keys exactly: "
     '{"location": "", "her_posture": "", "his_position": "", "configuration": "", '
-    '"accessibility": "", "her_clothing": [], "removed_clothing": [], "items_in_play": [], '
-    '"people_present": [], "other_facts": []}.\n'
+    '"accessibility": "", "contact_map": [], "her_clothing": [], "removed_clothing": [], '
+    '"items_in_play": [], "people_present": [], "other_facts": []}.\n'
     "Rules:\n"
     "- KEEP every fact the latest messages did NOT change — carry it forward verbatim. Continuity is the point.\n"
     "- her_posture / his_position = exactly how each is positioned NOW. They change ONLY when the "
@@ -92,6 +93,12 @@ _UPDATER_SYSTEM = (
     "OCCUPIED/OUT-OF-REACH right now, per person (e.g. 'её руки прижаты над головой; до его спины "
     "достают её ноги, не руки'). This is the physical-possibility constraint — derive it from the "
     "configuration; update it whenever the arrangement changes.\n"
+    "- contact_map = the PER-PART occupancy list: for each body part, hand, mouth, or item that is "
+    "actually engaged, ONE short entry of what it's doing / holding / pinned by / inside right now "
+    "(e.g. 'его правая рука — держит её запястья над головой', 'её рот — свободен', 'её правая рука "
+    "— на его груди', 'большой вибратор — в ней'). Add a part when it engages, carry it forward "
+    "unchanged otherwise, and free/drop it when the dialogue releases it. A part already holding/"
+    "pinned/doing something can't also do something else until it's freed.\n"
     "- her_clothing = what she's wearing NOW; when an item comes off, move it to removed_clothing "
     "(note where it ended up if said). Clothing changes ONLY when the dialogue changes it — never "
     "add or remove a garment on your own.\n"
@@ -142,11 +149,13 @@ def parse_update(reply, current):
 _LABELS = {
     "ru": {"location": "Где вы", "her_posture": "Её поза", "his_position": "Его положение",
            "configuration": "Расположение тел", "accessibility": "Доступность (что свободно/занято)",
-           "her_clothing": "На ней сейчас", "removed_clothing": "Снято", "items_in_play": "В игре",
+           "contact_map": "Занятость по частям", "her_clothing": "На ней сейчас",
+           "removed_clothing": "Снято", "items_in_play": "В игре",
            "people_present": "Рядом ещё", "other_facts": "Ещё"},
     "en": {"location": "Where", "her_posture": "Her posture", "his_position": "His position",
            "configuration": "Body arrangement", "accessibility": "Accessibility (free/blocked)",
-           "her_clothing": "She's wearing", "removed_clothing": "Removed", "items_in_play": "In play",
+           "contact_map": "Per-part occupancy", "her_clothing": "She's wearing",
+           "removed_clothing": "Removed", "items_in_play": "In play",
            "people_present": "Also present", "other_facts": "Also"},
 }
 
@@ -178,7 +187,9 @@ def render(state, lang):
             "changes it (then move to the new state and hold that). Nothing changes on its own: hold "
             "everyone's POSE and arrangement exactly until the dialogue moves them (no sudden pose "
             "jumps); don't add or remove clothing/items without a cue, and never forget what's in play. "
-            "RESPECT ACCESSIBILITY: never narrate an action with a body part that's pinned, occupied "
-            "or out of reach right now, and don't have anyone touch what they can't reach in this "
-            "arrangement — if an action needs a different arrangement, change it in words first.")
+            "RESPECT ACCESSIBILITY and the per-part occupancy: never narrate an action with a body "
+            "part that's pinned, occupied or out of reach right now, and a part already holding/"
+            "pinned/doing something can't also do something else until it's freed; don't have anyone "
+            "touch what they can't reach — if an action needs a different arrangement, change it in "
+            "words first.")
     return head + "\n" + "\n".join(lines)

@@ -443,6 +443,13 @@ proactively like real memory. Design decisions and why:
   from his message **before** her reply, and `store.scene_clear`ed when the meeting ends.
   **Duration awareness:** `_meeting_duration_note` adds a code-computed line (hours together,
   and "you spent the night together and are still here" once it crosses the night). Content-agnostic.
+- **Per-part occupancy (`contact_map`).** On top of `configuration`/`accessibility`, the scene
+  tracks a per-part list of what each engaged body part / hand / mouth / item is doing / holding /
+  pinned-by / inside right now (e.g. "его правая рука — держит её запястья над головой", "её рот —
+  свободен", "большой вибратор — в ней"). Carried forward per part; a part already holding/pinned/
+  doing something can't also do something else until freed. The directive makes the model consult
+  it before narrating an action — finer-grained than the summary `accessibility`, still
+  natural-language (not coordinate geometry).
 - **Roleplay isn't an "unclear request" (P4).** During a live social meeting a non-command line
   routed to `clarify` just converses and is **not** logged as `unclear_request` (that count was
   almost entirely date roleplay/narration with side-characters); outside a meeting it's still logged.

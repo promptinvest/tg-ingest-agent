@@ -839,13 +839,17 @@ class SceneModuleTests(unittest.TestCase):
         current = {"location": "спальня", "her_posture": "на спине", "his_position": "сверху",
                    "configuration": "Кара на спине, Олег сверху между её бёдер, её запястья прижаты",
                    "accessibility": "её руки прижаты/заняты; свободны рот и ноги",
+                   "contact_map": ["его правая рука — держит её запястья над головой", "её рот — свободен"],
                    "her_clothing": [], "removed_clothing": [], "items_in_play": [],
                    "people_present": [], "other_facts": []}
         kept = scene.parse_update('{"her_posture": "на спине"}', current)   # nothing about arrangement
         self.assertIn("прижаты", kept["configuration"])      # arrangement carried forward
         self.assertIn("руки прижаты", kept["accessibility"])  # accessibility carried forward
+        self.assertEqual(kept["contact_map"], current["contact_map"])   # per-part occupancy carried forward
         block = scene.render(current, "ru")
         self.assertIn("Расположение тел", block)
+        self.assertIn("Занятость по частям", block)          # the per-part contact map renders
+        self.assertIn("держит её запястья", block)
         self.assertIn("СЧИТАЙСЯ С ДОСТУПНОСТЬЮ", block)      # the reach/occlusion constraint
         self.assertIn("недосягаема", block)
 
