@@ -286,7 +286,10 @@ def consolidate(conn, cfg, max_items=120):
     """De-duplicate Cara's memory: an LLM groups genuine duplicate items and we KEEP the
     richest. Boss facts: the rest are marked 'merged' (reversible). Her life-flavour facts
     (cara_life, no status column): the redundant copies are deleted, keeping one of each
-    distinct beat — this is what folds the over-grown 'tea' duplicates. Returns total folded."""
+    distinct beat — this is what folds the over-grown 'tea' duplicates. Pending memory
+    candidates are also tidied: duplicates folded ('merged') and any that CONTRADICT a fact
+    he already confirmed dropped ('superseded') — a sensed guess never overrides confirmed
+    truth (the кофе-vs-confirmed-чай case). Returns total folded."""
     # Group in SMALL batches — the fast model reliably spots duplicates in ~40 items but
     # misses them in a 120-item wall. (Re-running across weeks folds anything a batch split.)
     def _batches(seq, size=40):
@@ -315,4 +318,23 @@ def consolidate(conn, cfg, max_items=120):
             for d in drops:
                 if store.life_delete(conn, d):
                     merged += 1
+    # 3) Pending candidates -> drop ones that CONTRADICT a confirmed fact (a sensed guess
+    #    never overrides confirmed truth), then fold duplicates among the rest (so the same
+    #    person/fact isn't proposed several times — e.g. "Иван Доронин" ×4).
+    pending = store.candidates_pending(conn, limit=max_items)
+    survivors = []
+    for c in pending:
+        txt = (c["proposed_text"] or "").strip()
+        if not txt:
+            continue
+        if boss_model.conflicts_with_confirmed(conn, txt):
+            store.candidate_set_status(conn, c["id"], "superseded")
+            merged += 1
+        else:
+            survivors.append((c["id"], txt))
+    for batch in _batches(survivors):
+        for _keep, drops in _merge_groups(conn, cfg, batch):
+            for d in drops:
+                store.candidate_set_status(conn, d, "merged")
+                merged += 1
     return merged

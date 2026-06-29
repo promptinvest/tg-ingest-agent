@@ -283,6 +283,11 @@ tone variants; only conversation and grounded answers are free-form.
   **boss facts** (`boss_profile_items` — the rest demoted to `merged`, reversible) AND **her
   life flavour** (`cara_life` — redundant copies deleted, keeping one of each distinct beat;
   this is what folds the over-grown "tea" duplicates). Never merges genuinely distinct facts.
+  It also tidies **pending `memory_candidates`**: any candidate that **contradicts a CONFIRMED
+  fact** is dropped (`superseded`) — a sensed guess never overrides confirmed truth (the
+  кофе-vs-confirmed-чай case) — and duplicate candidates are folded (`merged`), so the same
+  person/fact isn't proposed several times (the "Иван Доронин ×4" bloat). Low-value-but-unique
+  candidates are left for the boss to accept/reject in review (no aggressive auto-pruning).
 - **Provenance (`boss_model.explain`).** "Откуда ты это знаешь?" cites how a fact
   was learned, in character (the source she stored + the date) — memory you can
   inspect, not magic.

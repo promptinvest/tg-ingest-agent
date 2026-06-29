@@ -3149,6 +3149,31 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertEqual(store.boss_get(c, keep)["status"], "confirmed")  # canonical kept
         self.assertTrue(skill_manifest.known("memory_cleanup"))
 
+    def test_consolidate_tidies_pending_candidates(self):
+        # P6: consolidate must also drop a sensed candidate that CONTRADICTS a confirmed fact,
+        # and fold duplicate candidates (the "Иван Доронин ×4" bloat).
+        import memory_curator, boss_model, llm, json
+        c = self.agent.conn
+        boss_model.remember_explicit(c, "Пьёт чай без сахара.", "personal_fact")   # confirmed
+        store.candidate_add(c, "personal_fact", "Пьёт кофе, а не чай.", confidence=0.7)  # conflict
+        for t in ["Знаком с Иваном Дорониным", "Есть знакомый Иван Доронин", "Любит джаз",
+                  "Был в Японии", "Жарит мясо на мангале", "Играет в шахматы",
+                  "Носит чёрные часы", "Катается на лыжах"]:
+            store.candidate_add(c, "personal_fact", t, confidence=0.7)
+        pend = store.candidates_pending(c, limit=50)
+        ivan = [p["id"] for p in pend if "Иван" in p["proposed_text"]]
+        groups = json.dumps({"groups": [{"keep": ivan[0], "drop": [ivan[1]]}]})
+        # content-aware mock: group the two Иван candidates, leave every other batch (seeded
+        # life facts, etc.) untouched.
+        def fake_cp(cfg, conn, skill, messages, **kw):
+            return groups if "Иван" in messages[1]["content"] else json.dumps({"groups": []})
+        with mock.patch.object(llm, "chat_profile", side_effect=fake_cp):
+            memory_curator.consolidate(c, self.agent.cfg)
+        left = {p["proposed_text"] for p in store.candidates_pending(c, limit=50)}
+        self.assertNotIn("Пьёт кофе, а не чай.", left)              # contradiction dropped
+        self.assertLessEqual(sum("Иван" in t for t in left), 1)    # duplicates folded
+        self.assertIn("Любит джаз", left)                          # unrelated candidate kept
+
     def test_merge_categories_folds_and_deletes_duplicate(self):
         c = self.agent.conn
         a = store.insert_message(c, {"chat_id": 1, "tg_message_id": 1,
