@@ -259,12 +259,22 @@ def default_profiles(cfg):
 
 def profiles(cfg):
     table = default_profiles(cfg)
+    overridden = set()
     if cfg.llm_profiles_json:
         try:
             for name, prof in json.loads(cfg.llm_profiles_json).items():
                 table.setdefault(name, {}).update(prof)
+                overridden.add(name)
         except Exception as exc:
             log(f"LLM_PROFILES_JSON ignored (invalid): {exc!r}")
+    # The live-date variant must run on the SAME model as ordinary conversation — only its
+    # token budget differs — so a `converse_warm` model override (env) carries over and the
+    # date path can never silently fall back to a stale default model/fallback (the bug where
+    # dates ran on the cheap flash model and a fallback that 403s for the subscription tier).
+    if "converse_meeting" not in overridden and "converse_warm" in table:
+        cw, cm = table["converse_warm"], table.setdefault("converse_meeting", {})
+        cm["primary"] = cw.get("primary", cm.get("primary"))
+        cm["fallbacks"] = cw.get("fallbacks", cm.get("fallbacks"))
     return table
 
 

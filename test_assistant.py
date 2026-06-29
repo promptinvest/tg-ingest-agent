@@ -156,6 +156,20 @@ class GatewayTests(unittest.TestCase):
         cfg2 = make_config(LLM_PROFILES_JSON='{"router_fast": {"max_tokens": 99}}')
         self.assertEqual(llm.profiles(cfg2)["router_fast"]["max_tokens"], 99)
 
+    def test_converse_meeting_inherits_converse_warm_model(self):
+        # The live-date profile must track converse_warm's model (so a date never runs on a
+        # stale default model / a fallback that 403s), keeping its own larger token budget.
+        cfg = make_config(LLM_PROFILES_JSON=
+            '{"converse_warm": {"primary": "deepseek-v4-pro", "fallbacks": ["kimi-k2.6"]}}')
+        profs = llm.profiles(cfg)
+        self.assertEqual(profs["converse_meeting"]["primary"], "deepseek-v4-pro")
+        self.assertEqual(profs["converse_meeting"]["fallbacks"], ["kimi-k2.6"])
+        self.assertEqual(profs["converse_meeting"]["max_tokens"], 800)   # own budget kept
+        # an explicit converse_meeting override still wins
+        cfg2 = make_config(LLM_PROFILES_JSON=
+            '{"converse_warm": {"primary": "a"}, "converse_meeting": {"primary": "b"}}')
+        self.assertEqual(llm.profiles(cfg2)["converse_meeting"]["primary"], "b")
+
     def test_chat_profile_failover_and_cooldown(self):
         cfg = make_config()
         calls = []
