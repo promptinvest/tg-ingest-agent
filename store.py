@@ -413,6 +413,22 @@ CREATE TABLE IF NOT EXISTS meeting_scene (
   updated_at TEXT NOT NULL
 );
 
+-- Durable WORLD MODEL beyond facts-about-him: the cast of people (real acquaintances and
+-- recurring roleplay characters, with relationships/bonding/background), promises to keep,
+-- relationship milestones, and recurring owned items/props. Injected (compact) into context
+-- so Cara remembers who's who, what was promised, and where the relationship is going.
+CREATE TABLE IF NOT EXISTS world_facts (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,                     -- person|promise|milestone|item
+  name TEXT,                              -- canonical name (person/item); NULL for promise/milestone
+  text TEXT NOT NULL,                     -- role/relationship (person) or the promise/milestone text
+  status TEXT NOT NULL DEFAULT 'active',  -- active|kept|inactive|superseded
+  happened_at TEXT,                       -- when a promise was made / a milestone occurred
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_world_kind ON world_facts(kind, status);
+
 -- Preparation agreed for an UPCOMING meeting: logistical details/agreements (what
 -- she'll wear, what he brings, the plan) and emotional beats (her anticipation,
 -- longing). Accumulated during the lead-up, surfaced while planning AND carried into
@@ -927,6 +943,69 @@ def scene_set(conn, meeting_id, state):
 
 def scene_clear(conn, meeting_id):
     conn.execute("DELETE FROM meeting_scene WHERE meeting_id = ?", (meeting_id,))
+    conn.commit()
+
+
+# -- world model (people / promises / milestones / owned items) ---------------
+
+def world_upsert_person(conn, name, role, kind="person"):
+    """Add or update a person (or named item) by canonical name, case-insensitively — so a
+    role/relationship gets refreshed and the name is never duplicated. Returns the id.
+    (Matching is done in Python: SQLite's lower() doesn't fold Cyrillic.)"""
+    name = (name or "").strip()
+    if not name:
+        return None
+    role = (role or "").strip()
+    now = _now()
+    key = name.casefold()
+    for row in conn.execute("SELECT id, name FROM world_facts WHERE kind=?", (kind,)).fetchall():
+        if (row["name"] or "").casefold() == key:
+            conn.execute(
+                "UPDATE world_facts SET text=?, status='active', last_seen_at=? WHERE id=?",
+                (role or "", now, row["id"]))
+            conn.commit()
+            return row["id"]
+    cur = conn.execute(
+        "INSERT INTO world_facts (kind, name, text, status, created_at, last_seen_at)"
+        " VALUES (?, ?, ?, 'active', ?, ?)", (kind, name, role, now, now))
+    conn.commit()
+    return cur.lastrowid
+
+
+def world_add(conn, kind, text, happened_at=None):
+    """Add a nameless world fact (promise/milestone), deduped by (kind, casefold(text)).
+    Returns the id, or None if it duplicates an existing one. (Python casefold — Cyrillic-safe.)"""
+    text = (text or "").strip()
+    if not text:
+        return None
+    key = text.casefold()
+    for row in conn.execute("SELECT text FROM world_facts WHERE kind=?", (kind,)).fetchall():
+        if (row["text"] or "").casefold() == key:
+            return None
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO world_facts (kind, text, status, happened_at, created_at, last_seen_at)"
+        " VALUES (?, ?, 'active', ?, ?, ?)", (kind, text, happened_at, now, now))
+    conn.commit()
+    return cur.lastrowid
+
+
+def world_active(conn, kind, limit=20):
+    return conn.execute(
+        "SELECT * FROM world_facts WHERE kind=? AND status='active'"
+        " ORDER BY last_seen_at DESC, id DESC LIMIT ?", (kind, limit)).fetchall()
+
+
+def world_find_person(conn, name, kind="person"):
+    key = (name or "").strip().casefold()   # Python casefold — Cyrillic-safe
+    for row in conn.execute("SELECT * FROM world_facts WHERE kind=?", (kind,)).fetchall():
+        if (row["name"] or "").casefold() == key:
+            return row
+    return None
+
+
+def world_set_status(conn, fact_id, status):
+    conn.execute("UPDATE world_facts SET status=? WHERE id=?", (status, fact_id))
     conn.commit()
 
 

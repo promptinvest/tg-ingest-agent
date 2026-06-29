@@ -1401,6 +1401,36 @@ class Agent(hermes.HermesMixin):
                 "together. Your baseline is a live-in partner who shares his everyday life, not a "
                 "girlfriend pining across a distance.")
 
+    def _world_context(self, lang):
+        """Compact 'who's who and where we're going' block: the cast of people (with their
+        relationships/bonding), promises to keep, and relationship milestones — so Cara
+        remembers the people in their life and what was promised. '' when nothing's known."""
+        people = store.world_active(self.conn, "person", limit=8)
+        promises = store.world_active(self.conn, "promise", limit=5)
+        milestones = store.world_active(self.conn, "milestone", limit=4)
+        items = store.world_active(self.conn, "item", limit=6)
+        if not (people or promises or milestones or items):
+            return ""
+        ru = lang == "ru"
+        lines = []
+        if people:
+            lines.append("Люди в вашей жизни — помни, кто это и какие у вас отношения:" if ru
+                         else "People in your world — remember who they are and your relationships:")
+            for p in people:
+                lines.append(f"  - {p['name']}: {p['text']}" if (p["text"] or "").strip()
+                             else f"  - {p['name']}")
+        if promises:
+            lines.append("Обещания — помни и держи их:" if ru else "Promises — remember and keep them:")
+            lines += [f"  - {p['text']}" for p in promises]
+        if milestones:
+            lines.append("Важные вехи ваших отношений:" if ru else "Milestones in your relationship:")
+            lines += [f"  - {m['text']}" for m in milestones]
+        if items:
+            lines.append("Что у вас в обиходе (не забывай, не подменяй):" if ru
+                         else "Things you keep around together (don't forget or swap them):")
+            lines += [f"  - {i['name'] or i['text']}" for i in items]
+        return "\n".join(lines)
+
     def _active_reminders_context(self, chat_id, lang, limit=10):
         """Compact view of her own active reminders (display #, local time, title and
         status) for the converse prompt, so a question about a reminder is answered from
@@ -1448,6 +1478,10 @@ class Agent(hermes.HermesMixin):
         # Living-together baseline: she's a live-in partner sharing his everyday rhythm.
         if self._cohabiting():
             parts.append(self._cohabiting_context(lang))
+        # Durable world model: the cast of people, promises to keep, milestones, shared items.
+        world = self._world_context(lang)
+        if world:
+            parts.append(world)
         if self.cfg.cara_tz_offset != self.tz_offset():
             cara_local = datetime.now(timezone.utc) + timedelta(hours=self.cfg.cara_tz_offset)
             parts.append(f"For you it's {cara_local.strftime('%H:%M')} "

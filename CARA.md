@@ -388,6 +388,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   surprise you with something new — and she **won't forget what you're already playing with**.
   She also knows **how long you've been together** this time, including when you've **been up
   through the night**. (Kept per‑date, cleared when it ends.)
+- **She remembers your world — people, promises, milestones** — Cara keeps a durable ledger of
+  **the people in your life** (real acquaintances *and* recurring roleplay characters, each with
+  who they are to you and to her — including anyone you two share a background with), the
+  **promises** either of you made (she holds you to them, and herself), the **milestones** of
+  your relationship (moving in, someone moving in with you, anniversaries), and the **things you
+  keep around together**. She's reminded of them every turn, so she won't forget who Иван or Лера
+  is, mix up your relationships, drop a promise, or lose track of where the two of you are headed.
+  (Learned from conversation; a person's name is remembered once — no duplicates.)
 - **She knows you live together** — her baseline is a **live‑in partner**, not a girlfriend
   far away: your nights are together, and on a workday she knows you're **at the office and
   back in the evening** (not "gone" or "distant"). Wake up together and her morning greeting is

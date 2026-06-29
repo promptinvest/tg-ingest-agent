@@ -4763,5 +4763,65 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(store.feedback_recent(self.conn, "router"), [])
 
 
+class WorldModelTests(unittest.TestCase):
+    """Durable world model: people/cast, promises, milestones + their extraction & injection."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "w.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_person_upsert_dedupes_by_name(self):
+        i1 = store.world_upsert_person(self.conn, "Иван Доронин", "знакомый")
+        i2 = store.world_upsert_person(self.conn, "иван доронин", "консультирует по работе")  # case-insensitive
+        self.assertEqual(i1, i2)                                   # same row, updated in place
+        people = store.world_active(self.conn, "person")
+        self.assertEqual(len(people), 1)
+        self.assertEqual(people[0]["text"], "консультирует по работе")  # role refreshed
+
+    def test_promise_and_milestone_add_and_dedup(self):
+        self.assertIsNotNone(store.world_add(self.conn, "promise", "свозить её к морю"))
+        self.assertIsNone(store.world_add(self.conn, "promise", "Свозить её к морю"))  # dup (casefold)
+        store.world_add(self.conn, "milestone", "съехались вместе")
+        self.assertEqual(len(store.world_active(self.conn, "promise")), 1)
+        self.assertEqual(len(store.world_active(self.conn, "milestone")), 1)
+
+    def test_status_drops_from_active(self):
+        fid = store.world_upsert_person(self.conn, "Майя", "не должна знать о вас")
+        store.world_set_status(self.conn, fid, "inactive")
+        self.assertEqual(store.world_active(self.conn, "person"), [])
+
+    def test_curate_extracts_world_facts(self):
+        import memory_curator, json
+        store.convo_add(self.conn, 1, "user", "Иван Доронин помог мне с резюме. Обещаю свозить тебя к морю летом.")
+        store.convo_add(self.conn, 1, "bot", "Как мило 🤍")
+        reply = json.dumps({"cara_life": [], "boss_facts": [], "corrections": [],
+                            "people": [{"name": "Иван Доронин", "role": "знакомый, помог с резюме"}],
+                            "promises": ["свозить её к морю летом"], "milestones": []})
+        with mock.patch.object(llm, "chat_profile", return_value=reply):
+            memory_curator.curate_conversation(self.conn, self.agent.cfg, 1)
+        self.assertIsNotNone(store.world_find_person(self.conn, "Иван Доронин"))
+        self.assertEqual(len(store.world_active(self.conn, "promise")), 1)
+
+    def test_world_context_injected_into_converse(self):
+        store.world_upsert_person(self.conn, "Лера", "подруга, участвует в ваших вечерах")
+        store.world_add(self.conn, "promise", "свозить её к морю")
+        ctx = self.agent.converse_context("ru", 1)
+        self.assertIn("Лера", ctx)
+        self.assertIn("к морю", ctx)
+        # empty world -> no block
+        store.world_set_status(self.conn, store.world_find_person(self.conn, "Лера")["id"], "inactive")
+        for p in store.world_active(self.conn, "promise"):
+            store.world_set_status(self.conn, p["id"], "kept")
+        self.assertEqual(self.agent._world_context("ru"), "")
+
+
 if __name__ == "__main__":
     unittest.main()

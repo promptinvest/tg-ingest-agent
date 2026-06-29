@@ -386,6 +386,18 @@ proactively like real memory. Design decisions and why:
   summarizes into a warm episodic memory and **feeds `cara_life` + `relationship_events`**
   so dates actually deepen the bond. For a *visit* the scene is grounded in her
   existing fictional life (the riverside flat), not invented fresh.
+- **Durable world model (`world_facts`; `_world_context`).** Beyond facts-about-him, Cara keeps
+  a typed ledger of the **cast of people** (real acquaintances AND recurring roleplay characters,
+  each with their relationship/role and bonding, incl. background relationships), **promises** to
+  keep, **milestones** (moving in together, someone moving in, anniversaries), and recurring
+  **owned items/props**. The conversational curator extracts these each pass (`people`/`promises`/
+  `milestones` added to its JSON): people are **upserted by name** (Cyrillic-safe casefold dedup,
+  so a role just refreshes in place — no "Иван ×4"), promises/milestones deduped by text.
+  `_world_context` injects a compact, capped block into every converse turn ("People in your
+  world — remember who they are and your relationships", "Promises — remember and keep them",
+  "Milestones", "Things you keep around together — don't forget or swap them"), so she remembers
+  who's who, what was promised, and where the relationship is going. Scene `people_present`
+  (Stage 1) names who's in a live scene; the world ledger gives those names their relationships.
 - **Cohabitation baseline (`COHABITING` / `cohabiting` pref; `_cohabiting`).** When on (owner
   decision, 2026-06-29 — persistent default), Cara's baseline is a **live-in partner**: nights
   together, he commutes to the office on workdays and is back in the evening. `_cohabiting_context`
