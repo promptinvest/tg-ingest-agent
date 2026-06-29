@@ -503,22 +503,21 @@ class HermesMixin:
         elif query:
             filter_part = T(lang, "items_filter_query", query=query)
         blocks = [T(lang, "items_header", filter=filter_part, n=len(rows))]
-        dmap = store.display_map(self.conn)
         for row in rows:
-            blocks.append(self._note_line(lang, row, dmap))
+            blocks.append(self._note_line(lang, row))
         blocks.append(T(lang, "items_footer"))
         return "\n\n".join(blocks)
 
     NOTES_PAGE_SIZE = 8
 
-    def _note_line(self, lang, row, dmap):
-        """One note's compact block for a list: '📄 #N · category', a preview, and any
-        attachment/url marks. Shared by the plain list and the paginated view."""
+    def _note_line(self, lang, row):
+        """One note's compact block for a list: '📄 #N · category' (N = stable note number),
+        a preview, and any attachment/url marks. Shared by the plain list and the paginated view."""
         ru = lang == "ru"
         row_category = row["category"] or row["suggested_category"] or (
             "без категории" if ru else "uncategorized")
         pending = " ⏳" if row["status"] != "confirmed" else ""
-        item = [f"📄 #{dmap.get(row['id'], row['id'])} · {row_category}{pending}"]
+        item = [f"📄 #{self.note_no(row['id'])} · {row_category}{pending}"]
         text = (row["summary"] or row["raw_text"] or "").replace("\n", " ").strip()[:110]
         if text:
             item.append(f"   {text}")
@@ -541,7 +540,6 @@ class HermesMixin:
         """Render one page of notes + its ◀/▶ keyboard. Returns (text, keyboard, total)."""
         rows, total = store.list_messages_page(self.conn, category, query, offset,
                                                self.NOTES_PAGE_SIZE)
-        dmap = store.display_map(self.conn)
         filter_part = ""
         if category:
             filter_part = T(lang, "items_filter_category", category=category)
@@ -551,7 +549,7 @@ class HermesMixin:
         blocks = [T(lang, "notes_page_header", filter=filter_part,
                     start=start, end=offset + len(rows), total=total)]
         for row in rows:
-            blocks.append(self._note_line(lang, row, dmap))
+            blocks.append(self._note_line(lang, row))
         return "\n\n".join(blocks), self._notes_page_keyboard(lang, token, offset, total), total
 
     def _notes_page_keyboard(self, lang, token, offset, total):
@@ -662,7 +660,7 @@ class HermesMixin:
         if isinstance(ids, list) and ids:
             out = []
             for i in ids:
-                row = store.message_by_display_no(self.conn, i)  # user numbers are display 1..N
+                row = store.message_by_note_no(self.conn, i)  # stable #N
                 if row is not None:
                     out.append(row)
             if out:
@@ -679,8 +677,7 @@ class HermesMixin:
         return [row] if row else []
 
     def resolve_item(self, params):
-        """Resolve an item by user-facing note number (display 1..N),
-        query/category, or most recent."""
+        """Resolve an item by its stable note number (#N), query/category, or most recent."""
         try:
             no = int(params.get("id")) if params.get("id") is not None else None
         except (TypeError, ValueError):
@@ -694,16 +691,16 @@ class HermesMixin:
             if m:
                 no = int(m.group(1))
         if no is not None:
-            row = store.message_by_display_no(self.conn, no)
+            row = store.message_by_note_no(self.conn, no)
             if row is not None:
                 return row
         rows = store.list_messages(self.conn, params.get("category"), params.get("query"), limit=1)
         return rows[0] if rows else None
 
     def note_no(self, message_id):
-        """User-facing display number (1..N) for a note id; falls back to the id
-        for a not-yet-visible/transient row (e.g. a pending failed ingest)."""
-        n = store.display_no(self.conn, message_id)
+        """The note's STABLE number (#N) — assigned once, never reused; gaps on delete are
+        intentional. Falls back to the id for a transient row with no number yet."""
+        n = store.ensure_note_no(self.conn, message_id)
         return n if n is not None else message_id
 
     def item_detail_text(self, lang, params):
@@ -844,12 +841,11 @@ class HermesMixin:
         if not rows:
             return T(lang, "files_empty")
         ru = lang == "ru"
-        dmap = store.display_map(self.conn)
         lines = [T(lang, "files_header", n=len(rows))]
         for r in rows:
             cat = r["category"] or r["suggested_category"] or ("без категории" if ru else "uncategorized")
             name = r["file_name"] or ("файл" if ru else "file")
-            lines.append(f"📎 {name} — #{dmap.get(r['message_id'], r['message_id'])} · {cat}")
+            lines.append(f"📎 {name} — #{self.note_no(r['message_id'])} · {cat}")
         lines.append(T(lang, "files_footer"))
         return "\n".join(lines)
 

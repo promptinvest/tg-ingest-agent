@@ -3711,8 +3711,8 @@ class JournalTests(unittest.TestCase):
 
 
 class DisplayNumberTests(unittest.TestCase):
-    """User-facing note numbers are a contiguous 1..N position (oldest first)
-    that compacts on deletion; the immutable id stays the internal key."""
+    """User-facing note numbers are STABLE per-chat note_no: assigned once, never reused,
+    with permanent gaps on delete (a captured number can't go stale)."""
 
     def setUp(self):
         import tg_ingest_agent
@@ -3732,22 +3732,24 @@ class DisplayNumberTests(unittest.TestCase):
         store.confirm_category(self.conn, mid, "Разное")
         return mid
 
-    def test_numbers_contiguous_and_compact_on_delete(self):
+    def test_numbers_are_stable_with_gaps_on_delete(self):
         a, b, c = self._note(1, "first"), self._note(2, "second"), self._note(3, "third")
-        self.assertEqual([store.display_no(self.conn, x) for x in (a, b, c)], [1, 2, 3])
-        self.assertEqual(store.message_by_display_no(self.conn, 2)["id"], b)
+        self.assertEqual([store.ensure_note_no(self.conn, x) for x in (a, b, c)], [1, 2, 3])
+        self.assertEqual(store.message_by_note_no(self.conn, 2)["id"], b)
         for _ in store.delete_message(self.conn, b):  # remove the middle note
             pass
-        self.assertEqual(store.display_no(self.conn, a), 1)
-        self.assertEqual(store.display_no(self.conn, c), 2)        # was 3, compacted
-        self.assertIsNone(store.message_by_display_no(self.conn, 3))
+        self.assertEqual(store.ensure_note_no(self.conn, a), 1)
+        self.assertEqual(store.ensure_note_no(self.conn, c), 3)        # STAYS 3 — no compaction
+        self.assertIsNone(store.message_by_note_no(self.conn, 2))      # #2 is a permanent gap
+        d = self._note(4, "fourth")
+        self.assertEqual(store.ensure_note_no(self.conn, d), 4)        # next number, never reuses 2
 
-    def test_resolve_item_uses_display_number(self):
+    def test_resolve_item_uses_stable_number(self):
         a, b = self._note(1, "alpha"), self._note(2, "bravo")
         self.assertEqual(self.agent.resolve_item({"id": 2})["id"], b)
         self.assertEqual(self.agent.resolve_item({"query": "заметку 1"})["id"], a)
 
-    def test_delete_by_display_number_then_renumbers(self):
+    def test_delete_keeps_stable_numbers(self):
         a, b, c = self._note(1, "a"), self._note(2, "b"), self._note(3, "c")
         rows = self.agent.resolve_items({"ids": [1]})            # user types "#1"
         self.assertEqual(rows[0]["id"], a)
@@ -3756,8 +3758,8 @@ class DisplayNumberTests(unittest.TestCase):
             self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
         self.assertIn("#1", r.call_args[0][1])                  # acked as the number shown
         self.assertIsNone(store.get_message(self.conn, a))
-        self.assertEqual(store.display_no(self.conn, b), 1)      # remaining notes renumber
-        self.assertEqual(store.display_no(self.conn, c), 2)
+        self.assertEqual(store.ensure_note_no(self.conn, b), 2)   # b STAYS #2 — no renumber
+        self.assertEqual(store.ensure_note_no(self.conn, c), 3)   # c STAYS #3
 
     def test_item_list_shows_sequential_numbers(self):
         self._note(1, "a"); self._note(2, "b"); self._note(3, "c")

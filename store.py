@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS messages (
   llm_attempts INTEGER NOT NULL DEFAULT 0,
   suggestion_message_id INTEGER,
   duplicate_of INTEGER REFERENCES messages(id),
+  note_no INTEGER,                  -- stable, monotonic per-chat note number (never reused)
   UNIQUE (chat_id, tg_message_id)
 );
 
@@ -1269,6 +1270,26 @@ def _migrate(conn):
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
     if "forward_origin_username" not in columns:
         conn.execute("ALTER TABLE messages ADD COLUMN forward_origin_username TEXT")
+    if "note_no" not in columns:
+        # Stable per-note numbers: assigned once, never reused (gaps on delete are intentional).
+        # Backfill existing visible notes in their CURRENT display order (oldest-first, journals
+        # excluded — matches the #N shown today) so existing numbers are preserved, frozen.
+        conn.execute("ALTER TABLE messages ADD COLUMN note_no INTEGER")
+        if {"category", "status"} <= columns:   # a real notes schema to backfill
+            journals = {n.casefold() for n in journal_categories(conn)}
+            seq = {}
+            for r in conn.execute(
+                    "SELECT id, chat_id, category FROM messages"
+                    " WHERE status IN ('confirmed', 'suggested') ORDER BY chat_id, id ASC"):
+                if journals and (r["category"] or "").casefold() in journals:
+                    continue
+                n = seq.get(r["chat_id"], 0) + 1
+                seq[r["chat_id"]] = n
+                conn.execute("UPDATE messages SET note_no = ? WHERE id = ?", (n, r["id"]))
+    # Always ensure the index (a fresh DB has the column from SCHEMA but not the index; an old
+    # one just got it above). Created here, not in SCHEMA, so executescript can't reference
+    # note_no before _migrate adds it to a pre-existing messages table.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_note_no ON messages(chat_id, note_no)")
     image_columns = {row["name"] for row in conn.execute("PRAGMA table_info(images)")}
     if "object_key" not in image_columns:
         conn.execute("ALTER TABLE images ADD COLUMN object_key TEXT")
@@ -1659,6 +1680,7 @@ def set_suggestion(conn, message_id, suggested_category, summary, model):
         (suggested_category, summary, model, message_id),
     )
     conn.commit()
+    ensure_note_no(conn, message_id)   # a visible (suggested) note gets its stable #N now
 
 
 def set_suggestion_message(conn, message_id, tg_suggestion_message_id):
@@ -1675,6 +1697,10 @@ def confirm_category(conn, message_id, category):
         (category, message_id),
     )
     conn.commit()
+    # A confirmed note gets its stable #N now (journal entries live in the dated journal, not
+    # the #N list, so they don't consume a number).
+    if not is_journal(conn, category):
+        ensure_note_no(conn, message_id)
 
 
 def find_by_suggestion_message(conn, chat_id, suggestion_message_id):
@@ -1851,25 +1877,32 @@ def display_ids(conn):
     return out
 
 
-def display_map(conn):
-    """{message_id: display_no} for all visible notes."""
-    return {mid: i for i, mid in enumerate(display_ids(conn), start=1)}
+def ensure_note_no(conn, message_id):
+    """The note's STABLE number (`note_no`): assigned once, monotonic per chat, never reused —
+    so a captured number can't go stale (gaps on delete are intentional, like issue numbers).
+    Assigns one on first need. Returns the note_no, or None if no such message."""
+    row = conn.execute("SELECT chat_id, note_no FROM messages WHERE id = ?",
+                       (message_id,)).fetchone()
+    if row is None:
+        return None
+    if row["note_no"] is not None:
+        return row["note_no"]
+    nxt = conn.execute(
+        "SELECT COALESCE(MAX(note_no), 0) + 1 AS n FROM messages WHERE chat_id = ?",
+        (row["chat_id"],)).fetchone()["n"]
+    conn.execute("UPDATE messages SET note_no = ? WHERE id = ?", (nxt, message_id))
+    conn.commit()
+    return nxt
 
 
-def display_no(conn, message_id):
-    """The note's 1..N display number, or None if it isn't a visible note."""
-    ids = display_ids(conn)
-    return ids.index(message_id) + 1 if message_id in ids else None
-
-
-def message_by_display_no(conn, n):
-    """Resolve a user-typed note number (1..N) to its row, or None."""
+def message_by_note_no(conn, n):
+    """Resolve a stable note number to its row, or None. Numbers never shift, so this is the
+    same note tomorrow. Owner-only, so note_no is effectively global."""
     try:
         n = int(n)
     except (TypeError, ValueError):
         return None
-    ids = display_ids(conn)
-    return get_message(conn, ids[n - 1]) if 1 <= n <= len(ids) else None
+    return conn.execute("SELECT * FROM messages WHERE note_no = ? LIMIT 1", (n,)).fetchone()
 
 
 def delete_message(conn, message_id):
