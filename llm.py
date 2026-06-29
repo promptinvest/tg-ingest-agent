@@ -248,6 +248,9 @@ def default_profiles(cfg):
         "scene_update": {"primary": primary, "fallbacks": fb, "max_tokens": 400,
                          "json_required": True, "temperature": 0},
         "memory_curator": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
+        # Weekly memory consolidation (dedup + contradiction judgment) — infrequent but needs
+        # real semantic judgment, so it gets a stronger model than the fast curator.
+        "memory_consolidate": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
         "review_balanced": {"primary": primary, "fallbacks": [], "max_tokens": 900, "json_required": False},
         # meeting end-recap: JSON {title, summary, decisions/highlights}
         "meeting_summary": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},

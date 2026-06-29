@@ -257,7 +257,7 @@ def _merge_groups(conn, cfg, items, max_items=120):
             cfg, conn, "memory_curator",
             [{"role": "system", "content": _CONSOLIDATE_SYSTEM},
              {"role": "user", "content": listing}],
-            profile="memory_curator")
+            profile="memory_consolidate")
     except (llm.BudgetExceeded, llm.LLMError):
         return []
     parsed = llm.parse_llm_json(reply) or {}
@@ -359,7 +359,7 @@ def _tidy_candidates(conn, cfg, max_items=120):
             [{"role": "system", "content": _CANDIDATE_HYGIENE_SYSTEM},
              {"role": "user",
               "content": f"CONFIRMED facts:\n{conf_listing}\n\nCANDIDATES:\n{cand_listing}"}],
-            profile="memory_curator")
+            profile="memory_consolidate")
     except (llm.BudgetExceeded, llm.LLMError):
         return 0
     parsed = llm.parse_llm_json(reply) or {}
