@@ -3176,6 +3176,23 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertLessEqual(sum("Иван" in t for t in left), 1)    # duplicate folded
         self.assertIn("Любит джаз", left)                          # unrelated candidate kept
 
+    def test_consolidate_demotes_inferred_contradicting_confirmed(self):
+        # The stored-fact contradiction case: an auto-learned (inferred) "пьёт кофе" must not
+        # coexist with confirmed "пьёт чай" — confirmed wins, inferred demoted to 'merged'.
+        import memory_curator, boss_model, json
+        c = self.agent.conn
+        boss_model.remember_explicit(c, "Пьёт чай без сахара.", "personal_fact")           # confirmed
+        store.boss_add(c, "personal_fact", "Пьёт кофе по утрам.", status="inferred", confidence=0.7)
+        inf = [r["id"] for r in store.boss_items(c, "inferred", limit=50) if "кофе" in r["value"]][0]
+
+        def fake_cp(cfg, conn, skill, messages, **kw):
+            if "INFERRED:" in messages[1]["content"]:
+                return json.dumps({"contradicts": [inf]})
+            return json.dumps({"groups": []})
+        with mock.patch.object(llm, "chat_profile", side_effect=fake_cp):
+            memory_curator.consolidate(c, self.agent.cfg)
+        self.assertEqual(store.boss_get(c, inf)["status"], "merged")   # inferred кофе demoted
+
     def test_merge_categories_folds_and_deletes_duplicate(self):
         c = self.agent.conn
         a = store.insert_message(c, {"chat_id": 1, "tg_message_id": 1,

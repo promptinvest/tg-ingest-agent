@@ -351,6 +351,10 @@ def consolidate(conn, cfg, max_items=120):
     #    ('merged'). Semantic, not token-overlap: catches "пьёт кофе, а не чай" vs a verbose
     #    confirmed "пьёт чай…" and folds the "Иван Доронин ×N" restatements.
     merged += _tidy_candidates(conn, cfg, max_items)
+    # 4) Stored INFERRED facts that CONTRADICT a confirmed fact -> demote to 'merged' (reversible).
+    #    An auto-learned guess must not coexist with confirmed truth (inferred "пьёт кофе" next to
+    #    confirmed "пьёт чай"); the confirmed fact wins.
+    merged += _tidy_inferred(conn, cfg, max_items)
     return merged
 
 
@@ -411,5 +415,50 @@ def _tidy_candidates(conn, cfg, max_items=120):
     for i in _ids("duplicates"):
         if i not in contradicts:
             store.candidate_set_status(conn, i, "merged")
+            folded += 1
+    return folded
+
+
+_INFERRED_HYGIENE_SYSTEM = (
+    "You reconcile Cara's AUTO-LEARNED (unconfirmed) facts about the boss against facts he has "
+    "CONFIRMED. You are given CONFIRMED facts (text only) and INFERRED items as '<id>: <text>'. "
+    'Return STRICT JSON only: {"contradicts": [<id>, ...]}. List the INFERRED ids that state '
+    "something CONTRADICTING a confirmed fact (e.g. confirmed 'пьёт чай' vs inferred 'пьёт кофе') "
+    "— the confirmed fact wins, so the inferred one is wrong/outdated. Leave OUT anything that is "
+    "consistent with, or merely additional to, the confirmed facts. Reference only the given "
+    "inferred ids; never invent. Empty array if none contradict."
+)
+
+
+def _tidy_inferred(conn, cfg, max_items=120):
+    """Demote stored INFERRED facts that CONTRADICT a confirmed fact to 'merged' (reversible).
+    Conservative: only direct contradictions with a CONFIRMED fact (confirmed wins). 0 on
+    nothing-to-do or failure."""
+    import llm
+    inferred = [(r["id"], r["value"]) for r in store.boss_items(conn, "inferred", limit=max_items)
+                if (r["value"] or "").strip()]
+    confirmed = [r["value"] for r in store.boss_items(conn, "confirmed", limit=80)
+                 if (r["value"] or "").strip()]
+    if not inferred or not confirmed:
+        return 0
+    listing = "\n".join(f"{i}: {v}" for i, v in inferred)
+    conf = "\n".join(f"- {v}" for v in confirmed)
+    try:
+        reply = llm.chat_profile(
+            cfg, conn, "memory_curator",
+            [{"role": "system", "content": _INFERRED_HYGIENE_SYSTEM},
+             {"role": "user", "content": f"CONFIRMED facts:\n{conf}\n\nINFERRED:\n{listing}"}],
+            profile="memory_consolidate")
+    except (llm.BudgetExceeded, llm.LLMError):
+        return 0
+    parsed = llm.parse_llm_json(reply) or {}
+    valid = {i for i, _ in inferred}
+    folded = 0
+    for x in (parsed.get("contradicts") or []):
+        try:
+            i = int(x)
+        except (TypeError, ValueError):
+            continue
+        if i in valid and store.boss_set_status(conn, i, "merged"):
             folded += 1
     return folded
