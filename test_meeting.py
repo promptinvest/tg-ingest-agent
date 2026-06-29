@@ -855,6 +855,10 @@ class SceneModuleTests(unittest.TestCase):
         block = scene.render({"location": "спальня", "her_posture": "на животе"}, "ru")
         self.assertIn("спальня", block)
         self.assertIn("на животе", block)
+        self.assertIn("ПОЗУ", block)        # pose held like clothing — no sudden pose jumps
+        en = scene.render({"her_posture": "on her back"}, "en")
+        self.assertIn("POSE", en)
+        self.assertIn("no sudden pose", en)
 
 
 class SceneStateTests(unittest.TestCase):

@@ -80,6 +80,10 @@ _UPDATER_SYSTEM = (
     '"removed_clothing": [], "items_in_play": [], "people_present": [], "other_facts": []}.\n'
     "Rules:\n"
     "- KEEP every fact the latest messages did NOT change — carry it forward verbatim. Continuity is the point.\n"
+    "- her_posture / his_position = exactly how each is positioned NOW. They change ONLY when the "
+    "dialogue moves them (he repositions her, she shifts, they relocate) — carry the EXACT current "
+    "pose forward otherwise; never spring a new pose out of nowhere. Treat a pose like clothing: it "
+    "stays until something in the dialogue changes it.\n"
     "- her_clothing = what she's wearing NOW; when an item comes off, move it to removed_clothing "
     "(note where it ended up if said). Clothing changes ONLY when the dialogue changes it — never "
     "add or remove a garment on your own.\n"
@@ -154,9 +158,11 @@ def render(state, lang):
     if not lines:
         return ""
     head = ("Физическая обстановка ПРЯМО СЕЙЧАС — держись её как данности, пока его сообщение её не "
-            "изменит (тогда обнови и дальше держи новую). Ничего не меняется само собой: одежду и "
-            "предметы не вводи и не убирай без повода в диалоге; не забывай, что уже в игре." if lang == "ru" else
+            "изменит (тогда обнови и дальше держи новую). Ничего не меняется само собой: ПОЗУ и "
+            "положение держи неизменными, пока их не изменит диалог (никаких внезапных смен позы); "
+            "одежду и предметы не вводи и не убирай без повода; не забывай, что уже в игре." if lang == "ru" else
             "The physical scene RIGHT NOW — treat it as given and stay consistent until his message "
-            "changes it (then move to the new state and hold that). Nothing changes on its own: don't "
-            "add or remove clothing/items without a cue in the dialogue, and never forget what's in play.")
+            "changes it (then move to the new state and hold that). Nothing changes on its own: hold "
+            "the POSE and positions exactly until the dialogue moves them (no sudden pose jumps); "
+            "don't add or remove clothing/items without a cue, and never forget what's in play.")
     return head + "\n" + "\n".join(lines)
