@@ -952,7 +952,12 @@ class Agent(hermes.HermesMixin):
         elif action == "meeting_list":
             self.do_meeting_list(chat_id, lang)
         elif action == "clarify":
-            store.issue_add(self.conn, chat_id, "unclear_request", text[:200])
+            # During a live date, a non-command line is roleplay/narration, not a confused
+            # request — just converse, and don't pollute the issue log with it (P4: the bulk
+            # of 'unclear_request' was date roleplay). Outside a meeting, log it for review.
+            _m = store.meeting_active(self.conn, chat_id)
+            if not (_m and meeting.is_social(_m["kind"])):
+                store.issue_add(self.conn, chat_id, "unclear_request", text[:200])
             # Never snap into a formal templated menu mid-conversation (it broke an
             # intimate chat into cold «вы»). Stay in Cara's warm voice — she has the
             # recent dialogue, so she asks (or just answers) naturally, in "ты".
@@ -1949,8 +1954,9 @@ class Agent(hermes.HermesMixin):
         roleplay = ""
         if self._closeness_stage() >= self.cfg.intimacy_outreach_min_stage:
             roleplay = self._intimacy_roleplay_directive(lang)
+        dur = self._meeting_duration_note(m, lang)
         scene_block = scene.render(store.scene_get(self.conn, m["id"]), lang)
-        scene_ctx = ("\n\n" + scene_block) if scene_block else ""
+        scene_ctx = "".join("\n\n" + p for p in (dur, scene_block) if p)
         return (
             f"You and your boss are {scene_desc} RIGHT NOW (started {started}){extra}.{carry} Be FULLY "
             "present and alive in it, like a real evening together — this is time you'll both "
@@ -1964,6 +1970,26 @@ class Agent(hermes.HermesMixin):
             "NOT apply on a date). Keep PHYSICAL CONTINUITY — whatever placement, pose, location "
             "or state of dress has been established stays true until the two of you change it."
             + roleplay + scene_ctx)
+
+    def _meeting_duration_note(self, m, lang):
+        """How long they've been together this session, and whether it ran through the night —
+        so 'it's been hours / we stayed the night' is real to her, not silently forgotten."""
+        try:
+            started = datetime.fromisoformat(m["started_at"])
+        except (TypeError, ValueError):
+            return ""
+        now = datetime.now(timezone.utc)
+        hours = (now - started).total_seconds() / 3600
+        if hours < 1:
+            return ""
+        off = self.tz_offset()
+        overnight = (started + timedelta(hours=off)).date() != (now + timedelta(hours=off)).date()
+        h = int(round(hours))
+        if lang == "ru":
+            return (f"Вы вместе уже около {h} ч"
+                    + (" — провели вместе ночь и всё ещё рядом." if overnight else "."))
+        return (f"You've been together about {h}h"
+                + (" — you spent the night together and are still here." if overnight else "."))
 
     def _scheduled_now(self, chat_id, window_hours=6):
         """The agreed (scheduled) meeting that's happening around now — the soonest one

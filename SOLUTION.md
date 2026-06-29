@@ -391,17 +391,24 @@ proactively like real memory. Design decisions and why:
   is still kept for the *separate* contexts: the wardrobe library, proactive outreach pings,
   the day-after afterglow, and what gets written into episodic-memory/arc summaries.)
 - **Physical scene continuity (`scene.py` + `meeting_scene`).** During a live social meeting
-  Cara keeps a compact, persistent snapshot of the PHYSICAL situation — `location`,
-  `her_posture`, `his_position`, `state_of_dress`, `objects_in_play`, `other_facts[]` — so a
-  pose/placement established earlier stays true turn to turn instead of drifting as the scene
-  scrolls out of the context window. **Hybrid update:** a deterministic cue check
-  (`scene.likely_change` — movement/position/location/(un)dressing words, RU+EN) gates a tiny
-  JSON-only `scene_update` LLM call that re-derives the state from the latest turns, *carrying
-  unchanged facts forward verbatim* and changing a field only when the dialogue changes it
-  (explicitly or implicitly); most turns cost nothing. The snapshot is rendered into
-  `_meeting_presence` ("the physical scene RIGHT NOW — stay consistent until his message
-  changes it"), updated from his message **before** her reply, and `store.scene_clear`ed when
-  the meeting ends. Content-agnostic — it tracks whatever physical facts get established.
+  Cara keeps a compact, persistent snapshot of the PHYSICAL situation so an earlier-established
+  fact stays true turn to turn instead of drifting as the scene scrolls out of the context
+  window. **Slots:** `location`, `her_posture`, `his_position` (strings) + `her_clothing`,
+  `removed_clothing`, `items_in_play`, `people_present`, `other_facts` (lists). So **clothing**
+  is structured (what's on her vs. what's come off and where; prolonged wear persists),
+  **props/items** persist (introduced when actually used, **never dropped while in use, never
+  swapped in/out on their own** — a new one appears only as a deliberate surprise), and **other
+  people** in the scene are tracked. **Hybrid update:** a deterministic cue check
+  (`scene.likely_change` — movement/position/location/(un)dressing/item/person words, RU+EN)
+  gates a JSON-only `scene_update` LLM call that re-derives the state from the latest turns,
+  *carrying unchanged facts forward verbatim*; most turns cost nothing. Rendered into
+  `_meeting_presence` ("the physical scene RIGHT NOW — nothing changes on its own"), updated
+  from his message **before** her reply, and `store.scene_clear`ed when the meeting ends.
+  **Duration awareness:** `_meeting_duration_note` adds a code-computed line (hours together,
+  and "you spent the night together and are still here" once it crosses the night). Content-agnostic.
+- **Roleplay isn't an "unclear request" (P4).** During a live social meeting a non-command line
+  routed to `clarify` just converses and is **not** logged as `unclear_request` (that count was
+  almost entirely date roleplay/narration with side-characters); outside a meeting it's still logged.
 - **Live-date replies get room (`converse_meeting` profile).** While any meeting is active,
   converse runs at `max_tokens=800` (vs 320 for `converse_warm`) so an immersive reply isn't
   truncated mid-sentence.

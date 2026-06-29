@@ -812,10 +812,11 @@ class MeetingDispatchTests(unittest.TestCase):
 class SceneModuleTests(unittest.TestCase):
     """Pure scene-state helpers: change detection, merge-on-update, rendering."""
 
-    def test_likely_change_detects_movement(self):
+    def test_likely_change_detects_movement_items_people(self):
         import scene
         for t in ("ты ложишься на живот", "перейдём на кровать", "иди ко мне",
-                  "сними чулки", "lie down on your back", "let's move to the couch"):
+                  "сними чулки", "lie down on your back", "let's move to the couch",
+                  "достаю вибратор", "I take out a toy", "Лера приходит к нам"):
             self.assertTrue(scene.likely_change(t), t)
         for t in ("как же хорошо с тобой", "я так тебя люблю", "ты счастлив?"):
             self.assertFalse(scene.likely_change(t), t)
@@ -823,12 +824,26 @@ class SceneModuleTests(unittest.TestCase):
     def test_parse_update_carries_unchanged_forward(self):
         import scene
         current = {"location": "спальня", "her_posture": "на спине", "his_position": "",
-                   "state_of_dress": "без одежды", "objects_in_play": "", "other_facts": []}
-        # the updater changes only the posture; everything else must persist verbatim
+                   "her_clothing": ["платье", "чулки"], "removed_clothing": [],
+                   "items_in_play": ["вибратор"], "people_present": [], "other_facts": []}
+        # only the posture changes; clothing and items-in-play must persist verbatim
         new = scene.parse_update('{"her_posture": "на животе, подушка под бёдрами"}', current)
         self.assertEqual(new["her_posture"], "на животе, подушка под бёдрами")
-        self.assertEqual(new["location"], "спальня")            # carried forward
-        self.assertEqual(new["state_of_dress"], "без одежды")   # carried forward
+        self.assertEqual(new["location"], "спальня")              # carried forward
+        self.assertEqual(new["her_clothing"], ["платье", "чулки"])  # not changed on its own
+        self.assertEqual(new["items_in_play"], ["вибратор"])       # item not forgotten
+
+    def test_parse_update_moves_clothing_and_adds_item(self):
+        import scene
+        current = {"location": "спальня", "her_clothing": ["платье", "чулки"],
+                   "removed_clothing": [], "items_in_play": [], "people_present": [],
+                   "her_posture": "", "his_position": "", "other_facts": []}
+        new = scene.parse_update(
+            '{"her_clothing": ["чулки"], "removed_clothing": ["платье на полу"], '
+            '"items_in_play": ["вибратор"]}', current)
+        self.assertEqual(new["her_clothing"], ["чулки"])           # dress came off
+        self.assertEqual(new["removed_clothing"], ["платье на полу"])
+        self.assertEqual(new["items_in_play"], ["вибратор"])       # newly introduced
 
     def test_parse_update_bad_json_returns_none(self):
         import scene
@@ -902,6 +917,31 @@ class SceneStateTests(unittest.TestCase):
         self.assertEqual(captured.get("converse"), "converse_meeting")   # roomier profile on a date
         self.assertEqual(captured.get("scene"), "scene_update")          # scene refreshed
         self.assertEqual(store.scene_get(self.conn, mid)["her_posture"], "на животе")
+
+    def test_meeting_duration_note(self):
+        from datetime import datetime, timezone, timedelta
+        started = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        note = self.agent._meeting_duration_note({"started_at": started}, "ru")
+        self.assertIn("3", note)        # ~3h together is surfaced to her
+        # under an hour -> no note (avoid noise)
+        fresh = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+        self.assertEqual(self.agent._meeting_duration_note({"started_at": fresh}, "ru"), "")
+
+    def test_clarify_during_date_not_logged_unclear(self):
+        # P4: a non-command roleplay line during a live date just converses; it must NOT be
+        # logged as unclear_request (that count was almost all date roleplay).
+        store.meeting_start(self.conn, 111, kind="visit")
+        with mock.patch.object(router, "route",
+                               return_value={"action": "clarify", "params": {}, "confidence": 0.2}), \
+                mock.patch.object(llm, "chat_profile", return_value="иди ко мне 🤍"), \
+                mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "maybe_curate_conversation"), \
+                mock.patch.object(self.agent, "_converse_grounding", return_value=""):
+            self.agent.dispatch(111, {}, "я снова рядом с тобой сзади")
+        n = self.conn.execute(
+            "SELECT COUNT(*) n FROM issues WHERE kind='unclear_request'").fetchone()["n"]
+        self.assertEqual(n, 0)
 
 
 if __name__ == "__main__":

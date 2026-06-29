@@ -379,11 +379,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **follows his lead**: business stays focused; a personal/social one unlocks an open,
   candid, lively, lead‑following register that warms and deepens as he does, matching his
   intensity (no explicitness cap on a live date; narration welcome there); owner‑only.
-- **Physical continuity on a date** — she keeps track of the **physical scene** (where you
-  are, her pose/position, state of dress, what's in play) and **holds it in her replies until
-  you change it**, explicitly or implicitly. Lie her on her stomach with a pillow under her
-  hips and she stays there — and "in" that — until the two of you move; say "перейдём в
-  спальню" and the scene moves with you. (Kept per‑date, cleared when the date ends.)
+- **Physical continuity on a date** — she tracks the **physical scene** and **holds it until
+  you change it**, explicitly or implicitly: where you are, her pose and yours, **what she's
+  wearing vs. what's come off** (and where it landed), **the props/items in play**, and **who
+  else is in the scene**. Lie her on her stomach with a pillow under her hips and she stays
+  there until you move; "перейдём в спальню" moves the scene with you. She **won't change her
+  clothes or swap a toy out of nowhere** — only when the dialogue does, or when *she* means to
+  surprise you with something new — and she **won't forget what you're already playing with**.
+  She also knows **how long you've been together** this time, including when you've **been up
+  through the night**. (Kept per‑date, cleared when it ends.)
 - **Separate episodic memory** — on end she **summarizes** it (kind‑aware: business →
   decisions/action‑items; social → a warm episodic memory + highlights), embeds it into a
   **dedicated meeting memory** (`meeting_chunks`, never the notes inbox / `ask` KB), and a
