@@ -318,23 +318,70 @@ def consolidate(conn, cfg, max_items=120):
             for d in drops:
                 if store.life_delete(conn, d):
                     merged += 1
-    # 3) Pending candidates -> drop ones that CONTRADICT a confirmed fact (a sensed guess
-    #    never overrides confirmed truth), then fold duplicates among the rest (so the same
-    #    person/fact isn't proposed several times — e.g. "Иван Доронин" ×4).
-    pending = store.candidates_pending(conn, limit=max_items)
-    survivors = []
-    for c in pending:
-        txt = (c["proposed_text"] or "").strip()
-        if not txt:
-            continue
-        if boss_model.conflicts_with_confirmed(conn, txt):
-            store.candidate_set_status(conn, c["id"], "superseded")
-            merged += 1
-        else:
-            survivors.append((c["id"], txt))
-    for batch in _batches(survivors):
-        for _keep, drops in _merge_groups(conn, cfg, batch):
-            for d in drops:
-                store.candidate_set_status(conn, d, "merged")
-                merged += 1
+    # 3) Pending candidates: an LLM judges each against the CONFIRMED facts — dropping ones
+    #    that CONTRADICT a confirmed fact ('superseded') and ones that merely DUPLICATE another
+    #    ('merged'). Semantic, not token-overlap: catches "пьёт кофе, а не чай" vs a verbose
+    #    confirmed "пьёт чай…" and folds the "Иван Доронин ×N" restatements.
+    merged += _tidy_candidates(conn, cfg, max_items)
     return merged
+
+
+_CANDIDATE_HYGIENE_SYSTEM = (
+    "You tidy a queue of UNCONFIRMED memory candidates about the boss against facts he has "
+    "ALREADY CONFIRMED. You are given CONFIRMED facts (text only) and CANDIDATES as "
+    "'<id>: <text>'. Return STRICT JSON only: "
+    '{"contradicts": [<id>, ...], "duplicates": [<id>, ...]}.\n'
+    "- contradicts: candidate ids stating something that CONTRADICTS a confirmed fact (e.g. "
+    "confirmed 'пьёт чай' vs candidate 'пьёт кофе, а не чай') — a wrong/outdated guess.\n"
+    "- duplicates: candidate ids that merely RESTATE another candidate OR a confirmed fact "
+    "(same underlying fact/paraphrase, nothing new). Of a duplicate set keep ONE — list only "
+    "the redundant ids.\n"
+    "Leave OUT any candidate that is a genuinely new, non-conflicting fact. Reference only the "
+    "given candidate ids; never invent. Empty arrays if nothing to drop."
+)
+
+
+def _tidy_candidates(conn, cfg, max_items=120):
+    """LLM hygiene over pending candidates: drop contradictions-with-confirmed ('superseded')
+    and duplicates ('merged'). Returns count folded. Best-effort: 0 on <2 candidates or failure."""
+    import llm
+    pending = [c for c in store.candidates_pending(conn, limit=max_items)
+               if (c["proposed_text"] or "").strip()]
+    if len(pending) < 2:
+        return 0
+    confirmed = [r["value"] for r in store.boss_items(conn, "confirmed", limit=80)
+                 if (r["value"] or "").strip()]
+    conf_listing = "\n".join(f"- {v}" for v in confirmed) or "(none)"
+    cand_listing = "\n".join(f"{c['id']}: {c['proposed_text']}" for c in pending)
+    try:
+        reply = llm.chat_profile(
+            cfg, conn, "memory_curator",
+            [{"role": "system", "content": _CANDIDATE_HYGIENE_SYSTEM},
+             {"role": "user",
+              "content": f"CONFIRMED facts:\n{conf_listing}\n\nCANDIDATES:\n{cand_listing}"}],
+            profile="memory_curator")
+    except (llm.BudgetExceeded, llm.LLMError):
+        return 0
+    parsed = llm.parse_llm_json(reply) or {}
+    valid = {c["id"] for c in pending}
+
+    def _ids(key):
+        out = []
+        for x in (parsed.get(key) or []):
+            try:
+                i = int(x)
+            except (TypeError, ValueError):
+                continue
+            if i in valid:
+                out.append(i)
+        return out
+
+    folded, contradicts = 0, set(_ids("contradicts"))
+    for i in contradicts:
+        store.candidate_set_status(conn, i, "superseded")
+        folded += 1
+    for i in _ids("duplicates"):
+        if i not in contradicts:
+            store.candidate_set_status(conn, i, "merged")
+            folded += 1
+    return folded

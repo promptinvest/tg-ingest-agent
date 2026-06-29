@@ -3161,17 +3161,19 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
                   "Носит чёрные часы", "Катается на лыжах"]:
             store.candidate_add(c, "personal_fact", t, confidence=0.7)
         pend = store.candidates_pending(c, limit=50)
+        kofe = next(p["id"] for p in pend if "кофе" in p["proposed_text"])
         ivan = [p["id"] for p in pend if "Иван" in p["proposed_text"]]
-        groups = json.dumps({"groups": [{"keep": ivan[0], "drop": [ivan[1]]}]})
-        # content-aware mock: group the two Иван candidates, leave every other batch (seeded
-        # life facts, etc.) untouched.
+        # the candidate-hygiene LLM pass (its prompt lists CANDIDATES): flag the кофе
+        # contradiction and one Иван duplicate. Other batches (seeded life, etc.) -> no-op.
         def fake_cp(cfg, conn, skill, messages, **kw):
-            return groups if "Иван" in messages[1]["content"] else json.dumps({"groups": []})
+            if "CANDIDATES:" in messages[1]["content"]:
+                return json.dumps({"contradicts": [kofe], "duplicates": [ivan[1]]})
+            return json.dumps({"groups": []})
         with mock.patch.object(llm, "chat_profile", side_effect=fake_cp):
             memory_curator.consolidate(c, self.agent.cfg)
         left = {p["proposed_text"] for p in store.candidates_pending(c, limit=50)}
         self.assertNotIn("Пьёт кофе, а не чай.", left)              # contradiction dropped
-        self.assertLessEqual(sum("Иван" in t for t in left), 1)    # duplicates folded
+        self.assertLessEqual(sum("Иван" in t for t in left), 1)    # duplicate folded
         self.assertIn("Любит джаз", left)                          # unrelated candidate kept
 
     def test_merge_categories_folds_and_deletes_duplicate(self):
