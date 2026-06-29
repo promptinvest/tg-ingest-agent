@@ -2805,6 +2805,18 @@ class GoldenTranscriptTests(unittest.TestCase):
             "Всегда — это очень долго. И я согласна.")
         self.assertEqual(f("просто текст без действий"), "просто текст без действий")
 
+    def test_strip_technical_ids(self):
+        import tg_ingest_agent
+        f = tg_ingest_agent.Agent._strip_technical_ids
+        # trace ids, uuids and long hex blobs are removed; never shipped as content
+        self.assertNotIn("tr_1782452622", f("Готово, трейс tr_1782452622_ff1810017f"))
+        self.assertNotIn("ff1810017f", f("номер ff1810017fabcd1234"))
+        self.assertEqual(f("550e8400-e29b-41d4-a716-446655440000"), "")   # bare uuid removed
+        # ordinary text and plain numbers (dates, counts, prices) are untouched
+        self.assertEqual(f("встреча 24 июня в 18:30, потратили 1500 рублей"),
+                         "встреча 24 июня в 18:30, потратили 1500 рублей")
+        self.assertEqual(f("просто тёплое сообщение 🤍"), "просто тёплое сообщение 🤍")
+
     def test_extract_leading_reaction(self):
         import tg_ingest_agent
         f = tg_ingest_agent.Agent._extract_leading_reaction

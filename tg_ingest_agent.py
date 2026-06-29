@@ -1284,6 +1284,24 @@ class Agent(hermes.HermesMixin):
         cleaned = "\n".join(line.strip() for line in cleaned.split("\n"))
         return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
+    # Internal technical identifiers that must NEVER reach the boss as if they were content
+    # or an answer — trace ids (tr_1782..._ff..), UUIDs, long hex/file blobs. The boss
+    # corrected this ("не генерируй технические номера и трейсы без смысла").
+    _TECH_ID_RE = re.compile(
+        r"\btr_[0-9a-fA-F]{4,}(?:_[0-9a-fA-F]+)*\b"
+        r"|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+        r"|\b(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{16,}\b")   # long hex with ≥1 letter (not a plain number)
+
+    @classmethod
+    def _strip_technical_ids(cls, text):
+        """Remove internal trace ids / uuids / long hex-file blobs from a free-text reply so
+        Cara never passes them off as content or an answer. (If she has no real content she
+        should say so — handled by the empty-reply fallback in do_converse.)"""
+        cleaned = cls._TECH_ID_RE.sub("", text or "")
+        cleaned = re.sub(r"\(\s*\)|«\s*»|\[\s*\]", "", cleaned)   # tidy emptied brackets/quotes
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
     def _maybe_update_scene(self, meeting_row, lang):
         """Hybrid physical-scene tracker for a live date: carry the snapshot forward for free,
         and only spend a small JSON updater call when his latest message plausibly moved things
@@ -1735,6 +1753,7 @@ class Agent(hermes.HermesMixin):
         # and scene description flow — it's immersive roleplay he's part of.
         if not in_social_meeting:
             reply = self._strip_roleplay(reply)
+        reply = self._strip_technical_ids(reply)   # never ship trace ids / file blobs as content
         reply = re.sub(r"\n{3,}", "\n\n", self.PHOTO_PLACEHOLDER_RE.sub("", reply)).strip()
         if not reply:
             # A reaction / sticker / selfie on its own IS a complete response — not an error.
