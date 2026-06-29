@@ -17,7 +17,7 @@ Hybrid update: a deterministic cue check (`likely_change`) gates a small JSON-on
 so most turns cost nothing and only a turn that plausibly moved things re-derives the state.
 """
 
-STR_SLOTS = ("location", "her_posture", "his_position")
+STR_SLOTS = ("location", "her_posture", "his_position", "configuration", "accessibility")
 LIST_SLOTS = ("her_clothing", "removed_clothing", "items_in_play", "people_present", "other_facts")
 SLOTS = STR_SLOTS + LIST_SLOTS
 
@@ -76,14 +76,22 @@ _UPDATER_SYSTEM = (
     "You maintain a compact PHYSICAL SCENE STATE for an ongoing scene between Cara and the boss "
     "(and anyone else present). Given the CURRENT state and the latest messages, return the "
     "UPDATED state as STRICT JSON only — no prose, no code fences. Keys exactly: "
-    '{"location": "", "her_posture": "", "his_position": "", "her_clothing": [], '
-    '"removed_clothing": [], "items_in_play": [], "people_present": [], "other_facts": []}.\n'
+    '{"location": "", "her_posture": "", "his_position": "", "configuration": "", '
+    '"accessibility": "", "her_clothing": [], "removed_clothing": [], "items_in_play": [], '
+    '"people_present": [], "other_facts": []}.\n'
     "Rules:\n"
     "- KEEP every fact the latest messages did NOT change — carry it forward verbatim. Continuity is the point.\n"
     "- her_posture / his_position = exactly how each is positioned NOW. They change ONLY when the "
     "dialogue moves them (he repositions her, she shifts, they relocate) — carry the EXACT current "
     "pose forward otherwise; never spring a new pose out of nowhere. Treat a pose like clothing: it "
     "stays until something in the dialogue changes it.\n"
+    "- configuration = how the bodies are arranged RELATIVE to each other right now, covering "
+    "EVERYONE present (who is on top/under/behind/beside whom; what's pinned, held, or between "
+    "them). Keep it consistent with the postures and people_present.\n"
+    "- accessibility = given that configuration, which body parts are FREE vs BLOCKED/PINNED/"
+    "OCCUPIED/OUT-OF-REACH right now, per person (e.g. 'её руки прижаты над головой; до его спины "
+    "достают её ноги, не руки'). This is the physical-possibility constraint — derive it from the "
+    "configuration; update it whenever the arrangement changes.\n"
     "- her_clothing = what she's wearing NOW; when an item comes off, move it to removed_clothing "
     "(note where it ended up if said). Clothing changes ONLY when the dialogue changes it — never "
     "add or remove a garment on your own.\n"
@@ -133,9 +141,11 @@ def parse_update(reply, current):
 
 _LABELS = {
     "ru": {"location": "Где вы", "her_posture": "Её поза", "his_position": "Его положение",
+           "configuration": "Расположение тел", "accessibility": "Доступность (что свободно/занято)",
            "her_clothing": "На ней сейчас", "removed_clothing": "Снято", "items_in_play": "В игре",
            "people_present": "Рядом ещё", "other_facts": "Ещё"},
     "en": {"location": "Where", "her_posture": "Her posture", "his_position": "His position",
+           "configuration": "Body arrangement", "accessibility": "Accessibility (free/blocked)",
            "her_clothing": "She's wearing", "removed_clothing": "Removed", "items_in_play": "In play",
            "people_present": "Also present", "other_facts": "Also"},
 }
@@ -159,10 +169,16 @@ def render(state, lang):
         return ""
     head = ("Физическая обстановка ПРЯМО СЕЙЧАС — держись её как данности, пока его сообщение её не "
             "изменит (тогда обнови и дальше держи новую). Ничего не меняется само собой: ПОЗУ и "
-            "положение держи неизменными, пока их не изменит диалог (никаких внезапных смен позы); "
-            "одежду и предметы не вводи и не убирай без повода; не забывай, что уже в игре." if lang == "ru" else
+            "расположение всех держи неизменными, пока их не изменит диалог (никаких внезапных смен "
+            "позы); одежду и предметы не вводи и не убирай без повода; не забывай, что уже в игре. "
+            "СЧИТАЙСЯ С ДОСТУПНОСТЬЮ: не описывай действие частью тела, которая сейчас прижата, занята "
+            "или недосягаема, и пусть никто не трогает то, до чего в этой позе не дотянуться — если "
+            "для действия нужно другое расположение, сперва смени его словами." if lang == "ru" else
             "The physical scene RIGHT NOW — treat it as given and stay consistent until his message "
             "changes it (then move to the new state and hold that). Nothing changes on its own: hold "
-            "the POSE and positions exactly until the dialogue moves them (no sudden pose jumps); "
-            "don't add or remove clothing/items without a cue, and never forget what's in play.")
+            "everyone's POSE and arrangement exactly until the dialogue moves them (no sudden pose "
+            "jumps); don't add or remove clothing/items without a cue, and never forget what's in play. "
+            "RESPECT ACCESSIBILITY: never narrate an action with a body part that's pinned, occupied "
+            "or out of reach right now, and don't have anyone touch what they can't reach in this "
+            "arrangement — if an action needs a different arrangement, change it in words first.")
     return head + "\n" + "\n".join(lines)

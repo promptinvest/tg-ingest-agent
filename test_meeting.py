@@ -833,6 +833,22 @@ class SceneModuleTests(unittest.TestCase):
         self.assertEqual(new["her_clothing"], ["платье", "чулки"])  # not changed on its own
         self.assertEqual(new["items_in_play"], ["вибратор"])       # item not forgotten
 
+    def test_configuration_and_accessibility_tracked(self):
+        import scene
+        # an established arrangement with body-part accessibility, and it carries forward
+        current = {"location": "спальня", "her_posture": "на спине", "his_position": "сверху",
+                   "configuration": "Кара на спине, Олег сверху между её бёдер, её запястья прижаты",
+                   "accessibility": "её руки прижаты/заняты; свободны рот и ноги",
+                   "her_clothing": [], "removed_clothing": [], "items_in_play": [],
+                   "people_present": [], "other_facts": []}
+        kept = scene.parse_update('{"her_posture": "на спине"}', current)   # nothing about arrangement
+        self.assertIn("прижаты", kept["configuration"])      # arrangement carried forward
+        self.assertIn("руки прижаты", kept["accessibility"])  # accessibility carried forward
+        block = scene.render(current, "ru")
+        self.assertIn("Расположение тел", block)
+        self.assertIn("СЧИТАЙСЯ С ДОСТУПНОСТЬЮ", block)      # the reach/occlusion constraint
+        self.assertIn("недосягаема", block)
+
     def test_parse_update_moves_clothing_and_adds_item(self):
         import scene
         current = {"location": "спальня", "her_clothing": ["платье", "чулки"],

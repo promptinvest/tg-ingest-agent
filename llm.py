@@ -244,8 +244,9 @@ def default_profiles(cfg):
         # immersive reply isn't truncated mid-sentence.
         "converse_meeting": {"primary": primary, "fallbacks": fb, "max_tokens": 800,
                              "json_required": False, "temperature": 0.7},
-        # JSON-only updater for the live physical scene snapshot (placement/clothing/items/people).
-        "scene_update": {"primary": primary, "fallbacks": fb, "max_tokens": 400,
+        # JSON-only updater for the live physical scene snapshot (placement/clothing/items/people/
+        # configuration/accessibility).
+        "scene_update": {"primary": primary, "fallbacks": fb, "max_tokens": 500,
                          "json_required": True, "temperature": 0},
         "memory_curator": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
         # Weekly memory consolidation (dedup + contradiction judgment) — infrequent but needs

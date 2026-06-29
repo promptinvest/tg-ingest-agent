@@ -2026,7 +2026,9 @@ class Agent(hermes.HermesMixin):
             "down. Only stop if HE asks to stop. Stay vividly in the moment: you may narrate the "
             "scene and what you're doing, in your own voice (the no-narration texting rule does "
             "NOT apply on a date). Keep PHYSICAL CONTINUITY — whatever placement, pose, location "
-            "or state of dress has been established stays true until the two of you change it."
+            "or state of dress has been established stays true until the two of you change it, and "
+            "respect what's physically reachable in the current arrangement (don't act with a part "
+            "that's pinned, occupied or out of reach)."
             + roleplay + scene_ctx)
 
     def _meeting_duration_note(self, m, lang):
