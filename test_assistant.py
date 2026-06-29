@@ -4885,5 +4885,74 @@ class WorldModelTests(unittest.TestCase):
         self.assertEqual(self.agent._world_context("ru"), "")
 
 
+class NotesPaginationTests(unittest.TestCase):
+    """Inline ◀/▶ pagination over the notes list."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "p.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _seed(self, n, category="Крипта"):
+        for i in range(n):
+            mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 100 + i,
+                "received_at": f"2026-06-{10 + i:02d}T10:00:00Z", "raw_text": f"note {i}"})
+            store.confirm_category(self.conn, mid, category)
+
+    def test_list_messages_page_slices_and_counts(self):
+        self._seed(20)
+        rows, total = store.list_messages_page(self.conn, offset=0, limit=8)
+        self.assertEqual((len(rows), total), (8, 20))
+        rows2, total2 = store.list_messages_page(self.conn, offset=16, limit=8)
+        self.assertEqual((len(rows2), total2), (4, 20))     # last page is partial
+
+    def test_list_view_roundtrip_and_prune(self):
+        t = store.list_view_add(self.conn, 1, {"category": "Крипта", "query": None})
+        self.assertEqual(store.list_view_get(self.conn, t)["category"], "Крипта")
+        self.assertIsNone(store.list_view_get(self.conn, 9999))      # unknown token
+        self.assertEqual(store.list_views_prune(self.conn, "2099-01-01T00:00:00Z"), 1)
+        self.assertIsNone(store.list_view_get(self.conn, t))         # pruned
+
+    def test_do_list_items_sends_page_with_keyboard(self):
+        self._seed(20)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_list_items(1, "ru", {})
+        kw = r.call_args.kwargs.get("reply_markup")
+        self.assertIn("inline_keyboard", kw)                # paginated -> keyboard present
+        self.assertIn("1–8 из 20", r.call_args[0][1])       # header shows the page window
+
+    def test_page_callback_edits_to_next_page(self):
+        self._seed(20)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_list_items(1, "ru", {})
+        kw = r.call_args.kwargs["reply_markup"]
+        nxt = [b for rowk in kw["inline_keyboard"] for b in rowk
+               if b["callback_data"].split("|")[2] == "1"][0]
+        msg = {"chat": {"id": 1}, "message_id": 555}
+        with mock.patch.object(self.agent, "edit_message") as em, \
+                mock.patch.object(self.agent, "answer_callback"):
+            self.agent.handle_page_callback("cbid", 1, msg, nxt["callback_data"])
+        self.assertIn("9–16 из 20", em.call_args[0][2])     # edited in place to page 2
+
+    def test_page_callback_stale_token(self):
+        with mock.patch.object(self.agent, "edit_message") as em, \
+                mock.patch.object(self.agent, "answer_callback") as ack:
+            self.agent.handle_page_callback("cbid", 1, {"message_id": 5}, "pg|9999|1")
+        self.assertFalse(em.called)
+        self.assertEqual(ack.call_args[0][1], texts.T("ru", "list_view_stale"))
+
+    def test_do_list_items_empty(self):
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_list_items(1, "ru", {})
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "items_empty"))
+
+
 if __name__ == "__main__":
     unittest.main()

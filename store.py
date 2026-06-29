@@ -444,6 +444,16 @@ CREATE TABLE IF NOT EXISTS body_state (
 );
 CREATE INDEX IF NOT EXISTS idx_body_status ON body_state(status);
 
+-- Paginated list views: a short-lived snapshot of the FILTER behind a notes list message, so
+-- its inline ◀/▶ buttons can recompute pages by token (the filter can exceed Telegram's 64-byte
+-- callback_data). Pruned after a day.
+CREATE TABLE IF NOT EXISTS list_views (
+  id INTEGER PRIMARY KEY,
+  chat_id INTEGER NOT NULL,
+  filter TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 -- Preparation agreed for an UPCOMING meeting: logistical details/agreements (what
 -- she'll wear, what he brings, the plan) and emotional beats (her anticipation,
 -- longing). Accumulated during the lead-up, surfaced while planning AND carried into
@@ -1741,6 +1751,77 @@ def list_messages(conn, category=None, query=None, limit=10):
         if len(result) >= limit:
             break
     return result
+
+
+def list_messages_filtered(conn, category=None, query=None):
+    """ALL visible notes matching the filter, newest-first (Python-filtered for Cyrillic
+    casefold). Returns the full list; callers slice for pagination. Confirmed journal entries
+    are hidden from the general list (they have their own dated journal) unless a category
+    filter is given."""
+    rows = conn.execute(
+        "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested') ORDER BY id DESC"
+    ).fetchall()
+    facts_by_message = {}
+    if query:
+        for row in conn.execute(
+            "SELECT message_id, GROUP_CONCAT(fact, ' ') AS f FROM facts GROUP BY message_id"
+        ):
+            facts_by_message[row["message_id"]] = row["f"]
+    journals = {n.casefold() for n in journal_categories(conn)} if category is None else set()
+    out = []
+    for row in rows:
+        row_category = row["category"] or row["suggested_category"] or ""
+        if category and row_category.casefold() != str(category).casefold():
+            continue
+        if journals and (row["category"] or "").casefold() in journals:
+            continue
+        if query:
+            haystack = " ".join(filter(None, [
+                row["raw_text"], row["summary"], row_category, row["forward_origin_title"],
+                facts_by_message.get(row["id"]),
+            ])).casefold()
+            if str(query).casefold() not in haystack:
+                continue
+        out.append(row)
+    return out
+
+
+def list_messages_page(conn, category=None, query=None, offset=0, limit=8):
+    """A page of filtered notes plus the TOTAL match count: (rows, total)."""
+    allrows = list_messages_filtered(conn, category, query)
+    offset = max(0, offset)
+    return allrows[offset:offset + limit], len(allrows)
+
+
+def list_view_add(conn, chat_id, filter_dict):
+    """Persist the filter behind a paginated list; returns a token (its id) for callback_data."""
+    cur = conn.execute(
+        "INSERT INTO list_views (chat_id, filter, created_at) VALUES (?, ?, ?)",
+        (chat_id, json.dumps(filter_dict, ensure_ascii=False), _now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_view_get(conn, token):
+    """The stored filter dict for a list token, or None if unknown/expired."""
+    try:
+        token = int(token)
+    except (TypeError, ValueError):
+        return None
+    row = conn.execute("SELECT filter FROM list_views WHERE id = ?", (token,)).fetchone()
+    if not row:
+        return None
+    try:
+        data = json.loads(row["filter"])
+        return data if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def list_views_prune(conn, cutoff_iso):
+    cur = conn.execute("DELETE FROM list_views WHERE created_at < ?", (cutoff_iso,))
+    conn.commit()
+    return cur.rowcount
 
 
 def status_counts(conn):

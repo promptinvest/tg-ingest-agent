@@ -505,29 +505,82 @@ class HermesMixin:
         blocks = [T(lang, "items_header", filter=filter_part, n=len(rows))]
         dmap = store.display_map(self.conn)
         for row in rows:
-            row_category = row["category"] or row["suggested_category"] or (
-                "без категории" if ru else "uncategorized")
-            pending = " ⏳" if row["status"] != "confirmed" else ""
-            item = [f"📄 #{dmap.get(row['id'], row['id'])} · {row_category}{pending}"]
-            text = (row["summary"] or row["raw_text"] or "").replace("\n", " ").strip()[:110]
-            if text:
-                item.append(f"   {text}")
-            marks = []
-            files = store.message_files(self.conn, row["id"])
-            if files:
-                marks.append("📎 " + ", ".join(f["file_name"] or ("файл" if ru else "file")
-                                               for f in files[:2]))
-            images = store.message_images(self.conn, row["id"])
-            if images:
-                marks.append(f"🖼 {len(images)}")
-            urls = store.message_urls(self.conn, row["id"])
-            if urls:
-                marks.append(f"🌐 {urls[0]['url']}")
-            if marks:
-                item.append("   " + " · ".join(marks))
-            blocks.append("\n".join(item))
+            blocks.append(self._note_line(lang, row, dmap))
         blocks.append(T(lang, "items_footer"))
         return "\n\n".join(blocks)
+
+    NOTES_PAGE_SIZE = 8
+
+    def _note_line(self, lang, row, dmap):
+        """One note's compact block for a list: '📄 #N · category', a preview, and any
+        attachment/url marks. Shared by the plain list and the paginated view."""
+        ru = lang == "ru"
+        row_category = row["category"] or row["suggested_category"] or (
+            "без категории" if ru else "uncategorized")
+        pending = " ⏳" if row["status"] != "confirmed" else ""
+        item = [f"📄 #{dmap.get(row['id'], row['id'])} · {row_category}{pending}"]
+        text = (row["summary"] or row["raw_text"] or "").replace("\n", " ").strip()[:110]
+        if text:
+            item.append(f"   {text}")
+        marks = []
+        files = store.message_files(self.conn, row["id"])
+        if files:
+            marks.append("📎 " + ", ".join(f["file_name"] or ("файл" if ru else "file")
+                                           for f in files[:2]))
+        images = store.message_images(self.conn, row["id"])
+        if images:
+            marks.append(f"🖼 {len(images)}")
+        urls = store.message_urls(self.conn, row["id"])
+        if urls:
+            marks.append(f"🌐 {urls[0]['url']}")
+        if marks:
+            item.append("   " + " · ".join(marks))
+        return "\n".join(item)
+
+    def _notes_page(self, lang, category, query, offset, token):
+        """Render one page of notes + its ◀/▶ keyboard. Returns (text, keyboard, total)."""
+        rows, total = store.list_messages_page(self.conn, category, query, offset,
+                                               self.NOTES_PAGE_SIZE)
+        dmap = store.display_map(self.conn)
+        filter_part = ""
+        if category:
+            filter_part = T(lang, "items_filter_category", category=category)
+        elif query:
+            filter_part = T(lang, "items_filter_query", query=query)
+        start = offset + 1 if rows else 0
+        blocks = [T(lang, "notes_page_header", filter=filter_part,
+                    start=start, end=offset + len(rows), total=total)]
+        for row in rows:
+            blocks.append(self._note_line(lang, row, dmap))
+        return "\n\n".join(blocks), self._notes_page_keyboard(lang, token, offset, total), total
+
+    def _notes_page_keyboard(self, lang, token, offset, total):
+        """A ◀ Back · X/Y · Next ▶ row — or None when it all fits on one page."""
+        pages = max(1, (total + self.NOTES_PAGE_SIZE - 1) // self.NOTES_PAGE_SIZE)
+        if pages <= 1:
+            return None
+        cur = offset // self.NOTES_PAGE_SIZE
+        buttons = []
+        if cur > 0:
+            buttons.append({"text": T(lang, "page_prev"), "callback_data": f"pg|{token}|{cur - 1}"})
+        buttons.append({"text": f"{cur + 1}/{pages}", "callback_data": f"pg|{token}|noop"})
+        if cur < pages - 1:
+            buttons.append({"text": T(lang, "page_next"), "callback_data": f"pg|{token}|{cur + 1}"})
+        return {"inline_keyboard": [buttons]}
+
+    def do_list_items(self, chat_id, lang, params):
+        """Browse saved notes with inline ◀/▶ pagination (edits one message in place instead
+        of flooding the chat or capping the list at 10)."""
+        category, query = params.get("category"), params.get("query")
+        _, total = store.list_messages_page(self.conn, category, query, 0, self.NOTES_PAGE_SIZE)
+        if total == 0:
+            self.reply(chat_id, T(lang, "items_empty"))
+            return
+        store.list_views_prune(self.conn,
+                               (datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
+        token = store.list_view_add(self.conn, chat_id, {"category": category, "query": query})
+        text, keyboard, _ = self._notes_page(lang, category, query, 0, token)
+        self.reply(chat_id, text, reply_markup=keyboard)
 
     def do_show_media(self, chat_id, lang, params):
         row = self.resolve_item(params)

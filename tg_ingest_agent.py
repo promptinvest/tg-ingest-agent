@@ -206,6 +206,18 @@ class Agent(hermes.HermesMixin):
         except TelegramError as exc:
             log(f"answerCallbackQuery failed: {exc}")
 
+    def edit_message(self, chat_id, message_id, text, reply_markup=None):
+        """Edit a message's text (and keyboard) in place — used to page a notes list without
+        sending new messages."""
+        if not message_id:
+            return
+        try:
+            tg_call(self.cfg.token, "editMessageText", {
+                "chat_id": chat_id, "message_id": message_id,
+                "text": text[:4000], "reply_markup": reply_markup})
+        except TelegramError as exc:
+            log(f"editMessageText (page) failed: {exc}")
+
     def edit_suggestion_message(self, chat_id, message_id, row):
         if not message_id:
             return
@@ -846,7 +858,7 @@ class Agent(hermes.HermesMixin):
         elif action == "overview":
             self.reply(chat_id, self.overview_text(lang))
         elif action == "list_items":
-            self.reply_chunks(chat_id, self.items_text(lang, params))
+            self.do_list_items(chat_id, lang, params)
         elif action == "item_detail":
             self.do_item_detail(chat_id, lang, params)
         elif action == "merge_categories":
@@ -3437,6 +3449,9 @@ class Agent(hermes.HermesMixin):
         if data.startswith("mc|"):
             self.handle_memory_callback(callback_id, chat_id, msg, data)
             return
+        if data.startswith("pg|"):
+            self.handle_page_callback(callback_id, chat_id, msg, data)
+            return
         parsed = ingest.parse_callback_data(callback.get("data"))
         if not parsed:
             self.answer_callback(callback_id, "Unknown action.")
@@ -3459,6 +3474,37 @@ class Agent(hermes.HermesMixin):
             edit_message_id=msg.get("message_id") or row["suggestion_message_id"],
             quiet=True,
         )
+
+    def handle_page_callback(self, callback_id, chat_id, msg, data):
+        """A ◀/▶ tap on a paginated notes list: recompute the page from the stored filter
+        token and edit the message in place. 'noop' is the page-indicator button."""
+        parts = data.split("|")
+        if len(parts) != 3:
+            self.answer_callback(callback_id, "?")
+            return
+        _, token, page = parts
+        if page == "noop":
+            self.answer_callback(callback_id, "")
+            return
+        lang = self.lang()
+        filt = store.list_view_get(self.conn, token)
+        if filt is None:
+            self.answer_callback(callback_id, T(lang, "list_view_stale"))
+            return
+        try:
+            page = max(0, int(page))
+        except (TypeError, ValueError):
+            self.answer_callback(callback_id, "?")
+            return
+        offset = page * self.NOTES_PAGE_SIZE
+        text, keyboard, total = self._notes_page(lang, filt.get("category"), filt.get("query"),
+                                                  offset, token)
+        if total and offset >= total:   # clamp a now-out-of-range page (notes removed since)
+            offset = ((total - 1) // self.NOTES_PAGE_SIZE) * self.NOTES_PAGE_SIZE
+            text, keyboard, total = self._notes_page(lang, filt.get("category"),
+                                                     filt.get("query"), offset, token)
+        self.edit_message(chat_id, msg.get("message_id"), text, reply_markup=keyboard)
+        self.answer_callback(callback_id, "")
 
     def handle_correction(self, row, chat_id, text, reply_to):
         lang = self.lang()

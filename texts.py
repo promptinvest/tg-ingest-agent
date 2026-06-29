@@ -363,6 +363,16 @@ TEXTS = {
     },
     "items_filter_category": {"ru": " (категория: {category})", "en": " (category: {category})"},
     "items_filter_query": {"ru": " (по запросу: {query})", "en": " (matching: {query})"},
+    "notes_page_header": {
+        "ru": "🗂 Заметки{filter} — {start}–{end} из {total}",
+        "en": "🗂 Notes{filter} — {start}–{end} of {total}",
+    },
+    "page_prev": {"ru": "◀ Назад", "en": "◀ Back"},
+    "page_next": {"ru": "Вперёд ▶", "en": "Next ▶"},
+    "list_view_stale": {
+        "ru": "Этот список устарел — открой его заново 🙂",
+        "en": "This list is stale — open it again 🙂",
+    },
     "items_empty": {
         "ru": "По этому запросу ничего не нашла 🤷‍♀️",
         "en": "I found nothing for that 🤷‍♀️",
