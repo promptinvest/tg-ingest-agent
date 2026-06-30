@@ -436,8 +436,13 @@ proactively like real memory. Design decisions and why:
   `removed_clothing`, `items_in_play`, `people_present`, `other_facts` (lists). So **clothing**
   is structured (what's on her vs. what's come off and where; prolonged wear persists),
   **props/items** persist (introduced when actually used, **never dropped while in use, never
-  swapped in/out on their own** — a new one appears only as a deliberate surprise), and **other
-  people** in the scene are tracked. **Hybrid update:** a deterministic cue check
+  swapped in/out on their own** — a new one appears only as a deliberate surprise), and **a
+  third participant's position is tracked too**: `people_present` carries one `"<Name> — their
+  EXACT current pose/state"` entry per other person, carried forward and changed only when the
+  dialogue moves THAT person — the same continuity rule as `her_posture`/`his_position` (fixes a
+  case where a named participant's position lived only in the shared `configuration`/`other_facts`
+  and drifted/reset). String slots were also widened (≈240 chars; list entries ≈200) so a
+  three-person `configuration`/`accessibility` isn't truncated mid-phrase. **Hybrid update:** a deterministic cue check
   (`scene.likely_change` — movement/position/location/(un)dressing/item/person words, RU+EN)
   gates a JSON-only `scene_update` LLM call that re-derives the state from the latest turns,
   *carrying unchanged facts forward verbatim*; most turns cost nothing. Rendered into

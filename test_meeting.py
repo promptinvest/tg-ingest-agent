@@ -948,6 +948,32 @@ class SceneModuleTests(unittest.TestCase):
         self.assertIn("POSE", en)
         self.assertIn("no sudden pose", en)
 
+    def test_third_participant_pose_tracked_in_people_present(self):
+        import scene
+        current = {"location": "комната", "her_posture": "на коленях", "his_position": "стоит",
+                   "configuration": "", "accessibility": "", "contact_map": [],
+                   "her_clothing": [], "removed_clothing": [], "items_in_play": [],
+                   "people_present": ["Лера — на спине, ноги раздвинуты, привязана"],
+                   "other_facts": []}
+        # an update about someone else must NOT drop a third participant's tracked position
+        kept = scene.parse_update('{"his_position": "подходит ближе"}', current)
+        self.assertIn("Лера — на спине, ноги раздвинуты, привязана", kept["people_present"])
+        # when the dialogue moves her, the entry updates (на спине -> на животе)
+        moved = scene.parse_update(
+            '{"people_present": ["Лера — на животе, попой кверху, ноги раздвинуты"]}', current)
+        self.assertEqual(moved["people_present"],
+                         ["Лера — на животе, попой кверху, ноги раздвинуты"])
+        block = scene.render(moved, "ru")
+        self.assertIn("Кто ещё в сцене", block)   # third participant + pose rendered
+        self.assertIn("на животе", block)
+
+    def test_scene_str_slots_allow_multi_person_room(self):
+        import scene
+        long_cfg = "Кара на коленях рядом с привязанной Лерой; " * 4   # > 120 chars
+        new = scene.parse_update('{"configuration": ' + __import__("json").dumps(long_cfg) + '}',
+                                 scene._empty())
+        self.assertGreater(len(new["configuration"]), 120)   # not truncated at 120 anymore
+
 
 class SceneStateTests(unittest.TestCase):
     def setUp(self):

@@ -388,8 +388,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Physical continuity on a date** — she tracks the **physical scene** and **holds it until
   you change it**, explicitly or implicitly: where you are, her pose and yours, **what she's
   wearing vs. what's come off** (and where it landed), **the props/items in play**, and **who
-  else is in the scene**. Lie her on her stomach with a pillow under her hips and she stays
-  there until you move; "перейдём в спальню" moves the scene with you. She **won't change her
+  else is in the scene — and that third person's own position too** (each other participant is
+  tracked as "name — their current pose", held and updated exactly like her pose, so a named
+  participant's position no longer drifts or resets). Lie her on her stomach with a pillow under
+  her hips and she stays there until you move; "перейдём в спальню" moves the scene with you. She **won't change her
   clothes or swap a toy out of nowhere** — only when the dialogue does, or when *she* means to
   surprise you with something new — and she **won't forget what you're already playing with**.
   She also knows **how long you've been together** this time, including when you've **been up

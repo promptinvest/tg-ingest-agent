@@ -10,7 +10,8 @@ Tracked (content-agnostic — it tracks whatever physical facts get established)
   location, her_posture, his_position   — single short strings
   her_clothing, removed_clothing         — what's on her / what's come off (and where)
   items_in_play                          — props/objects in use (persist; introduced, never dropped)
-  people_present                         — anyone else physically in the scene
+  people_present                         — each OTHER person present, "Name — their current pose"
+                                           (a third participant's position is tracked here)
   other_facts                            — anything physical that fits no slot
 
 Hybrid update: a deterministic cue check (`likely_change`) gates a small JSON-only LLM call,
@@ -85,7 +86,9 @@ _UPDATER_SYSTEM = (
     "- her_posture / his_position = exactly how each is positioned NOW. They change ONLY when the "
     "dialogue moves them (he repositions her, she shifts, they relocate) — carry the EXACT current "
     "pose forward otherwise; never spring a new pose out of nowhere. Treat a pose like clothing: it "
-    "stays until something in the dialogue changes it.\n"
+    "stays until something in the dialogue changes it. The SAME pose-continuity applies to EVERY "
+    "other person present — each one's pose lives in people_present and is carried forward "
+    "identically (no sudden pose jumps for anyone, and never lose a third person's position).\n"
     "- configuration = how the bodies are arranged RELATIVE to each other right now, covering "
     "EVERYONE present (who is on top/under/behind/beside whom; what's pinned, held, or between "
     "them). Keep it consistent with the postures and people_present.\n"
@@ -104,7 +107,12 @@ _UPDATER_SYSTEM = (
     "add or remove a garment on your own.\n"
     "- items_in_play = props/objects/toys currently in use. ADD one only when it's actually brought "
     "in or used; NEVER drop an item that's still in use; never invent an item that wasn't mentioned.\n"
-    "- people_present = anyone physically in the scene besides the two (by name if given).\n"
+    "- people_present = EACH other person physically in the scene, ONE entry per person, as "
+    "\"<Name> — <their EXACT posture/position/state right now>\" (e.g. 'Лера — на животе, попой "
+    "кверху, ноги раздвинуты, запястья связаны над головой'). This is WHERE a third participant's "
+    "position lives — track it the SAME way as her_posture: carry it forward VERBATIM and change it "
+    "ONLY when the dialogue moves THAT person; never spring a new pose and NEVER let their position "
+    "drift or reset. Keep lasting details about them (restraints, marks, what's on or in them).\n"
     "- CHANGE a field only on an explicit or clearly-implied change; CLEAR a field (\"\" or []) only "
     "when it plainly no longer applies.\n"
     "- Track ONLY the physical situation — never feelings, mood, or what was said.\n"
@@ -137,11 +145,14 @@ def parse_update(reply, current):
     for s in STR_SLOTS:
         out.setdefault(s, "")
         if s in data:
-            out[s] = str(data.get(s) or "").strip()[:120]
+            # Roomy cap: configuration/accessibility cover EVERYONE present, so a 3-person scene
+            # needs space or a third person's state gets truncated away mid-phrase.
+            out[s] = str(data.get(s) or "").strip()[:240]
     for s in LIST_SLOTS:
         vals = out.get(s) or []
         if s in data and isinstance(data.get(s), list):
-            vals = [str(x).strip()[:120] for x in data[s] if str(x).strip()][:6]
+            # 'Name — full pose' entries (people_present) need room too.
+            vals = [str(x).strip()[:200] for x in data[s] if str(x).strip()][:6]
         out[s] = vals
     return out
 
@@ -151,12 +162,12 @@ _LABELS = {
            "configuration": "Расположение тел", "accessibility": "Доступность (что свободно/занято)",
            "contact_map": "Занятость по частям", "her_clothing": "На ней сейчас",
            "removed_clothing": "Снято", "items_in_play": "В игре",
-           "people_present": "Рядом ещё", "other_facts": "Ещё"},
+           "people_present": "Кто ещё в сцене (имя и их поза)", "other_facts": "Ещё"},
     "en": {"location": "Where", "her_posture": "Her posture", "his_position": "His position",
            "configuration": "Body arrangement", "accessibility": "Accessibility (free/blocked)",
            "contact_map": "Per-part occupancy", "her_clothing": "She's wearing",
            "removed_clothing": "Removed", "items_in_play": "In play",
-           "people_present": "Also present", "other_facts": "Also"},
+           "people_present": "Others present (name + their pose)", "other_facts": "Also"},
 }
 
 
