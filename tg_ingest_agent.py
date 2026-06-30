@@ -1709,6 +1709,21 @@ class Agent(hermes.HermesMixin):
         except (ValueError, TypeError):
             return False
 
+    def _recent_boss_msg(self, now=None):
+        """True within `reminder_quiet_after_msg_minutes` of the boss's LAST message to
+        Cara — the short lull a due reminder waits for so it never lands mid-exchange.
+        This is what gates reminders during a live meeting now (instead of holding for the
+        WHOLE meeting): a reminder fires in the first quiet gap, never frozen for days."""
+        now = now or datetime.now(timezone.utc)
+        last = store.kv_get(self.conn, "last_boss_msg_at")
+        if not last:
+            return False
+        try:
+            return (now - datetime.fromisoformat(last)).total_seconds() < \
+                self.cfg.reminder_quiet_after_msg_minutes * 60
+        except (ValueError, TypeError):
+            return False
+
     def _in_intimate_moment(self, now=None):
         """True when business pings should be HELD — a live social/personal meeting, or
         within `intimate_quiet_minutes` of a clearly intimate message."""

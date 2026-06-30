@@ -1133,6 +1133,11 @@ def meetings_idle(conn, cutoff_iso):
     ).fetchall()
 
 
+def meetings_active_all(conn):
+    """Every active meeting (idle auto-end + absolute-age cap apply their own cutoffs)."""
+    return conn.execute("SELECT * FROM meetings WHERE status = 'active'").fetchall()
+
+
 def set_meeting_chunks(conn, meeting_id, chunks):
     """Replace a meeting's embedding chunks. chunks: list of (text, vec_or_None).
     Embeddings stored as packed float32 BLOBs."""

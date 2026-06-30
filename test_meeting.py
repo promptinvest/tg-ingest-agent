@@ -230,6 +230,25 @@ class MeetingLifecycleTests(unittest.TestCase):
         self.assertEqual(len(ended), 1)
         self.assertIsNone(meeting.active(self.conn, 111))
 
+    def test_idle_sweep_absolute_cap_ends_continuously_active_meeting(self):
+        # A forgotten-open meeting kept "fresh" by ongoing messages (last_turn_at always
+        # recent) used to never end and froze reminders for days. The absolute cap ends it
+        # once it is older than meeting_max_hours, no matter how recently it was active.
+        self.cfg.meeting_max_hours = 24
+        meeting.start(self.conn, 111, kind="visit")
+        m = meeting.active(self.conn, 111)
+        started = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()   # > 24h cap
+        recent = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()   # just active
+        self.conn.execute("UPDATE meetings SET started_at = ?, last_turn_at = ? WHERE id = ?",
+                          (started, recent, m["id"]))
+        self.conn.commit()
+        with mock.patch.object(llm, "chat_profile",
+                               return_value='{"summary":"x","decisions":[],"highlights":[]}'), \
+                mock.patch.object(llm, "embed", side_effect=fake_embed):
+            ended = meeting.idle_sweep(self.conn, self.cfg)
+        self.assertEqual(len(ended), 1)
+        self.assertIsNone(meeting.active(self.conn, 111))
+
     def test_afterglow_candidate_social_only_and_windowed(self):
         now = datetime(2026, 6, 20, 7, 0, tzinfo=timezone.utc)
         # social, ended 14h ago -> eligible

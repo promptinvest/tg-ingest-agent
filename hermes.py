@@ -956,13 +956,15 @@ class HermesMixin:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         in_quiet = proactive.in_quiet_hours(self.cfg, self.conn, now)
-        in_meeting = self._in_social_meeting()
+        recent_msg = self._recent_boss_msg(now)
         in_window = self._recent_intimate_msg(now)
         for row in store.reminders_due(self.conn, now_iso):
-            # Hold for the WHOLE date and through quiet hours (never lost — fires once the
-            # meeting ends / the window closes). A live meeting holds indefinitely; a bare
-            # intimate-message window holds only up to the max-defer so nothing's stranded.
-            if in_meeting or in_quiet:
+            # A due reminder may fire DURING a meeting now — it is no longer frozen for the
+            # whole meeting (a forgotten-open meeting used to strand reminders for days). It
+            # only waits for a brief lull: held through quiet hours, within ~5 min of his last
+            # message (so it never interrupts an active exchange), and the bounded intimate
+            # window. All of these are short/bounded, so nothing is ever stranded.
+            if in_quiet or recent_msg:
                 continue
             if in_window:
                 due = reminders.parse_iso_utc(row["due_utc"])

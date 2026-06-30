@@ -292,13 +292,23 @@ def idle_sweep(conn, cfg, now=None):
     cutoff = (now - timedelta(hours=cfg.meeting_idle_hours)).isoformat()
     social_hours = getattr(cfg, "meeting_social_idle_hours", cfg.meeting_idle_hours)
     social_cutoff = (now - timedelta(hours=social_hours)).isoformat()
+    max_hours = getattr(cfg, "meeting_max_hours", 24.0)
+    age_cutoff = (now - timedelta(hours=max_hours)).isoformat()
     ended = []
-    for m in store.meetings_idle(conn, cutoff):
-        # A visit/date/staying-over gets the longer leash, so an overnight stay survives
-        # till morning (he's still there); only end it past the social cutoff.
+    for m in store.meetings_active_all(conn):
+        started = m["started_at"] or ""
         last = m["last_turn_at"] or m["started_at"] or ""
-        if is_social(m["kind"]) and last >= social_cutoff:
-            continue
+        # Absolute cap FIRST: a meeting older than max_hours ends no matter how active —
+        # a forgotten-open meeting (refreshed by every message) must not freeze reminders
+        # or swallow chat for days.
+        over_age = bool(started) and started < age_cutoff
+        if not over_age:
+            if last >= cutoff:
+                continue  # still active recently — not idle yet
+            # A visit/date/staying-over gets the longer leash, so an overnight stay survives
+            # till morning (he's still there); only end it past the social cutoff.
+            if is_social(m["kind"]) and last >= social_cutoff:
+                continue
         row, recap = end(conn, cfg, m["chat_id"], auto=True)
         if row:
             ended.append((row, recap))

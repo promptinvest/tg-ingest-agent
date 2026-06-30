@@ -224,10 +224,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     закрыла #1?", "что там с напоминаниями?" — is answered from the **real active list**
     (she explains a fired one is still open until "готово" and offers to close it), **not**
     by searching your notes. (An explicit "закрой #1" cancels it.)
-  - **Never fires late at night or mid‑intimacy.** A reminder due in **quiet hours** is held
-    until the window ends and delivered the next morning; during a **live date** it's held for
-    the **whole meeting** (and a bare intimate‑message window up to `reminder_max_defer_hours`),
-    so a reminder never lands at 1 AM or in the middle of a date. **System notices, too** — a
+  - **Never fires late at night or mid‑sentence — but no longer frozen by a meeting.** A
+    reminder due in **quiet hours** is held until the window ends and delivered the next
+    morning. It is **no longer held for a whole date** (a forgotten‑open meeting used to
+    strand reminders for *days*); instead it waits only for a brief **~5‑min lull** after your
+    last message (`reminder_quiet_after_msg_minutes`) — so it can fire **during** a date, just
+    in a quiet gap, never interrupting an active exchange — plus the bounded intimate‑message
+    window (`reminder_max_defer_hours`). Every hold is short/bounded, so a reminder is never
+    stranded. (A meeting itself also can't linger: it auto‑ends past an absolute cap
+    `meeting_max_hours`, default 24h, no matter how active.) **System notices, too** — a
     **build/deploy announcement** and **model up/down alerts** are held during a meeting /
     intimate moment and posted once you're free, so nothing breaks the mood.
   - **Rescheduling never lands in the past, and re‑arms cleanly.** A **move verb + a time** is

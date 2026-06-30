@@ -1718,6 +1718,34 @@ class ConversationDispatchTests(unittest.TestCase):
             self.agent.fire_due_reminders()
         self.assertTrue(any("благодарности" in s for s in sent))  # fires once it's morning
 
+    def test_reminder_fires_during_meeting_after_lull(self):
+        """A due reminder is no longer frozen for a whole meeting — it waits only for a
+        ~5-min lull after his last message, then fires even while the meeting is live."""
+        import proactive
+        import meeting
+        from datetime import datetime, timezone
+        conn = self.agent.conn
+        self.agent.cfg.reminder_quiet_after_msg_minutes = 5
+        due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        store.reminder_add(conn, 1, "выплата", due, "none")
+        meeting.start(conn, 1, kind="visit")  # a live social meeting used to freeze reminders
+        sent = []
+        cap = lambda cid, text, *a, **k: sent.append(text)
+        # he just messaged -> held so the reminder doesn't interrupt the active exchange
+        store.kv_set(conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
+        with mock.patch.object(self.agent, "reply", side_effect=cap), \
+                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
+            self.agent.fire_due_reminders()
+        self.assertEqual(sent, [])
+        # 6-min lull -> fires, even though the meeting is STILL in progress
+        store.kv_set(conn, "last_boss_msg_at",
+                     (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat())
+        with mock.patch.object(self.agent, "reply", side_effect=cap), \
+                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
+            self.agent.fire_due_reminders()
+        self.assertIsNotNone(meeting.active(conn, 1))            # meeting still open
+        self.assertTrue(any("выплата" in s for s in sent))      # reminder fired anyway
+
     def test_reschedule_ordinal_targets_position_not_last_touched(self):
         from datetime import datetime, timezone
         conn = self.agent.conn
@@ -1777,8 +1805,12 @@ class ConversationDispatchTests(unittest.TestCase):
         import proactive
         conn = self.agent.conn
         owner = self.agent._owner_chat()
+        self.agent.cfg.reminder_quiet_after_msg_minutes = 5
         store.meeting_start(conn, owner, kind="visit")            # a live date
-        # a reminder 5h overdue (well past the max-defer) is STILL held for the whole date
+        # A reminder is NOT frozen by the meeting anymore (that stranded reminders for days);
+        # it only waits for a ~5-min lull so it doesn't interrupt an active exchange. He just
+        # messaged, so an overdue reminder still holds right now.
+        store.kv_set(conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
         store.reminder_add(conn, owner, "оплата",
                            (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(), "none")
         sent = []
@@ -1786,7 +1818,7 @@ class ConversationDispatchTests(unittest.TestCase):
                                side_effect=lambda cid, text, *a, **k: sent.append(text)), \
                 mock.patch.object(proactive, "in_quiet_hours", return_value=False):
             self.agent.fire_due_reminders()
-        self.assertEqual(sent, [])                                # not interrupted
+        self.assertEqual(sent, [])                                # not interrupted mid-exchange
         # a build/deploy notice is also held (and not marked seen -> announces later)
         store.kv_set(conn, "deployed_version", "old")
         with mock.patch.object(self.agent, "build_version", return_value="new"), \

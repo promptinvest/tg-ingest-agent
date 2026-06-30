@@ -334,6 +334,13 @@ def load_config(env=None):
     # Social/personal time (a visit, a date, staying over) gets a far longer idle leash so
     # an overnight stay survives till morning instead of silently auto-ending at 3h.
     cfg.meeting_social_idle_hours = float(env.get("MEETING_SOCIAL_IDLE_HOURS") or "16")
+    # Absolute cap: a meeting auto-ends once it is older than this since it started, no
+    # matter how recently it was active. A continuously-touched social meeting could
+    # otherwise stay "open" for days (refreshed by every message) and freeze reminders.
+    cfg.meeting_max_hours = float(env.get("MEETING_MAX_HOURS") or "24")
+    # A due reminder waits for a ~5-min lull after the boss's last message so it never lands
+    # mid-exchange (this is what lets reminders fire DURING a meeting, in a quiet gap).
+    cfg.reminder_quiet_after_msg_minutes = float(env.get("REMINDER_QUIET_AFTER_MSG_MINUTES") or "5")
     # Proactive day-after afterglow (the morning after a personal meeting she may,
     # occasionally, open with warm afterglow). Gentle: one-shot per meeting,
     # probability-gated, quiet-hours/proactive-prefs aware. Never clingy.
