@@ -123,7 +123,11 @@ def update_arc(conn, cfg, trigger="meeting", meeting_id=None):
     meetings = store.meeting_recent(conn, owner, limit=6) if owner is not None else []
     events = store.rel_recent(conn, _since(120), limit=8)
     convo = store.convo_recent(conn, owner, limit=14) if owner is not None else []
-    if not (prior or meetings or events or convo):
+    # Real in-meeting dialogue from the last couple of days — so a long or just-ended (or
+    # not-yet-summarized) meeting still folds into the storyline, instead of the daily
+    # reflection going blind and echoing the prior arc while all the life is in meeting_turns.
+    turns = store.meeting_turns_since(conn, owner, _since(2), limit=60) if owner is not None else []
+    if not (prior or meetings or events or convo or turns):
         return ""
     blocks = []
     if prior:
@@ -141,6 +145,9 @@ def update_arc(conn, cfg, trigger="meeting", meeting_id=None):
     if convo:
         blocks.append("Recent everyday conversation:\n" + "\n".join(
             f"{'Boss' if r['role'] == 'user' else 'Cara'}: {r['text']}" for r in convo))
+    if turns:
+        blocks.append("Recent time together — verbatim moments (most recent):\n" + "\n".join(
+            f"{'Boss' if r['role'] == 'boss' else 'Cara'}: {r['text']}" for r in turns))
     messages = [
         {"role": "system", "content": _ARC_SYSTEM},
         {"role": "user", "content": "\n\n".join(blocks)},

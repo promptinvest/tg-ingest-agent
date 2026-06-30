@@ -78,6 +78,7 @@ ACTIONS = {
     "meeting_end",       # end the meeting currently in progress
     "meeting_recall",    # params: query — recall a past meeting / time together (separate episodic memory)
     "meeting_list",      # list the meetings you've had together
+    "recall_conversation",  # params: since_utc/until_utc and/or query — read back our REAL past dialogue (messages)
     "clarify",           # params: question
     "out_of_scope",
 }
@@ -237,6 +238,9 @@ NOTE: while a meeting is in progress, a clear DEPARTURE — he's leaving, headin
 "тебе идёт изумрудное" / "мне нравишься в чёрном кружеве" / "обожаю тебя в шёлке" / "I love you in burgundy lace" -> {"action": "outfit_preference", "params": {"detail": "ему нравится она в изумрудном"}, "confidence": 0.88}
 NOTE: 'добавь в гардероб/у тебя теперь есть <вещь>' is wardrobe_add (her clothes). 'тебе идёт/мне нравишься в X' is outfit_preference (his taste — she remembers it and dresses to please). Both are about HER clothes, never the notes inbox (ingest).
 NOTE: her FEELINGS / anticipation / longing about a meeting (how she feels, is she excited, does she miss your time) is converse — answered warmly from the heart. meeting_recall is only for FACTUAL recall: what was decided/discussed or the logistics (when/where).
+"посмотри наш диалог вчера вечером и сегодня утром" / "перечитай наш вчерашний разговор" / "что я тебе писал ночью?" / "what did we talk about last night?" / "look back at our chat this morning" -> {"action": "recall_conversation", "params": {"since_utc": "<start of that window in UTC>", "until_utc": "<end of that window in UTC>"}, "confidence": 0.9}
+"что я тебе рассказывал про Ивана?" / "напомни, что я говорил про поездку в нашем разговоре" / "what did I tell you about the trip?" (recall a TOPIC from our past chat, no clear time) -> {"action": "recall_conversation", "params": {"query": "Иван поездка"}, "confidence": 0.82}
+NOTE: recall_conversation reads back YOUR ACTUAL CHAT — the real messages the two of you exchanged ("посмотри/перечитай наш диалог/разговор", "что я тебе писал/говорил", "what did we talk about / read our chat"). It is NOT 'ask' (which answers from his saved NOTES/documents) and NOT 'meeting_recall' (a past MEETING's summary/decisions). Point it at a TIME with since_utc/until_utc ("вчера вечером"/"утром"/"вчера"); point it at a TOPIC with query. When he asks you to LOOK at / RE-READ what was actually said between you, it is recall_conversation, never converse.
 "какие у нас были встречи?" / "покажи наши встречи" / "list our meetings" -> {"action": "meeting_list", "params": {}, "confidence": 0.85}
 """
 
@@ -286,6 +290,11 @@ def build_system_prompt(cfg, pending, now_utc=None):
         f"Allowed actions (closed set): {actions}.\n"
         "A question about the user's OWN saved notes, plans or documents"
         " (e.g. 'when is my flight?', 'what's the plan for today?') is the 'ask' action.\n"
+        "A request to READ BACK your actual past CONVERSATION with him — the real messages you"
+        " two exchanged ('посмотри наш диалог вчера вечером', 'перечитай наш разговор', 'что я"
+        " тебе писал утром', 'what did we talk about last night') — is 'recall_conversation'"
+        " (point it at the time with since_utc/until_utc, or a topic with query). It is NOT"
+        " 'ask' (his saved notes) and NOT 'converse'.\n"
         "But a question about CARA herself — her behaviour, feelings, or whether SHE will"
         " do/use something ('ты используешь это?', 'тебе нравится?', 'будешь пользоваться?',"
         " 'do you like it?') — is NOT 'ask'; it's 'converse' (she answers warmly herself).\n"

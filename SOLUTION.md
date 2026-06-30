@@ -469,6 +469,28 @@ proactively like real memory. Design decisions and why:
   reflection** job folds everyday interaction in too. The arc is grounded strictly in
   real episodes — interpretation of real history, never invented facts. A budget/LLM
   failure leaves the prior arc untouched.
+- **The storyline must not go blind during a meeting (2026-06-30).** `update_arc` read
+  only meeting *summaries* + the short `conversation` log — so while a long meeting was
+  live, all real interaction sat in `meeting_turns`, invisible to the daily reflection,
+  which then just echoed the prior arc. Worse, if a meeting's end-recap LLM failed (a
+  forgotten-open 3-day `visit` auto-ended exactly during a DO **402** window → empty
+  summary, never embedded, never arc'd), that whole period vanished from every memory path
+  and Cara "didn't remember last night". Fixes: (1) `update_arc` also folds recent
+  `meeting_turns` (`store.meeting_turns_since`, last ~2 days) so live/just-ended dialogue
+  reaches the arc; (2) a failed recap is flagged (`meetings.summary_tries`) and **retried**
+  by `check_meeting_resummary` → `meeting.resummarize`, which re-summarizes the transcript,
+  re-indexes it, and folds it into the arc (preserving the original `ended_at` via
+  `meeting_set_summary`), bounded by `meeting_summary_max_tries`.
+- **Read back the real conversation (`recall_conversation`).** Cara could only search his
+  NOTES (`ask`) or a meeting's *summary* (`meeting_recall`) — so "посмотри наш диалог вчера
+  вечером" found nothing. New action reads the **verbatim** dialogue — everyday
+  `conversation` + in-meeting `meeting_turns`, merged chronologically by time
+  (`store.dialog_in_range`), or keyword-searched across all of it (`dialog_search`) for a
+  topic with no clear time — and answers grounded ONLY in the real transcript (timestamped,
+  most-recent-tail within a char budget), never invented. The router emits `since_utc`/
+  `until_utc` for a time reference or `query` for a topic. Enabled by making the
+  `conversation` log **durable**: `convo_add` no longer prunes to 30 turns (owner chose full
+  retention — disk is a non-issue at personal volume), so any past dialogue stays readable.
 - **Closeness only deepens (anti-reset ratchet).** Because the arc is re-synthesized each
   pass from the prior arc + the last turns, a cool/task-only day could quietly cool the
   tone and make Cara "reset" to a more reserved register — surprised the boss is being more

@@ -1327,6 +1327,9 @@ def _migrate(conn):
         mtg_columns = {row["name"] for row in conn.execute("PRAGMA table_info(meetings)")}
         if mtg_columns and "scheduled_for" not in mtg_columns:
             conn.execute("ALTER TABLE meetings ADD COLUMN scheduled_for TEXT")
+        if mtg_columns and "summary_tries" not in mtg_columns:
+            # Retry budget for recovering a meeting whose recap LLM failed at end (e.g. a 402).
+            conn.execute("ALTER TABLE meetings ADD COLUMN summary_tries INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError:
         pass
     # One-time tea de-emphasis (the original seed life over-indexed on tea — 'a bad
@@ -2165,14 +2168,12 @@ def pending_expire(conn):
 
 
 def convo_add(conn, chat_id, role, text):
+    # Full verbatim history is kept (no pruning) so the boss can have Cara read back past
+    # dialogue on demand (recall_conversation). convo_recent still reads only the latest N
+    # for live context, so keeping everything costs nothing at conversation time.
     conn.execute(
         "INSERT INTO conversation (chat_id, ts, role, text) VALUES (?, ?, ?, ?)",
         (chat_id, _now(), role, text[:1000]),
-    )
-    conn.execute(
-        "DELETE FROM conversation WHERE chat_id = ? AND id NOT IN"
-        " (SELECT id FROM conversation WHERE chat_id = ? ORDER BY id DESC LIMIT 30)",
-        (chat_id, chat_id),
     )
     conn.commit()
 
@@ -2183,6 +2184,89 @@ def convo_recent(conn, chat_id, limit=10):
         (chat_id, limit),
     ).fetchall()
     return list(reversed(rows))
+
+
+def dialog_in_range(conn, chat_id, since_iso, until_iso, limit=300):
+    """Merged verbatim dialogue — everyday conversation + in-meeting turns — for a chat in
+    [since, until], oldest-first. Lets Cara read back 'our talk last night'. Roles differ by
+    source (conversation: user/bot; meeting_turns: boss/cara); the caller normalizes. When
+    over the limit, keeps the most RECENT turns (the tail) so a 'last night' window fits."""
+    rows = conn.execute(
+        "SELECT ts, role, text, 'convo' AS src FROM conversation"
+        "  WHERE chat_id = ? AND ts >= ? AND ts <= ?"
+        " UNION ALL "
+        "SELECT mt.ts, mt.role, mt.text, 'meeting' AS src FROM meeting_turns mt"
+        "  JOIN meetings m ON m.id = mt.meeting_id"
+        "  WHERE m.chat_id = ? AND mt.ts >= ? AND mt.ts <= ?"
+        " ORDER BY ts",
+        (chat_id, since_iso, until_iso, chat_id, since_iso, until_iso),
+    ).fetchall()
+    return rows[-limit:] if (limit and len(rows) > limit) else rows
+
+
+def dialog_search(conn, chat_id, terms, limit=40):
+    """Keyword search across all verbatim dialogue (conversation + meeting turns) for a chat —
+    used when the boss recalls a TOPIC with no clear time window. Oldest-first."""
+    terms = [t for t in (terms or []) if t]
+    if not terms:
+        return []
+    like = " OR ".join(["text LIKE ?"] * len(terms))
+    args = [f"%{t}%" for t in terms]
+    rows = conn.execute(
+        f"SELECT ts, role, text, 'convo' AS src FROM conversation WHERE chat_id = ? AND ({like})"
+        " UNION ALL "
+        f"SELECT mt.ts, mt.role, mt.text, 'meeting' AS src FROM meeting_turns mt"
+        f"  JOIN meetings m ON m.id = mt.meeting_id WHERE m.chat_id = ? AND ({like})"
+        " ORDER BY ts DESC LIMIT ?",
+        [chat_id, *args, chat_id, *args, limit],
+    ).fetchall()
+    return list(reversed(rows))
+
+
+def meeting_turns_since(conn, chat_id, since_iso, limit=60):
+    """Recent in-meeting turns for a chat since a cutoff (oldest-first) — folded into the
+    storyline arc so a long or just-ended meeting's real dialogue reaches the daily reflection
+    even before/without a written summary."""
+    rows = conn.execute(
+        "SELECT mt.ts, mt.role, mt.text FROM meeting_turns mt"
+        "  JOIN meetings m ON m.id = mt.meeting_id"
+        "  WHERE m.chat_id = ? AND mt.ts >= ?"
+        " ORDER BY mt.ts DESC LIMIT ?",
+        (chat_id, since_iso, limit),
+    ).fetchall()
+    return list(reversed(rows))
+
+
+def meetings_unsummarized(conn, max_tries=5, limit=3):
+    """Ended meetings that have turns but no summary (recap failed/skipped) and are still
+    within the retry budget — for the resummary sweep that recovers a lost period."""
+    return conn.execute(
+        "SELECT m.* FROM meetings m"
+        " WHERE m.status = 'ended' AND COALESCE(m.summary, '') = ''"
+        "   AND COALESCE(m.summary_tries, 0) < ?"
+        "   AND EXISTS (SELECT 1 FROM meeting_turns t WHERE t.meeting_id = m.id)"
+        " ORDER BY m.id DESC LIMIT ?",
+        (max_tries, limit),
+    ).fetchall()
+
+
+def meeting_bump_summary_try(conn, meeting_id):
+    conn.execute(
+        "UPDATE meetings SET summary_tries = COALESCE(summary_tries, 0) + 1 WHERE id = ?",
+        (meeting_id,),
+    )
+    conn.commit()
+
+
+def meeting_set_summary(conn, meeting_id, summary=None, decisions=None, title=None):
+    """Update a meeting's recap fields WITHOUT touching status/ended_at — for re-summarizing
+    an already-ended meeting whose original recap failed (preserves the real end time)."""
+    conn.execute(
+        "UPDATE meetings SET summary = COALESCE(?, summary),"
+        " decisions = COALESCE(?, decisions), title = COALESCE(?, title) WHERE id = ?",
+        (summary, decisions, title, meeting_id),
+    )
+    conn.commit()
 
 
 # -- issues (communication problems, for weekly/on-demand summaries) ----------

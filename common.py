@@ -341,6 +341,13 @@ def load_config(env=None):
     # A due reminder waits for a ~5-min lull after the boss's last message so it never lands
     # mid-exchange (this is what lets reminders fire DURING a meeting, in a quiet gap).
     cfg.reminder_quiet_after_msg_minutes = float(env.get("REMINDER_QUIET_AFTER_MSG_MINUTES") or "5")
+    # Recover a meeting whose recap LLM failed at end: the resummary sweep retries up to this
+    # many times before giving up (so a transient 402/budget blip never loses the period).
+    cfg.meeting_summary_max_tries = int(env.get("MEETING_SUMMARY_MAX_TRIES") or "5")
+    # recall_conversation: how far back to read by default when the boss references our past
+    # dialogue without a clear time ("посмотри наш разговор"), and the turn cap fed to the model.
+    cfg.recall_default_hours = float(env.get("RECALL_DEFAULT_HOURS") or "60")
+    cfg.recall_max_turns = int(env.get("RECALL_MAX_TURNS") or "300")
     # Proactive day-after afterglow (the morning after a personal meeting she may,
     # occasionally, open with warm afterglow). Gentle: one-shot per meeting,
     # probability-gated, quiet-hours/proactive-prefs aware. Never clingy.

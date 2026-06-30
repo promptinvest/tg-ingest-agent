@@ -421,11 +421,22 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Recall** — on demand (`meeting_recall` "помнишь наш ужин?", `meeting_list` "наши
   встречи") and **proactively**: the most relevant past meeting is surfaced into ordinary
   conversation grounding so she brings it up naturally when the moment fits.
+- **Read back our actual conversation** (`recall_conversation`) — when you point her at the
+  real dialogue you two had ("посмотри наш диалог вчера вечером и сегодня утром", "что я тебе
+  писал утром?", "перечитай наш разговор про поездку"), she **reads the verbatim history** —
+  everyday messages **and** in‑meeting turns, merged by time — for the time window or topic you
+  mean (`store.dialog_in_range`/`dialog_search`), and answers grounded in what was **actually
+  said** (never the notes KB, never invented). The full conversation is now **kept
+  indefinitely** (no more 30‑turn prune) so any past dialogue stays readable.
 - **The relationship storyline** — an evolving, synthesized **arc of "us"** (in
   `relationship_arc`, versioned) is **injected into every conversation**, so her baseline
-  warmth and what she references **track how the relationship actually developed**. It
-  grows continuously: meetings are the rich, verbatim beats, plus a **daily reflection**
-  folds everyday interaction into the arc. Grounded only in real history — never invented.
+  warmth and what she references **track how the relationship actually developed**. It grows
+  continuously: meetings are the rich, verbatim beats, plus a **daily reflection** that folds
+  everyday interaction **and recent in‑meeting dialogue** (`meeting_turns`) into the arc — so a
+  long or just‑ended meeting never leaves the storyline blind. If a meeting's end‑recap fails
+  (e.g. a budget/402 blip), it is **retried** on a later sweep (`check_meeting_resummary` →
+  `meeting.resummarize`, bounded by `meeting_summary_max_tries`) so a whole period is never
+  silently lost. Grounded only in real history — never invented.
 - **Your bond only deepens — she never "resets"** — closeness is ratcheted (a 1–5 stage
   that only goes up, plus an anti‑regression rule in the arc), so a quiet or busy day can't
   cool her back to a reserved register. As you grow closer and more open, she **meets you

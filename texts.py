@@ -767,6 +767,10 @@ TEXTS = {
         "ru": "Что-то не нахожу такой нашей встречи в памяти 🤍 Может, уточнишь?",
         "en": "I don't find a meeting like that in my memory 🤍 Want to give me a hint?",
     },
+    "recall_conversation_empty": {
+        "ru": "Не нашла этого в нашей переписке 🤍 Подскажи, когда это было (вечер, утро, какой день) — посмотрю дальше.",
+        "en": "I can't find that in our conversation 🤍 Tell me roughly when it was (evening, morning, which day) and I'll look further back.",
+    },
     "meeting_list_empty": {
         "ru": "Мы пока не проводили встреч — но я буду рада первой 🤍",
         "en": "We haven't had any meetings yet — but I'd love our first 🤍",

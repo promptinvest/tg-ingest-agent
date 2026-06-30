@@ -146,6 +146,9 @@ SKILLS = {
                     "title": {"en": "End the meeting", "ru": "Завершить встречу"}},
     "meeting_recall": {"risk": "read_only", "uses_llm": True, "persona_context": True,
                        "title": {"en": "Recall a meeting", "ru": "Вспомнить встречу"}},
+    "recall_conversation": {"risk": "read_only", "uses_llm": True, "persona_context": True,
+                            "title": {"en": "Read back our conversation",
+                                      "ru": "Перечитать наш разговор"}},
     "meeting_list": {"risk": "read_only", "persona_context": True,
                      "title": {"en": "Our meetings", "ru": "Наши встречи"}},
     # -- internal: the daily relationship reflection (grows the storyline arc)

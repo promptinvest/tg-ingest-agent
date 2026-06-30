@@ -131,57 +131,94 @@ def _transcript(conn, meeting_id):
         f"{'Boss' if r['role'] == 'boss' else 'Cara'}: {r['text']}" for r in rows)
 
 
+def _summarize_transcript(conn, cfg, m, transcript, auto):
+    """Run the kind-aware recap over a transcript and return the recap dict. Best-effort: an
+    LLM/budget failure returns an empty-summary recap (caller decides retry). Side effects for
+    a social meeting: stores landed pet-names + durable body changes."""
+    import llm
+    recap = {"title": m["title"], "summary": "", "decisions": [], "highlights": [],
+             "kind": m["kind"], "auto": auto}
+    if not transcript.strip():
+        return recap
+    social = is_social(m["kind"])
+    system = _SUMMARY_SOCIAL if social else _SUMMARY_BUSINESS
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": (
+            f"Kind: {m['kind']}; setting: {m['setting'] or '-'}\n\n"
+            f"Transcript:\n{transcript}")},
+    ]
+    try:
+        reply = llm.chat_profile(cfg, conn, "meeting", messages, profile="meeting_summary")
+        parsed = llm.parse_llm_json(reply) or {}
+        recap["title"] = (str(parsed.get("title") or "").strip() or (m["title"] or "")) or None
+        recap["summary"] = str(parsed.get("summary") or "").strip()
+        recap["decisions"] = [str(d).strip() for d in (parsed.get("decisions") or [])
+                              if str(d).strip()][:8]
+        recap["highlights"] = [str(h).strip() for h in (parsed.get("highlights") or [])
+                               if str(h).strip()][:8]
+        if social:  # remember the shared pet-names / playful phrasings that landed
+            for e in (parsed.get("endearments") or [])[:4]:
+                store.intimacy_style_add(conn, str(e).strip())
+            # durable body memory: marks/add-ons/adjustments that outlast the date
+            for b in (parsed.get("body_changes") or [])[:6]:
+                if not isinstance(b, dict) or not str(b.get("feature") or "").strip():
+                    continue
+                perm = str(b.get("permanence") or "lasting").strip().lower()
+                store.body_add(conn, str(b["feature"]).strip(), perm,
+                               note=str(b.get("note") or "").strip() or None,
+                               fade_days=cfg.body_mark_fade_days if perm == "mark" else 0)
+    except (llm.BudgetExceeded, llm.LLMError):
+        pass  # best-effort; the episode still closes / will be retried
+    return recap
+
+
 def end(conn, cfg, chat_id, auto=False):
     """Close the active meeting: summarize (kind-aware), embed into episodic
     memory. Returns (meeting_row, recap_dict) or (None, None) if none active.
-    Best-effort: an LLM/budget failure still closes the meeting (empty recap)."""
-    import llm
+    Best-effort: an LLM/budget failure still closes the meeting (empty recap) and flags it for
+    the resummary sweep so the period is never silently lost."""
     m = store.meeting_active(conn, chat_id)
     if not m:
         return None, None
     meeting_id = m["id"]
     transcript = _transcript(conn, meeting_id)
-    recap = {"title": m["title"], "summary": "", "decisions": [], "highlights": [],
-             "kind": m["kind"], "auto": auto}
-    if transcript.strip():
-        social = is_social(m["kind"])
-        system = _SUMMARY_SOCIAL if social else _SUMMARY_BUSINESS
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": (
-                f"Kind: {m['kind']}; setting: {m['setting'] or '-'}\n\n"
-                f"Transcript:\n{transcript}")},
-        ]
-        try:
-            reply = llm.chat_profile(cfg, conn, "meeting", messages, profile="meeting_summary")
-            parsed = llm.parse_llm_json(reply) or {}
-            recap["title"] = (str(parsed.get("title") or "").strip()
-                              or (m["title"] or "")) or None
-            recap["summary"] = str(parsed.get("summary") or "").strip()
-            recap["decisions"] = [str(d).strip() for d in (parsed.get("decisions") or [])
-                                  if str(d).strip()][:8]
-            recap["highlights"] = [str(h).strip() for h in (parsed.get("highlights") or [])
-                                   if str(h).strip()][:8]
-            if social:  # remember the shared pet-names / playful phrasings that landed
-                for e in (parsed.get("endearments") or [])[:4]:
-                    store.intimacy_style_add(conn, str(e).strip())
-                # durable body memory: marks/add-ons/adjustments that outlast the date
-                for b in (parsed.get("body_changes") or [])[:6]:
-                    if not isinstance(b, dict) or not str(b.get("feature") or "").strip():
-                        continue
-                    perm = str(b.get("permanence") or "lasting").strip().lower()
-                    store.body_add(conn, str(b["feature"]).strip(), perm,
-                                   note=str(b.get("note") or "").strip() or None,
-                                   fade_days=cfg.body_mark_fade_days if perm == "mark" else 0)
-        except (llm.BudgetExceeded, llm.LLMError):
-            pass  # best-effort; the episode still closes
+    recap = _summarize_transcript(conn, cfg, m, transcript, auto)
     store.meeting_end(conn, meeting_id, summary=recap["summary"] or None,
                       decisions=json.dumps(recap["decisions"] or recap["highlights"],
                                            ensure_ascii=False),
                       title=recap["title"])
+    if transcript.strip() and not recap["summary"]:
+        store.meeting_bump_summary_try(conn, meeting_id)  # recap failed -> let the sweep retry
     store.scene_clear(conn, meeting_id)   # the live physical snapshot ends with the meeting
     _index(conn, cfg, meeting_id, recap, transcript)
     return store.meeting_get(conn, meeting_id), recap
+
+
+def resummarize(conn, cfg, meeting_id):
+    """Re-run the recap for an already-ENDED meeting whose summary is missing (its recap LLM
+    failed at end, e.g. a budget/402 blip). On success: stores the summary (preserving the real
+    ended_at), (re)indexes the transcript, and folds it into the storyline arc — so a lost
+    period (like a 3-day meeting that 402'd at auto-end) re-enters memory. Returns True on a
+    produced summary. Bumps the retry counter every attempt (bounded by the sweep)."""
+    import relationship
+    m = store.meeting_get(conn, meeting_id)
+    if not m:
+        return False
+    store.meeting_bump_summary_try(conn, meeting_id)
+    transcript = _transcript(conn, meeting_id)
+    if not transcript.strip():
+        return False
+    recap = _summarize_transcript(conn, cfg, m, transcript, auto=True)
+    if not recap["summary"]:
+        return False
+    store.meeting_set_summary(conn, meeting_id, summary=recap["summary"],
+                              decisions=json.dumps(recap["decisions"] or recap["highlights"],
+                                                   ensure_ascii=False),
+                              title=recap["title"])
+    _index(conn, cfg, meeting_id, recap, transcript)
+    relationship.update_arc(conn, cfg, trigger="meeting", meeting_id=meeting_id)
+    return True
 
 
 def _index(conn, cfg, meeting_id, recap, transcript):

@@ -327,6 +327,40 @@ class RelationshipArcTests(unittest.TestCase):
         with mock.patch.object(llm, "chat_profile", return_value="История растёт."):
             self.assertTrue(relationship.run_daily_reflection(self.conn, self.cfg))
 
+    def test_arc_folds_recent_meeting_turns(self):
+        # A meeting's verbatim dialogue must reach the storyline even with no written summary —
+        # otherwise a long/just-ended meeting goes blind and the arc just echoes the prior one.
+        meeting.start(self.conn, 111, kind="visit")
+        m = meeting.active(self.conn, 111)
+        store.meeting_turn_add(self.conn, m["id"], "boss", "мы решили лететь в Рим осенью")
+        captured = {}
+
+        def cp(cfg, conn, skill, messages, **k):
+            captured["user"] = messages[1]["content"]
+            return "Мы планируем Рим вместе. CLOSENESS: 4"
+        with mock.patch.object(llm, "chat_profile", side_effect=cp):
+            relationship.update_arc(self.conn, self.cfg, trigger="daily")
+        self.assertIn("лететь в Рим", captured["user"])   # verbatim meeting turn fed to the arc
+
+    def test_resummarize_recovers_unsummarized_meeting(self):
+        # A meeting whose recap LLM failed at end (empty summary) is recovered by the sweep:
+        # summary written, folded into the arc, and no longer pending.
+        meeting.start(self.conn, 111, kind="dinner")
+        m = meeting.active(self.conn, 111)
+        store.meeting_turn_add(self.conn, m["id"], "boss", "вино у реки, было волшебно")
+        store.meeting_end(self.conn, m["id"], summary=None, decisions="[]")  # recap failed
+        store.meeting_bump_summary_try(self.conn, m["id"])
+        self.assertEqual(len(store.meetings_unsummarized(self.conn)), 1)
+        with mock.patch.object(
+                llm, "chat_profile",
+                return_value='{"summary":"ужин у реки","decisions":[],"highlights":[]}'), \
+                mock.patch.object(llm, "embed", side_effect=fake_embed):
+            ok = meeting.resummarize(self.conn, self.cfg, m["id"])
+        self.assertTrue(ok)
+        self.assertEqual(store.meeting_get(self.conn, m["id"])["summary"], "ужин у реки")
+        self.assertEqual(len(store.meetings_unsummarized(self.conn)), 0)   # no longer pending
+        self.assertTrue(relationship.current_arc(self.conn))               # folded into the arc
+
 
 class MeetingDispatchTests(unittest.TestCase):
     """End-to-end golden transcripts through handle_update (LLM scripted)."""

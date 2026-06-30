@@ -1322,6 +1322,56 @@ class ConversationDispatchTests(unittest.TestCase):
         cp.assert_not_called()
         r.assert_not_called()
 
+    def test_conversation_history_is_kept(self):
+        # Full verbatim dialogue is retained (no 30-row prune) so it can be read back later.
+        conn = self.agent.conn
+        for i in range(40):
+            store.convo_add(conn, 1, "user", f"msg {i}")
+        n = conn.execute("SELECT COUNT(*) n FROM conversation WHERE chat_id=1").fetchone()["n"]
+        self.assertEqual(n, 40)
+
+    def test_dialog_in_range_merges_convo_and_meeting(self):
+        import meeting
+        conn = self.agent.conn
+        store.convo_add(conn, 1, "user", "доброе утро")
+        meeting.start(conn, 1, kind="visit")
+        m = meeting.active(conn, 1)
+        store.meeting_turn_add(conn, m["id"], "boss", "я уже у тебя")
+        rows = store.dialog_in_range(conn, 1, "2000-01-01T00:00:00+00:00",
+                                     "2999-01-01T00:00:00+00:00")
+        joined = " ".join(r["text"] for r in rows)
+        self.assertIn("доброе утро", joined)     # everyday conversation
+        self.assertIn("я уже у тебя", joined)     # AND in-meeting turns, merged
+
+    def test_recall_conversation_reads_past_dialogue(self):
+        import meeting
+        conn = self.agent.conn
+        meeting.start(conn, 1, kind="visit")      # last night's turns are the only record
+        m = meeting.active(conn, 1)
+        store.meeting_turn_add(conn, m["id"], "boss", "давай поедем к морю в июле")
+        store.meeting_turn_add(conn, m["id"], "cara", "обожаю эту идею 🤍")
+        captured = {}
+
+        def cp(cfg, conn_, skill, messages, **k):
+            captured["sys"] = messages[0]["content"]
+            return "Ты звал меня к морю в июле 🤍"
+        with mock.patch.object(llm, "chat_profile", side_effect=cp), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_recall_conversation(1, "ru", {"query": "море"},
+                                              "что я говорил тебе про море?")
+        self.assertIn("к морю в июле", captured["sys"])   # the REAL turn reached the model
+        self.assertEqual(r.call_args[0][1], "Ты звал меня к морю в июле 🤍")
+
+    def test_recall_conversation_empty_when_nothing_in_window(self):
+        from texts import T
+        with mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_recall_conversation(
+                1, "ru", {"since_utc": "2020-01-01T00:00:00+00:00",
+                          "until_utc": "2020-01-02T00:00:00+00:00"}, "что было?")
+        self.assertEqual(r.call_args[0][1], T("ru", "recall_conversation_empty"))
+
     def test_multi_action_asks_one_at_a_time(self):
         with mock.patch.object(router, "route",
                                return_value={"action": "multi_action", "params": {}, "confidence": 0.85}), \
@@ -4757,17 +4807,17 @@ class MemoryStoreTests(unittest.TestCase):
         store.pending_set(self.conn, 2, "habit", {}, ttl_seconds=-5)
         self.assertIsNone(store.pending_get(self.conn, 2))
 
-    def test_conversation_trim(self):
+    def test_conversation_recent_window_and_full_retention(self):
         for i in range(40):
             store.convo_add(self.conn, 1, "user", f"msg {i}")
         rows = store.convo_recent(self.conn, 1, limit=10)
-        self.assertEqual(len(rows), 10)
+        self.assertEqual(len(rows), 10)                  # live context is still a small window
         self.assertEqual(rows[-1]["text"], "msg 39")
         self.assertEqual(rows[0]["text"], "msg 30")
         total = self.conn.execute(
             "SELECT COUNT(*) AS n FROM conversation WHERE chat_id = 1"
         ).fetchone()["n"]
-        self.assertEqual(total, 30)  # capped
+        self.assertEqual(total, 40)  # FULL history kept (no prune) so it can be read back later
 
     def test_reminders_store_lifecycle(self):
         due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
