@@ -1901,33 +1901,29 @@ class ConversationDispatchTests(unittest.TestCase):
             router.route(self.agent.cfg, conn, 1, "удали #1", None)
         self.assertIn("reminder_cancel that reminder", captured["user"])
 
-    def test_reminder_held_during_intimacy_then_delivered(self):
+    def test_reminder_gated_only_by_5min_lull_not_intimacy(self):
+        # The ONLY in-conversation safety is the ~5-min message lull. Intimacy no longer adds a
+        # separate hold: a due reminder fires mid-intimacy as long as he hasn't messaged in the
+        # last 5 min — it just waits for the first 5-min gap.
         from datetime import datetime, timezone, timedelta
         conn = self.agent.conn
+        self.agent.cfg.reminder_quiet_after_msg_minutes = 5
         due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
         store.reminder_add(conn, 1, "благодарности", due, "none")
         sent = []
-        with mock.patch.object(self.agent, "reply",
-                               side_effect=lambda cid, text, *a, **k: sent.append(text)):
-            store.kv_set(conn, "last_intimate_at", datetime.now(timezone.utc).isoformat())
+        cap = lambda cid, text, *a, **k: sent.append(text)
+        # intimate moment AND he just messaged -> held by the 5-min lull
+        store.kv_set(conn, "last_intimate_at", datetime.now(timezone.utc).isoformat())
+        store.kv_set(conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
+        with mock.patch.object(self.agent, "reply", side_effect=cap):
             self.agent.fire_due_reminders()
-            self.assertEqual(sent, [])                       # held mid-intimacy
-            store.kv_set(conn, "last_intimate_at",
-                         (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
+        self.assertEqual(sent, [])                            # held: he messaged < 5 min ago
+        # still mid-intimacy, but a 6-min message gap -> fires (intimacy alone doesn't hold)
+        store.kv_set(conn, "last_boss_msg_at",
+                     (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat())
+        with mock.patch.object(self.agent, "reply", side_effect=cap):
             self.agent.fire_due_reminders()
-        self.assertTrue(any("благодарности" in s for s in sent))   # delivered once it passed
-
-    def test_reminder_fires_when_overdue_beyond_max_defer(self):
-        from datetime import datetime, timezone, timedelta
-        conn = self.agent.conn
-        due = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()  # > 2h max defer
-        store.reminder_add(conn, 1, "оплатить счёт", due, "none")
-        sent = []
-        with mock.patch.object(self.agent, "reply",
-                               side_effect=lambda cid, text, *a, **k: sent.append(text)):
-            store.kv_set(conn, "last_intimate_at", datetime.now(timezone.utc).isoformat())
-            self.agent.fire_due_reminders()
-        self.assertTrue(any("оплатить счёт" in s for s in sent))   # too overdue to keep holding
+        self.assertTrue(any("благодарности" in s for s in sent))   # fires despite intimacy
 
     def test_converse_context_surfaces_active_reminders(self):
         # She must know her own reminders in conversation, so "почему не закрыла #1?"

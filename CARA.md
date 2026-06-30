@@ -228,11 +228,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     **explicit alarm**, so it fires at its scheduled time **even inside quiet hours** (a
     deliberate "22:00 daily" reminder must not be swallowed by a 22:00–08:00 quiet window —
     quiet hours only silences Cara's *proactive* outreach). It is **no longer held for a whole
-    date** either (a forgotten‑open meeting used to strand reminders for *days*); it waits only
-    for a brief **~5‑min lull** after your last message (`reminder_quiet_after_msg_minutes`) —
-    so it can fire **during** a date, just in a quiet gap, never interrupting an active exchange
-    — plus the bounded intimate‑message window (`reminder_max_defer_hours`). Every hold is
-    short/bounded, so a reminder is never stranded. (A meeting itself also can't linger: it auto‑ends past an absolute cap
+    date** either (a forgotten‑open meeting used to strand reminders for *days*). The **only**
+    in‑conversation safety is a brief **~5‑min lull** after your last message
+    (`reminder_quiet_after_msg_minutes`) — so it fires **during** a date or mid‑intimacy, just in
+    the first quiet gap, never interrupting an active exchange. Nothing else holds it (no
+    quiet‑hours hold, no separate intimacy buffer), so a reminder always arrives at its time. (A meeting itself also can't linger: it auto‑ends past an absolute cap
     `meeting_max_hours`, default 24h, no matter how active.) **System notices, too** — a
     **build/deploy announcement** and **model up/down alerts** are held during a meeting /
     intimate moment and posted once you're free, so nothing breaks the mood.

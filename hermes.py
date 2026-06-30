@@ -956,22 +956,16 @@ class HermesMixin:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         recent_msg = self._recent_boss_msg(now)
-        in_window = self._recent_intimate_msg(now)
         for row in store.reminders_due(self.conn, now_iso):
-            # A reminder is an EXPLICIT alarm the boss set for a chosen time, so it fires at
-            # that time even inside quiet hours — otherwise a deliberate "22:00 daily" reminder
-            # is swallowed by a 22:00–08:00 quiet window and only arrives next morning. (Quiet
-            # hours still silences Cara's PROACTIVE outreach — nudges/brief/good-morning.) It is
-            # also no longer frozen for a whole meeting; it only waits for a brief lull: within
-            # ~5 min of his last message (never mid-exchange) and the bounded intimate window —
-            # both short, so nothing is stranded.
+            # A reminder is an EXPLICIT alarm the boss set for a chosen time: it fires at that
+            # time even inside quiet hours (quiet hours only silences Cara's PROACTIVE outreach
+            # — nudges/brief/good-morning) and is never frozen for a whole meeting. The ONLY
+            # in-conversation safety is the ~5-min lull: it won't land within
+            # reminder_quiet_after_msg_minutes of his last message, so it never interrupts an
+            # active exchange (including mid-intimacy, where messages are frequent — it just
+            # waits for the first 5-min gap, then fires). Nothing else holds it.
             if recent_msg:
                 continue
-            if in_window:
-                due = reminders.parse_iso_utc(row["due_utc"])
-                if due is not None and (now - due).total_seconds() < \
-                        self.cfg.reminder_max_defer_hours * 3600:
-                    continue
             lang = self.lang()
             self.reply(row["chat_id"], T(lang, "reminder_fired",
                                          name=self.owner_name(), title=row["title"]))
