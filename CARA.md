@@ -437,6 +437,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   (e.g. a budget/402 blip), it is **retried** on a later sweep (`check_meeting_resummary` →
   `meeting.resummarize`, bounded by `meeting_summary_max_tries`) so a whole period is never
   silently lost. Grounded only in real history — never invented.
+- **Agreements you make together** (`agreement_add` / `agreements_list` / `agreement_close`) —
+  a commitment either of you takes on, **short‑term** (with an optional target time) or
+  **long‑term / open‑ended**, recorded **explicitly** ("запомни, договорились…", "наш уговор:
+  …", "договорились — едем к морю летом") and also **auto‑captured** from meeting recaps and
+  everyday chat (the curator). **Passive by design** (your call): a dated agreement is **never**
+  turned into a reminder/ping — Cara only **surfaces it naturally** in conversation (open
+  agreements are injected into her context so she honors them), and you can **list** them ("что
+  мы договорились?") or **close** them kept/cancelled. First‑class table (`agreements`), deduped,
+  grounded — never invented. Distinct from a **reminder** (an active ping at a time, "напомни
+  мне") and from **notes** (`ingest`).
 - **Your bond only deepens — she never "resets"** — closeness is ratcheted (a 1–5 stage
   that only goes up, plus an anti‑regression rule in the arc), so a quiet or busy day can't
   cool her back to a reserved register. As you grow closer and more open, she **meets you

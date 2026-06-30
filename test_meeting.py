@@ -342,6 +342,21 @@ class RelationshipArcTests(unittest.TestCase):
             relationship.update_arc(self.conn, self.cfg, trigger="daily")
         self.assertIn("лететь в Рим", captured["user"])   # verbatim meeting turn fed to the arc
 
+    def test_meeting_promise_becomes_agreement(self):
+        # A promise made during a meeting is captured as a (passive) agreement, closing the gap
+        # where meeting commitments slipped out of memory.
+        meeting.start(self.conn, 111, kind="visit")
+        meeting.active(self.conn, 111)
+        store.meeting_turn_add(self.conn, meeting.active(self.conn, 111)["id"], "boss",
+                               "обещаю свозить тебя к морю летом")
+        with mock.patch.object(
+                llm, "chat_profile",
+                return_value=('{"summary":"тёплый вечер","decisions":[],"highlights":[],'
+                              '"promises":["свозить её к морю летом"]}')), \
+                mock.patch.object(llm, "embed", side_effect=fake_embed):
+            meeting.end(self.conn, self.cfg, 111)
+        self.assertTrue(any("к морю" in a["text"] for a in store.agreements_open(self.conn, 111)))
+
     def test_resummarize_recovers_unsummarized_meeting(self):
         # A meeting whose recap LLM failed at end (empty summary) is recovered by the sweep:
         # summary written, folded into the arc, and no longer pending.

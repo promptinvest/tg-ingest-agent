@@ -94,10 +94,12 @@ def record(conn, chat_id, role, text):
 _SUMMARY_BUSINESS = (
     "You summarize a WORKING meeting between the boss and Cara (his assistant). "
     "Return STRICT JSON only, no prose: "
-    '{"title": "...", "summary": "...", "decisions": ["..."], "highlights": []}\n'
+    '{"title": "...", "summary": "...", "decisions": ["..."], "highlights": [], "promises": ["..."]}\n'
     "title: a short label for the meeting (his language). summary: 2-4 sentences "
     "of what was discussed and concluded. decisions: concrete decisions / action "
     "items agreed (each short, his language); empty array if none. "
+    "promises: a lasting commitment EITHER of you made to keep beyond this meeting (e.g. "
+    "'ты обещал прислать отчёт к пятнице') — short, his language; empty if none. "
     "Ground everything ONLY in the transcript — never invent a decision, name, "
     "number or date that isn't there. Use the transcript's language."
 )
@@ -107,7 +109,10 @@ _SUMMARY_SOCIAL = (
     "with the boss (a dinner, a walk, the movies, or him visiting her). Return "
     "STRICT JSON only, no prose: "
     '{"title": "...", "summary": "...", "decisions": [], "highlights": ["..."], '
-    '"endearments": ["..."], "body_changes": [{"feature": "...", "permanence": "...", "note": "..."}]}\n'
+    '"endearments": ["..."], "promises": ["..."], '
+    '"body_changes": [{"feature": "...", "permanence": "...", "note": "..."}]}\n'
+    "promises: a lasting commitment EITHER of you made during this time together to keep going "
+    "forward (e.g. 'ты обещал свозить её к морю летом') — short, his language; empty if none.\n"
     "body_changes: LASTING changes to CARA's body from this time that should persist afterwards — "
     "a mark he left (hickey/bruise/scratch → permanence \"mark\", it fades), an add-on she's now "
     "wearing (a collar, jewelry → \"lasting\"), or a permanent change (a piercing, a tattoo → "
@@ -157,6 +162,12 @@ def _summarize_transcript(conn, cfg, m, transcript, auto):
                               if str(d).strip()][:8]
         recap["highlights"] = [str(h).strip() for h in (parsed.get("highlights") or [])
                                if str(h).strip()][:8]
+        # Promises made during the meeting become (passive) agreements, so a commitment from a
+        # date/sit-down is tracked and honored — closing the gap where meeting promises slipped.
+        for t in (parsed.get("promises") or [])[:6]:
+            if str(t).strip():
+                store.agreement_add(conn, m["chat_id"], str(t).strip(),
+                                    source="meeting", source_id=m["id"])
         if social:  # remember the shared pet-names / playful phrasings that landed
             for e in (parsed.get("endearments") or [])[:4]:
                 store.intimacy_style_add(conn, str(e).strip())

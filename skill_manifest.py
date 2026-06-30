@@ -149,6 +149,12 @@ SKILLS = {
     "recall_conversation": {"risk": "read_only", "uses_llm": True, "persona_context": True,
                             "title": {"en": "Read back our conversation",
                                       "ru": "Перечитать наш разговор"}},
+    "agreement_add": {"risk": "state_write", "writes_state": True, "persona_context": True,
+                      "title": {"en": "Remember an agreement", "ru": "Запомнить договорённость"}},
+    "agreements_list": {"risk": "read_only", "persona_context": True,
+                        "title": {"en": "Our agreements", "ru": "Наши договорённости"}},
+    "agreement_close": {"risk": "state_write", "writes_state": True, "persona_context": True,
+                        "title": {"en": "Close an agreement", "ru": "Закрыть договорённость"}},
     "meeting_list": {"risk": "read_only", "persona_context": True,
                      "title": {"en": "Our meetings", "ru": "Наши встречи"}},
     # -- internal: the daily relationship reflection (grows the storyline arc)

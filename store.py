@@ -430,6 +430,26 @@ CREATE TABLE IF NOT EXISTS world_facts (
 );
 CREATE INDEX IF NOT EXISTS idx_world_kind ON world_facts(kind, status);
 
+-- AGREEMENTS the boss and Cara make — commitments either of them takes on, short-term
+-- (with an optional target time) or long-term/open-ended. First-class + explicit (he can
+-- record one directly), also fed by meeting recaps and the conversation curator. PASSIVE
+-- memory: a dated agreement is NEVER turned into a reminder/nudge — Cara only brings it up
+-- naturally in conversation. Injected (compact) into her context so she honors them.
+CREATE TABLE IF NOT EXISTS agreements (
+  id INTEGER PRIMARY KEY,
+  chat_id INTEGER NOT NULL,
+  text TEXT NOT NULL,                     -- the agreement, short, in his language
+  party TEXT NOT NULL DEFAULT 'both',     -- who committed: boss|cara|both
+  due_utc TEXT,                           -- optional target time (passive — never auto-reminds)
+  status TEXT NOT NULL DEFAULT 'open',    -- open|kept|cancelled
+  source TEXT,                            -- explicit|meeting|conversation
+  source_id INTEGER,
+  created_at TEXT NOT NULL,
+  closed_at TEXT,
+  trace_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agreements_open ON agreements(chat_id, status, id);
+
 -- Long-term BODY memory for Cara: durable changes to her body that persist ACROSS dates and
 -- into everyday talk — marks he left (hickeys/bruises, which fade), add-ons she now wears
 -- (a collar, jewelry), and permanent adjustments (a piercing, a tattoo). Distinct from the
@@ -1032,6 +1052,63 @@ def world_find_person(conn, name, kind="person"):
 
 def world_set_status(conn, fact_id, status):
     conn.execute("UPDATE world_facts SET status=? WHERE id=?", (status, fact_id))
+    conn.commit()
+
+
+# -- agreements (commitments either of them made; passive memory) -------------
+
+def agreement_add(conn, chat_id, text, party="both", due_utc=None,
+                  source="explicit", source_id=None):
+    """Record an agreement. Deduped against OPEN ones by casefolded text (a re-statement
+    just refreshes nothing — returns None). party in boss|cara|both. Returns the new id, or
+    None when empty or a duplicate."""
+    text = (text or "").strip()[:400]
+    if not text:
+        return None
+    party = party if party in ("boss", "cara", "both") else "both"
+    key = text.casefold()
+    for row in conn.execute(
+            "SELECT text FROM agreements WHERE chat_id=? AND status='open'", (chat_id,)):
+        if (row["text"] or "").strip().casefold() == key:
+            return None
+    cur = conn.execute(
+        "INSERT INTO agreements (chat_id, text, party, due_utc, status, source, source_id,"
+        " created_at, trace_id) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)",
+        (chat_id, text, party, due_utc, source, source_id, _now(), _trace_id()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def agreements_open(conn, chat_id, limit=50):
+    """Open agreements for a chat — dated ones first (soonest due), then the most recent
+    open-ended ones. The contiguous order is also the boss-facing #1..N display order."""
+    return conn.execute(
+        "SELECT * FROM agreements WHERE chat_id=? AND status='open'"
+        " ORDER BY (due_utc IS NULL), due_utc, id DESC LIMIT ?",
+        (chat_id, limit),
+    ).fetchall()
+
+
+def agreements_all(conn, chat_id, limit=50, status=None):
+    if status:
+        return conn.execute(
+            "SELECT * FROM agreements WHERE chat_id=? AND status=? ORDER BY id DESC LIMIT ?",
+            (chat_id, status, limit)).fetchall()
+    return conn.execute(
+        "SELECT * FROM agreements WHERE chat_id=? ORDER BY id DESC LIMIT ?",
+        (chat_id, limit)).fetchall()
+
+
+def agreement_get(conn, agreement_id):
+    return conn.execute("SELECT * FROM agreements WHERE id=?", (agreement_id,)).fetchone()
+
+
+def agreement_set_status(conn, agreement_id, status):
+    """Close an agreement (kept|cancelled) or reopen it. Stamps closed_at when closing."""
+    closed = _now() if status in ("kept", "cancelled") else None
+    conn.execute("UPDATE agreements SET status=?, closed_at=? WHERE id=?",
+                 (status, closed, agreement_id))
     conn.commit()
 
 

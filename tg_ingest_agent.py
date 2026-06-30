@@ -284,6 +284,7 @@ class Agent(hermes.HermesMixin):
             f"known_categories={len(store.known_categories(self.conn))}, "
             f"allowed_chats={len(self.cfg.allowed_chat_ids)}, offset={offset})"
         )
+        self._backfill_agreements_once()
         while not self.stop:
             now = time.time()
             self.turn_lang = None  # scheduler replies use the stored preference
@@ -821,6 +822,12 @@ class Agent(hermes.HermesMixin):
             self.do_reschedule(chat_id, lang, params, text)
         elif action == "reminder_rename":
             self.do_rename_reminder(chat_id, lang, params, text)
+        elif action == "agreement_add":
+            self.do_agreement_add(chat_id, lang, params, text)
+        elif action == "agreements_list":
+            self.do_agreements_list(chat_id, lang)
+        elif action == "agreement_close":
+            self.do_agreement_close(chat_id, lang, params, text)
         elif action == "reminder_undo":
             self.do_reminder_undo(chat_id, lang, params)
         elif action == "list_files":
@@ -1434,15 +1441,31 @@ class Agent(hermes.HermesMixin):
                          else f"  - {r['feature']}")
         return "\n".join(lines)
 
+    def _backfill_agreements_once(self):
+        """One-time: migrate pre-existing world_facts promises into the new agreements store so
+        nothing already remembered is lost when promises moved to a first-class table. Idempotent."""
+        if store.kv_get(self.conn, "agreements_backfilled"):
+            return
+        owner = self._owner_chat()
+        if owner is not None:
+            for p in store.world_active(self.conn, "promise", limit=100):
+                if (p["text"] or "").strip():
+                    store.agreement_add(self.conn, owner, p["text"], source="conversation")
+        store.kv_set(self.conn, "agreements_backfilled", "1")
+
     def _world_context(self, lang):
         """Compact 'who's who and where we're going' block: the cast of people (with their
-        relationships/bonding), promises to keep, and relationship milestones — so Cara
-        remembers the people in their life and what was promised. '' when nothing's known."""
+        relationships/bonding), the agreements you've made together, and relationship
+        milestones — so Cara remembers the people in their life and what you agreed. Agreements
+        are PASSIVE: shown so she honors/brings them up naturally, never turned into a ping.
+        '' when nothing's known."""
+        import agreements as _ag
+        owner = self._owner_chat()
         people = store.world_active(self.conn, "person", limit=8)
-        promises = store.world_active(self.conn, "promise", limit=5)
+        agreement_rows = store.agreements_open(self.conn, owner, limit=6) if owner is not None else []
         milestones = store.world_active(self.conn, "milestone", limit=4)
         items = store.world_active(self.conn, "item", limit=6)
-        if not (people or promises or milestones or items):
+        if not (people or agreement_rows or milestones or items):
             return ""
         ru = lang == "ru"
         lines = []
@@ -1452,9 +1475,13 @@ class Agent(hermes.HermesMixin):
             for p in people:
                 lines.append(f"  - {p['name']}: {p['text']}" if (p["text"] or "").strip()
                              else f"  - {p['name']}")
-        if promises:
-            lines.append("Обещания — помни и держи их:" if ru else "Promises — remember and keep them:")
-            lines += [f"  - {p['text']}" for p in promises]
+        if agreement_rows:
+            lines.append("Ваши договорённости — помни и держись их (не выдумывай новых):" if ru
+                         else "Your agreements — remember and honor them (never invent new ones):")
+            for a in agreement_rows:
+                who = _ag.party_label(a["party"], lang)
+                when = _ag.fmt_due(a["due_utc"], self.tz_offset())
+                lines.append(f"  - [{who}] {a['text']}" + (f" ({when})" if when else ""))
         if milestones:
             lines.append("Важные вехи ваших отношений:" if ru else "Milestones in your relationship:")
             lines += [f"  - {m['text']}" for m in milestones]

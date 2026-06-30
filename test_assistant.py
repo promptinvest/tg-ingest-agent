@@ -4927,7 +4927,8 @@ class WorldModelTests(unittest.TestCase):
         with mock.patch.object(llm, "chat_profile", return_value=reply):
             memory_curator.curate_conversation(self.conn, self.agent.cfg, 1)
         self.assertIsNotNone(store.world_find_person(self.conn, "Иван Доронин"))
-        self.assertEqual(len(store.world_active(self.conn, "promise")), 1)
+        # an extracted promise is now filed as a (passive) agreement, not a world_facts promise
+        self.assertEqual(len(store.agreements_open(self.conn, 1)), 1)
 
     def test_body_add_dedup_and_active(self):
         c = self.conn
@@ -4956,17 +4957,42 @@ class WorldModelTests(unittest.TestCase):
         self.assertIn("ошейник", ctx)
         self.assertIn("Твоё тело сейчас", ctx)
 
-    def test_world_context_injected_into_converse(self):
+    def test_world_context_injects_people_and_agreements(self):
         store.world_upsert_person(self.conn, "Лера", "подруга, участвует в ваших вечерах")
-        store.world_add(self.conn, "promise", "свозить её к морю")
+        store.agreement_add(self.conn, 1, "свозить её к морю")   # open agreement
         ctx = self.agent.converse_context("ru", 1)
         self.assertIn("Лера", ctx)
-        self.assertIn("к морю", ctx)
+        self.assertIn("к морю", ctx)              # agreements surfaced passively into context
         # empty world -> no block
         store.world_set_status(self.conn, store.world_find_person(self.conn, "Лера")["id"], "inactive")
-        for p in store.world_active(self.conn, "promise"):
-            store.world_set_status(self.conn, p["id"], "kept")
+        for a in store.agreements_open(self.conn, 1):
+            store.agreement_set_status(self.conn, a["id"], "kept")
         self.assertEqual(self.agent._world_context("ru"), "")
+
+    def test_agreement_add_list_close(self):
+        a = self.agent
+        with mock.patch.object(a, "reply") as r:
+            a.do_agreement_add(1, "ru", {"text": "едем к морю этим летом", "party": "both"}, "")
+        self.assertEqual(len(store.agreements_open(self.conn, 1)), 1)
+        self.assertIn("к морю", r.call_args[0][1])
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), 0)   # passive: NO reminder
+        with mock.patch.object(a, "reply") as r:
+            a.do_agreements_list(1, "ru")
+        self.assertIn("#1", r.call_args[0][1])
+        self.assertIn("к морю", r.call_args[0][1])
+        with mock.patch.object(a, "reply"):
+            a.do_agreement_close(1, "ru", {"id": 1, "outcome": "kept"}, "")
+        self.assertEqual(len(store.agreements_open(self.conn, 1)), 0)    # closed out
+
+    def test_agreement_dedup_and_dated_is_passive(self):
+        self.assertIsNotNone(store.agreement_add(self.conn, 1, "мыть посуду по очереди"))
+        self.assertIsNone(store.agreement_add(self.conn, 1, "Мыть посуду по очереди"))  # casefold dup
+        due = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_agreement_add(1, "ru", {"text": "прислать отчёт", "due_utc": due}, "")
+        rows = store.agreements_open(self.conn, 1)
+        self.assertTrue(any(r["due_utc"] for r in rows))                 # dated agreement kept
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), 0)   # but still no reminder
 
 
 class NotesPaginationTests(unittest.TestCase):

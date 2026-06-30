@@ -1009,6 +1009,42 @@ class HermesMixin:
         n = store.reminder_display_no(self.conn, chat_id, rid)
         return n if n is not None else rid
 
+    # -- agreements (passive memory of commitments we made) -------------------
+
+    def do_agreement_add(self, chat_id, lang, params, text):
+        import agreements
+        now = datetime.now(timezone.utc)
+        draft = agreements.validate_add(params, now)
+        if not draft:  # router gave no clean text -> fall back to the raw message
+            draft = agreements.validate_add(
+                {"text": params.get("text") or text, "party": params.get("party"),
+                 "due_utc": params.get("due_utc")}, now)
+        if not draft:
+            self.reply(chat_id, T(lang, "agreement_unclear"))
+            return
+        store.agreement_add(self.conn, chat_id, draft["text"], party=draft["party"],
+                            due_utc=draft["due_utc"], source="explicit")
+        relationship.log_event(self.conn, "agreement", f"agreed: {draft['text']}", importance=2)
+        self.reply(chat_id, T(lang, "agreement_saved", text=draft["text"]))
+
+    def do_agreements_list(self, chat_id, lang):
+        import agreements
+        rows = store.agreements_open(self.conn, chat_id)
+        self.reply(chat_id, agreements.format_list(rows, self.tz_offset(), lang))
+
+    def do_agreement_close(self, chat_id, lang, params, text):
+        import agreements
+        rows = store.agreements_open(self.conn, chat_id)
+        row = agreements.find(rows, params)
+        if row is None:
+            self.reply(chat_id, T(lang, "agreement_not_found"))
+            return
+        outcome = str(params.get("outcome") or "kept").strip().lower()
+        cancelled = outcome in ("cancel", "cancelled", "отмена", "отменить", "сними", "снять")
+        store.agreement_set_status(self.conn, row["id"], "cancelled" if cancelled else "kept")
+        self.reply(chat_id, T(lang, "agreement_cancelled" if cancelled else "agreement_kept",
+                              text=row["text"]))
+
     def do_budget_set(self, chat_id, lang, params):
         """Change the AI spend cap on the boss's explicit request — a runtime
         override stored in preferences and enforced by the budget gateway."""

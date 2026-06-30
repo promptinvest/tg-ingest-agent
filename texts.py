@@ -771,6 +771,34 @@ TEXTS = {
         "ru": "Не нашла этого в нашей переписке 🤍 Подскажи, когда это было (вечер, утро, какой день) — посмотрю дальше.",
         "en": "I can't find that in our conversation 🤍 Tell me roughly when it was (evening, morning, which day) and I'll look further back.",
     },
+    "agreement_saved": {
+        "ru": "Запомнила нашу договорённость: {text} 🤍",
+        "en": "Noted our agreement: {text} 🤍",
+    },
+    "agreement_unclear": {
+        "ru": "О чём именно договорились? Скажи в двух словах — и я запомню.",
+        "en": "What exactly did we agree on? Tell me in a few words and I'll keep it.",
+    },
+    "agreement_list_header": {
+        "ru": "Наши договорённости:",
+        "en": "Our agreements:",
+    },
+    "agreement_list_empty": {
+        "ru": "Пока у нас нет записанных договорённостей 🤍 Скажешь «запомни, договорились…» — и запишу.",
+        "en": "No agreements recorded yet 🤍 Say \"remember, we agreed…\" and I'll keep it.",
+    },
+    "agreement_kept": {
+        "ru": "Отметила, что выполнили: {text} 🤍",
+        "en": "Marked as kept: {text} 🤍",
+    },
+    "agreement_cancelled": {
+        "ru": "Сняла договорённость: {text}",
+        "en": "Cancelled the agreement: {text}",
+    },
+    "agreement_not_found": {
+        "ru": "Не нашла такую договорённость. Покажу список — скажи «наши договорённости».",
+        "en": "I can't find that agreement. Say \"our agreements\" and I'll show the list.",
+    },
     "meeting_list_empty": {
         "ru": "Мы пока не проводили встреч — но я буду рада первой 🤍",
         "en": "We haven't had any meetings yet — but I'd love our first 🤍",

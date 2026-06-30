@@ -491,6 +491,21 @@ proactively like real memory. Design decisions and why:
   `until_utc` for a time reference or `query` for a topic. Enabled by making the
   `conversation` log **durable**: `convo_add` no longer prunes to 30 turns (owner chose full
   retention — disk is a non-issue at personal volume), so any past dialogue stays readable.
+- **Agreements are first-class, not just inferred promises (2026-06-30).** Commitments the two
+  of them make were only caught probabilistically (the curator's `promises` → `world_facts`,
+  ambient, no command, no lifecycle, and meeting-made ones slipped). Now a dedicated
+  `agreements` table (id · chat · text · party `boss|cara|both` · optional `due_utc` · status
+  `open|kept|cancelled` · source) backs three actions: `agreement_add` ("запомни, договорились…"),
+  `agreements_list` ("что мы договорились?"), `agreement_close` (kept/cancelled). It's fed from
+  **three sources** — explicit command, the meeting-end recap (new `promises` field →
+  `agreement_add` source=meeting, so date/sit-down commitments don't slip), and the conversation
+  curator (its `promises` now write agreements, not `world_facts`). Open agreements are injected
+  (compact) into `converse_context` via `_world_context` so Cara honors and brings them up.
+  **Deliberately PASSIVE** (owner's call): a dated agreement is **never** turned into a
+  reminder/nudge — it's memory she surfaces, not a scheduler ping (that's what `reminder_create`
+  is for; the router NOTE keeps "договорились" → agreement vs "напомни" → reminder distinct).
+  Existing `world_facts` promises are backfilled into `agreements` once at startup
+  (`_backfill_agreements_once`, kv-guarded) so nothing already remembered is lost.
 - **Closeness only deepens (anti-reset ratchet).** Because the arc is re-synthesized each
   pass from the prior arc + the last turns, a cool/task-only day could quietly cool the
   tone and make Cara "reset" to a more reserved register — surprised the boss is being more

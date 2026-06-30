@@ -79,6 +79,9 @@ ACTIONS = {
     "meeting_recall",    # params: query — recall a past meeting / time together (separate episodic memory)
     "meeting_list",      # list the meetings you've had together
     "recall_conversation",  # params: since_utc/until_utc and/or query — read back our REAL past dialogue (messages)
+    "agreement_add",     # params: text, party(boss|cara|both), due_utc(optional) — record a commitment we made
+    "agreements_list",   # show our recorded agreements ("что мы договорились?")
+    "agreement_close",   # params: id/query + outcome(kept|cancelled) — close out an agreement
     "clarify",           # params: question
     "out_of_scope",
 }
@@ -104,6 +107,12 @@ NOTE: rescheduling SEVERAL reminders to the SAME time ("первые две", "#
 NOTE: a move verb + a time is ALWAYS reminder_reschedule, even when the reminder is named only by an ordinal ("первое"/"второе") or "его"/"это"/"это напоминание" — put just the due_utc in params and let the engine resolve WHICH from the ordinal/reference. NEVER send such a reschedule to converse or clarify, and never refuse it (there is no "too close in time" limit — the engine just sets it).
 "передвинь благодарности на 22:00 каждый день" / "сдвинь напоминание про банк на 22:00" / "move the gratitude reminder to 22:00 every day" ("передвинь"/"сдвинь" mean the SAME as "перенеси"; a recurring reminder simply keeps recurring at the new time) -> {"action": "reminder_reschedule", "params": {"title_query": "благодарности", "due_utc": "<22:00 local in UTC>"}, "confidence": 0.9}
 "покажи напоминания" / "мои напоминания" / "покажи просроченные" / "какие у меня напоминания?" / "show my reminders" / "list reminders" -> {"action": "reminder_list", "params": {}, "confidence": 0.92}
+"запомни, мы договорились, что я бросаю курить" / "наш уговор: ты готовишь, я мою посуду" / "договорились — едем к морю этим летом" / "let's agree I'll write every day" / "remember our deal: you pick the movie next time" -> {"action": "agreement_add", "params": {"text": "едем к морю этим летом", "party": "both"}, "confidence": 0.9}
+"договорились, что ты пришлёшь отчёт к пятнице" / "уговор: я звоню маме в воскресенье" (an agreement WITH a target time — still passive, NOT a reminder) -> {"action": "agreement_add", "params": {"text": "прислать отчёт", "party": "boss", "due_utc": "<that time in UTC>"}, "confidence": 0.88}
+"что мы договорились?" / "наши договорённости" / "о чём мы условились?" / "what did we agree on?" / "our agreements" / "what are our deals?" -> {"action": "agreements_list", "params": {}, "confidence": 0.92}
+"мы выполнили уговор про море" / "договорённость про отчёт закрыта, сделал" / "we kept our deal about the trip" -> {"action": "agreement_close", "params": {"query": "море", "outcome": "kept"}, "confidence": 0.88}
+"отмени нашу договорённость про кино" / "снимаем уговор про посуду" / "cancel our agreement about the dishes" -> {"action": "agreement_close", "params": {"query": "кино", "outcome": "cancelled"}, "confidence": 0.88}
+NOTE: an AGREEMENT is a mutual commitment to remember ("договорились", "уговор", "условились", "our deal/agreement", "let's agree"). It is PASSIVE memory — even one with a time is agreement_add, NOT a reminder (a reminder is "напомни мне" — an active ping at a time). "запомни/договорились" about a commitment -> agreement_add; "напомни" at a time -> reminder_create. Closing one ("выполнили/сделали/сняли/cancel/kept") -> agreement_close with outcome.
 "закрой напоминание про Рим" / "Азербайджан закрой" / "убери напоминание Азербайджан" / "close the Rome reminder" (close ONE reminder named by TITLE, in any word order) -> {"action": "reminder_cancel", "params": {"title_query": "Рим"}, "confidence": 0.9}
 "первое закрой" / "закрой второе" / "удали первое напоминание" / "убери третье" / "close the first reminder" (a LONE close naming ONE reminder by ordinal position) -> {"action": "reminder_cancel", "params": {"id": 1}, "confidence": 0.88}
 NOTE: a close verb ("закрой"/"удали"/"убери"/"close"/"delete") naming ONE reminder — by title OR by ordinal, in ANY word order ("Азербайджан закрой" == "закрой Азербайджан") — is reminder_cancel, NEVER clarify/converse. Only a message bundling two+ DIFFERENT commands ("закрой первое, второе перенеси") is multi_action.
