@@ -955,16 +955,17 @@ class HermesMixin:
     def fire_due_reminders(self):
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
-        in_quiet = proactive.in_quiet_hours(self.cfg, self.conn, now)
         recent_msg = self._recent_boss_msg(now)
         in_window = self._recent_intimate_msg(now)
         for row in store.reminders_due(self.conn, now_iso):
-            # A due reminder may fire DURING a meeting now — it is no longer frozen for the
-            # whole meeting (a forgotten-open meeting used to strand reminders for days). It
-            # only waits for a brief lull: held through quiet hours, within ~5 min of his last
-            # message (so it never interrupts an active exchange), and the bounded intimate
-            # window. All of these are short/bounded, so nothing is ever stranded.
-            if in_quiet or recent_msg:
+            # A reminder is an EXPLICIT alarm the boss set for a chosen time, so it fires at
+            # that time even inside quiet hours — otherwise a deliberate "22:00 daily" reminder
+            # is swallowed by a 22:00–08:00 quiet window and only arrives next morning. (Quiet
+            # hours still silences Cara's PROACTIVE outreach — nudges/brief/good-morning.) It is
+            # also no longer frozen for a whole meeting; it only waits for a brief lull: within
+            # ~5 min of his last message (never mid-exchange) and the bounded intimate window —
+            # both short, so nothing is stranded.
+            if recent_msg:
                 continue
             if in_window:
                 due = reminders.parse_iso_utc(row["due_utc"])

@@ -1751,7 +1751,10 @@ class ConversationDispatchTests(unittest.TestCase):
         row = store.reminder_get(conn, rid)
         self.assertGreater(reminders.parse_iso_utc(row["due_utc"]), datetime.now(timezone.utc))
 
-    def test_reminder_held_during_quiet_hours(self):
+    def test_reminder_fires_even_in_quiet_hours(self):
+        # A reminder is an EXPLICIT alarm: it fires at its set time even inside quiet hours,
+        # so a deliberate "22:00 daily" reminder isn't swallowed by a 22:00-08:00 quiet window
+        # (quiet hours only silences Cara's PROACTIVE outreach, not the boss's own reminders).
         import proactive
         conn = self.agent.conn
         due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
@@ -1761,12 +1764,7 @@ class ConversationDispatchTests(unittest.TestCase):
                                side_effect=lambda cid, text, *a, **k: sent.append(text)), \
                 mock.patch.object(proactive, "in_quiet_hours", return_value=True):
             self.agent.fire_due_reminders()
-        self.assertEqual(sent, [])                          # held through the night
-        with mock.patch.object(self.agent, "reply",
-                               side_effect=lambda cid, text, *a, **k: sent.append(text)), \
-                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
-            self.agent.fire_due_reminders()
-        self.assertTrue(any("благодарности" in s for s in sent))  # fires once it's morning
+        self.assertTrue(any("благодарности" in s for s in sent))  # fires despite quiet hours
 
     def test_reminder_fires_during_meeting_after_lull(self):
         """A due reminder is no longer frozen for a whole meeting — it waits only for a
