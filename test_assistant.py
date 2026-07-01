@@ -3597,6 +3597,58 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertIn("do NOT hand-render his saved lists", sys_ru)
         self.assertIn("empty '**' placeholder", sys_ru)
 
+    def test_converse_system_forbids_inventing_photo_contents(self):
+        import converse
+        sys_ru = converse.build_system(self.conn, "ru")
+        self.assertIn("never describe what is in a photo", sys_ru)
+        self.assertIn("Seeing is not guessing", sys_ru)
+
+    # --- Router resilience to transient (429) overloads -----------------------
+    def test_transient_error_helper(self):
+        import llm
+        h = llm._is_transient_llm_error
+        self.assertTrue(h("inference request failed with HTTP 429: Platform overloaded"))
+        self.assertTrue(h("failed with HTTP 503"))
+        self.assertTrue(h("inference request failed: timed out"))
+        self.assertFalse(h("failed with HTTP 403: tier-locked"))
+        self.assertFalse(h("failed with HTTP 401: unauthorized"))
+
+    def test_router_retries_same_model_on_transient_429(self):
+        import llm
+        calls = []
+
+        def fake_chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
+            calls.append(model)
+            if len(calls) == 1:
+                raise llm.LLMError("inference request failed with HTTP 429: Platform overloaded")
+            return '{"action":"converse","params":{},"confidence":0.9}'
+
+        with mock.patch.object(llm, "chat", side_effect=fake_chat), \
+                mock.patch.object(llm.time, "sleep"):
+            out = llm.chat_profile(self.agent.cfg, self.conn, "router",
+                                   [{"role": "user", "content": "x"}], profile="router_fast")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], calls[1])      # SAME model retried, not benched to a fallback
+        self.assertIn("converse", out)
+
+    def test_router_fails_over_immediately_on_hard_error(self):
+        import llm
+        calls = []
+
+        def fake_chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
+            calls.append(model)
+            if len(calls) == 1:
+                raise llm.LLMError("inference request failed with HTTP 403: tier-locked")
+            return '{"action":"converse","params":{},"confidence":0.9}'
+
+        with mock.patch.object(llm, "chat", side_effect=fake_chat), \
+                mock.patch.object(llm.time, "sleep"):
+            out = llm.chat_profile(self.agent.cfg, self.conn, "router",
+                                   [{"role": "user", "content": "x"}], profile="router_fast")
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual(calls[0], calls[1])   # hard error -> straight to the fallback model
+        self.assertIn("converse", out)
+
     def test_referential_empty_summary_shows_raw_text(self):
         # C2: a referential save with no resolvable subject must not be a blank note —
         # it falls back to its real raw_text (shown + indexed), not "(no summary)".

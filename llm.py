@@ -8,6 +8,7 @@ exhausted. Skills never talk to the API directly.
 import base64
 import json
 import re
+import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -320,9 +321,25 @@ def profiles(cfg):
     return table
 
 
+def _is_transient_llm_error(msg):
+    """A TRANSIENT provider hiccup (DO 'Platform overloaded' 429s are frequent), as
+    opposed to a hard error (403 tier-lock, 401 auth, 404). A transient error should
+    be retried and must NOT bench the model for the full cooldown — otherwise one 429
+    on the fast router strands every request on a weaker fallback for minutes (the
+    recorded bug: 'опиши фото' mis-routed to converse and Cara hallucinated)."""
+    m = (msg or "").lower()
+    if "http 429" in m or "rate_limit" in m or "overload" in m:
+        return True
+    if "http 500" in m or "http 502" in m or "http 503" in m or "http 504" in m:
+        return True
+    return "timeout" in m or "timed out" in m
+
+
 def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_required=None):
     """Budget-guarded chat with model failover and cooldowns. Tries the
-    profile's primary then fallbacks, skipping models on active cooldown.
+    profile's primary then fallbacks, skipping models on active cooldown. A transient
+    overload (429/5xx/timeout) gets ONE quick same-model retry before failover and only
+    a brief cooldown, so the preferred model isn't benched for minutes on a blip.
     Budget is authoritative — BudgetExceeded never triggers a fallback."""
     from common import current_trace
     prof = profiles(cfg).get(profile) or {
@@ -337,19 +354,30 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
     last_exc = None
     last_content = None
     for model in active:
-        try:
-            content = chat(cfg, conn, skill, messages, max_tokens=mt, model=model,
-                           temperature=temp)
-        except BudgetExceeded:
-            raise  # budget hard-stop sits above failover
-        except LLMError as exc:
-            last_exc = exc
-            store.cooldown_set(conn, profile, model, cfg.llm_fallback_cooldown, str(exc)[:200])
-            if current_trace():
-                store.trace_event(conn, current_trace(), "llm.fallback",
-                                  f"{profile}:{model} failed: {exc}", level="warn", skill=skill)
-            log(f"profile {profile} model {model} failed ({exc}); trying next")
-            continue
+        content = None
+        for attempt in range(2):
+            try:
+                content = chat(cfg, conn, skill, messages, max_tokens=mt, model=model,
+                               temperature=temp)
+                break
+            except BudgetExceeded:
+                raise  # budget hard-stop sits above failover
+            except LLMError as exc:
+                last_exc = exc
+                transient = _is_transient_llm_error(str(exc))
+                if transient and attempt == 0:
+                    time.sleep(0.8)      # a 'Platform overloaded' 429 usually clears in ~1s
+                    continue             # retry the SAME (preferred) model once
+                # Bench only briefly for a transient blip; a hard error gets the full cooldown.
+                cd = min(cfg.llm_fallback_cooldown, 20) if transient else cfg.llm_fallback_cooldown
+                store.cooldown_set(conn, profile, model, cd, str(exc)[:200])
+                if current_trace():
+                    store.trace_event(conn, current_trace(), "llm.fallback",
+                                      f"{profile}:{model} failed: {exc}", level="warn", skill=skill)
+                log(f"profile {profile} model {model} failed ({exc}); trying next")
+                break
+        if content is None:
+            continue  # move to the next fallback model
         if jr and parse_llm_json(content) is None:
             last_content = content
             if current_trace():
