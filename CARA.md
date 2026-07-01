@@ -176,7 +176,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **discarded as if empty** rather than folded in, so Cara never parrots gibberish. With no
   vision model (or a discarded read) she falls back to **text‑only** / a warm "I can see you
   sent a photo but can't quite make it out — what did you want me to see?" — either way a
-  photo post never gets stuck and she never invents its contents. A slow vision/embedding call
+  photo post never gets stuck and she never invents its contents. Even when he **asks to
+  describe a photo but none actually reached her** this turn, she says she doesn't see it and
+  asks him to resend — she never fabricates a description from mood or memory. A slow vision/embedding call
   can't sink the reply: every transport fault (including a bare socket **read‑timeout**)
   is wrapped as `LLMError`, so indexing stays best‑effort and the suggestion card is
   still delivered.
