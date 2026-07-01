@@ -167,8 +167,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **PDFs** (text extraction — pdfminer.six, with a stdlib regex fallback) are analyzed;
   **every other file** (voice, audio, video, documents…) is **stored**, fetchable later
   — not parsed. When the chat model isn't **vision‑capable** (e.g. open‑weight models),
-  a forwarded **photo** is handled by a configured **`VISION_MODEL`** (e.g.
-  `nemotron-3-nano-omni`): it *describes* the image and that description is folded into
+  a forwarded **photo** is handled by a configured **`VISION_MODEL`**
+  (`llama-4-maverick` — an open multimodal model that actually describes images on this DO
+  tier, where Claude/GPT‑4o vision are 403): it *describes* the image and that is folded into
   the text for categorization. With no vision model it falls back to **text‑only** (the
   caption) — either way a photo post never gets stuck. A slow vision/embedding call
   can't sink the reply: every transport fault (including a bare socket **read‑timeout**)

@@ -48,6 +48,10 @@ DEFAULT_PRICING = {
     "deepseek-3.2": (0.50, 1.60),
     "nemotron-3-nano-omni": (0.50, 0.90),
     "nemotron-nano-12b-v2-vl": (0.20, 0.60),
+    # Vision model (own-photo reactions): open Llama-4 multimodal — describes accurately on
+    # this DO tier, where Claude/GPT-4o vision are 403. DO publishes no per-model price;
+    # estimated from common Llama-4-Maverick rates (well under the $3/$15 default).
+    "llama-4-maverick": (0.20, 0.85),
     "openai-gpt-oss-20b": (0.05, 0.45),
     "openai-gpt-oss-120b": (0.10, 0.70),
     "kimi-k2.6": (0.95, 4.0),
