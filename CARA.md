@@ -494,8 +494,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   scope for the single‑action router).
 - **VPS stats:** "как сервер?" → CPU/mem/disk/uptime + her own footprint.
 - **Why did you do that** (`trace_query`): replays the last trace timeline.
-- **Deploy notice:** after a new build is installed she says "обновления установлены"
-  once (quiet on plain reboots).
+- **Deploy notice:** after a new build is installed, a one‑line notice goes to the shared
+  **fleet notification bot** (the ops channel the other VPSes post to) — **never into the
+  boss's chat with Cara**, so a code install can't clutter the conversation or bleed into
+  what she says. Fires once per real code change (quiet on plain reboots); silently skipped
+  if the fleet creds aren't configured. Config: `FLEET_NOTIFY_BOT_TOKEN` /
+  `FLEET_NOTIFY_CHAT_ID` / `FLEET_NOTIFY_LABEL` (copied from the box's root‑only
+  `/etc/codex-auto-update/telegram.env`, since the `tg-ingest` user can't read that file).
 - **Model‑health monitor:** every `MODEL_HEALTH_INTERVAL_SECONDS` (default 30 min) she
   checks her models (chat, conversation, vision) are reachable and **messages the boss the
   moment one becomes inaccessible** (e.g. a provider/tier 403) — and again when it

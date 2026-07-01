@@ -346,19 +346,27 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return ""
 
     def announce_deploy_if_changed(self):
-        """Tell the boss when a NEW build is running. The installer writes a
-        content hash to VERSION on each install, so this fires on a real code
+        """On a NEW build, post a one-line notice to the shared FLEET notification bot
+        (the ops channel other VPSes use) — never into the boss's conversation, so a code
+        install can't clutter the personal chat or bleed into what Cara says. The installer
+        writes a content hash to VERSION on each install, so this fires on a real code
         change but stays quiet across reboots (same files → same hash)."""
         version = self.build_version()
         if not version or store.kv_get(self.conn, "deployed_version") == version:
             return
-        # Never break a meeting / intimate moment with a build notice — hold it (don't
-        # mark the version seen) and announce on a later tick once they're free.
-        if self._in_intimate_moment():
-            return
         store.kv_set(self.conn, "deployed_version", version)
-        for chat_id in self.cfg.allowed_chat_ids:
-            self.reply(chat_id, T(self.lang(), "deploy_notice"))
+        token = self.cfg.fleet_notify_token
+        chat_id = self.cfg.fleet_notify_chat_id
+        if not token or not chat_id:
+            log("deploy notice skipped: FLEET_NOTIFY_BOT_TOKEN/CHAT_ID not configured")
+            return
+        try:
+            tg_call(token, "sendMessage", {
+                "chat_id": chat_id,
+                "text": f"✅ {self.cfg.fleet_notify_label} — new build deployed & running",
+            })
+        except TelegramError as exc:
+            log(f"fleet deploy notice failed: {exc}")
 
     # -- Main loop
 
@@ -380,7 +388,6 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             now = time.time()
             self.turn_lang = None  # scheduler replies use the stored preference
             self.flush_albums(now)
-            self.announce_deploy_if_changed()  # held during a date -> posts once it's free
             self.fire_due_reminders()
             self.check_scheduled_meetings()  # agreed meeting time arrived -> go live
             self.check_budget_notice()

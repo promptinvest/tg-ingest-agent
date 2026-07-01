@@ -1900,13 +1900,15 @@ class ConversationDispatchTests(unittest.TestCase):
                 mock.patch.object(proactive, "in_quiet_hours", return_value=False):
             self.agent.fire_due_reminders()
         self.assertEqual(sent, [])                                # not interrupted mid-exchange
-        # a build/deploy notice is also held (and not marked seen -> announces later)
+        # A build/deploy notice can NEVER interrupt the boss's chat: it goes to the fleet
+        # ops bot, not through reply(). With no fleet creds in the test env it just marks the
+        # version seen and stays silent — either way reply() is untouched.
         store.kv_set(conn, "deployed_version", "old")
         with mock.patch.object(self.agent, "build_version", return_value="new"), \
                 mock.patch.object(self.agent, "reply") as r:
             self.agent.announce_deploy_if_changed()
         r.assert_not_called()
-        self.assertEqual(store.kv_get(conn, "deployed_version"), "old")
+        self.assertEqual(store.kv_get(conn, "deployed_version"), "new")  # fleet path, not boss chat
 
     def test_stale_fired_reminders_auto_expire(self):
         from datetime import datetime, timezone
@@ -2637,7 +2639,12 @@ class MaintenanceJobTests(unittest.TestCase):
         self.assertEqual(n, 3)  # one per action, not six
 
     def test_deploy_notice_fires_only_on_version_change(self):
-        with mock.patch.object(self.agent, "reply") as reply:
+        # Deploy notices go to the FLEET ops bot (tg_call to a distinct token/chat), never
+        # into the boss's conversation (reply); they fire once per real version change.
+        self.agent.cfg.fleet_notify_token = "FLEET:tok"
+        self.agent.cfg.fleet_notify_chat_id = "160568780"
+        with mock.patch("tg_ingest_agent.tg_call") as tg, \
+                mock.patch.object(self.agent, "reply") as reply:
             with mock.patch.object(self.agent, "build_version", return_value="v1"):
                 self.agent.announce_deploy_if_changed()      # new build -> announce
                 self.agent.announce_deploy_if_changed()      # same build -> quiet (reboot)
@@ -2645,8 +2652,24 @@ class MaintenanceJobTests(unittest.TestCase):
                 self.agent.announce_deploy_if_changed()      # changed -> announce again
             with mock.patch.object(self.agent, "build_version", return_value=""):
                 self.agent.announce_deploy_if_changed()      # no VERSION (dev) -> quiet
-        self.assertEqual(reply.call_count, 2)
-        self.assertIn("обновлен", reply.call_args[0][1].lower())  # the ru deploy notice
+        reply.assert_not_called()                            # never the boss's chat
+        self.assertEqual(tg.call_count, 2)                   # one per real version change
+        token, method = tg.call_args[0][0], tg.call_args[0][1]
+        self.assertEqual((token, method), ("FLEET:tok", "sendMessage"))
+        self.assertEqual(tg.call_args[0][2]["chat_id"], "160568780")
+
+    def test_deploy_notice_skipped_when_fleet_unconfigured(self):
+        # No fleet creds -> mark the version seen and stay silent (never falls back to
+        # the boss's chat).
+        self.agent.cfg.fleet_notify_token = ""
+        self.agent.cfg.fleet_notify_chat_id = ""
+        with mock.patch("tg_ingest_agent.tg_call") as tg, \
+                mock.patch.object(self.agent, "reply") as reply, \
+                mock.patch.object(self.agent, "build_version", return_value="v9"):
+            self.agent.announce_deploy_if_changed()
+        tg.assert_not_called()
+        reply.assert_not_called()
+        self.assertEqual(store.kv_get(self.agent.conn, "deployed_version"), "v9")
 
     def test_drain_runs_maintenance_and_expires_pending(self):
         import runtime

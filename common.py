@@ -421,4 +421,12 @@ def load_config(env=None):
     cfg.gcal_calendar_id = (env.get("GCAL_CALENDAR_ID") or "").strip()
     cfg.gcal_key_file = (env.get("GCAL_SA_KEY_FILE") or "/etc/tg-ingest-agent/gcal-sa.json").strip()
     cfg.event_duration_minutes = int(env.get("EVENT_DURATION_MINUTES") or "30")
+    # Build/deploy notices go to the shared FLEET notification bot (the ops channel other
+    # VPSes post to), NOT into the boss's conversation with Cara — a code install must never
+    # clutter the personal chat. These live in Cara's own env because the tg-ingest user can't
+    # read the root-only /etc/codex-auto-update/telegram.env (and its var names would collide
+    # with Cara's own token). Empty token/chat -> deploy notices are simply skipped.
+    cfg.fleet_notify_token = (env.get("FLEET_NOTIFY_BOT_TOKEN") or "").strip()
+    cfg.fleet_notify_chat_id = (env.get("FLEET_NOTIFY_CHAT_ID") or "").strip()
+    cfg.fleet_notify_label = (env.get("FLEET_NOTIFY_LABEL") or "tg-ingest-agent (Cara)").strip()
     return cfg
