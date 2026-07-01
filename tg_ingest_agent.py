@@ -31,6 +31,7 @@ import knowledge
 import llm
 import meeting
 import memory_curator
+import notes_svc
 import persona
 import proactive
 import reminders
@@ -145,7 +146,7 @@ _DISPATCH = {
 }
 
 
-class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin):
+class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixin):
     def __init__(self, cfg):
         # Fail fast if a router action lacks a manifest policy (P0.1: the
         # manifest is the live permission gate, not just documentation).
@@ -832,23 +833,6 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin):
                 )
             else:
                 self.reply(chat_id, T(lang, "calendar_not_found"))
-
-    def do_item_delete(self, chat_id, lang, params):
-        rows = self.resolve_items(params)
-        if not rows:
-            self.reply(chat_id, T(lang, "items_empty"))
-        elif len(rows) == 1:
-            row = rows[0]
-            store.pending_set(self.conn, chat_id, "delete", {"row_ids": [row["id"]]})
-            snippet = (row["summary"] or row["raw_text"] or "")[:60].replace("\n", " ")
-            self.reply(chat_id, T(lang, "delete_confirm", row_id=self.note_no(row["id"]),
-                                  category=row["category"] or row["suggested_category"] or "?",
-                                  snippet=snippet))
-        else:
-            ids = [r["id"] for r in rows]
-            store.pending_set(self.conn, chat_id, "delete", {"row_ids": ids})
-            listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
-            self.reply(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
 
     def do_help(self, chat_id, lang):
         self.reply(chat_id, T(lang, "capabilities") + "\n— "
