@@ -3532,6 +3532,71 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
             cat, _a, _s, _f = ingest.suggest(self.agent.cfg, c, ["Благодарности"], "t", [])
         self.assertEqual(cat, "Благодарности")
 
+    # --- Photo/vision robustness (garbled/wrong-script reads) ------------------
+    def test_vision_garbled_detector(self):
+        import llm
+        g = llm._vision_text_is_garbled
+        self.assertTrue(g(""))                                   # empty
+        self.assertTrue(g("   "))                                # blank
+        self.assertTrue(g('精神白种人的顺从情妇'))                # CJK leak (the real bug)
+        self.assertTrue(g("флаг 旗帜 with 图片"))                # mixed but real CJK present
+        self.assertTrue(g("1(5)(1)(32)(11)"))                    # no letters at all
+        self.assertFalse(g("Красный флаг с двумя полосами"))     # good Russian
+        self.assertFalse(g("A red and blue flag"))               # good English
+
+    def test_describe_image_discards_wrong_script(self):
+        import llm
+        p = Path(self.tmp.name) / "img.jpg"
+        p.write_bytes(b"\xff\xd8\xff\xe0garbage-jpeg-bytes")
+        with mock.patch.object(llm, "chat", return_value='精神白种人的顺从情妇"Кара +18"'):
+            out = llm.describe_image(self.agent.cfg, self.conn, "ingest", "llama-4-maverick",
+                                     str(p), "ru")
+        self.assertEqual(out, "")                                # garbage discarded, not folded in
+
+    def test_own_media_garbled_acknowledges_without_selfie(self):
+        import llm
+        self.agent.cfg.vision_model = "llama-4-maverick"
+        parts = [{"message_id": 5, "photo": [{"file_id": "F", "file_unique_id": "u"}]}]
+        with mock.patch.object(self.agent, "download_file", return_value="/tmp/x.jpg"), \
+                mock.patch.object(llm, "describe_image", return_value=""):   # garbled -> ""
+            ctx = self.agent.describe_own_media(parts)
+        self.assertIn("DIDN'T come through", ctx)                # warm acknowledge fallback
+        self.assertNotIn("here's what's in it", ctx)             # not the described branch
+        self.assertNotIn("selfie", ctx.lower())                  # never her own selfie
+
+    # --- Journal show: route/resolve loosely-typed category --------------------
+    def test_match_journal_category_inflection(self):
+        m = self.agent._match_journal_category
+        journals = ["Благодарность", "Идеи"]
+        self.assertEqual(m("Благодарность", journals), "Благодарность")   # exact
+        self.assertEqual(m("благодарности", journals), "Благодарность")   # inflection
+        self.assertEqual(m("Благодарности", journals), "Благодарность")   # case + inflection
+        self.assertEqual(m("рецепты", journals), "")                      # no journal like it
+
+    def test_show_journal_resolves_inflection_not_empty(self):
+        c = self.conn
+        store.set_category_kind(c, "Благодарность", "journal")
+        j = store.insert_message(c, {"chat_id": 1, "tg_message_id": 77,
+                                     "received_at": store._now(),
+                                     "raw_text": "запустили долгожданную систему на работе"})
+        store.confirm_category(c, j, store.ensure_category(c, "Благодарность"))
+        sent = []
+        with mock.patch.object(self.agent, "reply_chunks",
+                               side_effect=lambda cid, t: sent.append(t)), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, t, *a, **k: sent.append(t)):
+            # boss typed the plural; must resolve to the stored singular journal, not empty
+            self.agent.do_journal_show(1, "ru", {"category": "Благодарности"})
+        body = "\n".join(sent)
+        self.assertIn("долгожданную систему", body)              # real entry shown
+        self.assertNotIn("**", body)                             # deterministic render, no empty bold
+
+    def test_converse_system_forbids_hand_rendered_lists(self):
+        import converse
+        sys_ru = converse.build_system(self.conn, "ru")
+        self.assertIn("do NOT hand-render his saved lists", sys_ru)
+        self.assertIn("empty '**' placeholder", sys_ru)
+
     def test_referential_empty_summary_shows_raw_text(self):
         # C2: a referential save with no resolvable subject must not be a blank note —
         # it falls back to its real raw_text (shown + indexed), not "(no summary)".

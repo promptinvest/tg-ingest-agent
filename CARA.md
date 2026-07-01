@@ -170,8 +170,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   a forwarded **photo** is handled by a configured **`VISION_MODEL`**
   (`llama-4-maverick` — an open multimodal model that actually describes images on this DO
   tier, where Claude/GPT‑4o vision are 403): it *describes* the image and that is folded into
-  the text for categorization. With no vision model it falls back to **text‑only** (the
-  caption) — either way a photo post never gets stuck. A slow vision/embedding call
+  the text for categorization. The description is **language‑pinned** (ru/en) and
+  **sanity‑checked** (`llm._vision_text_is_garbled`): an open vision model sometimes leaks a
+  reply in the **wrong script** (a whole Chinese sentence) or a degenerate stub — that is
+  **discarded as if empty** rather than folded in, so Cara never parrots gibberish. With no
+  vision model (or a discarded read) she falls back to **text‑only** / a warm "I can see you
+  sent a photo but can't quite make it out — what did you want me to see?" — either way a
+  photo post never gets stuck and she never invents its contents. A slow vision/embedding call
   can't sink the reply: every transport fault (including a bare socket **read‑timeout**)
   is wrapped as `LLMError`, so indexing stays best‑effort and the suggestion card is
   still delivered.
@@ -192,9 +197,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Journals (long‑term areas):** mark a category as a journal — "веди Благодарности
   как дневник" / "сделай X журналом" — and it becomes append‑only: each note acks as a
   dated entry ("запись за 18.06, всего N"), "покажи дневник благодарности [за неделю/
-  месяц]" replays it as a **day‑grouped series**, a "📔 Дневники" digest appears in the
-  weekly review and morning brief, and a "clear all notes" purge **spares it**. Turn it
-  back off with "X больше не дневник". One‑time notes behave exactly as before.
+  месяц]" — or just a bare **"покажи благодарности"** — replays it as a **day‑grouped
+  series** (deterministic `#N • snippet`, never free‑texted by the model). The show handler
+  **resolves a loosely‑typed name** (`_match_journal_category`) so an inflection ("благодарности"
+  vs the stored "Благодарность") hits the real journal instead of spawning a phantom empty
+  one. A "📔 Дневники" digest appears in the weekly review and morning brief, and a "clear
+  all notes" purge **spares it**. Turn it back off with "X больше не дневник". One‑time notes
+  behave exactly as before.
 - **Overview & stats:** "что у тебя есть?" → a digest (counts, reminders, memory,
   spend); per‑status/category **stats** (`stats`) and the **category list**
   (`categories`).

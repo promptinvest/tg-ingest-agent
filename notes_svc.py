@@ -78,6 +78,28 @@ class NotesMixin:
             return (now - timedelta(days=30)).isoformat()
         return None
 
+    def _match_journal_category(self, name, journals):
+        """Map a loosely-typed category to an EXISTING journal so an inflection
+        ('благодарности' vs the stored 'Благодарность') doesn't spawn a phantom empty
+        one. Exact (case-insensitive) first, then a shared-stem match (long common
+        prefix, both diverging only in a short suffix). '' if nothing fits."""
+        n = (name or "").casefold()
+        if not n:
+            return ""
+        for j in journals:
+            if j.casefold() == n:
+                return j
+        for j in journals:
+            jc = j.casefold()
+            cpl = 0
+            for a, b in zip(n, jc):
+                if a != b:
+                    break
+                cpl += 1
+            if cpl >= 5 and (len(n) - cpl) <= 3 and (len(jc) - cpl) <= 3:
+                return j
+        return ""
+
     def do_journal_show(self, chat_id, lang, params):
         """Recall a journal as a dated series (entries grouped by day)."""
         ru = lang == "ru"
@@ -89,7 +111,7 @@ class NotesMixin:
             hint = ("\n" + ", ".join(journals)) if journals else ""
             self.reply(chat_id, T(lang, "journal_which") + hint)
             return
-        canonical = store.ensure_category(self.conn, name)
+        canonical = self._match_journal_category(name, journals) or store.ensure_category(self.conn, name)
         period = str(params.get("period") or "").strip().lower() or "month"
         if period not in ("day", "week", "month", "all"):
             period = "month"

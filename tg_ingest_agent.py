@@ -3693,9 +3693,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     files.append(other.get("file_name"))
         bits = []
         if descs:
-            bits.append("The boss just SHOWED you a photo (he's sharing it with you, not "
-                        "filing it) — here's what's in it; react naturally and personally, "
-                        "using your shared context: " + " | ".join(descs))
+            bits.append("The boss just sent YOU a photo of HIS — he's sharing it with you, not "
+                        "filing it. This is HIS photo, NOT a picture of you and NOT something you "
+                        "sent; never call it your own selfie/autoportrait. Here's what's in it; "
+                        "react naturally and personally, using your shared context: "
+                        + " | ".join(descs))
         elif had_photo:
             # Vision returned nothing usable (empty / failed / declined). She must still
             # ACKNOWLEDGE the photo instead of talking past it — and never fabricate its content.

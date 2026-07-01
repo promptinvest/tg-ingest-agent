@@ -205,28 +205,62 @@ def _sniff_image_mime(data):
     return "image/jpeg"
 
 
+def _vision_text_is_garbled(text):
+    """A vision description we must NOT trust and should treat as 'no usable read'.
+    On this DO tier the open vision models (e.g. llama-4-maverick) sometimes leak a
+    reply in the WRONG script — a whole Chinese sentence for a ru/en task — or return
+    a degenerate stub. Folding that into the conversation makes Cara talk gibberish, so
+    a garbled read is downgraded to empty and the caller falls back to a warm 'couldn't
+    make it out' acknowledgment instead of inventing content."""
+    t = (text or "").strip()
+    if len(t) < 4:
+        return True
+    letters = [c for c in t if c.isalpha()]
+    if not letters:
+        return True  # digits/punctuation only, e.g. "Article 1(5)(1)(32)(11)"
+    def _cjk(c):
+        o = ord(c)
+        return (0x3040 <= o <= 0x9FFF) or (0xAC00 <= o <= 0xD7A3) or (0xF900 <= o <= 0xFAFF)
+    def _latcyr(c):
+        lo = c.lower()
+        return ("a" <= lo <= "z") or ("Ѐ" <= c <= "ӿ")
+    cjk = sum(1 for c in letters if _cjk(c))
+    if cjk / len(letters) > 0.1:          # any real CJK on a ru/en task = a leak
+        return True
+    if sum(1 for c in letters if _latcyr(c)) / len(letters) < 0.6:
+        return True                        # mostly some other script → untrusted
+    return False
+
+
 def describe_image(cfg, conn, skill, model, image_path, lang="ru", prompt=None):
     """Use a vision-capable model to produce a short text description of an image,
     so a non-vision text model can still categorize a photo post (or know what a
-    sticker depicts). '' on failure."""
+    sticker depicts). '' on failure OR on a garbled/wrong-script read."""
     try:
         data = Path(image_path).read_bytes()
     except OSError:
         return ""
     b64 = base64.b64encode(data).decode("ascii")
     mime = _sniff_image_mime(data)
-    prompt = prompt or ("Опиши коротко, что на изображении: текст, объекты, суть."
-                        if lang == "ru" else
-                        "Briefly describe this image: any text, objects, and the gist.")
+    prompt = prompt or (
+        "Опиши коротко и ТОЛЬКО на русском языке, что на изображении: текст, объекты, "
+        "суть. Никогда не отвечай на других языках."
+        if lang == "ru" else
+        "Briefly describe this image in ENGLISH ONLY: any text, objects, and the gist. "
+        "Never answer in any other language.")
     messages = [{"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
     ]}]
     try:
-        return (chat(cfg, conn, skill, messages, max_tokens=400, model=model) or "").strip()
+        out = (chat(cfg, conn, skill, messages, max_tokens=400, model=model) or "").strip()
     except LLMError as exc:
         log(f"image describe ({model}) failed: {exc}")
         return ""
+    if _vision_text_is_garbled(out):
+        log(f"image describe ({model}) discarded as garbled/wrong-script: {out[:60]!r}")
+        return ""
+    return out
 
 
 def default_profiles(cfg):
