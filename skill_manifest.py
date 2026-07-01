@@ -37,6 +37,8 @@ SKILLS = {
                 "title": {"en": "Discard suggestion", "ru": "Отклонить запись"}},
     "item_delete": {"risk": "state_write", "writes_state": True, "requires_confirmation": True,
                     "title": {"en": "Delete item", "ru": "Удалить запись"}},
+    "note_edit": {"risk": "state_write", "writes_state": True, "persona_context": True,
+                  "title": {"en": "Edit a note", "ru": "Исправить заметку"}},
     "recategorize": {"risk": "state_write", "writes_state": True, "persona_context": True,
                      "title": {"en": "Re-categorize item", "ru": "Сменить категорию"}},
     "merge_categories": {"risk": "state_write", "writes_state": True,

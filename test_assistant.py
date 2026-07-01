@@ -294,10 +294,10 @@ class RouterTests(unittest.TestCase):
             "fire_due_reminders", "check_reminder_expiry", "reminder_no")
         notes_methods = (
             "do_report_problem", "do_set_journal", "_journal_since", "do_journal_show",
-            "stats_text", "overview_text", "items_text", "_note_line", "_notes_page",
+            "stats_text", "overview_text", "_note_line", "_notes_page",
             "_notes_page_keyboard", "do_list_items", "do_show_media", "do_discard",
             "_purge_impact_text", "do_purge", "resolve_purge", "resolve_items", "resolve_item",
-            "note_no", "item_detail_text", "do_item_detail", "do_recategorize",
+            "note_no", "item_detail_text", "do_item_detail", "do_recategorize", "do_note_edit",
             "do_merge_categories", "issues_text", "files_text", "categories_text", "do_item_delete")
         hermes_methods = (
             "do_ask", "do_fetch", "ingest_fetched", "_keyword_context",
@@ -646,10 +646,21 @@ class AgentViewTests(unittest.TestCase):
         self.agent.conn.close()
         self.tmp.cleanup()
 
-    def test_items_listing_shows_first_url(self):
-        text = self.agent.items_text("ru", {})
-        self.assertIn("📄 #%d · Flight Deals" % self.row_id, text)  # sectioned card style
-        self.assertIn("🌐 https://vandrouki.ru/x/", text)
+    def test_note_line_shows_first_url(self):
+        row = store.get_message(self.agent.conn, self.row_id)
+        line = self.agent._note_line("ru", row)  # the live list/paginated renderer
+        self.assertIn("📄 #%d · Flight Deals" % self.row_id, line)
+        self.assertIn("🌐 https://vandrouki.ru/x/", line)
+
+    def test_note_edit_updates_summary_only(self):
+        original_raw = store.get_message(self.agent.conn, self.row_id)["raw_text"]
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_note_edit(1, "ru", {"id": self.agent.note_no(self.row_id),
+                                              "new_summary": "исправленное краткое"}, "")
+        row = store.get_message(self.agent.conn, self.row_id)
+        self.assertEqual(row["summary"], "исправленное краткое")   # summary fixed in place
+        self.assertEqual(row["raw_text"], original_raw)            # original text preserved (KB source)
+        self.assertIn("исправленное краткое", r.call_args[0][1])
 
     def test_item_detail_by_id_query_and_fallback(self):
         detail = self.agent.item_detail_text("ru", {"id": self.row_id})
@@ -3859,9 +3870,9 @@ class DisplayNumberTests(unittest.TestCase):
         self.assertEqual(store.ensure_note_no(self.conn, b), 2)   # b STAYS #2 — no renumber
         self.assertEqual(store.ensure_note_no(self.conn, c), 3)   # c STAYS #3
 
-    def test_item_list_shows_sequential_numbers(self):
+    def test_notes_page_shows_sequential_numbers(self):
         self._note(1, "a"); self._note(2, "b"); self._note(3, "c")
-        text = self.agent.items_text("ru", {})
+        text, _, _ = self.agent._notes_page("ru", None, None, 0, "tok")  # live paginated path
         self.assertIn("#1", text)
         self.assertIn("#2", text)
         self.assertIn("#3", text)

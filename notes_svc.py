@@ -110,7 +110,8 @@ class NotesMixin:
                 last_day = day
             body = (e["summary"] or e["raw_text"] or "").strip()
             snippet = body.splitlines()[0][:120] if body else "—"
-            lines.append(f"  • {snippet}")
+            lines.append(f"  #{self.note_no(e['id'])} • {snippet}")
+        lines.append(T(lang, "journal_open_hint"))
         self.reply_chunks(chat_id, "\n".join(lines))
 
     # -- notes / inbox (stage 2) ----------------------------------------------
@@ -143,28 +144,6 @@ class NotesMixin:
                        day=store.usage_total(self.conn, "day"),
                        month=store.usage_total(self.conn, "month")))
         return "\n".join(lines)
-
-    def items_text(self, lang, params):
-        try:
-            limit = min(int(params.get("limit") or 5), 10)
-        except (TypeError, ValueError):
-            limit = 5
-        category = params.get("category")
-        query = params.get("query")
-        rows = store.list_messages(self.conn, category, query, limit)
-        if not rows:
-            return T(lang, "items_empty")
-        ru = lang == "ru"
-        filter_part = ""
-        if category:
-            filter_part = T(lang, "items_filter_category", category=category)
-        elif query:
-            filter_part = T(lang, "items_filter_query", query=query)
-        blocks = [T(lang, "items_header", filter=filter_part, n=len(rows))]
-        for row in rows:
-            blocks.append(self._note_line(lang, row))
-        blocks.append(T(lang, "items_footer"))
-        return "\n\n".join(blocks)
 
     NOTES_PAGE_SIZE = 8
 
@@ -444,9 +423,11 @@ class NotesMixin:
         elif params.get("id") is not None:
             rows = self.resolve_items({"id": params["id"]})
         elif params.get("query"):
+            # "переложи всё из crypto в news" (a whole category) or a text query. Move the
+            # WHOLE set, not a silent first-20 slice — the reply reports the real count moved.
             q = params["query"]
-            rows = (store.list_messages(self.conn, q, None, limit=20)
-                    or store.list_messages(self.conn, None, q, limit=20))
+            rows = (store.list_messages(self.conn, q, None, limit=1000)
+                    or store.list_messages(self.conn, None, q, limit=1000))
         else:
             row = self.resolve_item({})
             rows = [row] if row else []
@@ -515,6 +496,21 @@ class NotesMixin:
         lines.extend(f"  {row['name']}: {row['n']}" for row in rows)
         return "\n".join(lines)
 
+    def do_note_edit(self, chat_id, lang, params, text):
+        """Fix a saved note's SUMMARY in place (the LLM-written line shown in lists and the
+        detail card) — 'исправь заметку #11 на …', 'поменяй краткое #3 на …'. The original
+        message text (raw_text, used for KB search) is preserved; only the summary changes."""
+        row = self.resolve_item(params)
+        if row is None:
+            self.reply(chat_id, T(lang, "items_empty"))
+            return
+        new_summary = str(params.get("new_summary") or params.get("summary") or "").strip()
+        if not new_summary:
+            self.reply(chat_id, T(lang, "note_edit_unclear"))
+            return
+        store.message_update_summary(self.conn, row["id"], new_summary[:600])
+        self.reply(chat_id, T(lang, "note_edited", row_id=self.note_no(row["id"]),
+                              summary=new_summary[:200]))
 
     def do_item_delete(self, chat_id, lang, params):
         rows = self.resolve_items(params)

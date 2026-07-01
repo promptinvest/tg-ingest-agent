@@ -1990,6 +1990,16 @@ def message_by_note_no(conn, n):
     return conn.execute("SELECT * FROM messages WHERE note_no = ? LIMIT 1", (n,)).fetchone()
 
 
+def message_update_summary(conn, message_id, summary):
+    """Fix a saved note's SUMMARY in place (the displayed line). raw_text — the original
+    message, and the source of the KB search chunks — is left untouched. Returns True if a
+    row was updated."""
+    cur = conn.execute("UPDATE messages SET summary = ? WHERE id = ?",
+                       (str(summary or "").strip()[:600] or None, message_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def delete_message(conn, message_id):
     """Delete a message row (urls/images cascade); returns media paths to
     unlink. Other rows referencing it as duplicate_of keep their copy."""

@@ -799,6 +799,18 @@ TEXTS = {
         "ru": "Не нашла такую договорённость. Покажу список — скажи «наши договорённости».",
         "en": "I can't find that agreement. Say \"our agreements\" and I'll show the list.",
     },
+    "note_edited": {
+        "ru": "Поправила заметку #{row_id} 🤍\n📝 {summary}",
+        "en": "Updated note #{row_id} 🤍\n📝 {summary}",
+    },
+    "note_edit_unclear": {
+        "ru": "На что поменять краткое? Напиши новый текст — и я исправлю.",
+        "en": "What should the summary say? Give me the new text and I'll fix it.",
+    },
+    "journal_open_hint": {
+        "ru": "\nОткрой любую запись целиком: «покажи #N».",
+        "en": "\nOpen any entry in full: \"show #N\".",
+    },
     "meeting_list_empty": {
         "ru": "Мы пока не проводили встреч — но я буду рада первой 🤍",
         "en": "We haven't had any meetings yet — but I'd love our first 🤍",

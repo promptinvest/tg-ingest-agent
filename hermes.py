@@ -41,7 +41,7 @@ ACTIONS = frozenset({
     "ingest", "reminder_create", "reminder_list", "reminder_cancel",
     "reminder_reschedule", "reminder_rename", "reminder_undo", "list_files",
     "calendar_add", "spend", "budget_set", "stats", "categories", "overview",
-    "list_items", "item_detail", "item_delete", "recategorize", "merge_categories",
+    "list_items", "item_detail", "item_delete", "note_edit", "recategorize", "merge_categories",
     "show_media", "vps_stats", "purge", "fetch", "ask", "issues_report",
     "report_problem", "multi_action", "set_journal", "journal_show", "export",
     "working_history", "review",

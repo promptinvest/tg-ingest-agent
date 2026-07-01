@@ -95,6 +95,7 @@ _DISPATCH = {
     "merge_categories":    lambda s, c: s.do_merge_categories(c.chat_id, c.lang, c.params),
     "recategorize":        lambda s, c: s.do_recategorize(c.chat_id, c.lang, c.params),
     "item_delete":         lambda s, c: s.do_item_delete(c.chat_id, c.lang, c.params),
+    "note_edit":           lambda s, c: s.do_note_edit(c.chat_id, c.lang, c.params, c.text),
     "show_media":          lambda s, c: s.do_show_media(c.chat_id, c.lang, c.params),
     "read_media":          lambda s, c: s.do_read_media(c.chat_id, c.lang, c.params),
     "discard":             lambda s, c: s.do_discard(c.chat_id, c.lang, c.pending),

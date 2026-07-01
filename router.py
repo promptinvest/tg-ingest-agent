@@ -31,6 +31,7 @@ ACTIONS = {
     "list_items",        # params: category, query, limit — browse stored messages
     "item_detail",       # params: id OR query/category — one item in full (links, source)
     "item_delete",       # params: id OR query — delete a stored item (asks confirmation)
+    "note_edit",         # params: id/query + new_summary — fix a saved note's summary text in place
     "recategorize",      # params: id/ids/query/count + category — change a saved item's category
     "merge_categories",  # params: from + into — fold a duplicate category into another, delete the empty one
     "show_media",        # params: id OR query — re-send the stored photo(s)
@@ -140,6 +141,8 @@ NOTE: reminder_rename changes a REMINDER's TITLE — put the NEW name in new_tit
 "найди сохранённое про DeepSeek" -> {"action": "list_items", "params": {"query": "DeepSeek"}, "confidence": 0.9}
 "покажи ссылку" / "show the link" -> {"action": "item_detail", "params": {}, "confidence": 0.9}
 "покажи #3" / "детали 3" / "покажи заметку 11" / "заметку #11" / "open note 11" -> {"action": "item_detail", "params": {"id": 11}, "confidence": 0.9}
+"исправь заметку #11: встреча перенесена на вторник" / "поменяй краткое #3 на «оплатить до пятницы»" / "измени описание заметки про рейсы на …" / "edit note 11: new text" / "fix the summary of #3 to …" -> {"action": "note_edit", "params": {"id": 11, "new_summary": "встреча перенесена на вторник"}, "confidence": 0.9}
+NOTE: note_edit fixes a saved NOTE's SUMMARY text — put the corrected text in new_summary and target by id/query. It is NOT recategorize (which changes a note's CATEGORY, not its text) and NOT reminder_rename (which retitles a REMINDER). "исправь/поменяй краткое/измени описание/edit note/fix the summary" of a NOTE -> note_edit.
 "ссылку из поста про рейсы" -> {"action": "item_detail", "params": {"query": "рейсы"}, "confidence": 0.9}
 "удали это сообщение" / "delete it" / "сотри это" -> {"action": "item_delete", "params": {}, "confidence": 0.9}
 "удали #2" / "удали пост про рейсы" / "сотри #2" -> {"action": "item_delete", "params": {"id": 2}, "confidence": 0.9}

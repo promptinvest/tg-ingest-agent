@@ -198,8 +198,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   spend); per‑status/category **stats** (`stats`) and the **category list**
   (`categories`).
 - **Re‑categorize** (`recategorize`): "поменяй категорию #2 на Документы", "переложи
-  это в Чеки" (most recent), "переложи всё из crypto в news" (bulk). Logged as a
-  correction so it feeds learning.
+  это в Чеки" (most recent), "переложи всё из crypto в news" (bulk — moves the WHOLE
+  set, reporting the real count). Logged as a correction so it feeds learning.
+- **Edit a note's summary** (`note_edit`): "исправь заметку #11 на …", "поменяй краткое
+  #3 на …" — fixes the LLM‑written summary shown in lists/detail **in place**; the
+  original message text (`raw_text`, the KB‑search source) is preserved. Distinct from
+  re‑categorize (category) and reminder rename (a reminder's title).
 - **Delete / discard / purge:** delete by id/ids/count/query; decline a fresh
   suggestion; bulk purge by scope (all / category / stats / reminders / messages /
   issues) behind a typed phrase.
