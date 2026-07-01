@@ -2930,6 +2930,21 @@ class GoldenTranscriptTests(unittest.TestCase):
         self.assertTrue(sent)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"], 0)
 
+    def test_own_photo_vision_empty_still_acknowledges(self):
+        # Vision returned nothing usable -> converse must be TOLD she couldn't make out the
+        # photo (so she acknowledges it + asks), and is warned never to invent its content —
+        # instead of silently talking past the photo (the "убрала ✔️" non-reaction).
+        import llm
+        self.agent.cfg.vision_model = "some-vision-model"
+        part = {"chat": {"id": 1}, "message_id": 60, "from": {"id": 1},
+                "photo": [{"file_id": "P9", "file_unique_id": "pu9", "width": 90, "height": 90}]}
+        with mock.patch.object(self.agent, "download_file", return_value="/tmp/x.jpg"), \
+                mock.patch.object(llm, "describe_image", return_value=""):
+            ctx = self.agent.describe_own_media([part])
+        self.assertIn("SHOWED you a photo", ctx)
+        self.assertIn("DIDN'T come through clearly", ctx)   # the fallback fired
+        self.assertIn("NEVER invent", ctx)
+
     def test_forward_still_stored_as_note(self):
         msg = self._msg(52, "статья про вино", forward_origin={"type": "channel", "title": "WineMag"})
         self.drive({"message": msg}, {

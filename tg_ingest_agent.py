@@ -3661,19 +3661,22 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         vision-describe images and note documents so converse can respond ABOUT
         them. Returns a context string (or '')."""
         descs, files = [], []
+        had_photo = False
         for p in parts:
             photos = p.get("photo") or []
-            if photos and self.cfg.vision_model and len(descs) < 2:
-                largest = photos[-1]
-                try:
-                    path = self.download_file(largest.get("file_id"),
-                                              largest.get("file_unique_id"), ".jpg")
-                    d = llm.describe_image(self.cfg, self.conn, "ingest",
-                                           self.cfg.vision_model, path, self.lang())
-                    if d:
-                        descs.append(d)
-                except (TelegramError, llm.LLMError) as exc:
-                    log(f"own-media describe failed: {exc}")
+            if photos:
+                had_photo = True
+                if self.cfg.vision_model and len(descs) < 2:
+                    largest = photos[-1]
+                    try:
+                        path = self.download_file(largest.get("file_id"),
+                                                  largest.get("file_unique_id"), ".jpg")
+                        d = llm.describe_image(self.cfg, self.conn, "ingest",
+                                               self.cfg.vision_model, path, self.lang())
+                        if d:
+                            descs.append(d)
+                    except (TelegramError, llm.LLMError) as exc:
+                        log(f"own-media describe failed: {exc}")
             doc = p.get("document") or {}
             if doc.get("file_id"):
                 files.append(doc.get("file_name") or "file")
@@ -3686,6 +3689,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             bits.append("The boss just SHOWED you a photo (he's sharing it with you, not "
                         "filing it) — here's what's in it; react naturally and personally, "
                         "using your shared context: " + " | ".join(descs))
+        elif had_photo:
+            # Vision returned nothing usable (empty / failed / declined). She must still
+            # ACKNOWLEDGE the photo instead of talking past it — and never fabricate its content.
+            bits.append("The boss just SHOWED you a photo, but it DIDN'T come through clearly "
+                        "to you this time — you can't make out what's in it. React to the FACT "
+                        "that he shared a photo: warmly and in your shared context, and gently "
+                        "ask what he wanted you to see (or that it didn't load for you). Do NOT "
+                        "ignore it or carry on as if nothing was sent, and NEVER invent, guess "
+                        "or describe what's in it.")
         files = [f for f in files if f]
         if files:
             bits.append("He sent you a file: " + ", ".join(files))
