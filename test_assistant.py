@@ -1040,6 +1040,14 @@ class SkillManifestTests(unittest.TestCase):
         for action in router.ACTIONS:
             self.assertTrue(skill_manifest.known(action), f"no manifest policy for {action}")
 
+    def test_dispatch_table_matches_router_actions(self):
+        # The table dispatch is the single action->handler map; it must line up exactly with
+        # the router's closed action set (no orphaned handler, no unrouted action).
+        import tg_ingest_agent
+        keys = set(tg_ingest_agent._DISPATCH)
+        self.assertEqual(keys - router.ACTIONS, set(), "handler for a non-router action")
+        self.assertEqual(router.ACTIONS - keys, set(), "router action with no dispatch handler")
+
     def test_policy_defaults_and_gating(self):
         purge = skill_manifest.get_policy("purge")
         self.assertEqual(purge["risk"], "destructive")

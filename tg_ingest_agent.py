@@ -14,6 +14,7 @@ import json
 import re
 import signal
 import time
+from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -54,6 +55,93 @@ from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
 from texts import T
 
 COMMAND_ALIASES = {"/start": "start", "/stats": "stats", "/categories": "categories"}
+
+
+# One dispatch entry per router action: action -> handler(agent, ctx). This is the single
+# place that maps an action to its handler (the router validates the action, skill_manifest
+# declares its policy, texts.py holds its templates). `_Ctx` carries every field the handlers
+# need so they share one signature; `s` is the Agent. A converse-family or unknown action
+# falls through to `_dispatch_default` (warm free-form Cara).
+_Ctx = namedtuple("_Ctx", "action chat_id lang params text msg msg_id pending")
+
+
+def _dispatch_default(s, c):
+    s.do_converse(c.chat_id, c.lang, c.text, c.msg_id)
+
+
+_DISPATCH = {
+    "ingest":              lambda s, c: s.finalize([c.msg]),
+    "reminder_create":     lambda s, c: s.do_reminder_create(c.chat_id, c.lang, c.params),
+    "reminder_list":       lambda s, c: s.reply(c.chat_id, s._reminder_list_body(c.chat_id, c.lang)),
+    "reminder_cancel":     lambda s, c: s.do_reminder_cancel(c.chat_id, c.lang, c.params),
+    "reminder_reschedule": lambda s, c: s.do_reschedule(c.chat_id, c.lang, c.params, c.text),
+    "reminder_rename":     lambda s, c: s.do_rename_reminder(c.chat_id, c.lang, c.params, c.text),
+    "agreement_add":       lambda s, c: s.do_agreement_add(c.chat_id, c.lang, c.params, c.text),
+    "agreements_list":     lambda s, c: s.do_agreements_list(c.chat_id, c.lang),
+    "agreement_close":     lambda s, c: s.do_agreement_close(c.chat_id, c.lang, c.params, c.text),
+    "reminder_undo":       lambda s, c: s.do_reminder_undo(c.chat_id, c.lang, c.params),
+    "list_files":          lambda s, c: s.reply_chunks(c.chat_id, s.files_text(c.lang)),
+    "calendar_add":        lambda s, c: s.do_calendar_add(c.chat_id, c.lang, c.params),
+    "spend":               lambda s, c: s.reply(c.chat_id, spend.format_spend(s.conn, c.params.get("period"), s.cfg, c.lang)),
+    "budget_set":          lambda s, c: s.do_budget_set(c.chat_id, c.lang, c.params),
+    "stats":               lambda s, c: s.reply(c.chat_id, s.stats_text(c.lang)),
+    "categories":          lambda s, c: s.reply(c.chat_id, s.categories_text(c.lang)),
+    "help":                lambda s, c: s.do_help(c.chat_id, c.lang),
+    "overview":            lambda s, c: s.reply(c.chat_id, s.overview_text(c.lang)),
+    "list_items":          lambda s, c: s.do_list_items(c.chat_id, c.lang, c.params),
+    "item_detail":         lambda s, c: s.do_item_detail(c.chat_id, c.lang, c.params),
+    "merge_categories":    lambda s, c: s.do_merge_categories(c.chat_id, c.lang, c.params),
+    "recategorize":        lambda s, c: s.do_recategorize(c.chat_id, c.lang, c.params),
+    "item_delete":         lambda s, c: s.do_item_delete(c.chat_id, c.lang, c.params),
+    "show_media":          lambda s, c: s.do_show_media(c.chat_id, c.lang, c.params),
+    "read_media":          lambda s, c: s.do_read_media(c.chat_id, c.lang, c.params),
+    "discard":             lambda s, c: s.do_discard(c.chat_id, c.lang, c.pending),
+    "vps_stats":           lambda s, c: s.reply(c.chat_id, sysinfo.format_report(sysinfo.collect(str(s.cfg.db_path.parent)), c.lang, s.media_bytes())),
+    "purge":               lambda s, c: s.do_purge(c.chat_id, c.lang, c.params),
+    "fetch":               lambda s, c: s.do_fetch(c.chat_id, c.lang, c.params),
+    "ask":                 lambda s, c: s.do_ask(c.chat_id, c.lang, c.params, c.text),
+    "issues_report":       lambda s, c: s.reply(c.chat_id, s.issues_text(c.lang, c.params.get("period"))),
+    "report_problem":      lambda s, c: s.do_report_problem(c.chat_id, c.lang, c.params, c.text),
+    "set_journal":         lambda s, c: s.do_set_journal(c.chat_id, c.lang, c.params),
+    "journal_show":        lambda s, c: s.do_journal_show(c.chat_id, c.lang, c.params),
+    "multi_action":        lambda s, c: s.reply(c.chat_id, T(c.lang, "one_at_a_time")),
+    "review":              lambda s, c: s.do_review(c.chat_id, c.lang, c.params),
+    "converse":            _dispatch_default,
+    "persona":             _dispatch_default,
+    "smalltalk":           _dispatch_default,
+    "out_of_scope":        _dispatch_default,
+    "self_query":          _dispatch_default,
+    "boss_query":          lambda s, c: s.do_boss_query(c.chat_id, c.lang),
+    "memory_why":          lambda s, c: s.do_memory_why(c.chat_id, c.lang, c.text),
+    "proactive_prefs":     lambda s, c: s.do_proactive_prefs(c.chat_id, c.lang, c.params),
+    "boss_memory_update":  lambda s, c: s.do_boss_memory(c.chat_id, c.lang, c.params),
+    "style_update":        lambda s, c: s.do_style_update(c.chat_id, c.lang, c.params),
+    "trace_query":         lambda s, c: s.reply(c.chat_id, s.trace_explain_text(c.lang, c.chat_id)),
+    "memory_review":       lambda s, c: s.show_memory_review(c.chat_id, c.lang),
+    "memory_cleanup":      lambda s, c: s.do_memory_cleanup(c.chat_id, c.lang),
+    "working_history":     lambda s, c: s.reply(c.chat_id, relationship.render_working_history(s.conn, c.lang)),
+    "export":              lambda s, c: s.do_export(c.chat_id, c.lang, c.params),
+    "memory":              lambda s, c: s.reply(c.chat_id, s.memory_text(c.lang)),
+    "remember":            lambda s, c: s.do_remember(c.chat_id, c.params, c.lang),
+    "forget":              lambda s, c: s.do_forget(c.chat_id, c.params, c.lang),
+    "confirm":             lambda s, c: s.resolve_pending(c.chat_id, c.action, c.params, c.pending, c.lang),
+    "amend":               lambda s, c: s.resolve_pending(c.chat_id, c.action, c.params, c.pending, c.lang),
+    "cancel":              lambda s, c: s.resolve_pending(c.chat_id, c.action, c.params, c.pending, c.lang),
+    "save_sticker_pack":   lambda s, c: s.do_save_sticker_pack(c.chat_id, c.lang),
+    "send_sticker":        lambda s, c: s.do_send_sticker(c.chat_id, c.lang),
+    "save_cara_photo":     lambda s, c: s.do_save_cara_photo(c.chat_id, c.lang, c.msg),
+    "cara_selfie":         lambda s, c: s.do_cara_selfie(c.chat_id, c.lang),
+    "wardrobe_add":        lambda s, c: s.do_wardrobe_add(c.chat_id, c.lang, c.params, c.text),
+    "wardrobe_show":       lambda s, c: s.do_wardrobe_show(c.chat_id, c.lang, c.params),
+    "outfit_preference":   lambda s, c: s.do_outfit_preference(c.chat_id, c.lang, c.params, c.text),
+    "meeting_start":       lambda s, c: s.do_meeting_start(c.chat_id, c.lang, c.params, c.text),
+    "meeting_schedule":    lambda s, c: s.do_meeting_schedule(c.chat_id, c.lang, c.params, c.text, c.msg_id),
+    "meeting_end":         lambda s, c: s.do_meeting_end(c.chat_id, c.lang),
+    "meeting_recall":      lambda s, c: s.do_meeting_recall(c.chat_id, c.lang, c.params, c.text),
+    "recall_conversation": lambda s, c: s.do_recall_conversation(c.chat_id, c.lang, c.params, c.text),
+    "meeting_list":        lambda s, c: s.do_meeting_list(c.chat_id, c.lang),
+    "clarify":             lambda s, c: s.do_clarify(c.chat_id, c.lang, c.text, c.msg_id),
+}
 
 
 class Agent(hermes.HermesMixin):
@@ -695,6 +783,88 @@ class Agent(hermes.HermesMixin):
     # aside never reads as work and her warmth eases back when tasks stop.
     BUSINESS_REGISTER_ACTIONS = hermes.ACTIONS
 
+    # -- action handlers extracted from the old inline dispatch (verbatim behavior) --------
+
+    def do_reminder_create(self, chat_id, lang, params):
+        params = self._note_reminder_title(params)  # "напомни по заметке N"
+        draft = reminders.validate_draft(params)
+        if not draft:
+            self.start_partial_reminder(chat_id, lang, params)
+            return
+        store.pending_set(self.conn, chat_id, "reminder", draft)
+        self.reply(chat_id, T(
+            lang, "reminder_draft", title=draft["title"],
+            when_local=reminders.fmt_local(draft["due_utc"], self.tz_offset()),
+            recurrence=T(lang, "recurrence_" + draft["recurrence"]),
+        ))
+
+    def do_reminder_cancel(self, chat_id, lang, params):
+        rows = store.reminders_active(self.conn, chat_id)
+        row = reminders.find_by_query(rows, params)
+        if row:
+            disp = self.reminder_no(chat_id, row["id"])  # capture before it leaves the active list
+            store.reminder_close(self.conn, row["id"], "cancelled")
+            # Auto-show what's left, re-numbered, so the next "удали #N" reads off a
+            # current list — closing the back-to-back-delete renumbering hazard.
+            self.reply(chat_id, T(lang, "reminder_cancelled", rid=disp, title=row["title"])
+                       + "\n\n" + self._reminder_list_body(chat_id, lang))
+        else:
+            self.reply(chat_id, T(lang, "reminder_not_found"))
+
+    def do_calendar_add(self, chat_id, lang, params):
+        draft = reminders.validate_draft(params)
+        if draft:
+            event = {
+                "uid": f"event-{int(time.time())}",
+                "title": draft["title"],
+                "start_utc": draft["due_utc"],
+                "duration_minutes": self.cfg.event_duration_minutes,
+                "recurrence": draft["recurrence"],
+            }
+            self.send_to_calendar(chat_id, event)
+        else:
+            rows = store.reminders_active(self.conn, chat_id)
+            row = reminders.find_by_query(rows, params)
+            if row:
+                self.send_to_calendar(
+                    chat_id, gcal.event_from_reminder(row, self.cfg.event_duration_minutes)
+                )
+            else:
+                self.reply(chat_id, T(lang, "calendar_not_found"))
+
+    def do_item_delete(self, chat_id, lang, params):
+        rows = self.resolve_items(params)
+        if not rows:
+            self.reply(chat_id, T(lang, "items_empty"))
+        elif len(rows) == 1:
+            row = rows[0]
+            store.pending_set(self.conn, chat_id, "delete", {"row_ids": [row["id"]]})
+            snippet = (row["summary"] or row["raw_text"] or "")[:60].replace("\n", " ")
+            self.reply(chat_id, T(lang, "delete_confirm", row_id=self.note_no(row["id"]),
+                                  category=row["category"] or row["suggested_category"] or "?",
+                                  snippet=snippet))
+        else:
+            ids = [r["id"] for r in rows]
+            store.pending_set(self.conn, chat_id, "delete", {"row_ids": ids})
+            listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
+            self.reply(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
+
+    def do_help(self, chat_id, lang):
+        self.reply(chat_id, T(lang, "capabilities") + "\n— "
+                   + " · ".join(skill_manifest.capability_titles(lang)))
+
+    def do_clarify(self, chat_id, lang, text, msg_id):
+        # During a live date, a non-command line is roleplay/narration, not a confused
+        # request — just converse, and don't pollute the issue log with it (P4: the bulk
+        # of 'unclear_request' was date roleplay). Outside a meeting, log it for review.
+        _m = store.meeting_active(self.conn, chat_id)
+        if not (_m and meeting.is_social(_m["kind"])):
+            store.issue_add(self.conn, chat_id, "unclear_request", text[:200])
+        # Never snap into a formal templated menu mid-conversation (it broke an
+        # intimate chat into cold «вы»). Stay in Cara's warm voice — she has the
+        # recent dialogue, so she asks (or just answers) naturally, in "ты".
+        self.do_converse(chat_id, lang, text, msg_id)
+
     def dispatch(self, chat_id, msg, text):
         lang = self.lang()
         self.mark_contact_day()  # he reached out -> she isn't his first contact today
@@ -790,205 +960,10 @@ class Agent(hermes.HermesMixin):
             if self.continue_partial_reminder(chat_id, lang, pending, action, params):
                 return
 
-        if action == "ingest":
-            self.finalize([msg])
-        elif action == "reminder_create":
-            params = self._note_reminder_title(params)  # "напомни по заметке N"
-            draft = reminders.validate_draft(params)
-            if not draft:
-                self.start_partial_reminder(chat_id, lang, params)
-                return
-            store.pending_set(self.conn, chat_id, "reminder", draft)
-            self.reply(chat_id, T(
-                lang, "reminder_draft", title=draft["title"],
-                when_local=reminders.fmt_local(draft["due_utc"], self.tz_offset()),
-                recurrence=T(lang, "recurrence_" + draft["recurrence"]),
-            ))
-        elif action == "reminder_list":
-            self.reply(chat_id, self._reminder_list_body(chat_id, lang))
-        elif action == "reminder_cancel":
-            rows = store.reminders_active(self.conn, chat_id)
-            row = reminders.find_by_query(rows, params)
-            if row:
-                disp = self.reminder_no(chat_id, row["id"])  # capture before it leaves the active list
-                store.reminder_close(self.conn, row["id"], "cancelled")
-                # Auto-show what's left, re-numbered, so the next "удали #N" reads off a
-                # current list — closing the back-to-back-delete renumbering hazard.
-                self.reply(chat_id, T(lang, "reminder_cancelled", rid=disp, title=row["title"])
-                           + "\n\n" + self._reminder_list_body(chat_id, lang))
-            else:
-                self.reply(chat_id, T(lang, "reminder_not_found"))
-        elif action == "reminder_reschedule":
-            self.do_reschedule(chat_id, lang, params, text)
-        elif action == "reminder_rename":
-            self.do_rename_reminder(chat_id, lang, params, text)
-        elif action == "agreement_add":
-            self.do_agreement_add(chat_id, lang, params, text)
-        elif action == "agreements_list":
-            self.do_agreements_list(chat_id, lang)
-        elif action == "agreement_close":
-            self.do_agreement_close(chat_id, lang, params, text)
-        elif action == "reminder_undo":
-            self.do_reminder_undo(chat_id, lang, params)
-        elif action == "list_files":
-            self.reply_chunks(chat_id, self.files_text(lang))
-        elif action == "calendar_add":
-            draft = reminders.validate_draft(params)
-            if draft:
-                event = {
-                    "uid": f"event-{int(time.time())}",
-                    "title": draft["title"],
-                    "start_utc": draft["due_utc"],
-                    "duration_minutes": self.cfg.event_duration_minutes,
-                    "recurrence": draft["recurrence"],
-                }
-                self.send_to_calendar(chat_id, event)
-            else:
-                rows = store.reminders_active(self.conn, chat_id)
-                row = reminders.find_by_query(rows, params)
-                if row:
-                    self.send_to_calendar(
-                        chat_id, gcal.event_from_reminder(row, self.cfg.event_duration_minutes)
-                    )
-                else:
-                    self.reply(chat_id, T(lang, "calendar_not_found"))
-        elif action == "spend":
-            self.reply(chat_id, spend.format_spend(self.conn, params.get("period"), self.cfg, lang))
-        elif action == "budget_set":
-            self.do_budget_set(chat_id, lang, params)
-        elif action == "stats":
-            self.reply(chat_id, self.stats_text(lang))
-        elif action == "categories":
-            self.reply(chat_id, self.categories_text(lang))
-        elif action == "help":
-            self.reply(chat_id, T(lang, "capabilities") + "\n— "
-                       + " · ".join(skill_manifest.capability_titles(lang)))
-        elif action == "overview":
-            self.reply(chat_id, self.overview_text(lang))
-        elif action == "list_items":
-            self.do_list_items(chat_id, lang, params)
-        elif action == "item_detail":
-            self.do_item_detail(chat_id, lang, params)
-        elif action == "merge_categories":
-            self.do_merge_categories(chat_id, lang, params)
-        elif action == "recategorize":
-            self.do_recategorize(chat_id, lang, params)
-        elif action == "item_delete":
-            rows = self.resolve_items(params)
-            if not rows:
-                self.reply(chat_id, T(lang, "items_empty"))
-            elif len(rows) == 1:
-                row = rows[0]
-                store.pending_set(self.conn, chat_id, "delete", {"row_ids": [row["id"]]})
-                snippet = (row["summary"] or row["raw_text"] or "")[:60].replace("\n", " ")
-                self.reply(chat_id, T(lang, "delete_confirm", row_id=self.note_no(row["id"]),
-                                      category=row["category"] or row["suggested_category"] or "?",
-                                      snippet=snippet))
-            else:
-                ids = [r["id"] for r in rows]
-                store.pending_set(self.conn, chat_id, "delete", {"row_ids": ids})
-                listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
-                self.reply(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
-        elif action == "show_media":
-            self.do_show_media(chat_id, lang, params)
-        elif action == "read_media":
-            self.do_read_media(chat_id, lang, params)
-        elif action == "discard":
-            self.do_discard(chat_id, lang, pending)
-        elif action == "vps_stats":
-            self.reply(chat_id, sysinfo.format_report(
-                sysinfo.collect(str(self.cfg.db_path.parent)), lang, self.media_bytes()))
-        elif action == "purge":
-            self.do_purge(chat_id, lang, params)
-        elif action == "fetch":
-            self.do_fetch(chat_id, lang, params)
-        elif action == "ask":
-            self.do_ask(chat_id, lang, params, text)
-        elif action == "issues_report":
-            self.reply(chat_id, self.issues_text(lang, params.get("period")))
-        elif action == "report_problem":
-            self.do_report_problem(chat_id, lang, params, text)
-        elif action == "set_journal":
-            self.do_set_journal(chat_id, lang, params)
-        elif action == "journal_show":
-            self.do_journal_show(chat_id, lang, params)
-        elif action == "multi_action":
-            # Two+ distinct commands in one message: she does one at a time.
-            self.reply(chat_id, T(lang, "one_at_a_time"))
-        elif action == "review":
-            self.do_review(chat_id, lang, params)
-        elif action in ("converse", "persona", "smalltalk", "out_of_scope", "self_query"):
-            # All identity/self questions answer in Cara's own (human) voice — she
-            # never describes herself as software. Capability questions go to `help`.
-            self.do_converse(chat_id, lang, text, msg_id)
-        elif action == "boss_query":
-            self.do_boss_query(chat_id, lang)
-        elif action == "memory_why":
-            self.do_memory_why(chat_id, lang, text)
-        elif action == "proactive_prefs":
-            self.do_proactive_prefs(chat_id, lang, params)
-        elif action == "boss_memory_update":
-            self.do_boss_memory(chat_id, lang, params)
-        elif action == "style_update":
-            self.do_style_update(chat_id, lang, params)
-        elif action == "trace_query":
-            self.reply(chat_id, self.trace_explain_text(lang, chat_id))
-        elif action == "memory_review":
-            self.show_memory_review(chat_id, lang)
-        elif action == "memory_cleanup":
-            self.do_memory_cleanup(chat_id, lang)
-        elif action == "working_history":
-            self.reply(chat_id, relationship.render_working_history(self.conn, lang))
-        elif action == "export":
-            self.do_export(chat_id, lang, params)
-        elif action == "memory":
-            self.reply(chat_id, self.memory_text(lang))
-        elif action == "remember":
-            self.do_remember(chat_id, params, lang)
-        elif action == "forget":
-            self.do_forget(chat_id, params, lang)
-        elif action in ("confirm", "amend", "cancel"):
-            self.resolve_pending(chat_id, action, params, pending, lang)
-        elif action == "save_sticker_pack":
-            self.do_save_sticker_pack(chat_id, lang)
-        elif action == "send_sticker":
-            self.do_send_sticker(chat_id, lang)
-        elif action == "save_cara_photo":
-            self.do_save_cara_photo(chat_id, lang, msg)
-        elif action == "cara_selfie":
-            self.do_cara_selfie(chat_id, lang)
-        elif action == "wardrobe_add":
-            self.do_wardrobe_add(chat_id, lang, params, text)
-        elif action == "wardrobe_show":
-            self.do_wardrobe_show(chat_id, lang, params)
-        elif action == "outfit_preference":
-            self.do_outfit_preference(chat_id, lang, params, text)
-        elif action == "meeting_start":
-            self.do_meeting_start(chat_id, lang, params, text)
-        elif action == "meeting_schedule":
-            self.do_meeting_schedule(chat_id, lang, params, text, msg_id)
-        elif action == "meeting_end":
-            self.do_meeting_end(chat_id, lang)
-        elif action == "meeting_recall":
-            self.do_meeting_recall(chat_id, lang, params, text)
-        elif action == "recall_conversation":
-            self.do_recall_conversation(chat_id, lang, params, text)
-        elif action == "meeting_list":
-            self.do_meeting_list(chat_id, lang)
-        elif action == "clarify":
-            # During a live date, a non-command line is roleplay/narration, not a confused
-            # request — just converse, and don't pollute the issue log with it (P4: the bulk
-            # of 'unclear_request' was date roleplay). Outside a meeting, log it for review.
-            _m = store.meeting_active(self.conn, chat_id)
-            if not (_m and meeting.is_social(_m["kind"])):
-                store.issue_add(self.conn, chat_id, "unclear_request", text[:200])
-            # Never snap into a formal templated menu mid-conversation (it broke an
-            # intimate chat into cold «вы»). Stay in Cara's warm voice — she has the
-            # recent dialogue, so she asks (or just answers) naturally, in "ты".
-            self.do_converse(chat_id, lang, text, msg_id)
-        else:
-            # Unknown action -> never a cold rejection; talk to him.
-            self.do_converse(chat_id, lang, text, msg_id)
+        # Table dispatch: one handler per action (see module-level `_DISPATCH`). Unknown or
+        # converse-family actions fall through to warm free-form Cara (`_dispatch_default`).
+        _DISPATCH.get(action, _dispatch_default)(
+            self, _Ctx(action, chat_id, lang, params, text, msg, msg_id, pending))
 
     def handle_command(self, chat_id, name):
         lang = self.lang()
