@@ -34,6 +34,7 @@ import memory_curator
 import persona
 import proactive
 import reminders
+import reminders_svc
 import relationship
 import review
 import router
@@ -144,7 +145,7 @@ _DISPATCH = {
 }
 
 
-class Agent(hermes.HermesMixin):
+class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin):
     def __init__(self, cfg):
         # Fail fast if a router action lacks a manifest policy (P0.1: the
         # manifest is the live permission gate, not just documentation).
@@ -1369,15 +1370,6 @@ class Agent(hermes.HermesMixin):
                 if rest == "" or rest[0] == "\n":
                     return common.to_reaction(emo), rest.lstrip()
         return None, reply
-
-    def _reminder_list_body(self, chat_id, lang):
-        """Freshly-numbered active reminders, and stamp that they were JUST shown — so a
-        follow-up '#N' targets a reminder (not a note) AND maps to this current list. Used
-        both for an explicit list request and to auto-refresh after a delete, so the numbers
-        the boss sees never go stale under a back-to-back delete."""
-        rows = store.reminders_active(self.conn, chat_id)
-        store.kv_set(self.conn, "reminders_listed_at", datetime.now(timezone.utc).isoformat())
-        return reminders.format_list(rows, self.tz_offset(), lang)
 
     def _cohabiting(self):
         """Do Cara and the boss live together? Runtime pref overrides the configured default."""

@@ -277,28 +277,37 @@ class RouterTests(unittest.TestCase):
         # The dispatcher's business-register set IS the Hermes domain (single source).
         self.assertIs(tg_ingest_agent.Agent.BUSINESS_REGISTER_ACTIONS, hermes.ACTIONS)
 
-    def test_business_handlers_relocated_to_hermes_mixin(self):
-        # The extraction (#2): the business handlers physically live in hermes.HermesMixin,
+    def test_business_handlers_relocated_to_domain_mixins(self):
+        # The extraction (#2): business handlers physically live in their DOMAIN mixin — the
+        # reminder subsystem in reminders_svc.ReminderMixin, the rest in hermes.HermesMixin —
         # are NOT duplicated on Agent, yet still resolve on Agent via inheritance.
-        import hermes, tg_ingest_agent
+        import hermes, reminders_svc, tg_ingest_agent
         self.assertTrue(issubclass(tg_ingest_agent.Agent, hermes.HermesMixin))
-        for name in ("do_reschedule", "do_rename_reminder", "_resolve_reminder_target",
-                     "_resolve_reminder_op", "_parse_reminder_selector", "do_reminder_undo",
-                     "continue_partial_reminder", "start_partial_reminder", "_note_reminder_title",
-                     "do_journal_show", "do_set_journal", "do_report_problem",
-                     # stage 2 — notes/inbox
-                     "stats_text", "overview_text", "items_text", "do_show_media", "do_discard",
-                     "do_purge", "resolve_purge", "resolve_item", "resolve_items", "note_no",
-                     "item_detail_text", "do_item_detail", "do_recategorize", "do_merge_categories",
-                     "issues_text", "files_text", "categories_text",
-                     # stage 3 — KB / fetch
-                     "do_ask", "do_fetch", "ingest_fetched", "_keyword_context",
-                     # stage 4 — reminders firing/expiry + spend/review/export
-                     "fire_due_reminders", "check_reminder_expiry", "reminder_no",
-                     "do_budget_set", "do_review", "do_export"):
-            self.assertIn(name, hermes.HermesMixin.__dict__)         # physically in hermes
-            self.assertNotIn(name, tg_ingest_agent.Agent.__dict__)   # not duplicated on Agent
-            self.assertTrue(hasattr(tg_ingest_agent.Agent, name))    # still available via the mixin
+        self.assertTrue(issubclass(tg_ingest_agent.Agent, reminders_svc.ReminderMixin))
+        reminder_methods = (
+            "do_reschedule", "do_rename_reminder", "_resolve_reminder_target",
+            "_resolve_reminder_op", "_parse_reminder_selector", "do_reminder_undo",
+            "continue_partial_reminder", "start_partial_reminder", "_note_reminder_title",
+            "_remember_reminder", "_reminder_list_body",
+            "fire_due_reminders", "check_reminder_expiry", "reminder_no")
+        hermes_methods = (
+            "do_journal_show", "do_set_journal", "do_report_problem",
+            # notes / inbox
+            "stats_text", "overview_text", "items_text", "do_show_media", "do_discard",
+            "do_purge", "resolve_purge", "resolve_item", "resolve_items", "note_no",
+            "item_detail_text", "do_item_detail", "do_recategorize", "do_merge_categories",
+            "issues_text", "files_text", "categories_text",
+            # KB / fetch + spend/review/export
+            "do_ask", "do_fetch", "ingest_fetched", "_keyword_context",
+            "do_budget_set", "do_review", "do_export")
+        for name in reminder_methods:
+            self.assertIn(name, reminders_svc.ReminderMixin.__dict__)  # physically in the reminder mixin
+            self.assertNotIn(name, hermes.HermesMixin.__dict__)        # moved out of hermes
+        for name in hermes_methods:
+            self.assertIn(name, hermes.HermesMixin.__dict__)           # physically in hermes
+        for name in reminder_methods + hermes_methods:
+            self.assertNotIn(name, tg_ingest_agent.Agent.__dict__)     # not duplicated on Agent
+            self.assertTrue(hasattr(tg_ingest_agent.Agent, name))      # available via the mixin
 
     def test_ordinal_reschedule_routes_to_action_not_converse(self):
         import converse
