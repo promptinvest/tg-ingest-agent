@@ -7,7 +7,8 @@ suggest-and-confirm categorization, reminders, AI-spend stats, and a small
 preference memory. All model calls go through the budget-guarded gateway in
 llm.py. No inbound ports; stdlib only.
 
-Deployed on Pilot-VPS as /opt/tg-ingest-agent/agent.py.
+Deployed on the PD-VPS (174.138.108.85) as /opt/tg-ingest-agent/agent.py;
+Pilot-VPS is a cold standby.
 """
 import ast
 import json
@@ -186,6 +187,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # stickers so she sends one that fits the moment's MEANING, not a blind emoji.
         runtime.register("stickers", "describe",
                          lambda ctx, conn, payload, job: ctx.run_describe_stickers())
+        # A crash mid-job leaves the row 'claimed' with no owner; reclaim so the
+        # job kind isn't wedged forever (has_pending would block re-enqueue).
+        requeued, dead = jobs.reclaim_stale(self.conn)
+        if requeued or dead:
+            log(f"reclaimed stale jobs after restart: {requeued} requeued, {dead} failed")
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         self.stop = False
         self.last_sweep = 0.0

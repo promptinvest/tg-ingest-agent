@@ -1,10 +1,26 @@
 #!/usr/bin/env python3
-"""Minimal Telegram Bot API client (stdlib urllib)."""
+"""Minimal Telegram Bot API client (stdlib urllib).
+
+Every network/parse fault is wrapped as TelegramError: a bare socket
+read-timeout escapes urlopen as TimeoutError (not URLError), a reset mid-body
+as ConnectionResetError, a truncated chunked body as http.client.IncompleteRead,
+and a truncated JSON body as ValueError — none of which the callers' `except
+TelegramError` would catch. Unwrapped, any of those kills the poll loop / a
+scheduler tick outright (the exact lesson llm.py already encodes for the LLM
+gateway; see SOLUTION.md §1.2).
+"""
+import http.client
 import json
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+# Transport/parse faults that must surface as TelegramError, not crash the
+# process. Order matters at the except sites: HTTPError/URLError first (both
+# are OSError subclasses), then this catch-all. ValueError covers json/unicode
+# decode errors on a truncated body.
+TRANSPORT_ERRORS = (TimeoutError, http.client.HTTPException, OSError, ValueError)
 
 
 class TelegramError(Exception):
@@ -48,6 +64,8 @@ def tg_call(token, method, params=None, timeout=35):
         ) from exc
     except URLError as exc:
         raise TelegramError(f"{method} failed: {exc.reason}") from exc
+    except TRANSPORT_ERRORS as exc:
+        raise TelegramError(f"{method} failed: {exc!r}") from exc
     if not payload.get("ok"):
         raise TelegramError(f"{method} returned ok=false: {payload.get('description')}")
     return payload.get("result")
@@ -73,6 +91,8 @@ def tg_send_document(token, chat_id, filename, content_bytes, caption=None,
         raise TelegramError(f"sendDocument failed with HTTP {exc.code}", status=exc.code) from exc
     except URLError as exc:
         raise TelegramError(f"sendDocument failed: {exc.reason}") from exc
+    except TRANSPORT_ERRORS as exc:
+        raise TelegramError(f"sendDocument failed: {exc!r}") from exc
     if not payload.get("ok"):
         raise TelegramError(f"sendDocument returned ok=false: {payload.get('description')}")
     return payload.get("result")
@@ -126,6 +146,8 @@ def tg_send_photo(token, chat_id, photo, caption=None, by_file_id=True):
         raise TelegramError(f"sendPhoto failed with HTTP {exc.code}", status=exc.code) from exc
     except URLError as exc:
         raise TelegramError(f"sendPhoto failed: {exc.reason}") from exc
+    except TRANSPORT_ERRORS as exc:
+        raise TelegramError(f"sendPhoto failed: {exc!r}") from exc
     if not payload.get("ok"):
         raise TelegramError(f"sendPhoto returned ok=false: {payload.get('description')}")
     return payload.get("result")
@@ -139,3 +161,5 @@ def tg_download(token, file_path, dest):
     except (HTTPError, URLError) as exc:
         reason = getattr(exc, "code", None) or getattr(exc, "reason", exc)
         raise TelegramError(f"file download failed: {reason}") from exc
+    except TRANSPORT_ERRORS as exc:
+        raise TelegramError(f"file download failed: {exc!r}") from exc

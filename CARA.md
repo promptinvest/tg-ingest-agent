@@ -1,7 +1,9 @@
 # Cara — Capabilities, Features & Architecture
 
 **Cara** (`@cara_assist_bot`) is a personal, conversational AI assistant that lives
-in Telegram and is self-hosted on Pilot‑VPS (a 1 vCPU / 2 GB DigitalOcean droplet).
+in Telegram and is self-hosted on the **PD‑VPS** (`174.138.108.85`, a DigitalOcean
+droplet shared with the PD platform; Pilot‑VPS is a cold standby — migrated off it
+2026‑06).
 She talks like a warm human, ingests and organizes what her owner ("boss") forwards
 her, runs reminders, answers from his own notes, learns from how they work together,
 and quietly flags things worth attention — all from **one stdlib‑only Python process**
@@ -188,14 +190,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   "найди про DeepSeek", "детали #2" / "покажи заметку 11" (full card + re‑sends the
   attached photos/files; a bare "заметка N" reference resolves by number regardless of
   phrasing).
-- **Note numbers** are a contiguous **1…N** position (oldest first) shown everywhere
-  the boss sees or types a note number; they **compact automatically on deletion** (no
-  gaps). The number is a display position, not the immutable internal id — so
-  attachments, embeddings and memory links never break, but a given number isn't
-  permanent (deleting an earlier note shifts the later ones down). **Reminder numbers
-  work the same way** — a contiguous 1…N position in the active list (soonest-due
-  first) that compacts as reminders fire/cancel; "#N" in reschedule/cancel/undo
-  resolves to that position.
+- **Note numbers** are **stable** per‑note ids (`messages.note_no`): assigned once when
+  a note first becomes visible, **monotonic, never reused**. Deleting a note leaves a
+  **permanent gap** (like a GitHub issue number), so "заметка 11" is the same note
+  tomorrow and marking a category a journal renumbers nothing. The number is a display
+  position distinct from the internal row id, so attachments/embeddings/memory links
+  never break. (Owner decision, 2026‑06‑29 — gaps accepted for stability.) **Reminder
+  numbers are different** — a contiguous 1…N position in the active list (soonest‑due
+  first) that **compacts** as reminders fire/cancel; "#N" in reschedule/cancel/undo
+  resolves to that position, and Cara re‑shows the refreshed list after a cancel so a
+  captured number never goes stale.
 - **Journals (long‑term areas):** mark a category as a journal — "веди Благодарности
   как дневник" / "сделай X журналом" — and it becomes append‑only: each note acks as a
   dated entry ("запись за 18.06, всего N"), "покажи дневник благодарности [за неделю/
@@ -524,17 +528,24 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 
 ## 4. Persona & honesty rules
 
-- Warm, loyal human companion (the boss is her *boss*); never romantic/possessive.
-- **Never breaks character** as an AI — owner‑only access makes this non‑deceptive.
+- Warm, loyal human companion who has grown into an intimate partner (a romance the
+  owner deliberately built out over time — see §3's meetings/storyline stack); never
+  possessive, clingy, or reproachful.
+- **Fully emulates a human and never breaks character** — she never says or hints she's
+  an AI/bot/persona, even asked point‑blank. This is an explicit owner decision made
+  non‑deceptive by owner‑only access (exactly one person reaches her, and he chose it);
+  the honesty boundary is kept at the system level (these specs) and in the hard data‑
+  truthfulness rules below, not in her voice.
 - **Matches the message's language per turn** (word‑based detection: a Russian
   sentence with an English term stays Russian; Russian is the uncertain fallback).
 - **Never fabricates specifics** — IDs, numbers, trace codes, prices, dates, model
   names; if unsure she says so.
 - **Action‑truth:** she won't claim a real task was done unless the code did it; the
   `action_truth` guard keeps "done/saved/scheduled" wording out of draft templates.
-- **Persona sits below the rules:** `persona.py` pins the prompt‑layer order
-  (security → tools → router → confirmation → memory → budget → persona), so charm can
-  never override safety, confirmation, or truth.
+- **Persona sits below the hard rules:** her prompts place the security, routing,
+  confirmation, budget and data‑truth rules above the persona voice, so charm can
+  never override safety, confirmation, or truth. (`persona.py` documents the intended
+  layer order; the live converse/meeting prompts embed the rules directly.)
 - Conversation and grounded answers are LLM‑generated; **transactional/system messages
   are deterministic `texts.py` templates** (bilingual, with tone variants).
 
@@ -567,7 +578,7 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ proactive.py     suggestion-only heartbeat (throttle, quiet hours, gating)
    ├─ skill_manifest.py permission registry (risk · confirmation · proactive)
    ├─ trace.py         one trace per update/tick; staged events
-   ├─ events.py/jobs.py/runtime.py  durable event/job queue + handler drain
+   ├─ events.py/jobs.py/runtime.py  update audit log (events) + durable job queue + drain
    ├─ action_truth.py  final-verb / state wording guard
    ├─ sysinfo.py       read-only host stats (/proc, statvfs)
    ├─ fetch.py         SSRF-guarded URL reader
@@ -613,8 +624,11 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   `llm_usage` and `issues`. "почему ты так решила?" replays the last trace.
 - **Events & jobs:** background work (daily memory curator, pending‑ingest retry
   sweep, media cleanup, expiring stale pending actions) runs as durable jobs that
-  survive restart, retry on failure, and run under their own traces. The live
-  request→reply path stays synchronous by design (single‑user, low volume).
+  survive restart, retry on failure, and run under their own traces. A job left
+  `claimed` by a crash mid‑run is **reclaimed at startup** (`jobs.reclaim_stale`,
+  2026‑07‑02) — requeued while retry budget remains, else terminally failed — so a
+  crash can never wedge a job kind forever. The live request→reply path stays
+  synchronous by design (single‑user, low volume).
 
 ---
 
@@ -642,10 +656,11 @@ Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
 
 Cascade deletes + purge scopes keep rows and media consistent. **`llm_usage` (spend
 history) and `preferences` (identity) are never purged.** The user-facing note number
-is a **contiguous 1…N display position** over visible notes (oldest first), computed
-from the stable `messages.id`; it compacts on deletion and never alters the id that
-attachments/embeddings/memory reference. **Reminder numbers** are the analogous 1…N
-position in the active list (due order), computed from the stable `reminders.id`.
+is a **stable `messages.note_no`** — assigned once, monotonic, never reused, with
+permanent gaps on deletion (it never alters the internal row id that attachments/
+embeddings/memory reference). **Reminder numbers** are different: a **contiguous 1…N
+display position** in the active list (due order, from the stable `reminders.id`) that
+compacts on fire/cancel.
 
 ---
 
@@ -693,16 +708,19 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 
 ## 9. Operations
 
-- **Host:** Pilot‑VPS, SSH key‑only on a non‑standard port. Service
-  `tg-ingest-agent`; app `/opt/tg-ingest-agent/`; state `/var/lib/tg-ingest-agent/`.
+- **Host:** PD‑VPS (`174.138.108.85`, SSH key‑only; connection details in the PD‑VPS
+  KB). Service `tg-ingest-agent`; app `/opt/tg-ingest-agent/`; state
+  `/var/lib/tg-ingest-agent/`. Pilot‑VPS is a cold standby (migrated 2026‑06).
 - **Deploy:** single‑connection `deploy.sh` (tar → test → install → verify) with an
   idempotent installer (backs up, preserves env, `py_compile` gate, restarts only when
   secrets are complete); `--pull` / `--rollback <sha>` supported. The installer stamps
-  a content‑hash `VERSION` so Cara announces real code changes (not reboots).
+  a content‑hash `VERSION` so Cara announces real code changes (not reboots). The
+  remote scripts run with `pipefail` (2026‑07‑02), so a FAILED test run or a mid‑way
+  installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 278 offline unit tests (no network; temp SQLite), run on the box as part
-  of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
+- **Tests:** 527 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+  the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an
   un‑scripted LLM call fails the scenario.

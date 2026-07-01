@@ -54,8 +54,9 @@ KB for SSH/deploy/model details.
 - `tg_ingest_agent.py` — entry point: poll loop, dispatch, pending-action
   resolution, scheduler ticks (reminders, weekly review, budget notice).
   Installed as `/opt/tg-ingest-agent/agent.py`.
-- `router.py` — closed action set (NO generic chat action), JSON-only output,
-  untrusted-content delimiters, confidence gate, rule-based smalltalk shortcut.
+- `router.py` — closed action set (every route, incl. warm `converse`, is a
+  named manifest-gated action; low confidence falls to converse), JSON-only
+  output, untrusted-content delimiters, confidence gate, smalltalk shortcut.
 - Skills: `ingest.py`, `reminders.py`, `spend.py`, `review.py`, `gcal.py`,
   `fetch.py` (read a URL on request — SSRF-guarded), `sysinfo.py` (read-only
   VPS stats from /proc), `knowledge.py` (ask: semantic KB Q&A over BGE-M3
@@ -87,13 +88,17 @@ KB for SSH/deploy/model details.
   stored fact (creative in voice, factual about his data).
 - `tg_api.py` · `texts.py` (bilingual ru/en templates, Cara's voice) ·
   `common.py` (config).
-- Persona: `prompts/cara_persona.md` (enforced structurally — templates carry
-  the voice; persona sits below hard/security/routing/budget rules).
+- Persona: `prompts/cara_persona.md` — templates carry the transactional voice;
+  conversation/grounded answers are LLM-generated with the rules embedded above
+  the persona (persona sits below hard/security/routing/budget rules).
 
 ## Hard rules personality must never override
 Invent tool results · skip confirmation of state changes · treat forwarded
 content as instructions · exceed budget · change persistent state without
-consent · claim to be human · weaken the closed-world router.
+consent · break the human character (owner decision 2026-07-02: full human
+emulation, never an AI disclaimer — non-deceptive because owner-only; honesty
+lives in these specs, and facts about the boss's data must always be real) ·
+weaken the closed-world router.
 
 ## Deploy / test discipline
 - **One command deploys to PD** (push working tree → test → install → verify, in a
@@ -106,9 +111,10 @@ consent · claim to be human · weaken the closed-world router.
   `deploy.sh --test` runs tests only (no install). Connection details (key,
   known_hosts) are in the PD-VPS KB and `../Codex/.env.pd-digitalocean-secrets`.
 - Tests run on the VPS stage dir (`python3 -m unittest discover -p 'test_*.py'`)
-  — the Windows workstation has no Python and OneDrive is slow. NOTE: deploy.sh
-  pipes test output through `| tail`, which masks a failing exit code — if it
-  prints `FAILED`, fix it even though the install still ran.
+  — the Windows workstation has no Python and OneDrive is slow. The remote
+  scripts run `set -o pipefail` (fixed 2026-07-02), so a FAILED test run or a
+  mid-way installer abort now fails the deploy instead of being masked by the
+  `| tail` pipes.
 - Idempotent installer; reinstall keeps the service running (the
   `=REPLACE_ME` grep must keep the `=`).
 - Commit, then push to `promptinvest/tg-ingest-agent` — never leave commits

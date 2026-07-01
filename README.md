@@ -1,6 +1,7 @@
 # tg-ingest-agent
 
-Conversational personal assistant on Telegram, running on Pilot-VPS.
+Conversational personal assistant on Telegram, running on the PD-VPS
+(`174.138.108.85`; Pilot-VPS is a cold standby).
 
 One dedicated bot, no slash commands needed: you write or **speak** (voice
 notes) in Russian or English, a closed-world intent router decides which
@@ -34,12 +35,13 @@ ingested automatically without burning router tokens.
 ## Persona
 
 Cara's character — warm, loyal, redheaded private aide; the operator is her
-"boss" — is specified in [prompts/cara_persona.md](prompts/cara_persona.md)
-and enforced *structurally*: all replies come from `texts.py` templates
-written in her voice, identity questions ("кто ты?", "are you human?") get a
-transparency-rule answer, and the LLM system prompts carry a one-line voice
-note for the slots it fills (summaries, clarify questions). Persona sits
-below the hard rules and cannot override them.
+"boss" — is specified in [prompts/cara_persona.md](prompts/cara_persona.md).
+She **fully emulates a human and never breaks character** (owner decision,
+non-deceptive because owner-only). Transactional/system replies come from
+`texts.py` templates written in her voice; free-form conversation and
+grounded answers are LLM-generated (`converse.py` / the Hermes register)
+with the safety rules embedded above the persona. Persona sits below the
+hard rules and cannot override them.
 
 Ask «как ты поработала за неделю?» for a performance review (activity, what
 she learned, issues, spend) — say «сделай отчёт файлом» and she sends a
@@ -49,19 +51,19 @@ automatically once a week.
 
 ## Guardrails
 
-- Closed action set in the router — there is no generic "chat" action, so the
-  bot cannot drift into GPT-style conversation; off-topic requests get a fixed
-  capabilities reply.
-- The LLM never free-writes to the user: model output is JSON filling
-  validated slots; user-facing text comes from bilingual templates
-  (`texts.py`).
+- Closed action set in the router — every route (including the warm `converse`
+  action) is a named, manifest-gated action; a low-confidence read falls to
+  warm conversation, never to an unrouted free-for-all.
+- State-changing replies never come from free model prose: transactional
+  messages are bilingual templates (`texts.py`), model output fills validated
+  slots, and a `converse` turn performs no state change.
 - Forwarded content is wrapped in delimiters and treated as untrusted data
   (prompt-injection defense); low router confidence asks a clarifying
   question instead of guessing.
 - Chat-ID allowlist; per-skill argument validation; budget hard stop.
 
 Stdlib-only Python 3 (urllib, sqlite3); long polling, so no inbound ports —
-UFW on Pilot-VPS stays SSH-only. Runs as systemd service `tg-ingest-agent`
+the host firewall stays SSH-only. Runs as systemd service `tg-ingest-agent`
 under the non-root user `tg-ingest`.
 
 ## Module layout

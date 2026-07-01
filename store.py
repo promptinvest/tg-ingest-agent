@@ -1349,6 +1349,12 @@ def open_db(path):
 def _migrate(conn):
     """Additive migrations for databases created by older versions
     (CREATE IF NOT EXISTS does not alter existing tables)."""
+    # categories.kind FIRST: the note_no backfill below calls journal_categories(),
+    # which selects on kind — on a DB predating both migrations that read would
+    # crash open_db (and crash-loop the service) if kind were added later.
+    cat_columns = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
+    if "kind" not in cat_columns:
+        conn.execute("ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'inbox'")
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
     if "forward_origin_username" not in columns:
         conn.execute("ALTER TABLE messages ADD COLUMN forward_origin_username TEXT")
@@ -1389,9 +1395,6 @@ def _migrate(conn):
     rem_columns = {row["name"] for row in conn.execute("PRAGMA table_info(reminders)")}
     if "prev_due_utc" not in rem_columns:
         conn.execute("ALTER TABLE reminders ADD COLUMN prev_due_utc TEXT")
-    cat_columns = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
-    if "kind" not in cat_columns:
-        conn.execute("ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'inbox'")
     try:
         stk_columns = {row["name"] for row in conn.execute("PRAGMA table_info(stickers)")}
         if stk_columns and "description" not in stk_columns:
@@ -1942,10 +1945,10 @@ def status_counts(conn):
 
 
 # -- display numbering -------------------------------------------------------
-# The user-facing note number is a contiguous 1..N position (oldest first) over
-# the *visible* notes — NOT the immutable `id` (which stays the stable key for
-# every attachment/embedding/memory FK). It compacts automatically on deletion,
-# so the numbers the boss sees always start at 1 with no gaps.
+# LIVE scheme: the stable per-chat `note_no` (ensure_note_no below) — assigned
+# once, monotonic, never reused; gaps on delete are intentional. display_ids()
+# is the LEGACY compacting 1..N scheme, retired 2026-06-29: kept only because a
+# legacy test still exercises it — do not use it for anything user-facing.
 
 def display_ids(conn):
     """Visible-note ids in display order (oldest first); position = number. A CONFIRMED

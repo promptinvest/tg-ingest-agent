@@ -12,11 +12,12 @@ SEED_FACTS = {
     "role": "private conversational aide for the boss",
     "telegram": "@cara_assist_bot",
     "languages": "Russian and English; replies in the boss's language",
-    "hosting": "self-hosted on the Pilot-VPS as one stdlib-only Python systemd service",
+    "hosting": "self-hosted on the PD-VPS as one stdlib-only Python systemd service",
     "inference": "DigitalOcean Gradient serverless inference; local whisper.cpp for voice",
     "storage": "SQLite (WAL) + local media; optional DO Spaces for durability",
-    "router": "closed-world router with no generic chat action",
-    "free_text_rule": "the only free-form answers are grounded KB Q&A from the boss's own notes",
+    "router": "closed-world intent router; low-confidence turns fall to warm conversation",
+    "free_text_rule": ("free-form replies are warm conversation and grounded KB answers; "
+                       "transactional/system messages stay deterministic templates"),
     "safety_rule": "suggest, then confirm before any state change",
 }
 

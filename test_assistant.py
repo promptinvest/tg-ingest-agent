@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline unit tests: router, LLM gateway, reminders, spend, texts, memory."""
+import json
 import os
 import sys
 import tempfile
@@ -34,6 +35,7 @@ import storage
 import store
 import sysinfo
 import texts
+import tg_api
 import trace as tracing
 
 
@@ -540,6 +542,46 @@ class CalendarTests(unittest.TestCase):
         self.assertFalse(gcal.configured(cfg))  # no calendar id, no key file
         cfg.gcal_calendar_id = "me@gmail.com"
         self.assertFalse(gcal.configured(cfg))  # key file still missing
+
+    def test_auth_failures_raise_calendar_error_not_raw(self):
+        # Regression: an unreadable/malformed key or a bare socket timeout used
+        # to escape as OSError/ValueError/TimeoutError — NOT CalendarError — so
+        # send_to_calendar's `except CalendarError` was skipped, the promised
+        # .ics fallback never engaged, and the boss got total silence.
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_db(Path(tmp) / "t.db")
+            cfg = make_config()
+            cfg.gcal_calendar_id = "me@gmail.com"
+            try:
+                # 1) key file missing entirely
+                cfg.gcal_key_file = str(Path(tmp) / "absent.json")
+                with self.assertRaises(gcal.CalendarError):
+                    gcal.get_access_token(cfg, conn)
+                # 2) key file present but not JSON (also covers PermissionError
+                #    -> OSError: same except clause)
+                bad = Path(tmp) / "bad.json"
+                bad.write_text("not json", encoding="utf-8")
+                cfg.gcal_key_file = str(bad)
+                with self.assertRaises(gcal.CalendarError):
+                    gcal.get_access_token(cfg, conn)
+                # 3) valid JSON but missing the SA fields
+                bad.write_text('{"type": "service_account"}', encoding="utf-8")
+                with self.assertRaises(gcal.CalendarError):
+                    gcal.get_access_token(cfg, conn)
+                # 4) bare socket read-timeout during the token call (raw
+                #    TimeoutError is NOT a URLError)
+                good = Path(tmp) / "sa.json"
+                good.write_text(json.dumps({"client_email": "sa@p.iam.gserviceaccount.com",
+                                            "private_key": "PEM"}), encoding="utf-8")
+                cfg.gcal_key_file = str(good)
+                import http.client
+                for fault in (TimeoutError("read"), http.client.IncompleteRead(b"x")):
+                    with mock.patch.object(gcal, "_sign_rs256", return_value=b"sig"), \
+                            mock.patch.object(gcal, "urlopen", side_effect=fault):
+                        with self.assertRaises(gcal.CalendarError, msg=repr(fault)):
+                            gcal.get_access_token(cfg, conn)
+            finally:
+                conn.close()
 
     def test_router_accepts_calendar_add(self):
         ok = router.validate_route({"action": "calendar_add", "params": {"title_query": "банк"}}, False)
@@ -1250,12 +1292,16 @@ class PersonaPatchTests(unittest.TestCase):
         store.pref_set(self.conn, "preferred_address_en", "chief")
         self.assertEqual(boss_model.get_address(self.conn, "en", allow_name=False), "chief")
 
-    # Personality: character + relationship answers (the screenshot complaint)
-    def test_persona_character_is_in_character_but_honest(self):
+    # Personality: character + relationship answers (the screenshot complaint).
+    # Owner decision 2026-07-02: full human emulation — she never breaks
+    # character (no "I'm not human / a persona" disclaimers anywhere).
+    def test_persona_character_stays_in_character(self):
         for lang in ("ru", "en"):
             ch = texts.T(lang, "persona_character", name=("босс" if lang == "ru" else "boss"))
-            self.assertTrue("рыж" in ch.lower() or "red" in ch.lower())   # character shows
-            self.assertIn("персон" if lang == "ru" else "persona", ch.lower())  # transparency
+            low = ch.lower()
+            self.assertTrue("рыж" in low or "red" in low)   # character shows
+            for breaks in ("не человек", "not human", "персона внутри", "persona inside"):
+                self.assertNotIn(breaks, low)  # never breaks character
             self.assertNotIn("SQLite", ch)  # NOT a tech dump
             self.assertNotIn("Pilot-VPS", ch)
 
@@ -1272,11 +1318,16 @@ class PersonaPatchTests(unittest.TestCase):
                 {"action": "persona", "params": {"topic": topic}}, False)["action"], "persona")
         self.assertTrue(skill_manifest.known("persona"))
 
-    def test_origin_is_honest(self):
+    def test_origin_stays_in_character(self):
+        # Human emulation: her origin is her own (fictional) life, told in
+        # character — never an "I have no human past" disclaimer, and never
+        # fabricated specifics (ages, dates).
         for lang in ("ru", "en"):
             low = texts.T(lang, "persona_origin", name=("босс" if lang == "ru" else "boss")).lower()
-            self.assertTrue("человеческого" in low or "no human" in low)  # no fake past
-            self.assertNotIn("years", low)
+            for breaks in ("человеческого прошлого у меня нет", "no human past",
+                           "не человек", "not human"):
+                self.assertNotIn(breaks, low)
+            self.assertNotIn("years", low)  # no invented concrete specifics
 
 
 class ConversationDispatchTests(unittest.TestCase):
@@ -4626,6 +4677,29 @@ class EventJobTests(unittest.TestCase):
         jobs.complete(self.conn, job["id"], {"candidates": 3})
         self.assertFalse(jobs.has_pending(self.conn, "memory_curator", "run_memory_curator"))
 
+    def test_job_reclaim_stale_after_crash(self):
+        # A crash mid-run used to leave the job 'claimed' forever: claim_next
+        # skips it, but has_pending counts it — so that job kind was never
+        # enqueued again ("durable jobs survive restart" silently broken).
+        # reclaim_stale at startup requeues it, or terminally fails it once
+        # the retry budget is spent.
+        jobs.add_job(self.conn, "maintenance", "media_cleanup", max_attempts=2)
+        crashed = jobs.claim_next(self.conn)  # attempts -> 1, then "crash"
+        self.assertIsNotNone(crashed)
+        self.assertIsNone(jobs.claim_next(self.conn))  # wedged: not claimable...
+        self.assertTrue(  # ...yet blocks re-enqueue
+            jobs.has_pending(self.conn, "maintenance", "media_cleanup"))
+        self.assertEqual(jobs.reclaim_stale(self.conn), (1, 0))
+        again = jobs.claim_next(self.conn)  # attempts -> 2 (budget spent), crash again
+        self.assertEqual(again["id"], crashed["id"])
+        self.assertEqual(jobs.reclaim_stale(self.conn), (0, 1))
+        row = self.conn.execute("SELECT status, error FROM jobs WHERE id = ?",
+                                (crashed["id"],)).fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("reclaimed", row["error"])
+        self.assertFalse(jobs.has_pending(self.conn, "maintenance", "media_cleanup"))
+        self.assertEqual(jobs.reclaim_stale(self.conn), (0, 0))  # idempotent
+
     def test_runtime_drain_runs_handler_and_failover(self):
         ran = {}
 
@@ -4897,6 +4971,45 @@ class AskFlowTests(unittest.TestCase):
 
 
 class StoreMigrationTests(unittest.TestCase):
+    def test_kind_migrates_before_note_no_backfill(self):
+        # Regression: the note_no backfill calls journal_categories(), which
+        # selects on categories.kind — on a DB predating BOTH migrations the
+        # kind column must be added FIRST or open_db crashes ("no such column:
+        # kind") and the service restart-loops.
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "old.db"
+            raw = sqlite3.connect(str(path))
+            raw.execute(
+                "CREATE TABLE messages (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL,"
+                " tg_message_id INTEGER NOT NULL, received_at TEXT, raw_text TEXT,"
+                " suggested_category TEXT, category TEXT, status TEXT,"
+                # SCHEMA's CREATE INDEX IF NOT EXISTS on messages still runs against a
+                # pre-existing table, so the fixture needs the indexed columns (real
+                # old DBs have them — _migrate only ever added forward_origin_username).
+                " forward_origin_chat_id INTEGER, forward_origin_message_id INTEGER,"
+                " suggestion_message_id INTEGER,"
+                " UNIQUE(chat_id, tg_message_id))")
+            raw.execute("CREATE TABLE categories (name TEXT PRIMARY KEY)")  # no 'kind' yet
+            raw.execute("INSERT INTO categories (name) VALUES ('crypto')")
+            raw.execute("INSERT INTO messages (chat_id, tg_message_id, received_at,"
+                        " raw_text, category, status) VALUES (1, 10, '2026-01-01', 'a',"
+                        " 'crypto', 'confirmed')")
+            raw.execute("INSERT INTO messages (chat_id, tg_message_id, received_at,"
+                        " raw_text, category, status) VALUES (1, 11, '2026-01-02', 'b',"
+                        " 'crypto', 'suggested')")
+            raw.commit()
+            raw.close()
+            conn = store.open_db(path)  # must not raise
+            try:
+                cat_cols = {r["name"] for r in conn.execute("PRAGMA table_info(categories)")}
+                self.assertIn("kind", cat_cols)
+                nos = [r["note_no"] for r in conn.execute(
+                    "SELECT note_no FROM messages ORDER BY id")]
+                self.assertEqual(nos, [1, 2])  # backfilled in display order
+            finally:
+                conn.close()
+
     def test_object_key_column_added_to_old_images(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as tmp:
@@ -4914,6 +5027,75 @@ class StoreMigrationTests(unittest.TestCase):
                 self.assertIn("object_key", cols)
             finally:
                 conn.close()
+
+
+class TelegramTransportTests(unittest.TestCase):
+    """Every transport/parse fault must surface as TelegramError. Regression:
+    a bare read-timeout (TimeoutError, not URLError), a reset mid-body, a
+    truncated chunked body (http.client.IncompleteRead) or a truncated JSON
+    body used to escape tg_call raw — killing the poll loop / a scheduler tick
+    (the exact class llm.py already wraps for the LLM gateway)."""
+
+    def test_raw_transport_faults_become_telegram_error(self):
+        import http.client
+        faults = [
+            TimeoutError("read timed out"),
+            ConnectionResetError(104, "connection reset by peer"),
+            http.client.IncompleteRead(b"partial"),
+            http.client.RemoteDisconnected("closed without response"),
+            OSError(101, "network unreachable"),
+        ]
+        for fault in faults:
+            with mock.patch.object(tg_api, "urlopen", side_effect=fault):
+                with self.assertRaises(tg_api.TelegramError, msg=repr(fault)):
+                    tg_api.tg_call("123:abc", "getMe")
+                with self.assertRaises(tg_api.TelegramError, msg=repr(fault)):
+                    tg_api.tg_download("123:abc", "f/p", "/tmp/x")
+
+    def test_truncated_json_body_becomes_telegram_error(self):
+        resp = mock.MagicMock()
+        resp.__enter__.return_value = resp
+        resp.read.return_value = b'{"ok": tru'  # cut mid-body
+        with mock.patch.object(tg_api, "urlopen", return_value=resp):
+            with self.assertRaises(tg_api.TelegramError):
+                tg_api.tg_call("123:abc", "getMe")
+
+
+class InstallerModulesTests(unittest.TestCase):
+    """Guard for the known crash class: a new .py module imported by the agent
+    but missing from the installer's MODULES list passes every test, then
+    ModuleNotFound-crashes the deployed service on the first update."""
+
+    def test_modules_list_matches_imports(self):
+        import ast as astmod
+        import re as remod
+        repo = Path(__file__).resolve().parent
+        installer = repo / "install-tg-ingest-agent-pilot-remote.sh"
+        match = remod.search(r'^MODULES="([^"]+)"', installer.read_text(encoding="utf-8"),
+                             remod.M)
+        self.assertIsNotNone(match, "MODULES line not found in installer")
+        modules = match.group(1).split()
+        for mod in modules:  # everything listed must exist to stage
+            self.assertTrue((repo / mod).is_file(), f"MODULES lists missing file {mod}")
+        local = {p.stem for p in repo.glob("*.py")}
+        installed = {Path(m).stem for m in modules} | {"tg_ingest_agent"}
+        missing = {}
+        for fname in ["tg_ingest_agent.py"] + modules:
+            tree = astmod.parse((repo / fname).read_text(encoding="utf-8"))
+            for node in astmod.walk(tree):
+                if isinstance(node, astmod.Import):
+                    names = [alias.name.split(".")[0] for alias in node.names]
+                elif isinstance(node, astmod.ImportFrom) and node.module and not node.level:
+                    names = [node.module.split(".")[0]]
+                else:
+                    continue
+                for name in names:
+                    if name in local and name not in installed:
+                        missing.setdefault(name, fname)
+        self.assertFalse(
+            missing,
+            f"imported by installed code but NOT in the installer MODULES list "
+            f"(would ModuleNotFound-crash the service): {missing}")
 
 
 class SysinfoTests(unittest.TestCase):

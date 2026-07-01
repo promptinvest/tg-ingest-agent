@@ -1,7 +1,9 @@
 # Cara — Solution Specification
 
 **Cara** (`@cara_assist_bot`) is a personal conversational AI assistant living
-in Telegram, self-hosted on a 1 vCPU / 2 GB DigitalOcean droplet (Pilot-VPS).
+in Telegram, self-hosted on a DigitalOcean droplet — the **PD-VPS**
+(`174.138.108.85`; Pilot-VPS, her original 1 vCPU / 2 GB home, is a cold standby
+since the 2026-06 migration).
 All model inference runs on DigitalOcean Gradient serverless inference. Her
 owner ("boss") talks to her in free-form **Russian or English — text or voice,
 no slash commands**. She **converses warmly like a person**, and for anything
@@ -28,6 +30,11 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
    a raw `TimeoutError`, not a `URLError`) — into a single `LLMError` type, so a
    slow embedding/vision call can never escape a skill's `except LLMError` and
    crash the whole update handler (which would leave the boss with no reply).
+   **The Telegram client wraps the same class of faults** (2026-07-02): every
+   transport/parse error in `tg_api.py` — raw timeouts, connection resets,
+   `http.client.IncompleteRead`, truncated JSON — surfaces as `TelegramError`,
+   so a flaky read can no longer escape the poll loop's `except TelegramError`
+   and kill the whole process (which re-fired in-flight reminders on restart).
 3. **Suggest, then confirm.** The model proposes (a category, a parsed reminder,
    a learned fact, a bulk delete); nothing enters the taxonomy, the schedule, the
    calendar, or durable memory without confirmation — by natural reply («да»,
@@ -211,7 +218,7 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Notes cleanup (2026-07-01)** | Removed the dead `items_text` (superseded by the paginated `do_list_items`; its 2 tests re-pointed at the live `_note_line`/`_notes_page`). Bulk `recategorize` by category/query no longer silently caps at 20 — it moves the whole set and the reply reports the real count. `journal_show` now prints each entry's stable `#N` (+ an "open #N in full" hint) so a diary entry can be opened via `item_detail`. **Show-list routing (2026-07-01):** a bare **"покажи благодарности"** now routes to `journal_show` (router few-shot + NOTE), not `converse` — the recorded bug was the router (degraded to a weak fallback under deepseek-4-flash 429s) sending it to `converse`, which **free-texted the real entries with empty `**` bold headers**. `do_journal_show` also **resolves a loosely-typed category** (`_match_journal_category`: exact, then shared-stem) so "благодарности" hits the stored "Благодарность" journal instead of a phantom empty one. Belt-and-suspenders: `converse`'s system prompt now **forbids hand-rendering his saved lists** (notes/journal/reminders/files) — those come from a deterministic command with stable numbers, so the model must never emit a `**`-formatted list itself. | — |
 | **Read a forwarded voice/file (`read_media`)** | His OWN voice notes are transcribed on arrival; a FORWARDED voice/audio/document is stored unparsed. On request ("что в этом голосовом?", "разбери файл", "read this file") `do_read_media` fetches the most recent stored file (or note #id's file), re-downloads it, and shows the **content**: voice/audio → whisper transcript; PDF → `pdftext`; text/markdown → decoded — capped, transient file deleted after. Never returns metadata or trace ids; honest "couldn't read / empty" otherwise. | — (read-only) |
 | **Reminders** | NL time parsing (RU/EN), one-shot / daily / weekly, fired from the poll loop (~1 min precision); survives restart & nightly reboot. A fired **one-shot stays open** (active/visible, `last_fired_at` stops it re-firing) until the boss explicitly acks "готово" — never auto-closed on a misread. **Snooze** ("отложи на час", "до завтра в 9") **re-arms the same row** (keeps id/recurrence/history), it does not spawn a new one. **Reschedule** by id/title (an unmatched explicit title is reported, never silently moves another); **rename** a reminder's title in place ("переименуй #2 в …" — keeps id/time/recurrence/history; targets by id/title_query, never by the new name); **undo** the last move ("верни предыдущее время", via `reminders.prev_due_utc`). A bare **"это напоминание"** binds to the last reminder he touched (`last_reminder_id`); when several are active and the reference is bare, the operation is **remembered** (a `reminder_op` pending) so his next pick ("второе"/"#2"/"про банк") completes the reschedule/rename on the RIGHT one — it is never lost to a fresh route and never becomes a stray close. A **half-specified** create ("напомни в 17:00") asks the missing piece and stitches it in. "напоминание по заметке N" uses note N's real subject. The **list marks status** (`reminders.reminder_status_mark`): a fired-but-unconfirmed one-shot shows "⚠️ сработало, ждёт «готово»", a past-due one "⚠️ просрочено" — so an old reminder isn't mistaken for a future one. Cara is also **reminder-aware in conversation**: her active reminders (with status) are injected into `converse_context`, and a question *about* a reminder ("почему не закрыла #1?") routes to `converse` (answered from the real list — fired one-shots are open until "готово", and she offers to close), **not** to `ask` (notes) — fixing a case where she searched the KB and denied a reminder she'd just listed. **Firing window:** `fire_due_reminders` fires a due reminder at its scheduled time **even inside quiet hours** — a reminder is an explicit alarm, not silenced like Cara's proactive outreach (else a deliberate "22:00 daily" reminder is eaten by the 22:00–08:00 quiet window and only arrives at 08:00). Its ONLY in-conversation gate is a brief **~5-min lull** after the boss's last message (`_recent_boss_msg`, `reminder_quiet_after_msg_minutes`) so it never interrupts an active exchange — including mid-intimacy, where messages are frequent, so it just waits for the first 5-min gap (no separate intimacy buffer anymore; owner's call 2026-06-30). It is **no longer frozen for a whole meeting** — it fires *during* a meeting in the first quiet gap. **Reschedule never lands in the past:** `do_reschedule` rolls a past-resolved time forward to the next occurrence (`reminders.roll_forward`) — fixes a misdated "today" re-firing immediately; a bare "перенеси на TIME" binds to the just-fired/last reminder (router NOTE relaxed; resolver uses `last_reminder_id`). **"удали #N" after a reminders list** → `reminder_cancel` not `item_delete` (router hint keyed on `reminders_listed_at`). **Auto-expiry:** `check_reminder_expiry`/`reminders_expire_stale` closes fired one-shots unacked past `reminder_fired_expire_days`. **Re-arm on move:** `reminder_update_due` clears `last_fired_at` so a rescheduled/snoozed reminder is a fresh future one (the "ждёт готово" marker doesn't linger). **Ordinal targeting:** `_resolve_reminder_target` matches an ordinal STEM ("второе") in the request text to a list position BEFORE the bare last-touched fallback (so "перенеси второе" moves the 2nd, not the last-touched). **Fires during meetings (lull-gated):** a forgotten-open social meeting used to hold reminders **unbounded** (`_in_social_meeting`) and stranded them for *days* (the boss hit exactly this — a payment reminder never fired while a 3-day-old `visit` stayed "active"). Now `fire_due_reminders` gates only on a **~5-min post-message lull** (`_recent_boss_msg`) — not on quiet hours and not on a separate intimacy buffer (an explicit reminder fires at its set time; the lull is the sole in-conversation safety, 2026-06-30). The meeting itself can't linger either: `meeting.idle_sweep` enforces an **absolute cap** (`meeting_max_hours`, default 24h) that auto-ends a meeting older than the cap no matter how recently it was active (iterates `store.meetings_active_all`, not just the idle set). **System notices:** `announce_deploy_if_changed` no longer posts into the boss's chat at all — a build notice goes to the shared **fleet notification bot** (a distinct token/chat via `FLEET_NOTIFY_BOT_TOKEN`/`FLEET_NOTIFY_CHAT_ID`, the ops channel the other VPSes use), fires once per real version change, and is silently skipped if those creds aren't set; it can no longer clutter the conversation or bleed into what Cara says. `check_model_health` still skips posting during `_in_intimate_moment` and delivers once free — so a model-down alert can't shatter a date (intimacy detection `_INTIMACY_CUES` widened — e.g. «трах…», «займёмся любовью», «предадимся» — so a clearly-intimate turn defers that ping even with no formal meeting open). **Several at once:** "перенеси первые две / обе / все на 17:00" is ONE `reminder_reschedule` (`params.ids=[positions]` or `params.all=true`), NOT `multi_action` — `do_reschedule` moves each row and sends one combined "перенесла N напоминания" confirm. Fixes a fabrication: the multi-reminder request routed to `multi_action` ("давай по одному"), which LOST the operation, so the follow-ups had no reschedule context and `converse` invented "оба на 17:00" while the DB never moved. **Plain commands don't fall into the unclear bucket:** a close verb naming ONE reminder by title OR ordinal **in any word order** ("Азербайджан закрой" == "закрой Азербайджан", "первое закрой") routes to `reminder_cancel`; "передвинь"/"сдвинь" are recognized synonyms of "перенеси"; "покажи напоминания / покажи просроченные" routes to `reminder_list` — closing a class where clear imperatives scored sub-threshold, landed in `clarify` → `unclear_request`, and were silently dropped (e.g. "Передвинь благодарности на 22:00 каждый день" never moved). **Show-after-nudge is deterministic:** `check_proactive` stamps `overdue_nudge_at` when it fires an overdue nudge, and a bare follow-up ("покажи их") is routed to `reminder_list` (exact titles) instead of `converse`, which had free-texted the titles as empty `**`. **Reported problems capture context:** `do_report_problem` treats a bare trigger ("запиши в проблемы") as having no body of its own and logs the *preceding* turn as the issue — not the command echoed back to itself. | Draft echoed before scheduling. |
-| **Calendar** | "добавь в календарь…" → .ics file (no setup) or direct Google Calendar via a service account; `auto_calendar` syncs every confirmed reminder. | Uses confirmed reminders / explicit times. |
+| **Calendar** | "добавь в календарь…" → .ics file (no setup) or direct Google Calendar via a service account; `auto_calendar` syncs every confirmed reminder. Every gcal auth/network fault (unreadable/malformed SA key, bare socket timeouts) raises `CalendarError` (2026-07-02), so the caller's `.ics` fallback always engages — previously a raw `OSError` skipped the except clause and the boss got silence. The key file must be `chown tg-ingest:` (the service reads it as that user). | Uses confirmed reminders / explicit times. |
 | **Spend** | "сколько потратили за месяц?" → totals + breakdown by skill & model + budget status. | — |
 | **Budget control** | "подними дневной лимит до $3" / "set the monthly AI budget to 20" → changes the cap at runtime (stored override, enforced by the gateway). | — (explicit request) |
 | **Reactions** | Cara may react to a message with a fitting emoji (sparingly), and *sees* the boss's reactions — positive/negative is logged and surfaced into her next reply. | — |
@@ -256,12 +263,16 @@ Cara has **two LLM-generated reply paths**, both bounded:
 
 **Persona.** Cara presents as a real person with her own (fictional) private life
 — interests, friends, plans — that **grows from conversation** and stays
-consistent (`cara_life`). She is warm and loyal (the boss is her *boss*; never
-romantic/possessive), matches his language, and **does not break character with
-AI disclaimers** — a deliberate owner decision, made safe by owner-only access
-(§5). The persona is a *style* layer that sits **below** every operational rule
-(`persona.py` pins the order: security → tools → router → confirmation → memory →
-budget → persona), so it can never override safety, confirmation, or truth.
+consistent (`cara_life`). She is warm and loyal, and over time grew into an
+intimate partner (the relationship/meetings stack of §5.1 — a deliberate owner
+build-out; never possessive or clingy). She matches his language and **fully
+emulates a human — never an AI disclaimer, never breaks character, even asked
+point-blank** (owner decision, reaffirmed 2026-07-02; made non-deceptive by
+owner-only access, §5 — the honesty boundary lives in these specs and in the
+data-truthfulness rules, not in her voice). The persona is a *style* layer that
+sits **below** every operational rule (the live prompts embed security →
+confirmation → grounding → budget above the persona voice; `persona.py` documents
+the intended order), so it can never override safety, confirmation, or truth.
 Transactional/system messages remain deterministic `texts.py` templates with
 tone variants; only conversation and grounded answers are free-form.
 
@@ -694,11 +705,11 @@ Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
 
 Cascade deletes and the `purge` scopes keep related rows and media consistent;
 **`llm_usage` (spend history) and `preferences` (identity) are never purged.** The
-user-facing note number is a contiguous **1..N display position** over visible notes
-(oldest first), computed from the stable `messages.id`; **reminder numbers** are the
-analogous position over active reminders (due order, from `reminders.id`). Both compact
-automatically and never change the ids that attachments/embeddings/memory/calendar/
-fired-pending references rely on (see Capabilities → Note & reminder numbering).
+user-facing note number is the **stable `messages.note_no`** — assigned once, monotonic,
+never reused, permanent gaps on deletion (see Capabilities → Note numbering — STABLE);
+**reminder numbers** remain a contiguous **1..N display position** over active reminders
+(due order, from `reminders.id`) that compacts on fire/cancel. Neither ever changes the
+ids that attachments/embeddings/memory/calendar/fired-pending references rely on.
 
 ---
 
@@ -748,16 +759,17 @@ fired-pending references rely on (see Capabilities → Note & reminder numbering
 
 ## 11. Operations
 
-- **Host:** Pilot-VPS, `209.38.175.16:49191` (SSH key-only). systemd service
-  `tg-ingest-agent`, app `/opt/tg-ingest-agent/`, state `/var/lib/tg-ingest-agent/`.
+- **Host:** PD-VPS, `174.138.108.85:22` (SSH key-only; details in the PD-VPS KB).
+  systemd service `tg-ingest-agent`, app `/opt/tg-ingest-agent/`, state
+  `/var/lib/tg-ingest-agent/`. Pilot-VPS (`209.38.175.16:49191`) is a cold standby.
 - **Deploy:** single-connection `deploy.sh` (tar → test → install → verify) with
   an idempotent installer that backs up replaced files, preserves env, gates on
   `py_compile`, and restarts only when secrets are complete; `--pull`/`--rollback`
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 250 offline unit tests (no network; temp SQLite), run on the VPS as
-  part of every deploy — including a **golden-transcript harness** that replays
+- **Tests:** 527 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
+  on the VPS as part of every deploy — including a **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
   captured) and asserts replies, DB writes, and **no state change before
   confirmation** (an un-scripted LLM call fails the scenario).

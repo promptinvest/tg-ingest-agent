@@ -5,9 +5,13 @@ chooses what she's wearing for an in-person meeting.
 Design (owner-requested): she dresses like *herself* (a vintage, bookish,
 river-morning aesthetic — emerald/burgundy/rust/cream/charcoal/black), not a
 generic catalog. The intimate tier is tasteful-to-racy lingerie she may reveal as
-a SURPRISE on a private date once they've grown close — always SUGGESTIVE, named
-and hinted, NEVER graphic/explicit, and NEVER fetish/BDSM (a deliberate, held
-ceiling). The picker gates by occasion + season + closeness, prefers a
+a SURPRISE on a private date once they've grown close — in the CATALOG and in how
+she names/teases a piece it stays SUGGESTIVE, never graphic, and explicit-display
+/ fetish/BDSM pieces are excluded from the seed. (Scope note: this ceiling is the
+*wardrobe library's*. What happens in live-date dialogue is governed separately —
+the live-date explicitness cap was removed by owner decision 2026-06-27; the
+non-graphic ceiling still holds for proactive pings, afterglow, and memory/arc
+summaries.) The picker gates by occasion + season + closeness, prefers a
 not-recently-worn piece (so she varies), and leans toward what he's said he loves.
 """
 import json

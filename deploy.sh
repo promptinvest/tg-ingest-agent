@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# One-connection deploy to Pilot-VPS.
+# One-connection deploy. Production is the PD-VPS (override via env, see below
+# and CLAUDE.md); the baked-in defaults still point at Pilot-VPS (cold standby).
 #
 # Why: many rapid ssh/scp calls trip the hardened box's fail2ban/MaxStartups
 # (connection resets, banner timeouts). Windows OpenSSH has no ControlMaster
@@ -32,15 +33,18 @@ SSH_OPTS=(-i "$KEY" -p "$PORT" -o IdentitiesOnly=yes -o ConnectTimeout=25
           -o UserKnownHostsFile="$KH" -o ServerAliveInterval=15)
 
 git_env="export GIT_SSH_COMMAND='ssh -i $BOX_KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=/root/.ssh/known_hosts'"
+# NOTE: every remote script sets `-o pipefail` — without it the `| tail`
+# pipes here return tail's exit 0 and mask a FAILED test run or a mid-way
+# installer abort (deploy printed green while the box kept running old code).
 install_verify="
 echo '--- install ---'
-STAGE_DIR='$SRC' bash '$SRC/install-tg-ingest-agent-pilot-remote.sh' 2>&1 | tail -1
+STAGE_DIR='$SRC' bash '$SRC/install-tg-ingest-agent-pilot-remote.sh' 2>&1 | tail -5
 echo -n 'service: '; systemctl is-active tg-ingest-agent"
 
 case "$MODE" in
   --pull)
     ssh "${SSH_OPTS[@]}" "$HOST" "
-set -e
+set -e -o pipefail
 $git_env
 if [ ! -d '$SRC/.git' ]; then echo '--- clone ---'; git clone '$REPO' '$SRC'; fi
 cd '$SRC'
@@ -48,7 +52,7 @@ git fetch --quiet origin
 git reset --hard origin/main
 echo \"at \$(git rev-parse --short HEAD): \$(git log -1 --format=%s)\"
 echo '--- tests ---'
-python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -3
+python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -15
 $install_verify"
     ;;
   --rollback)
@@ -57,7 +61,7 @@ $install_verify"
       echo "usage: ./deploy.sh --rollback <sha|branch>" >&2; exit 2
     fi
     ssh "${SSH_OPTS[@]}" "$HOST" "
-set -e
+set -e -o pipefail
 $git_env
 cd '$SRC'
 git fetch --quiet origin
@@ -72,17 +76,17 @@ echo '(return to latest with: ./deploy.sh --pull)'"
     DIRTY=""; [ -n "$(git status --porcelain 2>/dev/null)" ] && DIRTY=" +local-changes"
     echo "deploying from ${SHA}${DIRTY}"
     remote_script="
-set -e
+set -e -o pipefail
 mkdir -p '$STAGE'
 tar xzf - -C '$STAGE'
 cd '$STAGE'
 sed -i 's/\r\$//' *.py *.sh
 echo '--- tests ---'
-python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -3"
+python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -15"
     if [ "$MODE" != "--test" ]; then
       remote_script+="
 echo '--- install ---'
-bash install-tg-ingest-agent-pilot-remote.sh 2>&1 | tail -1
+bash install-tg-ingest-agent-pilot-remote.sh 2>&1 | tail -5
 echo -n 'service: '; systemctl is-active tg-ingest-agent"
     fi
     tar czf - "${FILES[@]}" | ssh "${SSH_OPTS[@]}" "$HOST" "$remote_script"

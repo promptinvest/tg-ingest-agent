@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Memory curator: proposes durable-memory candidates from evidence (repeated
-corrections, learned habits, explicit patterns) — never writes durable memory
-itself; the boss confirms. Runs as a background job (no proactive nudges; the
-boss pulls candidates via the memory_review action).
+corrections, learned habits, explicit patterns). Confirmed durable memory needs
+the boss's yes (memory_review); BENIGN facts learned from conversation are
+auto-stored as correctable *inferred* items (curate_conversation) — sensitive
+facts, and anything contradicting a confirmed fact, become confirm-first
+candidates, never auto-stored. Runs as a background job (no proactive nudges;
+the boss pulls candidates via the memory_review action).
 
 Deterministic by default (spec §21: deterministic candidates first). An
 optional LLM extraction pass is gated behind MEMORY_CURATOR_LLM.

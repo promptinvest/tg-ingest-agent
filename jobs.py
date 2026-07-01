@@ -49,6 +49,26 @@ def has_pending(conn, skill, action):
     ).fetchone() is not None
 
 
+def reclaim_stale(conn):
+    """Recover jobs left 'claimed' by a crash mid-run (called at startup).
+
+    A claimed row belongs to the single in-process runner; after a restart no
+    runner owns it. Without this, the row stays 'claimed' forever: claim_next
+    only selects 'pending', and has_pending() counts the zombie — so that job
+    kind is never enqueued again (the 'durable jobs survive restart' promise
+    silently broken). Requeue while retry budget remains (attempts were already
+    counted at claim); terminally fail the rest."""
+    requeued = conn.execute(
+        "UPDATE jobs SET status = 'pending' WHERE status = 'claimed'"
+        " AND attempts < max_attempts").rowcount
+    failed = conn.execute(
+        "UPDATE jobs SET status = 'failed', finished_at = ?,"
+        " error = 'reclaimed: process died mid-run' WHERE status = 'claimed'",
+        (_now(),)).rowcount
+    conn.commit()
+    return requeued, failed
+
+
 def claim_next(conn, now_iso=None):
     now_iso = now_iso or _now()
     row = conn.execute(

@@ -13,10 +13,17 @@ Activation (one-time, ~5 min):
   2. Create a service account, download its JSON key.
   3. In Google Calendar -> calendar settings -> share the calendar with the
      service account's client_email (permission: make changes to events).
-  4. Put the JSON key at /etc/tg-ingest-agent/gcal-sa.json (0600) and set
+  4. Put the JSON key at /etc/tg-ingest-agent/gcal-sa.json, `chown tg-ingest:`
+     and chmod 0600 — the service reads it as the `tg-ingest` user, so a
+     root-owned 0600 key passes configured() but fails every read — and set
      GCAL_CALENDAR_ID=<your calendar id / gmail> in the env; restart.
+
+Every failure path raises CalendarError (key unreadable/malformed, bare socket
+timeouts — which escape urlopen as OSError, not URLError) so the caller's
+.ics fallback always engages instead of the error skipping its except clause.
 """
 import base64
+import http.client
 import json
 import subprocess
 import tempfile
@@ -134,7 +141,12 @@ def get_access_token(cfg, conn):
     now = datetime.now(timezone.utc)
     if cached and expires and expires > now.isoformat():
         return cached
-    sa = json.loads(Path(cfg.gcal_key_file).read_text(encoding="utf-8"))
+    try:
+        sa = json.loads(Path(cfg.gcal_key_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise CalendarError(f"service-account key unreadable: {exc!r}") from exc
+    if not sa.get("client_email") or not sa.get("private_key"):
+        raise CalendarError("service-account key missing client_email/private_key")
     signing_input = build_jwt_unsigned(sa["client_email"], int(now.timestamp()))
     assertion = signing_input + b"." + _b64url(_sign_rs256(signing_input, sa["private_key"]))
     body = urlencode({
@@ -150,6 +162,8 @@ def get_access_token(cfg, conn):
         raise CalendarError(f"google token request failed with HTTP {exc.code}") from exc
     except URLError as exc:
         raise CalendarError(f"google token request failed: {exc.reason}") from exc
+    except (TimeoutError, http.client.HTTPException, OSError, ValueError) as exc:
+        raise CalendarError(f"google token request failed: {exc!r}") from exc
     token = payload.get("access_token")
     if not token:
         raise CalendarError("google token response had no access_token")
@@ -193,5 +207,7 @@ def insert_event(cfg, conn, event):
         raise CalendarError(f"calendar insert failed with HTTP {exc.code}") from exc
     except URLError as exc:
         raise CalendarError(f"calendar insert failed: {exc.reason}") from exc
+    except (TimeoutError, http.client.HTTPException, OSError, ValueError) as exc:
+        raise CalendarError(f"calendar insert failed: {exc!r}") from exc
     log(f"calendar event created: {payload.get('id')}")
     return payload.get("htmlLink") or ""
