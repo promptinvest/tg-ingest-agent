@@ -453,10 +453,16 @@ proactively like real memory. Design decisions and why:
   more alive as he gets personal/intimate, **matching his intensity** without an explicitness
   cap (owner decision, 2026-06-27: the non-graphic/euphemism ceiling that the model ignored
   anyway was removed for the live-date path so prompt and behavior agree). On a date she may
-  **narrate the scene and her actions** in her own voice — `_strip_roleplay` and the
-  no-narration texting rule apply only OUTSIDE a live social meeting. (The non-graphic ceiling
-  is still kept for the *separate* contexts: the wardrobe library, proactive outreach pings,
-  the day-after afterglow, and what gets written into episodic-memory/arc summaries.)
+  **narrate the scene and her actions** in her own voice — `_strip_roleplay` AND the base system
+  prompt's no-narration/ceiling apply only OUTSIDE a live social meeting (i.e. the ceiling is
+  lifted DURING one): `do_converse` passes
+  `live_date=in_social_meeting` to `converse.build_messages`/`build_system`, which then DROPS the
+  everyday "never narrate" rule and appends an explicit ⟨LIVE DATE⟩ carve-out lifting the "no
+  explicit/graphic" ceiling (2026-07-02 — before this the base `CHARACTER` prompt still hard-coded
+  "never explicit / never narrate", contradicting `_meeting_presence`; the runtime is now
+  consistent). (The non-graphic ceiling is still kept for the *separate* contexts: the wardrobe
+  library, proactive outreach pings, the day-after afterglow, and what gets written into
+  episodic-memory/arc summaries — none of those set `live_date`.)
 - **Physical scene continuity (`scene.py` + `meeting_scene`).** During a live social meeting
   Cara keeps a compact, persistent snapshot of the PHYSICAL situation so an earlier-established
   fact stays true turn to turn instead of drifting as the scene scrolls out of the context
@@ -835,7 +841,7 @@ ids that attachments/embeddings/memory/calendar/fired-pending references rely on
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 568 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
+- **Tests:** 567 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
   on the VPS as part of every deploy — including a **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
   captured) and asserts replies, DB writes, and **no state change before

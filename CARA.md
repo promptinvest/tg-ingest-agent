@@ -542,8 +542,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   longer starves the other nudges** — an already‑sent‑today hit is skipped, not treated
   as fatal, so a waiting candidate/uncategorized item still gets its turn. The daily cap
   counts only the heartbeat's own nudges (the relationship outreach — afterglow,
-  anticipation, good‑morning, meeting ping — doesn't consume it), and **all** of that
-  outreach now honors the `proactive_days` preference and quiet hours.
+  anticipation, good‑morning, meeting ping — doesn't consume it). The afterglow, anticipation,
+  intimacy‑outreach and good‑morning honor the `proactive_days` preference and quiet hours; the
+  **scheduled‑meeting ping** honors quiet hours + proactivity‑off but **not** `proactive_days`
+  by design — it's a concrete appointment you set for a day, like a reminder, so it isn't
+  silenced by "пиши только по выходным".
 - **Tune her proactivity** (`proactive_prefs`): "пиши только по выходным", "не беспокой
   до 10", "отключи напоминания", "можно почаще" → stored overrides (on/off, days,
   quiet window, frequency) the heartbeat honors.
@@ -785,7 +788,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 568 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+- **Tests:** 567 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
   the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an

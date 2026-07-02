@@ -395,9 +395,8 @@ class RouterTests(unittest.TestCase):
         self.assertIsNone(router.detect_smalltalk(""))
         ok = router.validate_route({"action": "smalltalk", "params": {"kind": "hello"}}, False)
         self.assertEqual(ok["action"], "smalltalk")
-        for kind in router.SMALLTALK_KINDS:
-            for lang in ("ru", "en"):
-                self.assertTrue(texts.T(lang, f"smalltalk_{kind}", name="X"))
+        # (detect_smalltalk still classifies to short-circuit to warm converse; the old
+        # smalltalk_* reply templates were removed 2026-07-02 — the reply is free-form.)
 
     def test_route_happy_path_and_guards(self):
         with mock.patch.object(llm, "chat",
@@ -1509,42 +1508,36 @@ class PersonaPatchTests(unittest.TestCase):
         store.pref_set(self.conn, "preferred_address_en", "chief")
         self.assertEqual(boss_model.get_address(self.conn, "en", allow_name=False), "chief")
 
-    # Personality: character + relationship answers (the screenshot complaint).
-    # Owner decision 2026-07-02: full human emulation — she never breaks
-    # character (no "I'm not human / a persona" disclaimers anywhere).
-    def test_persona_character_stays_in_character(self):
-        for lang in ("ru", "en"):
-            ch = texts.T(lang, "persona_character", name=("босс" if lang == "ru" else "boss"))
-            low = ch.lower()
-            self.assertTrue("рыж" in low or "red" in low)   # character shows
-            for breaks in ("не человек", "not human", "персона внутри", "persona inside"):
-                self.assertNotIn(breaks, low)  # never breaks character
-            self.assertNotIn("SQLite", ch)  # NOT a tech dump
-            self.assertNotIn("Pilot-VPS", ch)
+    # Persona honesty is enforced in the LIVE prompt (converse.CHARACTER), not the old
+    # smalltalk_*/persona_* templates (removed 2026-07-02 — those routed to converse and were
+    # never rendered, so testing them gave false coverage). Assert the REAL guardrail: full
+    # human emulation AND the hard truthfulness rules that must hold regardless of persona.
+    def test_converse_character_enforces_human_emulation_and_truth(self):
+        import converse
+        c = converse.CHARACTER.lower()
+        self.assertIn("real, human woman", c)            # presents as a real person
+        self.assertIn("not an ai", c)                    # never an AI, no disclaimers
+        self.assertNotIn("i'm a persona", c)
+        self.assertIn("never claim you did something", c)  # no-fake-action absolute rule
+        self.assertIn("never invent", c)                   # no-invented-specifics
 
-    def test_persona_relationship_warm_within_bounds(self):
-        for lang in ("ru", "en"):
-            low = texts.T(lang, "persona_relationship").lower()
-            self.assertTrue("сторон" in low or "side" in low)  # warm/loyal
-            for banned in ("влюбл", "romantic", "секс", "in love"):
-                self.assertNotIn(banned, low)  # §3 boundaries
+    def test_live_date_lifts_the_everyday_ceiling_in_the_prompt(self):
+        # The 2026-06-27 owner carve-out (explicitness/narration lifted on a live date) now
+        # lives in the RUNTIME prompt, so it no longer contradicts _meeting_presence.
+        import converse
+        base = converse.build_system(self.conn, "ru")              # everyday
+        self.assertIn("NEVER narrate", base)
+        self.assertNotIn("LIVE DATE", base)
+        date = converse.build_system(self.conn, "ru", live_date=True)  # live in-person date
+        self.assertNotIn("NEVER narrate", date)                    # no-narration rule dropped
+        self.assertIn("LIVE DATE", date)
+        self.assertIn("DO NOT apply on a live date", date)         # the ceiling is lifted
 
     def test_router_and_manifest_have_persona(self):
         for topic in ("character", "relationship", "origin"):
             self.assertEqual(router.validate_route(
                 {"action": "persona", "params": {"topic": topic}}, False)["action"], "persona")
         self.assertTrue(skill_manifest.known("persona"))
-
-    def test_origin_stays_in_character(self):
-        # Human emulation: her origin is her own (fictional) life, told in
-        # character — never an "I have no human past" disclaimer, and never
-        # fabricated specifics (ages, dates).
-        for lang in ("ru", "en"):
-            low = texts.T(lang, "persona_origin", name=("босс" if lang == "ru" else "boss")).lower()
-            for breaks in ("человеческого прошлого у меня нет", "no human past",
-                           "не человек", "not human"):
-                self.assertNotIn(breaks, low)
-            self.assertNotIn("years", low)  # no invented concrete specifics
 
 
 class ConversationDispatchTests(unittest.TestCase):

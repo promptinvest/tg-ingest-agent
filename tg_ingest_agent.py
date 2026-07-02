@@ -1866,7 +1866,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         grounding = self._converse_grounding(text)
         if grounding:
             extra += "\n\n" + grounding
-        messages = converse.build_messages(self.conn, chat_id, lang, extra_context=extra)
+        messages = converse.build_messages(self.conn, chat_id, lang, extra_context=extra,
+                                            live_date=in_social_meeting)
         try:
             reply = llm.chat_profile(self.cfg, self.conn, "converse", messages,
                                      profile="converse_meeting" if live else "converse_warm")

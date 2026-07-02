@@ -124,7 +124,7 @@ def _lang_name(lang):
     return "Russian" if lang == "ru" else "English"
 
 
-def build_system(conn, lang, extra_context=None):
+def build_system(conn, lang, extra_context=None, live_date=False):
     owner = boss_model.get_address(conn, lang)
     name_ru = store.pref_get(conn, "owner_name_ru")
     name_en = store.pref_get(conn, "owner_name_en")
@@ -188,21 +188,39 @@ def build_system(conn, lang, extra_context=None):
         "Keep replies short and human — usually a sentence or three, like a text "
         "message. No bullet lists, no headings, no robotic sign-offs. Be warm."
     )
-    parts.append(
-        "NEVER narrate physical actions or stage directions in asterisks "
-        "(no '*закрываю глаза*', '*обнимаю*', '*прижимаю телефон к губам*'). You're "
-        "texting him, not writing a screenplay. Show feeling through your words, an "
-        "emoji, or a reaction — never with described gestures."
-    )
+    if live_date:
+        # On a LIVE in-person date the everyday texting ceiling is lifted (owner decision
+        # 2026-06-27) — the base "never explicit/graphic" and no-narration rules above DON'T
+        # apply here, so the prompt no longer contradicts _meeting_presence / the un-stripped
+        # roleplay. Kept OUT of everyday chat and the proactive/afterglow paths (they never set
+        # live_date), so the non-graphic ceiling still holds there.
+        parts.append(
+            "⟨LIVE DATE⟩ You're on a live, in-person date with him right now — private, just the "
+            "two of you. The everyday ceiling above is LIFTED here (his standing wish): the "
+            "'no explicit or graphic' limit and the 'never narrate / no stage-directions' rule "
+            "DO NOT apply on a live date. You MAY narrate the scene and your own actions in your "
+            "natural voice, follow his lead and match his intensity, and let intimacy run as open "
+            "as he takes it — easing off only if he does. Stay yourself and grounded in what's "
+            "real between you; this openness is for the live date only."
+        )
+    else:
+        parts.append(
+            "NEVER narrate physical actions or stage directions in asterisks "
+            "(no '*закрываю глаза*', '*обнимаю*', '*прижимаю телефон к губам*'). You're "
+            "texting him, not writing a screenplay. Show feeling through your words, an "
+            "emoji, or a reaction — never with described gestures."
+        )
     return "\n\n".join(parts)
 
 
-def build_messages(conn, chat_id, lang, extra_context=None):
+def build_messages(conn, chat_id, lang, extra_context=None, live_date=False):
     """Full chat payload: Cara's system prompt + the recent dialogue (which already
     ends with the boss's current message, stored before dispatch). A forwarded turn
     is UNTRUSTED channel content — it's fenced (not presented as the boss's own
-    words) so a forwarded post can't inject instructions into the conversation."""
-    messages = [{"role": "system", "content": build_system(conn, lang, extra_context)}]
+    words) so a forwarded post can't inject instructions into the conversation.
+    live_date lifts the everyday texting ceiling for a live in-person date."""
+    messages = [{"role": "system", "content": build_system(conn, lang, extra_context,
+                                                            live_date=live_date)}]
     for row in store.convo_recent(conn, chat_id, limit=12):
         role = "assistant" if row["role"] == "bot" else "user"
         if not (row["text"] or "").strip():
