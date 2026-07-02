@@ -35,6 +35,11 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
    `http.client.IncompleteRead`, truncated JSON — surfaces as `TelegramError`,
    so a flaky read can no longer escape the poll loop's `except TelegramError`
    and kill the whole process (which re-fired in-flight reminders on restart).
+   **And every scheduler tick runs under a uniform guard** (`Agent._tick`,
+   2026-07-02): the ~18 `check_*`/sweep ticks were invoked bare in `run()`, so an
+   UNEXPECTED failure in one (e.g. a `sqlite3.OperationalError` from disk-full/IO)
+   propagated out and crash-looped the process; each now runs isolated (logged and
+   swallowed), with `ShutdownInterrupt` re-raised so a graceful stop still works.
 3. **Suggest, then confirm.** The model proposes (a category, a parsed reminder,
    a learned fact, a bulk delete); nothing enters the taxonomy, the schedule, the
    calendar, or durable memory without confirmation — by natural reply («да»,
@@ -841,7 +846,7 @@ ids that attachments/embeddings/memory/calendar/fired-pending references rely on
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 567 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
+- **Tests:** 568 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
   on the VPS as part of every deploy — including a **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
   captured) and asserts replies, DB writes, and **no state change before

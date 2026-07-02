@@ -377,6 +377,17 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     # -- Main loop
 
+    def _tick(self, name, fn):
+        """Run one scheduler tick, isolating an UNEXPECTED failure so it can't exit the poll
+        loop (a systemd crash-loop if the condition persists). ShutdownInterrupt is re-raised
+        so a graceful stop still propagates; everything else is logged and swallowed."""
+        try:
+            fn()
+        except ShutdownInterrupt:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a bad tick must never kill the loop
+            log(f"scheduler tick {name} failed: {exc!r}")
+
     def run(self):
         try:
             tg_call(self.cfg.token, "deleteWebhook", {"drop_pending_updates": False})
@@ -394,28 +405,42 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         while not self.stop:
             now = time.time()
             self.turn_lang = None  # scheduler replies use the stored preference
-            self.flush_albums(now)
-            self.fire_due_reminders()
-            self.check_scheduled_meetings()  # agreed meeting time arrived -> go live
-            self.check_budget_notice()
-            self.check_weekly_review()
-            self.check_daily_greeting()  # greet good-morning before any proactive contact
-            self.check_meeting_anticipation()  # lead-up teasing before an agreed date
-            self.check_meeting_afterglow()  # gentle day-after warmth (social meetings)
-            self.check_intimacy_outreach()  # off-hours: she reaches out, craving/longing
-            self.check_morning_brief()
-            self.check_daily_curator()
-            self.check_daily_reflection()  # grow the relationship storyline daily
-            self.check_memory_consolidation()  # weekly: fold duplicate remembered items
-            self.check_proactive()
-            self.check_model_health()
-            if now - self.last_sweep >= self.cfg.retry_interval:
+            # Each scheduler tick runs under a uniform guard: an UNEXPECTED failure in one tick
+            # (e.g. a sqlite3.OperationalError from disk-full/IO) must NOT propagate out of run()
+            # and crash the poll loop. Ticks already handle their own domain errors; this is the
+            # backstop. Order preserved; sweep-gated ticks run on the retry interval.
+            self._tick("flush_albums", lambda: self.flush_albums(now))
+            for name, fn in (
+                ("fire_due_reminders", self.fire_due_reminders),
+                ("check_scheduled_meetings", self.check_scheduled_meetings),
+                ("check_budget_notice", self.check_budget_notice),
+                ("check_weekly_review", self.check_weekly_review),
+                ("check_daily_greeting", self.check_daily_greeting),
+                ("check_meeting_anticipation", self.check_meeting_anticipation),
+                ("check_meeting_afterglow", self.check_meeting_afterglow),
+                ("check_intimacy_outreach", self.check_intimacy_outreach),
+                ("check_morning_brief", self.check_morning_brief),
+                ("check_daily_curator", self.check_daily_curator),
+                ("check_daily_reflection", self.check_daily_reflection),
+                ("check_memory_consolidation", self.check_memory_consolidation),
+                ("check_proactive", self.check_proactive),
+                ("check_model_health", self.check_model_health),
+            ):
+                if self.stop:
+                    break
+                self._tick(name, fn)
+            if not self.stop and now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
-                self.check_meeting_idle()  # auto-end a forgotten-open meeting
-                self.check_meeting_resummary()  # retry recaps that failed (e.g. 402) so no period is lost
-                self.check_reminder_expiry()  # clear the stale 'ждёт готово' pile
-                self.enqueue_maintenance_jobs()
-                runtime.drain(self.conn, self)  # runs due jobs (curator + maintenance + reflection)
+                for name, fn in (
+                    ("check_meeting_idle", self.check_meeting_idle),
+                    ("check_meeting_resummary", self.check_meeting_resummary),
+                    ("check_reminder_expiry", self.check_reminder_expiry),
+                    ("enqueue_maintenance_jobs", self.enqueue_maintenance_jobs),
+                    ("runtime.drain", lambda: runtime.drain(self.conn, self)),
+                ):
+                    if self.stop:
+                        break
+                    self._tick(name, fn)
             poll_timeout = 2 if self.albums else self.cfg.poll_timeout
             try:
                 updates = tg_call(

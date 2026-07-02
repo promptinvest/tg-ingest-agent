@@ -3011,6 +3011,26 @@ class MaintenanceJobTests(unittest.TestCase):
         ).fetchone()["n"]
         self.assertEqual(n, 3)  # one per action, not six
 
+    def test_tick_isolates_failures_and_propagates_shutdown(self):
+        # A scheduler tick that throws an UNEXPECTED error (e.g. sqlite3.OperationalError) must
+        # be caught+logged, not propagate out of run() and crash-loop the process. A graceful
+        # ShutdownInterrupt still propagates.
+        import sqlite3
+        import common
+        calls = []
+        def boom():
+            raise sqlite3.OperationalError("disk I/O error")
+        self.agent._tick("boom", boom)                 # returns normally (caught)
+        self.agent._tick("ok", lambda: calls.append("ran"))
+        self.assertEqual(calls, ["ran"])
+        with self.assertRaises(common.ShutdownInterrupt):
+            self.agent._tick("stop", self._raise_shutdown)
+
+    @staticmethod
+    def _raise_shutdown():
+        import common
+        raise common.ShutdownInterrupt()
+
     def test_deploy_notice_fires_only_on_version_change(self):
         # Deploy notices go to the FLEET ops bot (tg_call to a distinct token/chat), never
         # into the boss's conversation (reply); they fire once per real version change.
