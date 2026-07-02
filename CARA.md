@@ -370,12 +370,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   own recap) are remembered and woven back in, so her teasing and hints feel personal and
   consistent over time.
 - **She prepares for it and longs for it** (`meeting_prep`): everything you settle in the
-  lead‑up — the details, what she'll wear, the plan, the mood — *and her own feelings about
+  lead‑up — the details, **what she'll wear**, the plan, the mood — *and her own feelings about
   it* are remembered against that meeting. So she stays consistent through the whole
   planning ("the dress stays the dress"), and for a date she genuinely **anticipates and
   misses you** as it nears. When the meeting goes live she **arrives exactly as agreed**
-  (in that dress) and can draw on anything from your setup. Grounded only in what you
-  actually said — never invented.
+  (in that outfit — an agreed outfit wins even over her own wardrobe, so a piece she doesn't
+  keep in her closet is still honored) and can draw on anything from your setup. **This works
+  for a spur‑of‑the‑moment date too** (2026‑07‑02): if you just arrange it and say "я вошёл"
+  without scheduling it first, she still captures what you agreed **at that moment** and
+  arrives as agreed — no more turning up in the wrong thing and making you re‑establish it.
+  Grounded only in what you actually said — never invented.
 - **She reaches out on her own, like a girlfriend at a distance** (`check_intimacy_outreach`):
   in her **off‑hours, personal time** (not work hours, and not while you've been doing
   business) she may message you out of the blue — missing you, craving, a teasing intimate
@@ -788,7 +792,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 568 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+- **Tests:** 570 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
   the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an

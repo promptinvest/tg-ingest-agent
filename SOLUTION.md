@@ -364,14 +364,21 @@ proactively like real memory. Design decisions and why:
   (`compose_meeting_greeting`, grounded in setting/prep, falls back to the fixed template only
   on model failure) — replacing the static `meeting_started_*` line that read as a script
   ("чайник как раз вскипел" every time). A vague timeless wish stays `converse`.
-- **Prep continuity + anticipation for an upcoming meeting (`meeting_prep`).** While a
-  date/meeting is being set up, agreed details/logistics and **emotional beats** (her
-  longing, nerves) are extracted from the lead-up conversation (a small pass on the curator
-  cadence, only when a meeting is upcoming) and stored against that meeting. They're
-  surfaced in `converse_context` so she stays consistent through planning (the dress stays
-  the dress) and — for a social/date meeting — with genuine **anticipation/longing**; and
-  they're **carried into the live meeting** (`_meeting_presence`) so she "arrives" exactly
-  as agreed and can draw on anything from the setup. Grounded only in what was said.
+- **Prep continuity + anticipation for a meeting (`meeting_prep`).** The agreed
+  arrangement — the **outfit** (a dedicated `kind='outfit'` item), the scene setup / plan /
+  props (`agreement`), and Cara's **emotional beats** (longing, nerves — `feeling`) — is
+  extracted from the lead-up conversation (`_extract_meeting_prep`) and stored against that
+  meeting. It's surfaced in `converse_context` so she stays consistent through planning (the
+  dress stays the dress) and — for a date — with genuine **anticipation/longing**; and it's
+  **carried into the live meeting** (`_meeting_presence`) so she "arrives" exactly as agreed.
+  An agreed `outfit` (or any clothing mention in the agreements) **wins over the wardrobe
+  picker** — so a piece that isn't even in her catalog (e.g. "red latex") is honored rather
+  than replaced by a default. Grounded only in what was said. **Captured for SPONTANEOUS
+  dates too (2026-07-02):** the extraction runs on the periodic curator cadence for an
+  upcoming *scheduled* meeting AND **at the come-in itself** (`do_meeting_start`), so an
+  "arrange … then я вошёл" date with no prior scheduling still carries the just-agreed
+  arrangement into the greeting + presence — fixing the case where Cara "arrived" in a
+  wardrobe-default outfit and the boss had to re-establish everything.
 - **Capture is a minimal overlay, routing is unchanged.** While a meeting is open,
   the boss's turn is teed into `meeting_turns` at the top of `dispatch` and Cara's
   into the same record from `reply()`. The router still runs, so **a real command
@@ -846,7 +853,7 @@ ids that attachments/embeddings/memory/calendar/fired-pending references rely on
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 568 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
+- **Tests:** 570 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
   on the VPS as part of every deploy — including a **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
   captured) and asserts replies, DB writes, and **no state change before

@@ -1960,7 +1960,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return None
 
     _CLOTHING_HINTS = ("плать", "бель", "наряд", "одет", "пижам", "халат", "юбк", "топ",
-                       "джинс", "dress", "lingerie", "outfit", "wear", "robe", "skirt")
+                       "джинс", "латекс", "костюм", "туфл", "чулк", "корсет",
+                       "dress", "lingerie", "outfit", "wear", "robe", "skirt", "latex", "corset")
 
     _PALETTE_WORDS = ("emerald", "изумруд", "burgundy", "бордов", "rust", "cream", "крем",
                       "charcoal", "black", "чёрн", "черн", "champagne", "шампан", "gold",
@@ -2111,14 +2112,20 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         prep = store.meeting_prep_list(self.conn, m["id"])
         agreed_outfit = False
         if prep:
-            agreed = [p["detail"] for p in prep if p["kind"] != "feeling"]
+            outfits = [p["detail"] for p in prep if p["kind"] == "outfit"]
+            agreed = [p["detail"] for p in prep if p["kind"] not in ("feeling", "outfit")]
             feelings = [p["detail"] for p in prep if p["kind"] == "feeling"]
-            agreed_outfit = any(any(h in (a or "").casefold() for h in self._CLOTHING_HINTS)
-                                for a in agreed)
+            # An explicit agreed outfit (kind='outfit') OR a clothing mention in the agreements
+            # means you ALREADY agreed what to wear — that wins over the wardrobe picker.
+            agreed_outfit = bool(outfits) or any(
+                any(h in (a or "").casefold() for h in self._CLOTHING_HINTS) for a in agreed)
+            if outfits:
+                carry += (" You're dressed exactly as the two of you agreed: " + "; ".join(outfits)
+                          + " — you ARE in that right now; stay consistent with it.")
             if agreed:
-                carry += (" Beforehand you two agreed: " + "; ".join(agreed)
-                          + " — you ARE exactly that now (e.g. in that dress); stay consistent "
-                          "with it and you may draw on anything from your setup.")
+                carry += (" Beforehand you two arranged: " + "; ".join(agreed)
+                          + " — that's how things are set up now; stay consistent with it and you "
+                          "may draw on anything from your setup.")
             if feelings:
                 carry += " Coming into it you've been feeling: " + "; ".join(feelings) + "."
         # Attire only when you didn't already agree a specific outfit (else that wins).
@@ -2218,10 +2225,17 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             key = "meeting_started_visit"
         else:
             key = "meeting_started_social"
+        m = store.meeting_active(self.conn, chat_id)
+        # Carry the just-agreed arrangement IN. A spontaneous "arrange … then я вошёл" date has
+        # no scheduled meeting, so periodic prep-capture never ran — capture it now from the
+        # recent conversation (the agreed outfit, the scene setup, the plan) BEFORE the greeting,
+        # so the come-in and her attire reflect what you two just agreed instead of a default.
+        # Social/date only — a business come-in has no outfit/scene prep to carry.
+        if m and meeting.is_social(kind):
+            self._extract_meeting_prep(chat_id, lang, m)
         # Greet in her own voice, varied each time (grounded in setting/prep) so the
         # come-in never reads as the same scripted line; fall back to the template if the
         # model is unavailable.
-        m = store.meeting_active(self.conn, chat_id)
         greeting = self.compose_meeting_greeting(lang, kind, m) if m else ""
         self.reply(chat_id, greeting or T(lang, key))
 
@@ -2685,14 +2699,29 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             log(f"meeting prep capture failed: {exc}")
 
     def capture_meeting_prep(self, chat_id, lang):
-        """When a date/meeting is being set up, extract any NEW agreed prep details and
-        emotional beats from the recent conversation and remember them against that
-        meeting — so Cara stays consistent (the dress) and anticipatory (E). Cheap,
-        best-effort; no-op when there's no upcoming meeting."""
+        """Periodic (curator-cadence) prep capture for an UPCOMING scheduled meeting, so
+        agreed details/feelings accumulate in the lead-up. Best-effort; no-op when there's
+        no upcoming meeting. (The same extraction also runs at the come-in itself — see
+        do_meeting_start — so a SPONTANEOUS 'arrange then я вошёл' date carries the just-
+        agreed arrangement in too.)"""
         up = store.meetings_upcoming(self.conn, chat_id, limit=1)
-        if not up:
-            return
-        m = up[0]
+        if up:
+            self._extract_meeting_prep(chat_id, lang, up[0])
+
+    def _extract_meeting_prep(self, chat_id, lang, m):
+        """Extract the AGREED arrangement for meeting m from the recent conversation and
+        store it as prep — the agreed OUTFIT (kind='outfit', which then wins over the
+        wardrobe picker), the scene setup / plan / props (kind='agreement'), and Cara's
+        feelings about it (kind='feeling'). Grounded strictly in what was actually said;
+        best-effort — ANY failure (LLM, budget, or a DB hiccup) just leaves prep as-is and
+        must not abort the come-in greeting. Used both in the lead-up to a scheduled date and
+        at a spontaneous come-in."""
+        try:
+            self._do_extract_meeting_prep(chat_id, lang, m)
+        except Exception as exc:  # noqa: BLE001 — best-effort; never break a come-in / tick
+            log(f"meeting prep extract failed: {exc!r}")
+
+    def _do_extract_meeting_prep(self, chat_id, lang, m):
         history = store.convo_recent(self.conn, chat_id, limit=14)
         if not history:
             return
@@ -2701,24 +2730,29 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         existing = "; ".join(p["detail"] for p in store.meeting_prep_list(self.conn, m["id"])) \
             or "(none yet)"
         system = (
-            "You track the PREPARATION for an upcoming meeting/date between Cara and her boss. "
-            "From their recent conversation, extract any NEW concrete agreements about it (what "
-            "Cara will wear, what he brings, the time/place/plan/mood) and any NEW emotional "
-            "beats (how Cara feels about it — excitement, nervousness, longing). Return STRICT "
-            'JSON only: {"agreements":["..."],"feelings":["..."]}. ONLY items that are NEW (not '
-            "already listed) and were actually SAID — never invent. Short, in his language. "
-            "Empty arrays if nothing new.")
+            "You track what Cara and her boss have ARRANGED for their time together (a date or "
+            "meeting — upcoming, or just beginning). From their recent conversation extract the "
+            "concrete arrangement, using ONLY what was actually SAID (never invent). Return "
+            'STRICT JSON only: {"outfit": "<exactly what Cara is/will be wearing, as agreed — '
+            'free text, or empty>", "agreements": ["<other arranged details: how the scene is '
+            'set up, who does what, props, the plan, what he brings, time/place/mood>"], '
+            '"feelings": ["<how Cara feels about it — excitement, nerves, longing>"]}. ONLY items '
+            "that are NEW (not already listed). Short, in his language. Empty string/arrays if "
+            "nothing new.")
         user = (f"The meeting: {m['title'] or m['kind']} at {m['setting'] or '-'}.\n"
                 f"Already noted: {existing}\n\nRecent conversation:\n{convo}")
         try:
             reply = llm.chat_profile(
-                self.cfg, self.conn, "meeting",
+                self.cfg, self.conn, "meeting_prep",
                 [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 profile="memory_curator")
         except llm.LLMError:
             return
         parsed = llm.parse_llm_json(reply) or {}
         added = 0
+        outfit = str(parsed.get("outfit") or "").strip()
+        if outfit and store.meeting_prep_add(self.conn, m["id"], outfit, kind="outfit"):
+            added += 1  # the agreed outfit — wins over the wardrobe pick in _meeting_presence
         for d in (parsed.get("agreements") or [])[:6]:
             if store.meeting_prep_add(self.conn, m["id"], d, kind="agreement"):
                 added += 1

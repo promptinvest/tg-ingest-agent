@@ -472,6 +472,11 @@ class MeetingDispatchTests(unittest.TestCase):
                           MEDIA_DIR=str(Path(self.tmp.name) / "m"))
         self.agent = tg_ingest_agent.Agent(cfg)
         self.conn = self.agent.conn
+        # Quiet hours are checked against the REAL wall-clock, and several ping/outreach gates
+        # honor them — disable the window so those tests are deterministic whenever the suite runs
+        # (this class was flaky when run during 22:00-08:00 local).
+        store.pref_set(self.conn, "quiet_start", "0")
+        store.pref_set(self.conn, "quiet_end", "0")
 
     def tearDown(self):
         self.conn.close()
@@ -482,8 +487,8 @@ class MeetingDispatchTests(unittest.TestCase):
         sent = []
 
         def fake_cp(cfg, conn, skill, messages, **kw):
-            if skill == "scene" and skill not in responses:
-                return "{}"   # incidental scene-state refresh during a date: keep state as-is
+            if skill in ("scene", "meeting_prep") and skill not in responses:
+                return "{}"   # incidental scene refresh / come-in prep extraction: no-op
             if skill not in responses:
                 raise AssertionError(f"unexpected LLM call: skill={skill!r}")
             v = responses[skill]
@@ -695,6 +700,38 @@ class MeetingDispatchTests(unittest.TestCase):
             self.agent.do_meeting_start(111, "ru", {"kind": "other"})
         active = store.meeting_active(self.conn, 111)
         self.assertNotEqual(active["id"], old)   # not the stale plan
+
+    def test_come_in_captures_spontaneous_arrangement(self):
+        # A spontaneous "arrange … then я вошёл" date (no scheduled meeting) must carry the
+        # just-agreed arrangement in — the review bug where Cara "arrived" in the wrong outfit
+        # because prep-capture only ran for SCHEDULED meetings.
+        store.convo_add(self.conn, 111, "user",
+                        "надень красный латекс и вставь вибратор; Лера уже связана и готова")
+        store.convo_add(self.conn, 111, "user", "я вошёл")
+        extract = ('{"outfit":"красный латекс с вибратором","agreements":["Лера связана и готова"],'
+                   '"feelings":["предвкушение"]}')
+        with mock.patch.object(llm, "chat_profile", return_value=extract), \
+                mock.patch.object(self.agent, "compose_meeting_greeting", return_value="Наконец-то"), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.do_meeting_start(111, "ru", {"kind": "visit"}, "я вошёл")
+        m = store.meeting_active(self.conn, 111)
+        prep = store.meeting_prep_list(self.conn, m["id"])
+        self.assertIn("outfit", {p["kind"] for p in prep})                       # outfit captured
+        self.assertTrue(any("латекс" in p["detail"] for p in prep if p["kind"] == "outfit"))
+        self.assertTrue(any("Лера" in p["detail"] for p in prep))                # setup captured
+
+    def test_meeting_presence_agreed_outfit_beats_wardrobe(self):
+        # An agreed outfit (kind='outfit', e.g. "red latex" which isn't in the wardrobe) wins:
+        # _meeting_presence injects it and does NOT fall through to the wardrobe picker.
+        mid = store.meeting_start(self.conn, 111, kind="visit", setting="у неё")
+        store.meeting_prep_add(self.conn, mid, "красный латексный костюм", kind="outfit")
+        store.kv_set(self.conn, "closeness_stage", "5")
+        m = store.meeting_active(self.conn, 111)
+        with mock.patch.object(self.agent, "_meeting_attire",
+                               side_effect=AssertionError("wardrobe pick must be skipped")):
+            pres = self.agent._meeting_presence("ru", m)
+        self.assertIn("латексный костюм", pres)
+        self.assertIn("agreed", pres.lower())
 
     def test_come_in_line_recorded_as_opening_turn(self):
         # His varied arrival line ("я вошёл, привет") becomes the meeting's first turn.
