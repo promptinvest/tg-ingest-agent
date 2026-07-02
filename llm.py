@@ -134,6 +134,23 @@ def _base_url(cfg):
     return base if base.endswith("/v1") else base + "/v1"
 
 
+def _estimate_prompt_tokens(messages):
+    """Rough prompt-token estimate (~4 chars/token) for when the provider omits a
+    usage block. Counts only TEXT — a multimodal message's content is a list of
+    parts, and stringifying it would fold the base64 image blob into the count and
+    massively over-bill (the mirror of the $0-undercount this fallback fixes)."""
+    chars = 0
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            chars += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    chars += len(str(part.get("text") or ""))
+    return chars // 4
+
+
 def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
     """Budget-guarded chat completion; logs usage; returns content string."""
     _check_budget(cfg, conn)
@@ -169,16 +186,21 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
     except json.JSONDecodeError as exc:
         raise LLMError("inference response was not valid JSON") from exc
     choices = data.get("choices") or []
-    if not choices:
-        raise LLMError("inference response had no choices")
+    content = str((choices[0].get("message") or {}).get("content") or "") if choices else ""
+    # Meter the call BEFORE the no-choices guard so a billed-but-empty response is still
+    # counted. If the provider omits a usage block (some meta-routes do), estimate from
+    # text length (~4 chars/token) instead of logging $0 — an unmetered model silently
+    # under-counts the budget and the real DO bill can then blow past the "enforced" cap.
     usage = data.get("usage") or {}
-    tokens_in = int(usage.get("prompt_tokens") or 0)
-    tokens_out = int(usage.get("completion_tokens") or 0)
+    tokens_in = int(usage.get("prompt_tokens") or _estimate_prompt_tokens(messages))
+    tokens_out = int(usage.get("completion_tokens") or (len(content) // 4))
     store.usage_add(
         conn, skill, "chat", model, tokens_in, tokens_out,
         cost_usd=chat_cost(model, tokens_in, tokens_out, pricing_table(cfg)),
     )
-    return str((choices[0].get("message") or {}).get("content") or "")
+    if not choices:
+        raise LLMError("inference response had no choices")
+    return content
 
 
 def model_ok(cfg, conn, model):
@@ -270,7 +292,11 @@ def default_profiles(cfg):
     one route can still be served. Override wholesale via LLM_PROFILES_JSON."""
     primary = cfg.do_model
     router = cfg.router_model
-    fb = ["openai-gpt-4o"]  # confirmed in DO catalog; different family
+    # Default fallback: an open-weight model that's ACTUALLY reachable on this DO tier.
+    # (openai-gpt-4o was the old default but it 403s for the subscription tier — a dead
+    # fallback on any fresh deploy that hasn't set LLM_PROFILES_JSON. gpt-oss-20b is the
+    # slug the live box overrides to, and it's priced in DEFAULT_PRICING.)
+    fb = ["openai-gpt-oss-20b"]
     return {
         "router_fast": {"primary": router, "fallbacks": fb, "max_tokens": 200, "json_required": True},
         "ingest_balanced": {"primary": primary, "fallbacks": fb, "max_tokens": 600, "json_required": True},
@@ -310,6 +336,14 @@ def profiles(cfg):
                 overridden.add(name)
         except Exception as exc:
             log(f"LLM_PROFILES_JSON ignored (invalid): {exc!r}")
+    # A brand-new profile added via LLM_PROFILES_JSON without a "primary" would
+    # KeyError in chat_profile (not an LLMError, so it escapes every skill's
+    # except LLMError and dies to the loop). Backfill a primary from the configured
+    # chat model so a partial override can't crash a turn.
+    for name, prof in table.items():
+        if not prof.get("primary"):
+            prof["primary"] = cfg.do_model
+            log(f"profile {name!r} had no primary; defaulted to {cfg.do_model}")
     # The live-date variant must run on the SAME model as ordinary conversation — only its
     # token budget differs — so a `converse_warm` model override (env) carries over and the
     # date path can never silently fall back to a stale default model/fallback (the bug where

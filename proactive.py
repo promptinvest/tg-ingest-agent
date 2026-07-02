@@ -97,6 +97,11 @@ def _items_need_category(conn, cfg, lang, now):
 
 # urgent first, then by usefulness
 CHECKS = (_overdue_reminders, _memory_candidates, _items_need_category)
+# The "≤ max_per_day non-urgent" cap counts only the NON-URGENT heartbeat nudges.
+# Urgent ones (overdue) bypass the cap, so they must not consume it either; and the
+# separate relationship outreach (afterglow/anticipation/greeting/meeting ping) has its
+# own gates and never counts here.
+NONURGENT_KEYS = ("candidates", "unsorted")
 
 
 def run(conn, cfg, lang, reply_fn, now=None):
@@ -107,32 +112,40 @@ def run(conn, cfg, lang, reply_fn, now=None):
     if not s["enabled"]:
         return None
     now = now or datetime.now(timezone.utc)
-
     day = now.strftime("%Y-%m-%d")
-    hit = None
-    for check in CHECKS:
-        hit = check(conn, cfg, lang, now)
-        if hit:
-            break
-    if not hit:
-        store.proactive_log_add(conn, "none", "nothing due", day=day)
-        return None
-
-    key, text, urgent = hit
     quiet = in_quiet_hours(cfg, conn, now, s)
     wrong_day = _wrong_day(conn, cfg, now, s["days"])
 
-    if (quiet or wrong_day) and (not urgent or not cfg.proactive_urgent_bypass_quiet):
-        store.proactive_log_add(conn, key, "suppressed",
-                                reason="quiet hours" if quiet else "off-day", day=day)
+    # Consider the checks in order and send the first ELIGIBLE one — don't commit to the
+    # first hit and then bail. A persistent overdue reminder (always the first hit, and
+    # already sent today) used to short-circuit here and starve every other nudge type
+    # for the whole day; now an ineligible hit is skipped so a waiting memory candidate
+    # / uncategorized item still gets its turn.
+    any_hit = False
+    for check in CHECKS:
+        hit = check(conn, cfg, lang, now)
+        if not hit:
+            continue
+        any_hit = True
+        key, text, urgent = hit
+        if (quiet or wrong_day) and (not urgent or not cfg.proactive_urgent_bypass_quiet):
+            store.proactive_log_add(conn, key, "suppressed",
+                                    reason="quiet hours" if quiet else "off-day", day=day)
+            continue
+        if store.proactive_key_sent_today(conn, day, key):
+            store.proactive_log_add(conn, key, "suppressed", reason="already sent today", day=day)
+            continue
+        if not urgent and store.proactive_sent_count(conn, day, NONURGENT_KEYS) >= s["max_per_day"]:
+            store.proactive_log_add(conn, key, "suppressed", reason="daily cap", day=day)
+            continue
+        # Log "sent" only on a SUCCESSFUL delivery: reply_fn (agent.reply) swallows a
+        # TelegramError and returns None, and proactive_key_sent_today would otherwise
+        # block the retry for the rest of the day on a transient send failure.
+        if reply_fn(text):
+            store.proactive_log_add(conn, key, "sent", sent=True, day=day)
+            return key
+        store.proactive_log_add(conn, key, "send failed", reason="delivery error", day=day)
         return None
-    if store.proactive_key_sent_today(conn, day, key):
-        store.proactive_log_add(conn, key, "suppressed", reason="already sent today", day=day)
-        return None
-    if not urgent and store.proactive_sent_count(conn, day) >= s["max_per_day"]:
-        store.proactive_log_add(conn, key, "suppressed", reason="daily cap", day=day)
-        return None
-
-    reply_fn(text)
-    store.proactive_log_add(conn, key, "sent", sent=True, day=day)
-    return key
+    if not any_hit:
+        store.proactive_log_add(conn, "none", "nothing due", day=day)
+    return None

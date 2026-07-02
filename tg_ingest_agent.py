@@ -3025,17 +3025,26 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         except Exception as exc:  # noqa: BLE001 — must not kill the loop
             log(f"scheduled-meeting check error: {exc!r}")
             return
+        now = datetime.now(timezone.utc)
+        s = proactive.settings(self.conn, self.cfg)
+        # Respect proactivity-off and quiet hours: a mis-parsed 03:00 scheduled_for
+        # must not ping at 3am, and a boss who turned proactivity off isn't pinged.
+        # The flag stays unset when we hold, so the ping fires once the window opens.
+        if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
+            return
         for m in due:
             if store.meeting_active(self.conn, m["chat_id"]):
                 continue  # already together; nudge nothing
             flag = f"meeting_ping:{m['id']}"
             if store.kv_get(self.conn, flag):
                 continue  # already nudged about this one
-            store.kv_set(self.conn, flag, "1")
             self.turn_lang = None
-            store.proactive_log_add(self.conn, "meeting_waiting", "sent", sent=True)
-            self.reply(m["chat_id"], T(self.lang(), "meeting_waiting",
-                                       detail=self._meeting_detail(m, self.lang())))
+            # Flag + log only on a SUCCESSFUL send (reply returns None on TelegramError),
+            # so a transient failure doesn't permanently swallow the "я жду тебя" ping.
+            if self.reply(m["chat_id"], T(self.lang(), "meeting_waiting",
+                                          detail=self._meeting_detail(m, self.lang()))):
+                store.kv_set(self.conn, flag, "1")
+                store.proactive_log_add(self.conn, "meeting_waiting", "sent", sent=True)
 
     def check_meeting_idle(self):
         """Auto-end (and summarize) any meeting left open and idle past the
@@ -3077,9 +3086,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         s = proactive.settings(self.conn, self.cfg)
         if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
             return
+        if proactive._wrong_day(self.conn, self.cfg, now, s["days"]):
+            return  # honor "пиши только по выходным" etc. for this outreach too
         local = now + timedelta(hours=self.tz_offset())
-        if local.hour < self.cfg.morning_brief_hour:
-            return  # morning-only; wait for a civil hour
+        if not (self.cfg.morning_brief_hour <= local.hour < 12):
+            return  # MORNING-after only — a civil hour, not an evening "good morning"
         m = meeting.afterglow_candidate(self.conn, self.cfg, owner, now)
         if not m:
             return
@@ -3100,9 +3111,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         line = self.compose_afterglow(lang, m)
         if not line:
             return
-        store.kv_set(self.conn, flag, "sent")
-        self.reply(owner, line)
-        store.proactive_log_add(self.conn, "afterglow", "sent", sent=True, day=day)
+        # Flag + log only on a successful send, so a transient send failure doesn't burn
+        # this meeting's one afterglow chance.
+        if self.reply(owner, line):
+            store.kv_set(self.conn, flag, "sent")
+            store.proactive_log_add(self.conn, "afterglow", "sent", sent=True, day=day)
 
     def check_meeting_anticipation(self):
         """Lead-up to an agreed DATE: she MAY, occasionally, tease him during the day
@@ -3117,6 +3130,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         s = proactive.settings(self.conn, self.cfg)
         if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
             return
+        if proactive._wrong_day(self.conn, self.cfg, now, s["days"]):
+            return  # honor the days preference for this outreach too
         local = now + timedelta(hours=self.tz_offset())
         if local.hour < self.cfg.morning_brief_hour:
             return  # not in the dead of night
@@ -3137,9 +3152,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         line = self.compose_anticipation(self.lang(), m)
         if not line:
             return
-        store.kv_set(self.conn, cnt_key, sent + 1)
-        self.reply(owner, line)
-        store.proactive_log_add(self.conn, "anticipation", "sent", sent=True, day=day)
+        # Count + log only on a successful send (else a transient failure wastes the tease).
+        if self.reply(owner, line):
+            store.kv_set(self.conn, cnt_key, sent + 1)
+            store.proactive_log_add(self.conn, "anticipation", "sent", sent=True, day=day)
 
     def compose_anticipation(self, lang, m):
         """A playful, teasing lead-up message before an agreed date — she hints (by
@@ -3214,6 +3230,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         s = proactive.settings(self.conn, self.cfg)
         if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
             return
+        if proactive._wrong_day(self.conn, self.cfg, now, s["days"]):
+            return  # honor the days preference for this outreach too
         # Only in her relaxed, off-hours register (not work hours, not mobilized by recent
         # business) — that's the only time this forward, intimate reaching-out fits.
         if self._register_state(now) != "relaxed":
@@ -3241,8 +3259,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         line = self.compose_intimacy_outreach(self.lang())
         if not line:
             return
-        self.reply(owner, line)
-        store.proactive_log_add(self.conn, "intimacy_outreach", "sent", sent=True, day=day)
+        if self.reply(owner, line):  # log only on a successful send
+            store.proactive_log_add(self.conn, "intimacy_outreach", "sent", sent=True, day=day)
 
     def compose_intimacy_outreach(self, lang):
         """A short, out-of-the-blue intimate message in Cara's own voice — missing/craving/
@@ -3388,15 +3406,23 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         s = proactive.settings(self.conn, self.cfg)
         if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
             return  # proactivity off, or quiet hours
+        if proactive._wrong_day(self.conn, self.cfg, now, s["days"]):
+            return  # "пиши только по выходным" also suppresses the initiating good-morning
         self.turn_lang = None
         self.turn_extra = []  # scheduler context: no inbound media/reply to carry
         lang = self.lang()
         greeting = self.compose_morning_greeting(lang)
         if not greeting:
             return
-        store.kv_set(self.conn, "greeted_day", today)
+        # Mark the day greeted only if delivery actually succeeded — else a transient send
+        # failure would suppress the good-morning for the whole day (and the greeting is the
+        # first-contact promise, so losing it silently is exactly what must not happen).
+        delivered = False
         for chat_id in self.cfg.allowed_chat_ids:
-            self.reply(chat_id, greeting)
+            if self.reply(chat_id, greeting):
+                delivered = True
+        if delivered:
+            store.kv_set(self.conn, "greeted_day", today)
 
     def check_proactive(self):
         """Evaluate the proactive heartbeat at most once per interval; it sends

@@ -21,7 +21,7 @@ the exhaustive feature + architecture map.
 |---|---|
 | **Surface** | Telegram bot, single owner, free‑form Russian/English, text + voice + forwards |
 | **Runtime** | one systemd service, stdlib‑only Python 3, long polling (no webhooks/ports) |
-| **Inference** | DigitalOcean Gradient (chat `anthropic-claude-haiku-4.5`, fallback `openai-gpt-4o`, embeddings `BGE‑M3`); STT local `whisper.cpp` |
+| **Inference** | DigitalOcean Gradient (chat `anthropic-claude-haiku-4.5`, default fallback `openai-gpt-oss-20b`, embeddings `BGE‑M3`); STT local `whisper.cpp` |
 | **Storage** | SQLite (WAL) + local media dir; optional DO Spaces (dormant) |
 | **Persona** | a warm, loyal human companion with her own (fictional) life; **open and personal by the boss's wish** — shares her inner life and talks frankly about any personal matter, no "professional distance"; never breaks character; matches the boss's language |
 | **Safety spine** | owner‑only access · permission manifest · confirm‑before‑state‑change · budget caps · SSRF guard · action‑truth · full tracing |
@@ -500,9 +500,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   anticipation about a meeting** ("что ты чувствуешь про нашу встречу?", "ждёшь?") go to
   `converse` (answered from the heart), while **factual** recall — what you decided, when/
   where — stays `meeting_recall`.
-- **Day‑after afterglow** — the morning after a *personal* meeting she may, **occasionally**,
+- **Day‑after afterglow** — the *morning* after a *personal* meeting she may, **occasionally**,
   reach out first with genuine warmth ("было так хорошо, уже скучаю") — one‑shot per
-  meeting, quiet‑hours / proactivity‑prefs aware, **never** clingy or reproachful.
+  meeting, quiet‑hours / proactivity‑prefs / days‑pref aware, bounded to a real morning
+  window (`morning_brief_hour`..noon, so it never arrives as a 9pm "good morning"), and
+  logged only on a real send. **Never** clingy or reproachful.
 
 ### Reporting & ops
 - **Weekly performance review:** runs on a fixed schedule (default **Monday 10:00
@@ -513,7 +515,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   review, self, boss profile, working history, memory candidates, trace summary.
 - **Proactive heartbeat:** gentle, suggestion‑only nudges — overdue reminders, memory
   candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
-  quiet‑hours‑aware (22:00–08:00), fully audited; never acts.
+  quiet‑hours‑aware (22:00–08:00), fully audited; never acts. **A "sent" is recorded only
+  on real delivery** (2026‑07‑02), so a transient Telegram error doesn't mark the day's
+  nudge/afterglow/greeting delivered and lose it. **A persistent overdue reminder no
+  longer starves the other nudges** — an already‑sent‑today hit is skipped, not treated
+  as fatal, so a waiting candidate/uncategorized item still gets its turn. The daily cap
+  counts only the heartbeat's own nudges (the relationship outreach — afterglow,
+  anticipation, good‑morning, meeting ping — doesn't consume it), and **all** of that
+  outreach now honors the `proactive_days` preference and quiet hours.
 - **Tune her proactivity** (`proactive_prefs`): "пиши только по выходным", "не беспокой
   до 10", "отключи напоминания", "можно почаще" → stored overrides (on/off, days,
   quiet window, frequency) the heartbeat honors.
@@ -615,11 +624,17 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
 ### LLM gateway (`llm.py`)
 - **Model profiles** with primary + fallback + per‑profile temperature/max‑tokens/
   json‑required: `router_fast`, `ingest_balanced`, `ask_grounded`, `converse_warm`,
-  `memory_curator`, `review_balanced`. Failover to a different‑family model
-  (`openai-gpt-4o`) on error/invalid‑JSON, with per‑model cooldowns.
+  `memory_curator`, `review_balanced`. Failover to a fallback model on error/
+  invalid‑JSON, with per‑model cooldowns. The default fallback is an **accessible
+  open‑weight slug** (`openai-gpt-oss-20b`), not the tier‑403 `openai-gpt-4o` that used
+  to be a dead fallback on a fresh deploy; a profile added via `LLM_PROFILES_JSON`
+  without a `primary` is backfilled with the configured chat model so it can't crash a turn.
 - **Budget‑guarded:** every chat/STT/embedding call is priced and logged to
   `llm_usage`; daily/monthly caps warn at 80% and **hard‑stop** at 100% (above
-  failover). Caps are overridable at runtime via `budget_set`.
+  failover). Caps are overridable at runtime via `budget_set`. **A response missing its
+  `usage` block is metered from text length** (≈4 chars/token) rather than logged as $0,
+  and a billed‑but‑empty response is metered before it errors — so an under‑reporting
+  model can't quietly slip the meter past the "enforced" cap.
 
 ### Voice (STT)
 - DO has no transcription model, so Cara runs **whisper.cpp locally**: a warm
@@ -746,7 +761,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 547 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+- **Tests:** 554 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
   the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an

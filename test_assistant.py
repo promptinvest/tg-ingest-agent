@@ -176,6 +176,8 @@ class GatewayTests(unittest.TestCase):
         cfg = make_config()
         calls = []
 
+        fb = llm.default_profiles(cfg)["router_fast"]["fallbacks"][0]  # the default fallback slug
+
         def fake_chat(c, conn, skill, messages, max_tokens=300, model=None, temperature=0):
             calls.append(model)
             if model == cfg.router_model:
@@ -184,13 +186,62 @@ class GatewayTests(unittest.TestCase):
         with mock.patch.object(llm, "chat", side_effect=fake_chat):
             out = llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
         self.assertIn("spend", out)
-        self.assertEqual(calls, [cfg.router_model, "openai-gpt-4o"])  # primary then fallback
+        self.assertEqual(calls, [cfg.router_model, fb])  # primary then fallback
         self.assertTrue(store.cooldown_active(self.conn, "router_fast", cfg.router_model))
         # next call skips the cooled-down primary
         calls.clear()
         with mock.patch.object(llm, "chat", side_effect=fake_chat):
             llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
-        self.assertEqual(calls, ["openai-gpt-4o"])
+        self.assertEqual(calls, [fb])
+
+    def test_default_fallback_is_tier_accessible(self):
+        # The default fallback must NOT be the tier-403 openai-gpt-4o (a dead fallback on
+        # a fresh deploy) — it's an open-weight slug that's actually reachable AND priced.
+        fb = llm.default_profiles(make_config())["router_fast"]["fallbacks"]
+        self.assertNotIn("openai-gpt-4o", fb)
+        for slug in fb:
+            self.assertIn(slug, llm.DEFAULT_PRICING, slug)
+
+    def test_profile_without_primary_is_repaired(self):
+        # A brand-new LLM_PROFILES_JSON profile without a "primary" would KeyError in
+        # chat_profile (not an LLMError) and crash the turn — profiles() backfills one.
+        cfg = make_config(LLM_PROFILES_JSON='{"weird_new": {"max_tokens": 50}}')
+        prof = llm.profiles(cfg)["weird_new"]
+        self.assertEqual(prof["primary"], cfg.do_model)
+
+    def test_chat_estimates_usage_when_provider_omits_it(self):
+        # A response with no usage block must be metered from text length, not logged as
+        # $0 — an unmetered model silently under-counts the budget.
+        cfg = make_config()
+        body = {"choices": [{"message": {"content": "a fairly long reply " * 10}}]}  # no "usage"
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps(body).encode("utf-8")
+        with mock.patch.object(llm, "urlopen", return_value=Resp()):
+            llm.chat(cfg, self.conn, "converse", [{"role": "user", "content": "x" * 400}],
+                     model="deepseek-4-flash")
+        row = self.conn.execute("SELECT tokens_in, tokens_out, cost_usd FROM llm_usage").fetchone()
+        self.assertGreater(row["tokens_in"], 0)   # estimated from the 400-char prompt
+        self.assertGreater(row["tokens_out"], 0)  # estimated from the reply length
+        self.assertGreater(row["cost_usd"], 0)
+
+    def test_chat_meters_before_no_choices_error(self):
+        # A billed-but-empty (no-choices) response still bills the provider — it must be
+        # metered even though chat() then raises.
+        cfg = make_config()
+        body = {"choices": [], "usage": {"prompt_tokens": 123, "completion_tokens": 0}}
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps(body).encode("utf-8")
+        with mock.patch.object(llm, "urlopen", return_value=Resp()):
+            with self.assertRaises(llm.LLMError):
+                llm.chat(cfg, self.conn, "converse", [], model="deepseek-4-flash")
+        row = self.conn.execute("SELECT tokens_in FROM llm_usage").fetchone()
+        self.assertEqual(row["tokens_in"], 123)  # metered despite the raise
 
     def test_chat_profile_budget_never_falls_back(self):
         cfg = make_config(BUDGET_DAILY_USD="0.01")
@@ -2825,10 +2876,17 @@ class ProactiveTests(unittest.TestCase):
         self.assertTrue(self.proactive.in_quiet_hours(self.cfg, self.conn, self._now_local(7)))
         self.assertFalse(self.proactive.in_quiet_hours(self.cfg, self.conn, self._now_local(12)))
 
+    def _reply_ok(self, sink):
+        # A reply_fn that mimics a SUCCESSFUL send (agent.reply returns the message
+        # dict on success, None on TelegramError) — proactive.run logs "sent" only
+        # when the send returns truthy.
+        return lambda t: (sink.append(t) or {"message_id": 1})
+
     def test_sends_one_nudge_and_logs(self):
         store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
         sent = []
-        key = self.proactive.run(self.conn, self.cfg, "ru", sent.append, now=self._now_local(12))
+        key = self.proactive.run(self.conn, self.cfg, "ru", self._reply_ok(sent),
+                                 now=self._now_local(12))
         self.assertEqual(key, "candidates")
         self.assertEqual(len(sent), 1)
         self.assertEqual(store.proactive_sent_count(self.conn, "2026-06-15"), 1)
@@ -2839,10 +2897,45 @@ class ProactiveTests(unittest.TestCase):
                           " suggested_category) VALUES (1, 1, ?, 'suggested', 'news')",
                           (store._now(),))
         self.conn.commit()
-        first = self.proactive.run(self.conn, self.cfg, "ru", lambda t: None, now=self._now_local(12))
-        second = self.proactive.run(self.conn, self.cfg, "ru", lambda t: None, now=self._now_local(13))
+        first = self.proactive.run(self.conn, self.cfg, "ru", lambda t: {"message_id": 1},
+                                   now=self._now_local(12))
+        second = self.proactive.run(self.conn, self.cfg, "ru", lambda t: {"message_id": 1},
+                                    now=self._now_local(13))
         self.assertEqual(first, "candidates")
         self.assertIsNone(second)  # max_per_day=1 reached
+
+    def test_overdue_already_sent_does_not_starve_other_nudges(self):
+        # Regression: run() broke at the FIRST hit (overdue, persistent). Once overdue
+        # was sent today, run() returned None and a waiting candidate/unsorted item
+        # never got its turn. Now an ineligible hit is skipped, not fatal.
+        from datetime import timedelta
+        past = (self._now_local(12) - timedelta(days=1)).isoformat()
+        store.reminder_add(self.conn, 1, "call the bank", past)  # persistent overdue
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        store.proactive_log_add(self.conn, "overdue", "sent", sent=True, day="2026-06-15")
+        sent = []
+        key = self.proactive.run(self.conn, self.cfg, "ru", self._reply_ok(sent),
+                                 now=self._now_local(12))
+        self.assertEqual(key, "candidates")   # skipped the already-sent overdue, sent the candidate
+        self.assertEqual(len(sent), 1)
+
+    def test_failed_delivery_not_logged_as_sent(self):
+        # reply_fn returns None (TelegramError swallowed) -> must NOT log "sent",
+        # so proactive_key_sent_today doesn't block the retry for the whole day.
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        key = self.proactive.run(self.conn, self.cfg, "ru", lambda t: None,
+                                 now=self._now_local(12))
+        self.assertIsNone(key)
+        self.assertFalse(store.proactive_key_sent_today(self.conn, "2026-06-15", "candidates"))
+
+    def test_outreach_sends_do_not_consume_heartbeat_cap(self):
+        # A relationship-outreach send (afterglow etc.) must not eat the heartbeat's
+        # own daily cap — the cap counts only heartbeat keys.
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        store.proactive_log_add(self.conn, "afterglow", "sent", sent=True, day="2026-06-15")
+        key = self.proactive.run(self.conn, self.cfg, "ru", lambda t: {"message_id": 1},
+                                 now=self._now_local(12))
+        self.assertEqual(key, "candidates")  # afterglow send didn't spend the heartbeat cap
 
     def test_quiet_hours_suppress_nonurgent(self):
         store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
@@ -2858,7 +2951,8 @@ class ProactiveTests(unittest.TestCase):
         # cap already spent today by a non-urgent nudge
         store.proactive_log_add(self.conn, "candidates", "sent", sent=True)
         sent = []
-        key = self.proactive.run(self.conn, self.cfg, "ru", sent.append, now=self._now_local(12))
+        key = self.proactive.run(self.conn, self.cfg, "ru", self._reply_ok(sent),
+                                 now=self._now_local(12))
         self.assertEqual(key, "overdue")        # urgent fires despite the cap
         self.assertEqual(len(sent), 1)
 
