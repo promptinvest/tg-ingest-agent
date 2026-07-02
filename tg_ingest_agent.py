@@ -2296,10 +2296,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return
         row, recap = meeting.end(self.conn, self.cfg, chat_id)
         self._after_meeting(row, recap)
-        text = self._meeting_recap_text(lang, row, recap)
+        self.reply(chat_id, self._meeting_recap_text(lang, row, recap))
+        # Surface auto-captured agreements as a SEPARATE message — appending to the recap
+        # risked reply()'s 4000-char truncation silently dropping the block while still
+        # committing it surfaced (burning the one "did we really agree this?" chance).
         block, ids = self._pending_surface_agreements(chat_id, lang)
-        sent = self.reply(chat_id, text + ("\n\n" + block if block else ""))
-        if block and sent:
+        if block and self.reply(chat_id, block):
             self._commit_surfaced(ids)
 
     def _pending_surface_agreements(self, chat_id, lang):
@@ -3111,10 +3113,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         for row, recap in ended:
             self._after_meeting(row, recap)
             self.turn_lang = None
+            self.reply(row["chat_id"], T(self.lang(), "meeting_auto_ended"))
+            # Surface agreements as their OWN message (avoid the recap truncating the block).
             block, ids = self._pending_surface_agreements(row["chat_id"], self.lang())
-            sent = self.reply(row["chat_id"], T(self.lang(), "meeting_auto_ended")
-                              + ("\n\n" + block if block else ""))
-            if block and sent:
+            if block and self.reply(row["chat_id"], block):
                 self._commit_surfaced(ids)
 
     def check_meeting_resummary(self):

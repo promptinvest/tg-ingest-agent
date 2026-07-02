@@ -215,13 +215,35 @@ class HermesMixin:
                     recent = False
             raw = store.kv_get(self.conn, "agreements_surfaced_ids") or ""
             ids = [int(x) for x in raw.split(",") if x.strip().isdigit()] if recent else []
-            cancelled = [store.agreement_get(self.conn, i) for i in ids]
-            cancelled = [r for r in cancelled if r and r["status"] == "open"]
-            for r in cancelled:
+            rows = [store.agreement_get(self.conn, i) for i in ids]
+            rows = [r for r in rows if r and r["status"] == "open"]
+            # If he NAMED which one ("про море не договаривались, а отчёт да"), cancel ONLY the
+            # surfaced ones matching that subject — never nuke a commitment he reaffirmed in the
+            # same breath. A fully bare denial ("не договаривались") cancels the whole batch.
+            # Only params.query (the named subject) narrows the batch — NOT params.text: the
+            # router advertises only `query`, so a bare denial arrives with no query and must
+            # reliably cancel ALL surfaced (a stray `text` must not degrade that into a filter).
+            query = str(params.get("query") or "").strip().casefold()
+            if query:
+                # Substring match (like the other agreement resolvers). If a Russian inflection
+                # means it matches none (query "море" vs text "к морю"), we cancel NOTHING —
+                # the SAFE direction: never over-delete a reaffirmed one; he can rephrase/say "все".
+                targeted = [r for r in rows if query in (r["text"] or "").casefold()]
+                if not targeted:
+                    self.reply(chat_id, T(lang, "agreement_not_found"))  # named one not in the set
+                    return
+            else:
+                targeted = rows
+            for r in targeted:
                 store.agreement_set_status(self.conn, r["id"], "cancelled")
-            store.kv_set(self.conn, "agreements_surfaced_ids", "")
-            if cancelled:
-                self.reply(chat_id, T(lang, "agreement_surfaced_removed", n=len(cancelled)))
+            # Keep any NOT-cancelled surfaced ones addressable (a follow-up "и X тоже нет" can
+            # still hit them within the window); clear the pointer only when the batch is empty.
+            done = {r["id"] for r in targeted}
+            remaining = [r["id"] for r in rows if r["id"] not in done]
+            store.kv_set(self.conn, "agreements_surfaced_ids",
+                         ",".join(str(i) for i in remaining))
+            if targeted:
+                self.reply(chat_id, T(lang, "agreement_surfaced_removed", n=len(targeted)))
             else:
                 self.reply(chat_id, T(lang, "agreement_not_found"))
             return

@@ -1082,12 +1082,33 @@ class MeetingDispatchTests(unittest.TestCase):
         # an unsurfaced agreement is NOT honored in context until shown; explicit one is
         honored = store.agreements_open(self.conn, 111, surfaced_only=True)
         self.assertTrue(all(a["status"] == "open" for a in honored))
-        # "не договаривались" right after cancels exactly the surfaced pair, not the explicit one
+        # a fully bare "не договаривались" right after cancels exactly the surfaced pair
         with mock.patch.object(self.agent, "reply"):
             self.agent.do_agreement_close(111, "ru", {"surfaced": True}, "не договаривались")
         open_texts = [a["text"] for a in store.agreements_open(self.conn, 111)]
         self.assertEqual(open_texts, ["едем к морю летом"])         # only the explicit one remains
         self.assertEqual(store.agreement_get(self.conn, keep)["status"], "open")
+
+    def test_surfaced_denial_targets_only_the_named_one(self):
+        # "про море не договаривались, а отчёт да" must cancel ONLY море — never nuke the
+        # отчёт he reaffirmed in the same breath (the data-loss path the review flagged).
+        a_sea = store.agreement_add(self.conn, 111, "поездка на море летом",
+                                    source="meeting", surfaced=0)
+        a_rep = store.agreement_add(self.conn, 111, "прислать отчёт к пятнице",
+                                    source="meeting", surfaced=0)
+        _, ids = self.agent._pending_surface_agreements(111, "ru")
+        self.agent._commit_surfaced(ids)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_agreement_close(
+                111, "ru", {"surfaced": True, "query": "море"}, "про море не договаривались, а отчёт да")
+        self.assertEqual(store.agreement_get(self.conn, a_sea)["status"], "cancelled")
+        self.assertEqual(store.agreement_get(self.conn, a_rep)["status"], "open")   # reaffirmed, kept
+        # отчёт stays addressable for a follow-up denial within the window
+        self.assertIn(str(a_rep), store.kv_get(self.conn, "agreements_surfaced_ids"))
+        # a named subject NOT in the surfaced set cancels nothing
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_agreement_close(111, "ru", {"surfaced": True, "query": "кино"}, "про кино нет")
+        self.assertEqual(store.agreement_get(self.conn, a_rep)["status"], "open")   # untouched
 
     def test_closeness_owner_ceiling_survives_arc_reinflation(self):
         # After a manual lower, the STALE arc re-emitting a high CLOSENESS must NOT
@@ -1114,8 +1135,9 @@ class MeetingDispatchTests(unittest.TestCase):
         self.assertIn("OWNER CAP", captured["sys"])
         self.assertIn("2/5", captured["sys"])
 
-    def test_meeting_end_surfaces_agreements_in_recap(self):
-        # End-to-end: a meeting recap promise is surfaced in the recap message.
+    def test_meeting_end_surfaces_agreements_after_recap(self):
+        # End-to-end: a meeting recap promise is surfaced — as its OWN message right after the
+        # recap (separate reply, so the recap can't truncate it and still commit it).
         meeting.start(self.conn, 111, kind="visit")
         store.meeting_turn_add(self.conn, meeting.active(self.conn, 111)["id"], "boss",
                                "договорились, ты придёшь в субботу")
@@ -1125,7 +1147,7 @@ class MeetingDispatchTests(unittest.TestCase):
              "meeting": ('{"summary":"тёплый вечер","decisions":[],"highlights":[],'
                          '"promises":["ты придёшь в субботу"]}'),
              "relationship": "Нам было хорошо вместе."})
-        self.assertTrue(any("в субботу" in s for s in sent))       # surfaced in the recap
+        self.assertTrue(any("в субботу" in s for s in sent))       # surfaced (its own message)
         self.assertTrue(store.kv_get(self.conn, "agreements_surfaced_at"))
 
 

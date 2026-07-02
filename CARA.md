@@ -494,8 +494,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   curator — not something you explicitly said "запомни, договорились") is **not honored until
   shown** — surfaced to you once ("ещё отметила, что мы вроде договорились: …", at the meeting
   recap, or at the daily good‑morning if you don't meet) — so a mis‑heard commitment never
-  silently becomes a held fact; a bare "не договаривались" right after removes exactly those
-  (your explicitly‑stated agreements are honored immediately and untouched).
+  silently becomes a held fact; "не договаривались" right after removes them — **and if you
+  name which one** ("про море не договаривались, а отчёт да") only that one goes, never one you
+  reaffirmed in the same breath. (Your explicitly‑stated agreements are honored immediately and
+  untouched.)
 - **Your bond only deepens — she never "resets"** — closeness is ratcheted (a 1–5 stage
   that only goes up, plus an anti‑regression rule in the arc), so a quiet or busy day can't
   cool her back to a reserved register. As you grow closer and more open, she **meets you
@@ -783,7 +785,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 566 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+- **Tests:** 567 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
   the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an

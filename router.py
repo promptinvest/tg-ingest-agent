@@ -487,11 +487,13 @@ def route(cfg, conn, chat_id, text, pending):
             recent_surf = False
         if recent_surf and store.kv_get(conn, "agreements_surfaced_ids"):
             user_content += (
-                "You JUST showed the boss agreements you auto-noted, for him to confirm. So a "
-                "bare denial here — 'не договаривались' / 'мы такого не договаривались' / 'я "
-                "такого не обещал' / 'убери это' / \"we didn't agree that\" / \"that's not right\" "
-                "— means agreement_close with params {\"surfaced\": true} (remove exactly those). "
-                "A specific 'отмени уговор про X' still targets by query.\n\n")
+                "You JUST showed the boss agreements you auto-noted, for him to confirm. A denial "
+                "here — 'не договаривались' / 'мы такого не договаривались' / 'я такого не обещал' "
+                "/ 'убери это' / \"we didn't agree that\" / \"that's not right\" — means "
+                "agreement_close with params {\"surfaced\": true}. If he NAMES which one ('про "
+                "море не договаривались', 'убери про отчёт'), ALSO put that subject in "
+                "params.query so ONLY that one is removed (never the others he didn't deny). A "
+                "fully bare denial with no subject removes all of them.\n\n")
     user_content += f"<user_request>\n{text}\n</user_request>"
     messages = [
         {"role": "system", "content": system},

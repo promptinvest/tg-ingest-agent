@@ -544,12 +544,17 @@ proactively like real memory. Design decisions and why:
   FACT" without his say-so. So those insert with `surfaced=0` and are **not honored as fact until shown**: `_world_context`
   injects only `surfaced=1` agreements (`agreements_open(surfaced_only=True)`), so an
   unconfirmed extracted commitment never silently becomes a held fact. They're **shown once** —
-  appended to the meeting recap ("ещё отметила, что мы вроде договорились: …") via
-  `_pending_surface_agreements`, and, for a meeting-less boss, at the **daily good-morning** as
-  a follow-up — then `_commit_surfaced` marks them surfaced (ONLY after a confirmed send, so a
-  failed/truncated delivery doesn't burn the one chance) and stamps `agreements_surfaced_at` +
-  the ids. A bare denial right after ("не договаривались") is routed by a 600s-gated router hint
-  to `agreement_close {surfaced:true}` (which re-checks recency), cancelling exactly that set.
+  as their OWN message right after the meeting recap ("ещё отметила, что мы вроде договорились:
+  …") via `_pending_surface_agreements` (a SEPARATE `reply()`, 2026-07-02, so the recap can't
+  4000-char-truncate the block yet still commit it), and, for a meeting-less boss, at the
+  **daily good-morning** as a follow-up — then `_commit_surfaced` marks them surfaced (ONLY
+  after a confirmed send, so a failed/truncated delivery doesn't burn the one chance) and stamps
+  `agreements_surfaced_at` + the ids. A denial right after ("не договаривались") routes via a
+  600s-gated router hint to `agreement_close {surfaced:true}` (which re-checks recency).
+  **It's per-item (2026-07-02):** if he NAMES which one ("про море не договаривались, а отчёт
+  да") the router passes `query` and ONLY that surfaced agreement is cancelled — never one he
+  reaffirmed in the same breath (the data-loss path the re-review flagged); a fully bare denial
+  cancels the whole batch, and any not-cancelled ones stay addressable for a follow-up.
   His **explicit** agreements (source `explicit`) insert `surfaced=1` — honored immediately,
   never swept up. Additive migration defaults existing rows to surfaced=1.
 - **Closeness only deepens (anti-reset ratchet).** Because the arc is re-synthesized each
@@ -574,9 +579,12 @@ proactively like real memory. Design decisions and why:
   value; setting 5 lifts the cap. But the ceiling alone only fixed the *number* — the injected
   arc *narrative* stayed intimate and kept her conversing at the old closeness. So a **lower**
   set also runs `relationship.cool_arc` (the ONE path allowed to lower the arc — a small LLM
-  rewrite that reframes the current tone down to the set level, keeping real history), and
-  `arc_context`'s stage-line becomes ceiling-aware ("meet him at this level, don't push more
-  forward than it" while capped, vs "only deepens" when uncapped). **Intimate-tier gate lifted
+  rewrite that reframes the current tone down to the set level, keeping real history) for an
+  immediate cool-down, and — so the next daily/meeting `update_arc` can't re-warm the prose from
+  persistent intimate history — `update_arc` itself is ceiling-aware: when capped it swaps in an
+  OWNER CAP directive that suspends "only deepens" and holds the tone at the cap. `arc_context`'s
+  stage-line likewise flips to "meet him at this level, don't push more forward than it" while
+  capped (vs "only deepens" when uncapped). **Intimate-tier gate lifted
   to stage 4 (`intimate_min_stage`, was 2):** the sexual-roleplay directive, the reach-first
   register, intimacy-notes grounding, and the proactive craving-outreach now gate at
   `closeness_stage ≥ 4` (same as lingerie), so a reset to 2/3 fully disables intimate behavior
@@ -827,7 +835,7 @@ ids that attachments/embeddings/memory/calendar/fired-pending references rely on
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 566 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
+- **Tests:** 567 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
   on the VPS as part of every deploy — including a **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
   captured) and asserts replies, DB writes, and **no state change before
