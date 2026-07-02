@@ -567,12 +567,20 @@ proactively like real memory. Design decisions and why:
   confirmation prompt: every stage **increase** is logged to `relationship_events` (the
   evidence + trigger — visible in the working history), and a new owner-only `closeness_set`
   action ("сбрось близость на 3" / "set closeness to 2") is the **one path that can lower it**,
-  so a mistaken jump is always correctable. **The reset is DURABLE:** `closeness_set` stamps a
+  so a mistaken jump is always correctable. **The reset is DURABLE and actually cools her (2026-07-02):** `closeness_set` stamps a
   `closeness_ceiling` the ratchet honors (`new = min(max(prior, evidenced), ceiling)`) — without
   it the stale arc text would keep re-emitting a high `CLOSENESS` and the `max()` would
   re-inflate the stage within one meeting. The ceiling holds until the owner sets a higher
-  value; setting 5 lifts the cap (free organic growth again). The ratchet stays the default;
-  the reset is the escape hatch.
+  value; setting 5 lifts the cap. But the ceiling alone only fixed the *number* — the injected
+  arc *narrative* stayed intimate and kept her conversing at the old closeness. So a **lower**
+  set also runs `relationship.cool_arc` (the ONE path allowed to lower the arc — a small LLM
+  rewrite that reframes the current tone down to the set level, keeping real history), and
+  `arc_context`'s stage-line becomes ceiling-aware ("meet him at this level, don't push more
+  forward than it" while capped, vs "only deepens" when uncapped). **Intimate-tier gate lifted
+  to stage 4 (`intimate_min_stage`, was 2):** the sexual-roleplay directive, the reach-first
+  register, intimacy-notes grounding, and the proactive craving-outreach now gate at
+  `closeness_stage ≥ 4` (same as lingerie), so a reset to 2/3 fully disables intimate behavior
+  while light warmth stays. The ratchet stays the default; the reset is the escape hatch.
 - **Afterglow is gentle by construction.** The morning after a *social* meeting,
   `check_meeting_afterglow` may — occasionally (probability-gated), one-shot per
   meeting, quiet-hours/proactivity-aware — open with warm, in-voice afterglow grounded
@@ -640,7 +648,8 @@ business (then easing back).
   his intimate hints during business time — the old "save the playfulness for later" framing
   read as gatekeeping.)
 - **Imaginative role-play (`_intimacy_roleplay_directive`).** Once closeness ≥
-  `intimacy_outreach_min_stage`, intimacy can become play: she takes on a role, builds and
+  `intimate_min_stage` (default 4, same bar as the lingerie tier — raised from 2 on 2026-07-02
+  so an owner reset to 2/3 disables it), intimacy can become play: she takes on a role, builds and
   sustains a scene/scenario, follows one he starts AND proposes her own, voicing her own
   desires/characters/fantasies — not just reacting. Injected into the responsive register
   override, the date presence, and (as a teasing hint) the proactive outreach. The explicitness
@@ -648,7 +657,7 @@ business (then easing back).
   stripped — the proactive-outreach hint stays tasteful per that context's own framing.
 - **Proactive intimacy outreach (`check_intimacy_outreach` / `compose_intimacy_outreach`).**
   In her relaxed off-hours register only (never work hours, never while business is recent,
-  never mid-meeting), once closeness ≥ `intimacy_outreach_min_stage`, and only **within a
+  never mid-meeting), once closeness ≥ `intimate_min_stage` (default 4), and only **within a
   live exchange** (`last_boss_msg_at` inside `intimacy_outreach_after_contact_hours`), she
   may reach out unprompted like a remote girlfriend — missing/craving/teasing **by hint and
   euphemism, never graphic**, bolder at higher closeness. Rate-limited: probability-gated,
@@ -818,7 +827,7 @@ ids that attachments/embeddings/memory/calendar/fired-pending references rely on
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 562 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
+- **Tests:** 566 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
   on the VPS as part of every deploy — including a **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
   captured) and asserts replies, DB writes, and **no state change before

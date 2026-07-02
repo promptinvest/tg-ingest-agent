@@ -113,6 +113,44 @@ def current_arc(conn):
     return row["arc_text"] if row else ""
 
 
+_COOL_ARC_SYSTEM = (
+    "Cara's boss has EXPLICITLY asked to dial their closeness back to level {n}/5. Rewrite her "
+    "private sense of the relationship (the PRIOR arc) so its CURRENT tone and closeness read at "
+    "level {n} (1 = new/formal, 3 = warm friends, 5 = deeply bonded/intimate). This is the ONE "
+    "case that OVERRIDES the usual 'closeness only deepens' rule — you MAY describe things as "
+    "cooler and more measured now. Keep the real shared history and milestones that ACTUALLY "
+    "happened (don't erase or invent facts), but frame where things stand NOW at level {n}, "
+    "dropping the intimate/romantic framing that sits above it. 3-6 short sentences, first person "
+    "as Cara ('мы'/'we', 'он'/'he'), warm and honest, in the boss's language. Reply with the arc "
+    "text ONLY — no preamble, no quotes, and NO 'CLOSENESS:' line."
+)
+
+
+def cool_arc(conn, cfg, target_stage):
+    """Owner-initiated arc rewrite DOWN to target_stage — the ONE path allowed to lower the
+    narrative (`_ARC_SYSTEM` otherwise pins 'only deepens'). Without it a manual closeness
+    reset changes only the numeric gate while the injected arc prose keeps her conversing at
+    the old intimacy. Best-effort: an LLM/budget failure leaves the prior arc (the numeric
+    ceiling still holds), so it degrades to no-worse-than-before. Returns the new arc or ''."""
+    import llm
+    prior = current_arc(conn)
+    if not prior:
+        return ""  # nothing narrated yet to cool
+    messages = [
+        {"role": "system", "content": _COOL_ARC_SYSTEM.format(n=int(target_stage))},
+        {"role": "user", "content": "PRIOR arc:\n" + prior},
+    ]
+    try:
+        reply = llm.chat_profile(cfg, conn, "relationship", messages, profile="relationship_arc")
+    except (llm.BudgetExceeded, llm.LLMError):
+        return ""
+    arc = (reply or "").strip()[:ARC_MAX]
+    if not arc:
+        return ""
+    store.arc_set(conn, arc, source="owner_reset")
+    return arc
+
+
 def update_arc(conn, cfg, trigger="meeting", meeting_id=None):
     """Re-synthesize the storyline arc from the prior arc + recent real episodes.
     One small grounded LLM pass. Returns the new arc text, or '' (best-effort:
@@ -151,8 +189,24 @@ def update_arc(conn, cfg, trigger="meeting", meeting_id=None):
     if turns:
         blocks.append("Recent time together — verbatim moments (most recent):\n" + "\n".join(
             f"{'Boss' if r['role'] == 'boss' else 'Cara'}: {r['text']}" for r in turns))
+    # Owner ceiling caps the PROSE too, not just the number. Without this the daily/meeting
+    # arc re-warms the narrative from persistent intimate history (up to 120 days of beats +
+    # recent meeting turns) under the "only deepens" rule, undoing a reset within a day. When
+    # capped (ceiling<5), suspend "only deepens" and hold the tone at the cap.
+    try:
+        ceiling = int(store.kv_get(conn, "closeness_ceiling") or 5)
+    except (TypeError, ValueError):
+        ceiling = 5
+    system = _ARC_SYSTEM
+    if ceiling < 5:
+        system += (
+            f"\nOWNER CAP: the boss has capped closeness at {ceiling}/5. This SUSPENDS the "
+            f"'closeness only deepens' rule — do NOT describe the relationship as more intimate, "
+            f"romantic or physically close than level {ceiling}; hold the current tone at that "
+            f"level (measured/cooler is correct here), even if the history shows more. End with "
+            f"'CLOSENESS: N' where N ≤ {ceiling}.")
     messages = [
-        {"role": "system", "content": _ARC_SYSTEM},
+        {"role": "system", "content": system},
         {"role": "user", "content": "\n\n".join(blocks)},
     ]
     try:
@@ -171,14 +225,10 @@ def update_arc(conn, cfg, trigger="meeting", meeting_id=None):
             prior_stage = int(store.kv_get(conn, "closeness_stage", "0") or 0)
         except (TypeError, ValueError):
             prior_stage = 0
-        # Owner ceiling: closeness_set stamps a ceiling so a manual reset STICKS — the
+        # Owner ceiling (read above) also caps the ratchet, so a manual reset STICKS — the
         # stale arc text otherwise keeps re-emitting a high CLOSENESS and the ratchet would
-        # re-inflate the stage within one meeting. The ceiling caps the ratchet until the
-        # owner sets a higher value; unset (or 5) = the old unbounded organic ratchet.
-        try:
-            ceiling = int(store.kv_get(conn, "closeness_ceiling") or 5)
-        except (TypeError, ValueError):
-            ceiling = 5
+        # re-inflate the stage within one meeting. The ceiling caps until the owner sets a
+        # higher value; unset (or 5) = the old unbounded organic ratchet.
         new_stage = min(max(prior_stage, evidenced), ceiling)
         if new_stage != prior_stage:
             store.kv_set(conn, "closeness_stage", new_stage)
@@ -214,10 +264,24 @@ def arc_context(conn, lang, chat_id=None):
     except (TypeError, ValueError):
         stage = 0
     if stage:
-        parts.append(
-            f"Your closeness with him is at {stage}/5 — that's how far you've grown together. "
-            "Meet him AT that level: never act more reserved, distant or surprised when he's "
-            "open or intimate — you're already here with him. It only deepens from here.")
+        try:
+            ceiling = int(store.kv_get(conn, "closeness_ceiling") or 5)
+        except (TypeError, ValueError):
+            ceiling = 5
+        if ceiling < 5:
+            # Owner has CAPPED closeness (closeness_set). Hold at this level — the "only
+            # deepens" framing would fight the reset, so instead: match him here, and don't
+            # drift MORE forward/intimate than this. Cooler is fine now; it's where you've
+            # settled until he opens it up again.
+            parts.append(
+                f"Your closeness with him is at {stage}/5 right now — that's the level the two of "
+                "you are at. Meet him there naturally: don't act colder than this, but also don't "
+                "push MORE forward or intimate than this level. It's where you've settled for now.")
+        else:
+            parts.append(
+                f"Your closeness with him is at {stage}/5 — that's how far you've grown together. "
+                "Meet him AT that level: never act more reserved, distant or surprised when he's "
+                "open or intimate — you're already here with him. It only deepens from here.")
     if chat_id is not None:
         last = store.meeting_last(conn, chat_id)
         if last:

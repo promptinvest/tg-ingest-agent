@@ -409,7 +409,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **follows your lead and matches your intensity**, letting it run as hot as you take it and
   easing off only if you do. (Everyday chat keeps her usual shyer warmth; the boldness is for
   dates. The explicitness cap on the live date was removed — owner decision, 2026‑06‑27.)
-- **Imaginative role‑play** (`_intimacy_roleplay_directive`, unlocks once you're close) — when
+- **Imaginative role‑play** (`_intimacy_roleplay_directive`, unlocks at `closeness_stage` ≥ 4,
+  the intimate tier — same bar as the lingerie tier) — when
   intimacy is in full flow she can **take on a role, build and sustain a scene/scenario**,
   follow one you start **and start her own**, voicing characters, situations and fantasies
   **she'd** like to try — bringing her own desires, not just reacting, and leading the scene
@@ -503,8 +504,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   every step up is **audited** (logged as a relationship event with the evidence, visible in
   the working history), and you can **set it directly** — "сбрось близость на 3" / "set
   closeness to 2" (`closeness_set`) — the one path that can *lower* it, so a mistaken jump
-  is always correctable. The reset **sticks** (an owner ceiling the ratchet honors): the arc
-  can't quietly climb back past what you last set until you raise it again.
+  is always correctable. The reset **sticks and actually cools her** (2026‑07‑02): it holds an
+  owner ceiling the ratchet honors (the arc can't quietly climb back past what you last set
+  until you raise it again), **and** it rewrites the storyline narrative down to that level
+  (the one path allowed to lower the arc) so her conversational tone eases too — not just the
+  number; while capped, her injected context says "meet him at this level, don't push more
+  forward than it" instead of "only deepens." The **intimate tier** — sexual roleplay, the
+  reach‑first register, and the proactive craving‑outreach — unlocks at **closeness_stage ≥ 4**
+  (same bar as the lingerie tier), so a reset to 2/3 fully disables intimate behavior while
+  light warmth and flirtation stay.
   A relational question — "что ты помнишь про нас?", "наши отношения", "что между нами?" —
   is routed to **`converse`** (where the arc lives) so she answers from your shared story,
   **not** to `boss_query` (which is a facts‑about‑you summary). Likewise her **feelings or
@@ -775,7 +783,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 562 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+- **Tests:** 566 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
   the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an

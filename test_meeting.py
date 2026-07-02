@@ -384,6 +384,37 @@ class RelationshipArcTests(unittest.TestCase):
         events = store.rel_recent(self.conn, "2000-01-01T00:00:00+00:00", limit=10)
         self.assertTrue(any("closeness 2→4" in (e["summary"] or "") for e in events))
 
+    def test_cool_arc_rewrites_narrative_down(self):
+        # No prior arc -> nothing to cool, no LLM call.
+        with mock.patch.object(llm, "chat_profile",
+                               side_effect=AssertionError("should not call LLM")):
+            self.assertEqual(relationship.cool_arc(self.conn, self.cfg, 2), "")
+        # The one path allowed to LOWER the arc prose (owner reset) — bypasses "only deepens".
+        store.arc_set(self.conn, "Мы очень близки, почти любовники.")
+        captured = {}
+
+        def cp(cfg, conn, skill, messages, **k):
+            captured["sys"] = messages[0]["content"]
+            return "Мы добрые друзья, тепло, но без близости."
+        with mock.patch.object(llm, "chat_profile", side_effect=cp):
+            out = relationship.cool_arc(self.conn, self.cfg, 2)
+        self.assertEqual(out, "Мы добрые друзья, тепло, но без близости.")
+        self.assertEqual(relationship.current_arc(self.conn), out)   # stored
+        self.assertIn("level 2/5", captured["sys"])                  # target level in the prompt
+
+    def test_arc_context_stage_line_is_ceiling_aware(self):
+        store.arc_set(self.conn, "Мы близки.")
+        store.kv_set(self.conn, "closeness_stage", "4")
+        # no ceiling (organic) -> "only deepens"
+        ctx = relationship.arc_context(self.conn, "en")
+        self.assertIn("only deepens", ctx.lower())
+        # owner capped (ceiling < 5) -> hold-here framing, NOT "only deepens"
+        store.kv_set(self.conn, "closeness_ceiling", "2")
+        store.kv_set(self.conn, "closeness_stage", "2")
+        ctx2 = relationship.arc_context(self.conn, "en")
+        self.assertNotIn("only deepens", ctx2.lower())
+        self.assertIn("settled for now", ctx2.lower())
+
     def test_closeness_ratchet_no_audit_when_unchanged(self):
         # A lower evidenced stage never drops it (ratchet) and logs nothing (no noise).
         store.arc_set(self.conn, "Мы вместе.")   # prior content so update_arc runs the LLM pass
@@ -801,7 +832,7 @@ class MeetingDispatchTests(unittest.TestCase):
         # boss-local 23:00 Wed -> off-hours (relaxed register), a weekday
         return datetime(2026, 6, 17, 20, 0, tzinfo=timezone.utc)
 
-    def _prime_outreach(self, now, *, stage=3, business=None, last_msg_hours=1.0):
+    def _prime_outreach(self, now, *, stage=4, business=None, last_msg_hours=1.0):
         store.pref_set(self.conn, "proactive_enabled", "true")
         store.pref_set(self.conn, "quiet_start", "0")
         store.pref_set(self.conn, "quiet_end", "0")              # no quiet window
@@ -832,7 +863,7 @@ class MeetingDispatchTests(unittest.TestCase):
 
     def test_intimacy_outreach_sends_offhours_when_close(self):
         now = self._outreach_now()
-        sent = self._run_outreach(now, stage=3)
+        sent = self._run_outreach(now, stage=4)
         self.assertEqual(len(sent), 1)
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) n FROM proactive_log WHERE check_name='intimacy_outreach'"
@@ -841,7 +872,7 @@ class MeetingDispatchTests(unittest.TestCase):
     def test_intimacy_outreach_skips_when_business_recent(self):
         now = self._outreach_now()
         # recent business -> mobilized 'working' register, not her relaxed time
-        sent = self._run_outreach(now, stage=3, business=now.isoformat())
+        sent = self._run_outreach(now, stage=4, business=now.isoformat())
         self.assertEqual(len(sent), 0)
 
     def test_intimacy_outreach_skips_when_not_close(self):
@@ -852,7 +883,7 @@ class MeetingDispatchTests(unittest.TestCase):
     def test_intimacy_outreach_skips_on_long_silence(self):
         now = self._outreach_now()
         # last heard from him 10h ago (> after_contact window) -> don't pester
-        sent = self._run_outreach(now, stage=3, last_msg_hours=10)
+        sent = self._run_outreach(now, stage=4, last_msg_hours=10)
         self.assertEqual(len(sent), 0)
 
     def test_wardrobe_seeded(self):
@@ -954,14 +985,15 @@ class MeetingDispatchTests(unittest.TestCase):
             self.agent.compose_anticipation("ru", store.meetings_upcoming(self.conn, 111)[0])
         self.assertIn("присмотрела, что наденешь", captured["msgs"][1]["content"])
 
-    def test_date_presence_unlocks_roleplay_when_close(self):
-        # On a social date, once close, presence includes the imaginative roleplay layer
-        # (scenes/roles, her own desires) and the physical-continuity instruction.
+    def test_date_presence_unlocks_roleplay_only_at_intimate_stage(self):
+        # The imaginative sexual-roleplay layer gates at the INTIMATE tier (stage 4) — so a
+        # reset to 2/3 keeps it locked. Physical-continuity (non-sexual scene tracking) is
+        # independent and present once a date is open.
         mid = store.meeting_start(self.conn, 111, kind="dinner", setting="у неё")
         m = store.meeting_active(self.conn, 111)
-        store.kv_set(self.conn, "closeness_stage", "0")
-        self.assertNotIn("PLAY", self.agent._meeting_presence("en", m))
-        store.kv_set(self.conn, "closeness_stage", "3")
+        store.kv_set(self.conn, "closeness_stage", "3")            # below the intimate gate
+        self.assertNotIn("take on a role", self.agent._meeting_presence("en", m))
+        store.kv_set(self.conn, "closeness_stage", "4")            # intimate tier
         pres = self.agent._meeting_presence("en", m)
         self.assertIn("take on a role", pres)
         self.assertIn("PHYSICAL CONTINUITY", pres)
@@ -1003,6 +1035,34 @@ class MeetingDispatchTests(unittest.TestCase):
             self.agent.do_closeness_set(111, "ru", {"stage": "abc"})
         self.assertEqual(store.kv_get(self.conn, "closeness_stage"), "5")   # unchanged
 
+    def test_closeness_set_cools_the_arc_only_on_lower(self):
+        # Lowering also rewrites the arc NARRATIVE down (so the reset reaches her tone, not
+        # just the number); a raise leaves the arc to grow organically.
+        store.arc_set(self.conn, "Мы почти любовники, очень близки.")
+        store.kv_set(self.conn, "closeness_stage", "5")
+        calls = []
+
+        def cp(cfg, conn, skill, messages, **k):
+            calls.append(skill)
+            return "Мы просто добрые друзья."
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(llm, "chat_profile", side_effect=cp):
+            self.agent.do_closeness_set(111, "ru", {"stage": 2})   # lower -> cool
+        self.assertEqual(relationship.current_arc(self.conn), "Мы просто добрые друзья.")
+        self.assertEqual(calls, ["relationship"])                  # cool_arc ran once
+        # a RAISE does not cool the arc
+        calls.clear()
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(llm, "chat_profile", side_effect=cp):
+            self.agent.do_closeness_set(111, "ru", {"stage": 4})   # raise
+        self.assertEqual(calls, [])                                # no cool_arc
+
+    def test_intimacy_outreach_blocked_below_intimate_gate(self):
+        # The proactive craving-outreach now gates at the intimate tier (stage 4); a reset
+        # to 2/3 keeps it off.
+        now = self._outreach_now()
+        self.assertEqual(len(self._run_outreach(now, stage=3)), 0)
+
     def test_agreements_surfaced_once_then_correctable(self):
         # Auto-captured (surfaced=0) agreements are shown ONCE for a "did we really agree
         # this?" check, marked surfaced, then a bare denial cancels exactly those.
@@ -1035,12 +1095,24 @@ class MeetingDispatchTests(unittest.TestCase):
         import relationship
         store.arc_set(self.conn, "Мы очень близки.")
         store.kv_set(self.conn, "closeness_stage", "5")
-        with mock.patch.object(self.agent, "reply"):
+        # do_closeness_set(stage<prior) now calls cool_arc -> mock chat_profile so the unit
+        # test makes no real network call.
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(llm, "chat_profile", return_value="Мы просто друзья."):
             self.agent.do_closeness_set(111, "ru", {"stage": 2})   # stage=2, ceiling=2
-        with mock.patch.object(llm, "chat_profile", return_value="Всё так же близки.\nCLOSENESS: 5"), \
+        captured = {}
+
+        def cp(cfg, conn, skill, messages, **k):
+            captured["sys"] = messages[0]["content"]
+            return "Всё так же близки.\nCLOSENESS: 5"
+        with mock.patch.object(llm, "chat_profile", side_effect=cp), \
                 mock.patch.object(llm, "embed", side_effect=fake_embed):
             relationship.update_arc(self.conn, self.agent.cfg, trigger="daily")
-        self.assertEqual(store.kv_get(self.conn, "closeness_stage"), "2")   # ceiling held
+        self.assertEqual(store.kv_get(self.conn, "closeness_stage"), "2")   # numeric ceiling held
+        # AND the prose is capped: update_arc's system prompt carries the OWNER CAP directive,
+        # so the daily/meeting arc can't re-warm the narrative past the cap.
+        self.assertIn("OWNER CAP", captured["sys"])
+        self.assertIn("2/5", captured["sys"])
 
     def test_meeting_end_surfaces_agreements_in_recap(self):
         # End-to-end: a meeting recap promise is surfaced in the recap message.

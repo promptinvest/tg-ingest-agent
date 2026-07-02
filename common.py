@@ -380,7 +380,13 @@ def load_config(env=None):
     cfg.intimacy_outreach_enabled = (
         env.get("INTIMACY_OUTREACH_ENABLED") or "true").strip().lower() == "true"
     cfg.intimacy_outreach_probability = float(env.get("INTIMACY_OUTREACH_PROBABILITY") or "0.25")
-    cfg.intimacy_outreach_min_stage = int(env.get("INTIMACY_OUTREACH_MIN_STAGE") or "2")
+    # The closeness stage that unlocks the INTIMATE tier — the sexual-roleplay directive, the
+    # "reach for closeness first / tell him you want him" register, intimacy-notes grounding,
+    # the proactive craving-outreach, AND the wardrobe lingerie/surprise + spicy-anticipation
+    # tier (all read this one constant, so they move together). Default 4, so an owner "reset
+    # closeness to 2/3" (closeness_set) fully disables intimate behavior while light warmth /
+    # flirtation stays available lower. (Was 2, split across a separate outreach constant.)
+    cfg.intimate_min_stage = int(env.get("INTIMATE_MIN_STAGE") or "4")
     cfg.intimacy_outreach_max_per_day = int(env.get("INTIMACY_OUTREACH_MAX_PER_DAY") or "1")
     # Don't reach out into a long silence-of-his — only within this many hours of a real
     # exchange, so it reads as keeping-in-touch, not pestering an absent boss.

@@ -1218,7 +1218,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             else:
                 base = ("Сейчас нерабочее, ваше личное время. Базово ты расслабленная, игривая "
                         "и ласковая.")
-                if stage >= self.cfg.intimacy_outreach_min_stage:
+                if stage >= self.cfg.intimate_min_stage:
                     base += (" Можешь быть смелее и первой тянуться к близости — поддразнить, "
                              "пококетничать, намекнуть, что соскучилась и хочешь его; всё через "
                              "намёки и иносказания, со вкусом, без графики и пошлости.")
@@ -1250,7 +1250,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             else:
                 base = ("It's off-hours, your personal time together. Your resting tone is "
                         "relaxed, playful and affectionate.")
-                if stage >= self.cfg.intimacy_outreach_min_stage:
+                if stage >= self.cfg.intimate_min_stage:
                     base += (" You can be bolder and reach for closeness first — tease, flirt, "
                              "tell him you miss him and want him.")
             override = (" But that's only the backdrop: always read how personal and intimate "
@@ -1268,7 +1268,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # Once they're close, intimacy can become imaginative play — roles, scenes, scenarios
         # she sustains and also proposes from her own desires (still non-graphic).
         roleplay = ""
-        if stage >= self.cfg.intimacy_outreach_min_stage:
+        if stage >= self.cfg.intimate_min_stage:
             roleplay = self._intimacy_roleplay_directive(lang)
         return base + override + roleplay
 
@@ -1765,6 +1765,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # stale arc text would otherwise re-inflate the stage within one meeting). Setting a
         # higher value raises the ceiling; setting 5 lifts the cap (free organic growth again).
         store.kv_set(self.conn, "closeness_ceiling", stage)
+        # Cool the arc NARRATIVE down to the set level too — otherwise the number drops but the
+        # injected storyline prose keeps her conversing at the old intimacy (the reset would only
+        # half-work). Best-effort: a lower set cools the arc; a raise (or 5) leaves it to grow.
+        if stage < prior:
+            relationship.cool_arc(self.conn, self.cfg, stage)
         relationship.log_event(
             self.conn, "closeness", f"closeness set by owner: {prior}→{stage} (ceiling {stage})",
             importance=2)
@@ -1831,7 +1836,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # For a relational/intimate message once they've grown close, surface what she's
         # learned about HIM (his likings/taste) so intimacy is grounded in real shared
         # history, not generic — alongside the shared playful language and meeting recall.
-        if relational and self._closeness_stage() >= self.cfg.intimacy_outreach_min_stage:
+        if relational and self._closeness_stage() >= self.cfg.intimate_min_stage:
             facts = self._shared_intimacy_facts(self.lang())
             if facts:
                 blocks.append(facts)
@@ -1955,7 +1960,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if kind == "dinner":
             return ["dinner", "day"], (2 if stage >= 3 else 1), False
         if at_her_place:
-            if stage >= 4:
+            if stage >= self.cfg.intimate_min_stage:
                 return ["intimate", "home"], 5, True
             if stage >= 3:
                 return ["home"], 3, False
@@ -1997,7 +2002,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if cached:
                 o = store.wardrobe_get(self.conn, cached)
                 if o:
-                    return wardrobe.describe(o, lang, surprise=o["surprise"] and stage >= 4)
+                    return wardrobe.describe(o, lang, surprise=o["surprise"] and stage >= self.cfg.intimate_min_stage)
         families, cap, prefer_surprise = self._attire_plan(kind, setting, stage)
         # Continuity: if she already teased/planned a piece for this date, wear THAT (so
         # what she hinted she'd wear is what she's actually in).
@@ -2040,7 +2045,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                    "You're very close now — you dress for HIM, free and a little daring; at your "
                    "place in the evening you might surprise him with something special (pretty "
                    "lingerie or something soft) — tasteful and suggestive, never crude or graphic.")
-        elif stage >= 4:
+        elif stage >= self.cfg.intimate_min_stage:
             lvl = ("Вы близки — можно более открыто и неформально, чуть кокетливо." if ru else
                    "You're close — freer and more informal, a touch flirtatious.")
         elif stage >= 3:
@@ -2094,7 +2099,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if not agreed_outfit:
             carry += " " + self._meeting_attire(kind, setting, lang, meeting_id=m["id"])
         roleplay = ""
-        if self._closeness_stage() >= self.cfg.intimacy_outreach_min_stage:
+        if self._closeness_stage() >= self.cfg.intimate_min_stage:
             roleplay = self._intimacy_roleplay_directive(lang)
         dur = self._meeting_duration_note(m, lang)
         scene_block = scene.render(store.scene_get(self.conn, m["id"]), lang)
@@ -3222,7 +3227,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         setting = m["setting"] or ""
         when_local = (reminders.fmt_local(m["scheduled_for"], self.tz_offset())
                       if m["scheduled_for"] else "")
-        spicy = stage >= 4
+        spicy = stage >= self.cfg.intimate_min_stage
         det = (f" ({when_local}" + (f", {setting}" if setting else "") + ")") if when_local else ""
         # The outfit she has in mind — so her daytime tease can hint at it (not reveal).
         planned = self._planned_outfit_for(m)
@@ -3289,7 +3294,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # business) — that's the only time this forward, intimate reaching-out fits.
         if self._register_state(now) != "relaxed":
             return
-        if self._closeness_stage() < self.cfg.intimacy_outreach_min_stage:
+        if self._closeness_stage() < self.cfg.intimate_min_stage:
             return
         # Keep it to a live exchange — don't pester a long silence.
         last = store.kv_get(self.conn, "last_boss_msg_at")
@@ -3321,7 +3326,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         shared language, a real moment). Bolder at higher closeness; ALWAYS by hint and
         euphemism, never graphic. '' on failure."""
         stage = self._closeness_stage()
-        spicy = stage >= 4
+        spicy = stage >= self.cfg.intimate_min_stage
         facts = self._shared_intimacy_facts(lang)
         cohab = self._cohabiting()
         # How she frames reaching out: a live-in partner in a quiet moment vs. a girlfriend

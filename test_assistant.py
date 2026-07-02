@@ -2011,17 +2011,18 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertIn("ВЕДЁТ ОН", ru)                  # RU: he leads
         self.assertIn("накал", ru)                     # RU: matches his heat/intensity
 
-    def test_roleplay_layer_unlocks_with_closeness(self):
+    def test_roleplay_layer_unlocks_at_intimate_stage(self):
         a = self.agent
-        # not close yet -> no roleplay directive injected
-        store.kv_set(a.conn, "closeness_stage", "0")
-        self.assertNotIn("PLAY", a._register_directive("en"))
-        # once close -> roleplay capability is present, she follows his lead and matches him
+        # below the intimate gate (stage 4) -> no roleplay directive, even at stage 3
         store.kv_set(a.conn, "closeness_stage", "3")
+        self.assertNotIn("take on a role", a._register_directive("en"))
+        # she still meets his lead / matches intensity at any stage (that's the override, ungated)
+        self.assertIn("MATCH", a._register_directive("en"))
+        # intimate tier (stage 4) -> roleplay capability present
+        store.kv_set(a.conn, "closeness_stage", "4")
         d = a._register_directive("en")
         self.assertIn("take on a role", d)
         self.assertIn("scene or scenario", d)
-        self.assertIn("MATCH", d)                       # follows his lead / matches intensity
         self.assertIn("роль", a._register_directive("ru"))
 
     def test_intimate_moment_detection(self):
