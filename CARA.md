@@ -252,7 +252,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     in‑conversation safety is a brief **~5‑min lull** after your last message
     (`reminder_quiet_after_msg_minutes`) — so it fires **during** a date or mid‑intimacy, just in
     the first quiet gap, never interrupting an active exchange. Nothing else holds it (no
-    quiet‑hours hold, no separate intimacy buffer), so a reminder always arrives at its time. (A meeting itself also can't linger: it auto‑ends past an absolute cap
+    quiet‑hours hold, no separate intimacy buffer), so a reminder always arrives at its time.
+    **And the lull can't defer it forever** (`REMINDER_MAX_DEFER_HOURS`, default 2h,
+    implemented 2026‑07‑02): a reminder overdue past the cap fires even mid‑exchange, so a
+    long evening of continuous messages never swallows it. **A firing reminder no longer
+    clobbers a confirmation in flight** (2026‑07‑02): if you're mid‑way through confirming
+    something (a draft reminder, a note suggestion, a purge phrase), the fired reminder
+    doesn't replace that pending — your "да" still confirms what you were asked, and the
+    fired one stays addressable ("готово", "закрой её"). (A meeting itself also can't
+    linger: it auto‑ends past an absolute cap
     `meeting_max_hours`, default 24h, no matter how active.) **System notices, too** — a
     **build/deploy announcement** and **model up/down alerts** are held during a meeting /
     intimate moment and posted once you're free, so nothing breaks the mood.
@@ -308,7 +316,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   lists them with confirm/skip buttons. Durable memory only after a yes; benign facts
   learned from chat are stored as correctable "inferred" items — **but a fact that
   contradicts something you already confirmed is proposed for confirmation, not
-  silently auto‑stored**.
+  silently auto‑stored**. A candidate the consolidation already folded (`merged`/
+  `superseded`) is **never re‑proposed** (2026‑07‑02) — the curator's dedup no longer
+  churns the same text through propose→fold every pass.
 - **Memory provenance** (`memory_why`): "откуда ты это знаешь?" / "почему ты это
   помнишь?" → she cites *how* she learned it, in character ("ты сам мне это сказал",
   "ты меня поправил", "заметила из наших разговоров", with the date).
@@ -330,10 +340,19 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Agree a future meeting** (`meeting_schedule`): a future plan with a concrete time
   ("давай завтра в 19:00 ко мне", "сходим в кино в пятницу в 20:00") is **remembered as a
   scheduled meeting** — she warmly **confirms** it then keeps it (`scheduled → active →
-  ended` lifecycle). She's aware of it in conversation ("ты же сегодня вечером зайдёшь?"),
+  ended` lifecycle; `→ cancelled` if you never came). She's aware of it in conversation
+  ("ты же сегодня вечером зайдёшь?"),
   and "про нашу встречу" / `meeting_list` surface it. When the time arrives, if you haven't
   shown up she **pings and waits** ("я жду, ты собирался зайти") like a real person — and your
-  **"come in"** starts the agreed meeting (carrying its setting + prep), not a blank one. The
+  **"come in"** starts the agreed meeting (carrying its setting + prep), not a blank one.
+  **Late arrival counts from when you actually arrive** (2026‑07‑02): activation refreshes
+  the meeting's start to now (the agreed time is kept separately), so a late come‑in isn't
+  instantly auto‑ended by the 24h cap and "сколько мы вместе" is real. **A plan you never
+  came to lapses after a day** (status cancelled) instead of hijacking a later "давай
+  встретимся"; and an **explicitly different register** ("давай проведём рабочую встречу"
+  while tonight's date is on the books) starts its own meeting — your date isn't consumed
+  early in the wrong register. (Register, not exact kind: an arrival line — always tagged
+  `visit` by the router — still opens the agreed dinner or walk.) The
   arrival is understood **semantically**, however you phrase it ("я у двери, впусти", "я
   вошёл, привет", "ну вот и я", "I'm in") — and that opening line becomes the meeting's first
   recorded turn; from there every turn is captured. **Being *en route* is not arrival** — "я
@@ -679,7 +698,11 @@ compacts on fire/cancel.
   access keys redacted from logged HTTP errors. Dedicated bot token + DO key.
 - systemd hardening: non‑root user, `NoNewPrivileges`, `ProtectSystem=strict`,
   `PrivateTmp`, writable only in `/var/lib/tg-ingest-agent`.
-- Housekeeping: voice notes & orphaned media auto‑purged; review/export files trimmed.
+- Housekeeping: voice notes & orphaned media auto‑purged; review/export files trimmed;
+  telemetry retention (2026‑07‑02): traces, done/failed events+jobs, the proactive audit
+  log and expired model cooldowns are pruned past `TELEMETRY_RETENTION_DAYS` (default 90;
+  0 disables) — `llm_usage`, `conversation`, `issues` and all memory tables are never
+  pruned, so the DB stays bounded on the small box without losing anything she remembers.
 
 ---
 
@@ -719,7 +742,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 527 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+- **Tests:** 537 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
   the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an

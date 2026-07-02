@@ -446,10 +446,11 @@ class NotesMixin:
             rows = self.resolve_items({"id": params["id"]})
         elif params.get("query"):
             # "переложи всё из crypto в news" (a whole category) or a text query. Move the
-            # WHOLE set, not a silent first-20 slice — the reply reports the real count moved.
+            # WHOLE set, not a silent slice — the reply reports the real count moved.
+            # limit=None: genuinely everything (list_messages no longer pre-caps at 200).
             q = params["query"]
-            rows = (store.list_messages(self.conn, q, None, limit=1000)
-                    or store.list_messages(self.conn, None, q, limit=1000))
+            rows = (store.list_messages(self.conn, q, None, limit=None)
+                    or store.list_messages(self.conn, None, q, limit=None))
         else:
             row = self.resolve_item({})
             rows = [row] if row else []

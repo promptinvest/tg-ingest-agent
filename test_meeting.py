@@ -285,6 +285,37 @@ class MeetingLifecycleTests(unittest.TestCase):
         self.assertIsNotNone(store.meeting_active(self.conn, 111))    # went live
         self.assertEqual(len(store.meetings_upcoming(self.conn, 111)), 0)  # no longer scheduled
 
+    def test_activate_refreshes_started_at_and_survives_age_cap(self):
+        """A LATE come-in must not inherit the stale scheduled_for as its start:
+        started_at was seeded with the agreed time, so the meeting_max_hours age
+        cap auto-ended a late-activated date minutes after she welcomed him in,
+        and the duration note claimed fabricated hours together."""
+        past = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        mid = store.meeting_schedule(self.conn, 111, past, kind="visit")
+        self.assertEqual(store.meeting_get(self.conn, mid)["started_at"], past)
+        m = meeting.activate(self.conn, mid)
+        self.assertEqual(m["status"], "active")
+        self.assertGreater(m["started_at"], past)    # refreshed to the real start
+        self.assertEqual(m["scheduled_for"], past)   # the agreed time is preserved
+        ended = meeting.idle_sweep(self.conn, self.cfg)  # age cap no longer kills it
+        self.assertEqual(ended, [])
+        self.assertIsNotNone(store.meeting_active(self.conn, 111))
+
+    def test_stale_scheduled_meetings_expire(self):
+        """A plan he never came to lapses (status 'cancelled') instead of
+        lingering in 'upcoming' and hijacking a later meeting_start."""
+        now = datetime.now(timezone.utc)
+        stale = store.meeting_schedule(
+            self.conn, 111, (now - timedelta(hours=30)).isoformat(), kind="visit")
+        fresh = store.meeting_schedule(
+            self.conn, 111, (now + timedelta(hours=3)).isoformat(), kind="dinner")
+        n = store.meetings_expire_scheduled(
+            self.conn, (now - timedelta(hours=24)).isoformat())
+        self.assertEqual(n, 1)
+        self.assertEqual([r["id"] for r in store.meetings_upcoming(self.conn, 111)],
+                         [fresh])
+        self.assertEqual(store.meeting_get(self.conn, stale)["status"], "cancelled")
+
 
 class RelationshipArcTests(unittest.TestCase):
     def setUp(self):
@@ -563,6 +594,55 @@ class MeetingDispatchTests(unittest.TestCase):
         self.assertEqual(active["id"], mid)                              # the agreed one
         self.assertEqual(len(store.meetings_upcoming(self.conn, 111)), 0)  # no longer scheduled
         self.assertIn("синем платье", self.agent._meeting_presence("ru", active))  # prep carried in
+
+    def test_arrival_kind_visit_still_activates_scheduled_dinner(self):
+        # The router tags EVERY arrival line ("я у двери", "ну вот и я") as
+        # kind='visit'. That must still activate the agreed dinner/walk — kind
+        # compatibility is by REGISTER (social vs business), not exact equality,
+        # else every non-visit social plan is orphaned by the come-in.
+        soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        mid = store.meeting_schedule(self.conn, 111, soon, kind="dinner", setting="ресторан")
+        store.meeting_prep_add(self.conn, mid, "столик у окна", kind="agreement")
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "compose_meeting_greeting", return_value=""):
+            self.agent.do_meeting_start(111, "ru", {"kind": "visit"}, "ну вот и я")
+        active = store.meeting_active(self.conn, 111)
+        self.assertEqual(active["id"], mid)              # the agreed dinner, not a blank visit
+        self.assertEqual(active["kind"], "dinner")
+        # a generic plan (kind='other') is likewise activated by any arrival
+        store.meeting_end(self.conn, mid, summary="x")
+        soon2 = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        gid = store.meeting_schedule(self.conn, 111, soon2, kind="other")
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "compose_meeting_greeting", return_value=""):
+            self.agent.do_meeting_start(111, "ru", {"kind": "visit"})
+        self.assertEqual(store.meeting_active(self.conn, 111)["id"], gid)
+
+    def test_explicit_different_kind_does_not_hijack_scheduled_date(self):
+        # A date is on the books for tonight; an explicit business sit-down NOW must
+        # start its own meeting, not consume the date five hours early in the wrong
+        # register (leaving the agreed date row spent).
+        tonight = (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat()
+        did = store.meeting_schedule(self.conn, 111, tonight, kind="visit", setting="у неё")
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "compose_meeting_greeting", return_value=""):
+            self.agent.do_meeting_start(111, "ru", {"kind": "business"})
+        active = store.meeting_active(self.conn, 111)
+        self.assertEqual(active["kind"], "business")     # a fresh business meeting
+        self.assertNotEqual(active["id"], did)
+        # the date is still scheduled for tonight, untouched
+        self.assertEqual([r["id"] for r in store.meetings_upcoming(self.conn, 111)], [did])
+
+    def test_stale_scheduled_meeting_does_not_hijack_new_start(self):
+        # A days-old plan he never came to must NOT be what a fresh "давай встретимся"
+        # activates — _scheduled_now is bounded, so a blank meeting starts instead.
+        stale = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        old = store.meeting_schedule(self.conn, 111, stale, kind="visit")
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "compose_meeting_greeting", return_value=""):
+            self.agent.do_meeting_start(111, "ru", {"kind": "other"})
+        active = store.meeting_active(self.conn, 111)
+        self.assertNotEqual(active["id"], old)   # not the stale plan
 
     def test_come_in_line_recorded_as_opening_turn(self):
         # His varied arrival line ("я вошёл, привет") becomes the meeting's first turn.

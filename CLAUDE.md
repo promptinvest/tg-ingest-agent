@@ -69,7 +69,9 @@ KB for SSH/deploy/model details.
 - `storage.py` — binary backend: local default, optional DO Spaces (S3 SigV4
   in stdlib); dormant until SPACES_* configured.
 - `store.py` — SQLite schema + helpers; additive migrations via `_migrate`.
-  Housekeeping (in agent.housekeep): voice/orphan media + old reviews auto-purged.
+  Housekeeping (in agent.housekeep): voice/orphan media + old reviews auto-purged;
+  telemetry (traces/done jobs/proactive log/expired cooldowns) pruned past
+  `TELEMETRY_RETENTION_DAYS` (90; spend/conversation/issues/memory never pruned).
 - Personality/platform layer: `skill_manifest.py` (per-action policy; gates
   proactive + generates the capabilities answer), `trace.py` (one trace per
   inbound update; trace_id stamps llm_usage/issues via `common.current_trace`),

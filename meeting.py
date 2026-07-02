@@ -36,6 +36,21 @@ def is_social(kind):
     return normalize_kind(kind) in SOCIAL_KINDS
 
 
+def kinds_compatible(requested, scheduled):
+    """May an explicit meeting_start of `requested` kind activate a scheduled
+    meeting of `scheduled` kind? Compatibility is by REGISTER, not exact kind:
+    the router canonically tags every physical arrival ("я у двери", "ну вот и
+    я", "I'm here") as kind='visit', so an arrival must still activate the
+    agreed dinner/walk/movies — all SOCIAL kinds are mutually compatible.
+    'other' on either side is unspecified and matches anything. Only a genuine
+    register difference (business/call vs a social plan, or vice versa) starts
+    its own meeting instead of consuming the scheduled one."""
+    a, b = normalize_kind(requested), normalize_kind(scheduled)
+    if a == "other" or b == "other":
+        return True
+    return (a in SOCIAL_KINDS) == (b in SOCIAL_KINDS)
+
+
 def active(conn, chat_id):
     return store.meeting_active(conn, chat_id)
 

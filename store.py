@@ -735,12 +735,15 @@ def boss_find(conn, query):
 # -- memory candidates (curator) ---------------------------------------------
 
 def candidate_exists(conn, text):
-    """True if a same-text candidate is already pending/confirmed/rejected
-    (Cyrillic-safe), so the curator doesn't re-propose it."""
+    """True if a same-text candidate already exists in ANY resolved state
+    (Cyrillic-safe), so the curator doesn't re-propose it. Includes 'merged'
+    and 'superseded' — consolidation folds a candidate into those states, and
+    excluding them made the curator re-propose the identical text on its next
+    pass, paying another LLM call to fold it again, forever."""
     t = str(text or "").casefold()
     for row in conn.execute(
         "SELECT proposed_text FROM memory_candidates WHERE status IN"
-        " ('pending','confirmed','rejected')"
+        " ('pending','confirmed','rejected','merged','superseded')"
     ):
         if t == (row["proposed_text"] or "").casefold():
             return True
@@ -868,8 +871,9 @@ def meeting_get(conn, meeting_id):
 
 def meeting_schedule(conn, chat_id, scheduled_for, kind="other", setting=None, title=None):
     """Create a FUTURE (status='scheduled') meeting agreed in conversation, so
-    Cara remembers the appointment. started_at mirrors scheduled_for so it dates
-    correctly when it later goes live."""
+    Cara remembers the appointment. started_at is seeded with scheduled_for as a
+    placeholder (it dates never-activated rows for the sweep); meeting_activate
+    refreshes it to the REAL arrival time when the meeting goes live."""
     cur = conn.execute(
         "INSERT INTO meetings (chat_id, kind, setting, title, status, started_at,"
         " scheduled_for, trace_id) VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?)",
@@ -884,6 +888,17 @@ def meetings_upcoming(conn, chat_id, limit=10):
         "SELECT * FROM meetings WHERE chat_id = ? AND status = 'scheduled'"
         " ORDER BY scheduled_for LIMIT ?", (chat_id, limit),
     ).fetchall()
+
+
+def meetings_expire_scheduled(conn, cutoff_iso):
+    """Cancel scheduled meetings that were never activated and are overdue past
+    the cutoff — a stale plan from days ago must not hijack a later
+    meeting_start or linger in 'upcoming' forever. Returns the count."""
+    cur = conn.execute(
+        "UPDATE meetings SET status = 'cancelled' WHERE status = 'scheduled'"
+        " AND scheduled_for < ?", (cutoff_iso,))
+    conn.commit()
+    return cur.rowcount
 
 
 def intimacy_style_add(conn, text):
@@ -937,10 +952,17 @@ def meetings_due_scheduled(conn, now_iso):
 
 
 def meeting_activate(conn, meeting_id):
-    """Move a scheduled meeting into the live (active) state when it begins."""
+    """Move a scheduled meeting into the live (active) state when it begins.
+    started_at is refreshed to NOW: scheduling seeded it with scheduled_for, so
+    a late come-in (hours after the agreed time) otherwise inherits a stale
+    start — the meeting_max_hours age cap then auto-ends the meeting moments
+    after she welcomed him in, and the duration note claims fabricated hours
+    together. scheduled_for keeps the agreed time; started_at is the real one."""
+    now = _now()
     conn.execute(
-        "UPDATE meetings SET status = 'active', last_turn_at = ? WHERE id = ?",
-        (_now(), meeting_id),
+        "UPDATE meetings SET status = 'active', started_at = ?, last_turn_at = ?"
+        " WHERE id = ?",
+        (now, now, meeting_id),
     )
     conn.commit()
 
@@ -1832,46 +1854,21 @@ def pending_messages(conn, max_attempts, limit=5):
 def list_messages(conn, category=None, query=None, limit=10):
     """Recent stored messages, optionally filtered by category (exact,
     case-insensitive incl. Cyrillic) or a substring query over text, summary,
-    key facts, category, and source. Filtering happens in Python: SQL
-    lower()/NOCASE are ASCII-only."""
-    rows = conn.execute(
-        "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested')"
-        " ORDER BY id DESC LIMIT 200"
-    ).fetchall()
-    facts_by_message = {}
-    if query:
-        for row in conn.execute(
-            "SELECT message_id, GROUP_CONCAT(fact, ' ') AS f FROM facts GROUP BY message_id"
-        ):
-            facts_by_message[row["message_id"]] = row["f"]
-    # The general notes list hides CONFIRMED journal entries (they have their own dated
-    # journal); an explicit category filter still shows everything in that category.
-    journals = {n.casefold() for n in journal_categories(conn)} if category is None else set()
-    result = []
-    for row in rows:
-        row_category = row["category"] or row["suggested_category"] or ""
-        if category and row_category.casefold() != str(category).casefold():
-            continue
-        if journals and (row["category"] or "").casefold() in journals:
-            continue
-        if query:
-            haystack = " ".join(filter(None, [
-                row["raw_text"], row["summary"], row_category, row["forward_origin_title"],
-                facts_by_message.get(row["id"]),
-            ])).casefold()
-            if str(query).casefold() not in haystack:
-                continue
-        result.append(row)
-        if len(result) >= limit:
-            break
-    return result
+    key facts, category, and source. Delegates to list_messages_filtered —
+    which scans ALL visible notes — and trims to `limit` (None = everything).
+    (The old body pre-capped the scan at the newest 200 rows BEFORE filtering,
+    which silently blinded bulk recategorize / resolve_item / the router's
+    recent-item hint to anything older once the inbox outgrew 200.)"""
+    return list_messages_filtered(conn, category=category, query=query, limit=limit)
 
 
-def list_messages_filtered(conn, category=None, query=None):
-    """ALL visible notes matching the filter, newest-first (Python-filtered for Cyrillic
-    casefold). Returns the full list; callers slice for pagination. Confirmed journal entries
-    are hidden from the general list (they have their own dated journal) unless a category
-    filter is given."""
+def list_messages_filtered(conn, category=None, query=None, limit=None):
+    """Visible notes matching the filter, newest-first (Python-filtered for Cyrillic
+    casefold), the whole table scanned — no arbitrary pre-cap. limit=None returns the
+    full list (pagination callers slice); a limit stops the scan early, which keeps
+    the per-message hot-path callers (router recent-item hint, keyword context) cheap.
+    Confirmed journal entries are hidden from the general list (they have their own
+    dated journal) unless a category filter is given."""
     rows = conn.execute(
         "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested') ORDER BY id DESC"
     ).fetchall()
@@ -1897,6 +1894,8 @@ def list_messages_filtered(conn, category=None, query=None):
             if str(query).casefold() not in haystack:
                 continue
         out.append(row)
+        if limit is not None and len(out) >= limit:
+            break
     return out
 
 
@@ -2255,6 +2254,32 @@ def pending_expire(conn):
     cur = conn.execute("DELETE FROM pending_actions WHERE expires_at < ?", (_now(),))
     conn.commit()
     return cur.rowcount
+
+
+def prune_telemetry(conn, cutoff_iso):
+    """Retention sweep for the append-only telemetry tables, which otherwise
+    grow forever (several trace rows per inbound update AND per scheduler tick
+    — the DB's dominant growth term on a small box). Deletes rows older than
+    the cutoff: traces (trace_events follow via ON DELETE CASCADE), done/failed
+    events and jobs (pending/claimed are live state — never touched), the
+    proactive audit log, and expired model cooldowns. Deliberately NOT pruned:
+    llm_usage (spend history, never purged), conversation (recall_conversation
+    reads it verbatim), issues (weekly review + boss-reported problems), and
+    every memory/relationship table. Returns rows deleted (cascade-deleted
+    trace_events are not included in the count)."""
+    total = 0
+    total += conn.execute("DELETE FROM traces WHERE started_at < ?",
+                          (cutoff_iso,)).rowcount
+    total += conn.execute("DELETE FROM events WHERE status IN ('done', 'failed')"
+                          " AND created_at < ?", (cutoff_iso,)).rowcount
+    total += conn.execute("DELETE FROM jobs WHERE status IN ('done', 'failed')"
+                          " AND created_at < ?", (cutoff_iso,)).rowcount
+    total += conn.execute("DELETE FROM proactive_log WHERE ts < ?",
+                          (cutoff_iso,)).rowcount
+    total += conn.execute("DELETE FROM model_cooldowns WHERE until_at < ?",
+                          (cutoff_iso,)).rowcount
+    conn.commit()
+    return total
 
 
 def convo_add(conn, chat_id, role, text):

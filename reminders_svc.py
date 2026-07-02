@@ -319,23 +319,35 @@ class ReminderMixin:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         recent_msg = self._recent_boss_msg(now)
+        max_defer = self.cfg.reminder_max_defer_hours
+        defer_cutoff = ((now - timedelta(hours=max_defer)).isoformat()
+                        if max_defer and max_defer > 0 else None)
         for row in store.reminders_due(self.conn, now_iso):
             # A reminder is an EXPLICIT alarm the boss set for a chosen time: it fires at that
             # time even inside quiet hours (quiet hours only silences Cara's PROACTIVE outreach
             # — nudges/brief/good-morning) and is never frozen for a whole meeting. The ONLY
             # in-conversation safety is the ~5-min lull: it won't land within
             # reminder_quiet_after_msg_minutes of his last message, so it never interrupts an
-            # active exchange (including mid-intimacy, where messages are frequent — it just
-            # waits for the first 5-min gap, then fires). Nothing else holds it.
-            if recent_msg:
+            # active exchange — EXCEPT the max-defer valve: an alarm overdue beyond
+            # reminder_max_defer_hours is delivered anyway (a continuous exchange must not
+            # defer it indefinitely — "never lost to a long evening"; 0 disables the valve).
+            if recent_msg and not (defer_cutoff and (row["due_utc"] or "") < defer_cutoff):
                 continue
             lang = self.lang()
             self.reply(row["chat_id"], T(lang, "reminder_fired",
                                          name=self.owner_name(), title=row["title"]))
-            store.pending_set(
-                self.conn, row["chat_id"], "reminder_fired",
-                {"reminder_id": row["id"], "title": row["title"]}, ttl_seconds=1800,
-            )
+            # The pending slot is single (PK = chat_id). A firing reminder must NOT
+            # clobber a confirmation the boss is mid-way through (a reminder draft,
+            # an ingest suggestion, a typed purge phrase): his next "да" would then
+            # ack THIS reminder instead of confirming what he was asked — the draft
+            # silently lost. If a pending exists, keep it; the fired reminder stays
+            # addressable via last_reminder_id ("готово"/"закрой её" still lands).
+            existing = store.pending_get(self.conn, row["chat_id"])
+            if existing is None or existing.get("kind") == "reminder_fired":
+                store.pending_set(
+                    self.conn, row["chat_id"], "reminder_fired",
+                    {"reminder_id": row["id"], "title": row["title"]}, ttl_seconds=1800,
+                )
             following = reminders.next_due(row["due_utc"], row["recurrence"])
             if following:
                 store.reminder_update_due(self.conn, row["id"], following)  # recurring: re-arm

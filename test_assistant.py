@@ -1878,6 +1878,54 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertIsNotNone(meeting.active(conn, 1))            # meeting still open
         self.assertTrue(any("выплата" in s for s in sent))      # reminder fired anyway
 
+    def test_fired_reminder_does_not_clobber_pending_confirmation(self):
+        """The pending slot is single (PK = chat_id): a firing reminder must not
+        replace a confirmation mid-flight — his next 'да' would then ack the
+        reminder instead of the draft he was asked about (draft silently lost)."""
+        import proactive
+        from datetime import datetime, timezone
+        conn = self.agent.conn
+        store.pending_set(conn, 1, "reminder",
+                          {"title": "позвонить в банк", "due_utc": "2027-01-01T10:00:00+00:00"})
+        now = datetime.now(timezone.utc)
+        store.reminder_add(conn, 1, "выплата", (now - timedelta(minutes=1)).isoformat(), "none")
+        store.kv_set(conn, "last_boss_msg_at", (now - timedelta(minutes=10)).isoformat())
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
+            self.agent.fire_due_reminders()
+        pending = store.pending_get(conn, 1)
+        self.assertEqual(pending["kind"], "reminder")  # the draft survived the fire
+        self.assertEqual(pending["payload"]["title"], "позвонить в банк")
+        # With no pending in flight, the fired-reminder pending is set as before.
+        store.pending_clear(conn, 1)
+        store.reminder_add(conn, 1, "аренда", (now - timedelta(minutes=1)).isoformat(), "none")
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
+            self.agent.fire_due_reminders()
+        self.assertEqual(store.pending_get(conn, 1)["kind"], "reminder_fired")
+
+    def test_reminder_max_defer_valve_fires_past_cap(self):
+        """A continuous exchange defers a due reminder only up to
+        REMINDER_MAX_DEFER_HOURS — overdue past the cap it fires mid-exchange
+        (the documented 'never lost to a long evening' valve)."""
+        import proactive
+        from datetime import datetime, timezone
+        conn = self.agent.conn
+        self.agent.cfg.reminder_quiet_after_msg_minutes = 5
+        self.agent.cfg.reminder_max_defer_hours = 2
+        now = datetime.now(timezone.utc)
+        store.kv_set(conn, "last_boss_msg_at", now.isoformat())  # active exchange
+        store.reminder_add(conn, 1, "молоко", (now - timedelta(hours=1)).isoformat(), "none")
+        store.reminder_add(conn, 1, "выплата по кредиту",
+                           (now - timedelta(hours=3)).isoformat(), "none")
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, *a, **k: sent.append(text)), \
+                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
+            self.agent.fire_due_reminders()
+        self.assertTrue(any("выплата по кредиту" in s for s in sent))  # past the 2h cap
+        self.assertFalse(any("молоко" in s for s in sent))             # within cap: held
+
     def test_reschedule_ordinal_targets_position_not_last_touched(self):
         from datetime import datetime, timezone
         conn = self.agent.conn
@@ -1941,10 +1989,11 @@ class ConversationDispatchTests(unittest.TestCase):
         store.meeting_start(conn, owner, kind="visit")            # a live date
         # A reminder is NOT frozen by the meeting anymore (that stranded reminders for days);
         # it only waits for a ~5-min lull so it doesn't interrupt an active exchange. He just
-        # messaged, so an overdue reminder still holds right now.
+        # messaged, so an overdue-but-within-the-max-defer-cap reminder holds right now.
+        # (Overdue PAST the cap it fires anyway — test_reminder_max_defer_valve_fires_past_cap.)
         store.kv_set(conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
         store.reminder_add(conn, owner, "оплата",
-                           (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(), "none")
+                           (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(), "none")
         sent = []
         with mock.patch.object(self.agent, "reply",
                                side_effect=lambda cid, text, *a, **k: sent.append(text)), \
@@ -5027,6 +5076,74 @@ class StoreMigrationTests(unittest.TestCase):
                 self.assertIn("object_key", cols)
             finally:
                 conn.close()
+
+
+class StoreRetentionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "t.db")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_list_messages_scans_beyond_the_old_200_cap(self):
+        # Regression: list_messages pre-capped the scan at the newest 200 rows
+        # BEFORE filtering, so bulk recategorize / resolve saw nothing older.
+        for i in range(250):
+            store.insert_message(self.conn, {
+                "chat_id": 1, "tg_message_id": i + 1, "received_at": "2026-01-01",
+                "raw_text": f"note {i}"})
+            self.conn.execute("UPDATE messages SET status = 'confirmed',"
+                              " category = 'crypto' WHERE tg_message_id = ?", (i + 1,))
+        self.conn.commit()
+        rows = store.list_messages(self.conn, "crypto", None, limit=None)
+        self.assertEqual(len(rows), 250)                 # the WHOLE set, not 200
+        self.assertEqual(len(store.list_messages(self.conn, "crypto", None, limit=10)), 10)
+        # the oldest note (tg_message_id=1) is reachable by query despite 249 newer
+        hit = store.list_messages(self.conn, None, "note 0", limit=None)
+        self.assertTrue(any(r["tg_message_id"] == 1 for r in hit))
+
+    def test_prune_telemetry_keeps_live_and_spend(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        # old telemetry (should be pruned)
+        self.conn.execute("INSERT INTO traces (trace_id, kind, status, started_at)"
+                          " VALUES ('t1', 'update', 'ok', ?)", (old,))
+        self.conn.execute("INSERT INTO trace_events (trace_id, ts, stage, message)"
+                          " VALUES ('t1', ?, 's', 'm')", (old,))
+        self.conn.execute("INSERT INTO proactive_log (ts, day, check_name, result)"
+                          " VALUES (?, '2026-01-01', 'nudge', 'sent')", (old,))
+        jobs.add_job(self.conn, "maintenance", "media_cleanup")
+        self.conn.execute("UPDATE jobs SET status = 'done', created_at = ?", (old,))
+        # live/protected rows (must survive)
+        jobs.add_job(self.conn, "maintenance", "retry_sweep")  # stays pending
+        store.usage_add(self.conn, "converse", "chat", "model-x", 10, 5, cost_usd=0.01)
+        self.conn.execute("UPDATE llm_usage SET ts = ?", (old,))
+        store.issue_add(self.conn, 1, "unclear", "x")
+        self.conn.execute("UPDATE issues SET ts = ?", (old,))
+        pruned = store.prune_telemetry(self.conn, cutoff)
+        # rowcount doesn't include cascade-deleted trace_events: trace + proactive + job
+        self.assertGreaterEqual(pruned, 3)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM trace_events").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status='pending'").fetchone()[0], 1)  # live kept
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM llm_usage").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0], 1)
+
+    def test_candidate_exists_covers_merged_and_superseded(self):
+        # Regression: consolidation folds a candidate to 'merged'/'superseded';
+        # excluding those states made the curator re-propose the identical text
+        # every pass, paying an LLM call to re-fold it forever.
+        self.conn.execute(
+            "INSERT INTO memory_candidates (target, kind, proposed_text, status, created_at)"
+            " VALUES ('boss_profile', 'fact', 'Иван Доронин — его знакомый', 'merged', ?)",
+            (store._now(),))
+        self.conn.commit()
+        self.assertTrue(store.candidate_exists(self.conn, "Иван Доронин — его знакомый"))
+        self.assertIsNone(store.candidate_add(
+            self.conn, "fact", "Иван Доронин — его знакомый"))  # not re-proposed
 
 
 class TelegramTransportTests(unittest.TestCase):

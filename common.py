@@ -386,16 +386,22 @@ def load_config(env=None):
     # exchange, so it reads as keeping-in-touch, not pestering an absent boss.
     cfg.intimacy_outreach_after_contact_hours = float(
         env.get("INTIMACY_OUTREACH_AFTER_CONTACT_HOURS") or "6")
-    # Don't interrupt an intimate / together moment with business pings. While a social
-    # meeting is live, or for this many minutes after a clearly intimate message, a due
-    # reminder (and proactive nudges) are HELD and delivered once the moment passes — so a
-    # gratitude reminder never lands mid-intimacy. A reminder overdue beyond the max-defer
-    # is delivered anyway so it's never lost to a long evening.
+    # Don't interrupt an intimate / together moment with SYSTEM pings (model-health
+    # alerts, deploy notices): while a social meeting is live, or for this many minutes
+    # after a clearly intimate message, those are HELD and delivered once the moment
+    # passes. Reminders are NOT held by this (owner's call 2026-06-30): their only
+    # in-conversation gate is the ~5-min lull — plus the max-defer valve below: a
+    # reminder overdue beyond reminder_max_defer_hours fires even mid-exchange, so a
+    # long evening can never defer it indefinitely (0 disables the valve).
     cfg.intimate_quiet_minutes = int(env.get("INTIMATE_QUIET_MINUTES") or "25")
     cfg.reminder_max_defer_hours = float(env.get("REMINDER_MAX_DEFER_HOURS") or "2")
     # A fired one-shot reminder stays open ('ждёт готово') until acked; if never acked it
     # auto-closes after this many days so the list doesn't pile up forever (0 disables).
     cfg.reminder_fired_expire_days = float(env.get("REMINDER_FIRED_EXPIRE_DAYS") or "3")
+    # Telemetry retention (housekeep): traces/trace_events, done/failed events+jobs,
+    # the proactive audit log and expired model cooldowns are pruned past this window
+    # (0 disables). llm_usage, conversation, issues and memory tables are NEVER pruned.
+    cfg.telemetry_retention_days = float(env.get("TELEMETRY_RETENTION_DAYS") or "90")
     # Personality intensity (0 neutral .. 3 max; selects template variants only)
     cfg.personality_intensity = int(env.get("PERSONALITY_INTENSITY") or "2")
     # Knowledge Q&A (ask): semantic retrieval over the KB

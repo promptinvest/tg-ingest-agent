@@ -759,6 +759,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 removed += 1
         if removed:
             log(f"housekeep removed {removed} interim artifact(s)")
+        # Telemetry retention: traces/events/jobs/proactive_log/expired cooldowns
+        # older than the window (0 disables). Spend history, conversation, issues
+        # and memory tables are never touched.
+        days = getattr(self.cfg, "telemetry_retention_days", 0)
+        if days and days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            pruned = store.prune_telemetry(self.conn, cutoff)
+            if pruned:
+                log(f"housekeep pruned {pruned} telemetry row(s) older than {days:g}d")
         return removed
 
     def enqueue_maintenance_jobs(self):
@@ -2095,14 +2104,26 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         return (f"You've been together about {h}h"
                 + (" — you spent the night together and are still here." if overnight else "."))
 
-    def _scheduled_now(self, chat_id, window_hours=6):
+    def _scheduled_now(self, chat_id, window_hours=6, overdue_hours=12, kind=None):
         """The agreed (scheduled) meeting that's happening around now — the soonest one
-        whose time is already here or within the next `window_hours` (overdue ones count).
-        So 'я пришёл' activates the REAL agreed date, with its prep, not a blank meeting."""
-        horizon = (datetime.now(timezone.utc) + timedelta(hours=window_hours)).isoformat()
+        within the next `window_hours`, or overdue by at most `overdue_hours`. Bounded
+        both ways: a stale never-activated plan from days ago must NOT hijack a fresh
+        'давай встретимся' (the sweep expires it instead). And if the boss explicitly
+        asked for a different REGISTER ('давай проведём рабочую встречу' while tonight's
+        date is on the books), the scheduled one is left alone — his date isn't
+        consumed five hours early in the wrong register. Register, not exact kind:
+        the router tags every arrival line as kind='visit', which must still open
+        the agreed dinner/walk (meeting.kinds_compatible)."""
+        now = datetime.now(timezone.utc)
+        horizon = (now + timedelta(hours=window_hours)).isoformat()
+        floor = (now - timedelta(hours=overdue_hours)).isoformat()
         for m in store.meetings_upcoming(self.conn, chat_id, limit=5):
-            if (m["scheduled_for"] or "") <= horizon:
-                return m
+            sched = m["scheduled_for"] or ""
+            if not (floor <= sched <= horizon):
+                continue
+            if kind and not meeting.kinds_compatible(kind, m["kind"]):
+                continue
+            return m
         return None
 
     def do_meeting_start(self, chat_id, lang, params, text=None):
@@ -2112,8 +2133,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # The 'come in' moment: if you two agreed a meeting for around now, ARRIVING
         # activates THAT scheduled meeting (carrying its setting + prep) rather than
         # spinning up a fresh blank one (which would also leave the agreed one to fire
-        # later). A spontaneous meeting with nothing scheduled starts new.
-        due = self._scheduled_now(chat_id)
+        # later). A spontaneous meeting with nothing scheduled starts new — and an
+        # EXPLICIT different kind (a business sit-down while a date is scheduled)
+        # starts its own meeting instead of consuming the scheduled one.
+        requested = str(params.get("kind") or "").strip().lower()
+        requested = requested if requested in (meeting.ALL_KINDS - {"other"}) else None
+        due = self._scheduled_now(chat_id, kind=requested)
         if due is not None:
             meeting.activate(self.conn, due["id"])
             kind = due["kind"]
@@ -2984,6 +3009,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         silently going live on her own. She does NOT activate it; HIS 'come in' (meeting_start
         -> _scheduled_now) starts it. Once per meeting (kv flag)."""
         try:
+            # A scheduled meeting he never came to lapses after a day (like real
+            # life): it stops hijacking a later meeting_start and leaves 'upcoming'.
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            expired = store.meetings_expire_scheduled(self.conn, cutoff)
+            if expired:
+                log(f"expired {expired} stale scheduled meeting(s)")
             due = meeting.due_scheduled(self.conn)
         except Exception as exc:  # noqa: BLE001 — must not kill the loop
             log(f"scheduled-meeting check error: {exc!r}")
