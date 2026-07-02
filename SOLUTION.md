@@ -134,7 +134,7 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 | `boss_model.py` | structured boss profile (confirmed vs inferred, sensitivity floors, address resolution) |
 | `memory_curator.py` | proposes memory candidates from evidence + learns from conversation |
 | `relationship.py` | grounded working history (real events, never fabricated) |
-| `persona.py` | prompt-layer ordering (persona sits below all rule layers) |
+| `persona.py` | boss-preference hint for prompts (persona-below-rules is enforced structurally in the prompt content, not a table) |
 | `proactive.py` | suggestion-only heartbeat (nudges, throttle, quiet hours) |
 | `skill_manifest.py` | permission registry: per-skill risk, confirmation mode, proactive eligibility |
 | `trace.py` | structured tracing (one trace per update/tick; stages) |
@@ -272,9 +272,12 @@ emulates a human — never an AI disclaimer, never breaks character, even asked
 point-blank** (owner decision, reaffirmed 2026-07-02; made non-deceptive by
 owner-only access, §5 — the honesty boundary lives in these specs and in the
 data-truthfulness rules, not in her voice). The persona is a *style* layer that
-sits **below** every operational rule (the live prompts embed security →
-confirmation → grounding → budget above the persona voice; `persona.py` documents
-the intended order), so it can never override safety, confirmation, or truth.
+sits **below** every operational rule — enforced STRUCTURALLY: the live prompts
+that reach the model (`converse.CHARACTER`, the router/ingest system prompts) write
+security → no-fabrication → no-fake-action → grounding → budget rules **at the top**,
+above the persona voice and her changeable life, so charm can never precede or
+override safety, confirmation, or truth. (The old `persona.py` ordering *table* was
+inert and was removed 2026-07-02; the enforcement was always the prompt content.)
 Transactional/system messages remain deterministic `texts.py` templates with
 tone variants; only conversation and grounded answers are free-form.
 
@@ -536,6 +539,19 @@ proactively like real memory. Design decisions and why:
   is for; the router NOTE keeps "договорились" → agreement vs "напомни" → reminder distinct).
   Existing `world_facts` promises are backfilled into `agreements` once at startup
   (`_backfill_agreements_once`, kv-guarded) so nothing already remembered is lost.
+  **Surface-once for auto-captured agreements (2026-07-02).** An LLM-extracted commitment
+  (source `meeting`/`conversation`) is a place where model output crosses into "his world is
+  FACT" without his say-so. So those insert with `surfaced=0` and are **not honored as fact until shown**: `_world_context`
+  injects only `surfaced=1` agreements (`agreements_open(surfaced_only=True)`), so an
+  unconfirmed extracted commitment never silently becomes a held fact. They're **shown once** —
+  appended to the meeting recap ("ещё отметила, что мы вроде договорились: …") via
+  `_pending_surface_agreements`, and, for a meeting-less boss, at the **daily good-morning** as
+  a follow-up — then `_commit_surfaced` marks them surfaced (ONLY after a confirmed send, so a
+  failed/truncated delivery doesn't burn the one chance) and stamps `agreements_surfaced_at` +
+  the ids. A bare denial right after ("не договаривались") is routed by a 600s-gated router hint
+  to `agreement_close {surfaced:true}` (which re-checks recency), cancelling exactly that set.
+  His **explicit** agreements (source `explicit`) insert `surfaced=1` — honored immediately,
+  never swept up. Additive migration defaults existing rows to surfaced=1.
 - **Closeness only deepens (anti-reset ratchet).** Because the arc is re-synthesized each
   pass from the prior arc + the last turns, a cool/task-only day could quietly cool the
   tone and make Cara "reset" to a more reserved register — surprised the boss is being more
@@ -544,7 +560,19 @@ proactively like real memory. Design decisions and why:
   and a **ratcheting closeness stage 1-5** (`closeness_stage`, `new = max(prior, evidenced)`,
   parsed from a trailing `CLOSENESS: N` line) is injected into `arc_context` so she always
   **meets him at the level they've reached** and never snaps back. Like a real couple, the
-  bond only progresses.
+  bond only progresses. **Owner-controllable + audited (2026-07-02).** The stage is
+  LLM-authored and gates intimate behavior (wardrobe tier, roleplay directive, intimacy
+  outreach), so an over-eager `CLOSENESS: 5` would otherwise be an unconfirmed, irreversible
+  jump. Two guards keep the boss in control without breaking the mood with a mid-chat
+  confirmation prompt: every stage **increase** is logged to `relationship_events` (the
+  evidence + trigger — visible in the working history), and a new owner-only `closeness_set`
+  action ("сбрось близость на 3" / "set closeness to 2") is the **one path that can lower it**,
+  so a mistaken jump is always correctable. **The reset is DURABLE:** `closeness_set` stamps a
+  `closeness_ceiling` the ratchet honors (`new = min(max(prior, evidenced), ceiling)`) — without
+  it the stale arc text would keep re-emitting a high `CLOSENESS` and the `max()` would
+  re-inflate the stage within one meeting. The ceiling holds until the owner sets a higher
+  value; setting 5 lifts the cap (free organic growth again). The ratchet stays the default;
+  the reset is the escape hatch.
 - **Afterglow is gentle by construction.** The morning after a *social* meeting,
   `check_meeting_afterglow` may — occasionally (probability-gated), one-shot per
   meeting, quiet-hours/proactivity-aware — open with warm, in-voice afterglow grounded
@@ -790,7 +818,7 @@ ids that attachments/embeddings/memory/calendar/fired-pending references rely on
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 554 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
+- **Tests:** 562 offline unit tests (as of 2026-07-02; no network; temp SQLite), run
   on the VPS as part of every deploy — including a **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
   captured) and asserts replies, DB writes, and **no state change before

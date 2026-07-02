@@ -197,6 +197,34 @@ class HermesMixin:
 
     def do_agreement_close(self, chat_id, lang, params, text):
         import agreements
+        # "не договаривались" right after Cara surfaced newly auto-captured agreements:
+        # cancel exactly the ones she just showed (a mis-heard commitment, corrected on
+        # the spot). params.surfaced is set by the router hint keyed on agreements_surfaced_at.
+        if params.get("surfaced"):
+            # Recency guard (belt-and-suspenders): only act on a JUST-surfaced batch, so a
+            # stray/hallucinated {surfaced:true} outside the router's 600s hint window can't
+            # cancel a stale batch of ids that lingered after the boss simply accepted them.
+            at = store.kv_get(self.conn, "agreements_surfaced_at")
+            recent = False
+            if at:
+                try:
+                    from datetime import datetime, timezone
+                    recent = (datetime.now(timezone.utc)
+                              - datetime.fromisoformat(at)).total_seconds() < 600
+                except (TypeError, ValueError):
+                    recent = False
+            raw = store.kv_get(self.conn, "agreements_surfaced_ids") or ""
+            ids = [int(x) for x in raw.split(",") if x.strip().isdigit()] if recent else []
+            cancelled = [store.agreement_get(self.conn, i) for i in ids]
+            cancelled = [r for r in cancelled if r and r["status"] == "open"]
+            for r in cancelled:
+                store.agreement_set_status(self.conn, r["id"], "cancelled")
+            store.kv_set(self.conn, "agreements_surfaced_ids", "")
+            if cancelled:
+                self.reply(chat_id, T(lang, "agreement_surfaced_removed", n=len(cancelled)))
+            else:
+                self.reply(chat_id, T(lang, "agreement_not_found"))
+            return
         rows = store.agreements_open(self.conn, chat_id)
         row = agreements.find(rows, params)
         if row is None:

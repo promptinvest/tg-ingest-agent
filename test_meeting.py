@@ -373,6 +373,27 @@ class RelationshipArcTests(unittest.TestCase):
             relationship.update_arc(self.conn, self.cfg, trigger="daily")
         self.assertIn("лететь в Рим", captured["user"])   # verbatim meeting turn fed to the arc
 
+    def test_closeness_ratchet_up_is_audited(self):
+        # The stage is LLM-authored and gates intimate behavior, so a jump is recorded
+        # (with the evidence) — inspectable, and reversible via closeness_set.
+        store.arc_set(self.conn, "Мы вместе.")   # prior content so update_arc runs the LLM pass
+        store.kv_set(self.conn, "closeness_stage", "2")
+        with mock.patch.object(llm, "chat_profile", return_value="Ближе.\nCLOSENESS: 4"):
+            relationship.update_arc(self.conn, self.cfg, trigger="daily")
+        self.assertEqual(store.kv_get(self.conn, "closeness_stage"), "4")   # ratcheted up
+        events = store.rel_recent(self.conn, "2000-01-01T00:00:00+00:00", limit=10)
+        self.assertTrue(any("closeness 2→4" in (e["summary"] or "") for e in events))
+
+    def test_closeness_ratchet_no_audit_when_unchanged(self):
+        # A lower evidenced stage never drops it (ratchet) and logs nothing (no noise).
+        store.arc_set(self.conn, "Мы вместе.")   # prior content so update_arc runs the LLM pass
+        store.kv_set(self.conn, "closeness_stage", "5")
+        with mock.patch.object(llm, "chat_profile", return_value="Тепло.\nCLOSENESS: 3"):
+            relationship.update_arc(self.conn, self.cfg, trigger="daily")
+        self.assertEqual(store.kv_get(self.conn, "closeness_stage"), "5")   # never drops
+        events = store.rel_recent(self.conn, "2000-01-01T00:00:00+00:00", limit=10)
+        self.assertFalse(any("closeness" in (e["summary"] or "") for e in events))
+
     def test_meeting_promise_becomes_agreement(self):
         # A promise made during a meeting is captured as a (passive) agreement, closing the gap
         # where meeting commitments slipped out of memory.
@@ -955,6 +976,85 @@ class MeetingDispatchTests(unittest.TestCase):
         store.boss_add(self.conn, "personal_fact", "номер карты 1234",
                        status="confirmed", confidence=1.0, sensitivity="sensitive")
         self.assertNotIn("карты", self.agent._shared_intimacy_facts("ru"))
+
+    # -- Phase 3: closeness owner-control + surface-once agreements ------------
+
+    def test_closeness_set_routes_and_has_policy(self):
+        import skill_manifest
+        self.assertEqual(router.validate_route(
+            {"action": "closeness_set", "params": {"stage": 3}}, False)["action"], "closeness_set")
+        self.assertTrue(skill_manifest.known("closeness_set"))
+        skill_manifest.assert_covers(router.ACTIONS)  # every action still has a policy
+
+    def test_closeness_set_can_lower_and_is_audited(self):
+        # The owner override is the ONE way to LOWER closeness (the arc only ratchets up),
+        # so a hallucinated jump is correctable; every set is audited.
+        store.kv_set(self.conn, "closeness_stage", "5")
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_closeness_set(111, "ru", {"stage": 2})
+        self.assertEqual(store.kv_get(self.conn, "closeness_stage"), "2")   # lowered
+        events = store.rel_recent(self.conn, "2000-01-01T00:00:00+00:00", limit=5)
+        self.assertTrue(any("set by owner: 5→2" in (e["summary"] or "") for e in events))
+        # out-of-range clamps to 1..5; a non-numeric stage changes nothing
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_closeness_set(111, "ru", {"stage": 9})
+        self.assertEqual(store.kv_get(self.conn, "closeness_stage"), "5")   # clamped
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_closeness_set(111, "ru", {"stage": "abc"})
+        self.assertEqual(store.kv_get(self.conn, "closeness_stage"), "5")   # unchanged
+
+    def test_agreements_surfaced_once_then_correctable(self):
+        # Auto-captured (surfaced=0) agreements are shown ONCE for a "did we really agree
+        # this?" check, marked surfaced, then a bare denial cancels exactly those.
+        store.agreement_add(self.conn, 111, "ты подаришь ей цветы", source="meeting", surfaced=0)
+        store.agreement_add(self.conn, 111, "она приготовит ужин", source="conversation", surfaced=0)
+        # an explicitly-stated one is already surfaced and must NOT be swept up
+        keep = store.agreement_add(self.conn, 111, "едем к морю летом", source="explicit")
+        block, ids = self.agent._pending_surface_agreements(111, "ru")
+        self.assertIn("цветы", block)
+        self.assertIn("ужин", block)
+        self.assertNotIn("морю", block)                             # explicit one not surfaced
+        # NOT marked until the send is confirmed (delivery-safe surface-once)
+        self.assertEqual(len(store.agreements_unsurfaced(self.conn, 111)), 2)
+        self.agent._commit_surfaced(ids)
+        self.assertEqual(store.agreements_unsurfaced(self.conn, 111), [])  # now marked
+        self.assertEqual(self.agent._pending_surface_agreements(111, "ru"), ("", []))  # surface-once
+        # an unsurfaced agreement is NOT honored in context until shown; explicit one is
+        honored = store.agreements_open(self.conn, 111, surfaced_only=True)
+        self.assertTrue(all(a["status"] == "open" for a in honored))
+        # "не договаривались" right after cancels exactly the surfaced pair, not the explicit one
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_agreement_close(111, "ru", {"surfaced": True}, "не договаривались")
+        open_texts = [a["text"] for a in store.agreements_open(self.conn, 111)]
+        self.assertEqual(open_texts, ["едем к морю летом"])         # only the explicit one remains
+        self.assertEqual(store.agreement_get(self.conn, keep)["status"], "open")
+
+    def test_closeness_owner_ceiling_survives_arc_reinflation(self):
+        # After a manual lower, the STALE arc re-emitting a high CLOSENESS must NOT
+        # re-inflate the stage past the owner-set ceiling (the reset must stick).
+        import relationship
+        store.arc_set(self.conn, "Мы очень близки.")
+        store.kv_set(self.conn, "closeness_stage", "5")
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_closeness_set(111, "ru", {"stage": 2})   # stage=2, ceiling=2
+        with mock.patch.object(llm, "chat_profile", return_value="Всё так же близки.\nCLOSENESS: 5"), \
+                mock.patch.object(llm, "embed", side_effect=fake_embed):
+            relationship.update_arc(self.conn, self.agent.cfg, trigger="daily")
+        self.assertEqual(store.kv_get(self.conn, "closeness_stage"), "2")   # ceiling held
+
+    def test_meeting_end_surfaces_agreements_in_recap(self):
+        # End-to-end: a meeting recap promise is surfaced in the recap message.
+        meeting.start(self.conn, 111, kind="visit")
+        store.meeting_turn_add(self.conn, meeting.active(self.conn, 111)["id"], "boss",
+                               "договорились, ты придёшь в субботу")
+        sent = self.drive(
+            {"message": self._msg(80, "давай закончим")},
+            {"router": '{"action":"meeting_end","params":{},"confidence":0.9}',
+             "meeting": ('{"summary":"тёплый вечер","decisions":[],"highlights":[],'
+                         '"promises":["ты придёшь в субботу"]}'),
+             "relationship": "Нам было хорошо вместе."})
+        self.assertTrue(any("в субботу" in s for s in sent))       # surfaced in the recap
+        self.assertTrue(store.kv_get(self.conn, "agreements_surfaced_at"))
 
 
 class SceneModuleTests(unittest.TestCase):

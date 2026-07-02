@@ -1118,6 +1118,29 @@ class ForwardedContentFencingTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_migration_adds_surfaced_column_to_agreements(self):
+        # An old agreements table (no `surfaced`) gets the column, and existing rows
+        # default to surfaced=1 (already known — never re-surfaced as "did we agree this?").
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "old.db"
+            raw = sqlite3.connect(str(path))
+            raw.execute("CREATE TABLE agreements (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL,"
+                        " text TEXT NOT NULL, party TEXT NOT NULL DEFAULT 'both', due_utc TEXT,"
+                        " status TEXT NOT NULL DEFAULT 'open', source TEXT, source_id INTEGER,"
+                        " created_at TEXT NOT NULL, closed_at TEXT, trace_id TEXT)")
+            raw.execute("INSERT INTO agreements (chat_id, text, status, created_at)"
+                        " VALUES (111, 'старый уговор', 'open', '2026-01-01')")
+            raw.commit()
+            raw.close()
+            conn = store.open_db(path)
+            try:
+                cols = {r["name"] for r in conn.execute("PRAGMA table_info(agreements)")}
+                self.assertIn("surfaced", cols)
+                self.assertEqual(store.agreements_unsurfaced(conn, 111), [])  # existing = surfaced
+            finally:
+                conn.close()
+
     def test_router_context_fences_forwarded_turn(self):
         store.convo_add(self.conn, 1, "user", self.INJECTION, source="forward")
         captured = {}
@@ -1412,12 +1435,23 @@ class PersonaPatchTests(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
-    # Fix 1: persona layer order
-    def test_persona_below_operational_rules(self):
-        self.assertTrue(persona.persona_below_rules())
-        self.assertEqual(persona.PROMPT_LAYER_ORDER[-1], "user_message")
-        self.assertLess(persona.PROMPT_LAYER_ORDER.index("budget_rules"),
-                        persona.PROMPT_LAYER_ORDER.index("human_like_persona"))
+    # Persona-below-rules is enforced STRUCTURALLY (not by an abstract ordering table):
+    # converse.build_system writes the hard rules into the system prompt ABOVE the
+    # persona's changeable life/voice, so charm can't precede or override safety.
+    def test_persona_rules_precede_persona_life_in_prompt(self):
+        import converse
+        store.life_add(self.conn, "hobby", "учусь печь хлеб")  # a life fact, appended later
+        prompt = converse.build_system(self.conn, "ru")
+        low = prompt.lower()
+        # the hard rules are present in the prompt
+        self.assertIn("absolute rule", low)     # no-fake-action
+        self.assertIn("never invent", low)      # no-invented-specifics
+        # and they come BEFORE the mutable "Your life right now" persona section
+        rule_i = low.find("absolute rule")
+        life_i = low.find("your life right now")
+        self.assertNotEqual(rule_i, -1)
+        self.assertNotEqual(life_i, -1)
+        self.assertLess(rule_i, life_i)
 
     def test_router_prompt_stays_strict(self):
         prompt = router.build_system_prompt(self.cfg, None)

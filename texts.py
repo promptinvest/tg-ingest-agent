@@ -790,6 +790,25 @@ TEXTS = {
         "ru": "Не нашла такую договорённость. Покажу список — скажи «наши договорённости».",
         "en": "I can't find that agreement. Say \"our agreements\" and I'll show the list.",
     },
+    # Surface-once: newly auto-captured agreements shown for a "did we really agree this?" check.
+    "agreement_surfaced_block": {
+        "ru": ("Ещё отметила, что мы вроде договорились:\n{items}\n"
+               "Если что-то не так — скажи «не договаривались», и я уберу."),
+        "en": ("I also jotted down what we seem to have agreed:\n{items}\n"
+               "If any of that's off, just say \"we didn't agree that\" and I'll drop it."),
+    },
+    "agreement_surfaced_removed": {
+        "ru": "Поняла, убрала — не буду держать это за нами ({n}).",
+        "en": "Got it, removed — I won't hold that between us ({n}).",
+    },
+    "closeness_set": {
+        "ru": "Хорошо — приму нашу близость за {stage}/5 и буду держаться этого. 🤍",
+        "en": "Okay — I'll take our closeness as {stage}/5 and keep to that. 🤍",
+    },
+    "closeness_unclear": {
+        "ru": "Скажи число от 1 до 5 — например, «поставь близость 3».",
+        "en": "Give me a number from 1 to 5 — e.g. \"set closeness to 3\".",
+    },
     "note_edited": {
         "ru": "Поправила заметку #{row_id} 🤍\n📝 {summary}",
         "en": "Updated note #{row_id} 🤍\n📝 {summary}",

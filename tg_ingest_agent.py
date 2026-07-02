@@ -82,6 +82,7 @@ _DISPATCH = {
     "agreement_add":       lambda s, c: s.do_agreement_add(c.chat_id, c.lang, c.params, c.text),
     "agreements_list":     lambda s, c: s.do_agreements_list(c.chat_id, c.lang),
     "agreement_close":     lambda s, c: s.do_agreement_close(c.chat_id, c.lang, c.params, c.text),
+    "closeness_set":       lambda s, c: s.do_closeness_set(c.chat_id, c.lang, c.params),
     "reminder_undo":       lambda s, c: s.do_reminder_undo(c.chat_id, c.lang, c.params),
     "list_files":          lambda s, c: s.reply_chunks(c.chat_id, s.files_text(c.lang)),
     "calendar_add":        lambda s, c: s.do_calendar_add(c.chat_id, c.lang, c.params),
@@ -1442,7 +1443,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         import agreements as _ag
         owner = self._owner_chat()
         people = store.world_active(self.conn, "person", limit=8)
-        agreement_rows = store.agreements_open(self.conn, owner, limit=6) if owner is not None else []
+        # surfaced_only: an auto-captured commitment is honored only AFTER it's been shown
+        # to the boss for a "did we really agree this?" chance — never silently held as fact.
+        agreement_rows = (store.agreements_open(self.conn, owner, limit=6, surfaced_only=True)
+                          if owner is not None else [])
         milestones = store.world_active(self.conn, "milestone", limit=4)
         items = store.world_active(self.conn, "item", limit=6)
         if not (people or agreement_rows or milestones or items):
@@ -1744,6 +1748,27 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return int(store.kv_get(self.conn, "closeness_stage", "0") or 0)
         except (TypeError, ValueError):
             return 0
+
+    def do_closeness_set(self, chat_id, lang, params):
+        """Owner override of the relationship-closeness level (1-5). This is the ONE path
+        that can LOWER it — the arc otherwise only ratchets it up — so a hallucinated jump
+        (or just his wish to dial it back) is correctable. Clamped to 1-5; audited."""
+        try:
+            stage = int(params.get("stage"))
+        except (TypeError, ValueError):
+            self.reply(chat_id, T(lang, "closeness_unclear"))
+            return
+        stage = max(1, min(5, stage))
+        prior = self._closeness_stage()
+        store.kv_set(self.conn, "closeness_stage", stage)
+        # A ceiling makes the reset DURABLE: the arc ratchet won't climb back past it (the
+        # stale arc text would otherwise re-inflate the stage within one meeting). Setting a
+        # higher value raises the ceiling; setting 5 lifts the cap (free organic growth again).
+        store.kv_set(self.conn, "closeness_ceiling", stage)
+        relationship.log_event(
+            self.conn, "closeness", f"closeness set by owner: {prior}→{stage} (ceiling {stage})",
+            importance=2)
+        self.reply(chat_id, T(lang, "closeness_set", stage=stage))
 
     def _shared_intimacy_facts(self, lang):
         """What Cara has actually learned about HIM — his likings and taste — so intimacy
@@ -2266,7 +2291,31 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return
         row, recap = meeting.end(self.conn, self.cfg, chat_id)
         self._after_meeting(row, recap)
-        self.reply(chat_id, self._meeting_recap_text(lang, row, recap))
+        text = self._meeting_recap_text(lang, row, recap)
+        block, ids = self._pending_surface_agreements(chat_id, lang)
+        sent = self.reply(chat_id, text + ("\n\n" + block if block else ""))
+        if block and sent:
+            self._commit_surfaced(ids)
+
+    def _pending_surface_agreements(self, chat_id, lang):
+        """The surface block for auto-captured agreements (meeting recap / conversation
+        curator) not yet shown to the boss for a "did we really agree this?" chance, plus
+        their ids — or ('', []). Does NOT mark them: the caller marks via _commit_surfaced
+        only after a SUCCESSFUL send, so a failed/truncated delivery doesn't burn the one
+        surface-once chance (they're not honored as fact until surfaced, so a delay is safe)."""
+        rows = store.agreements_unsurfaced(self.conn, chat_id, limit=6)
+        if not rows:
+            return "", []
+        items = "\n".join(f"  • {r['text']}" for r in rows)
+        return T(lang, "agreement_surfaced_block", items=items), [r["id"] for r in rows]
+
+    def _commit_surfaced(self, ids):
+        """Mark surfaced (after a confirmed send) + stamp the hint so a bare
+        "не договаривались" right after cancels exactly these."""
+        store.agreements_mark_surfaced(self.conn, ids)
+        store.kv_set(self.conn, "agreements_surfaced_at",
+                     datetime.now(timezone.utc).isoformat())
+        store.kv_set(self.conn, "agreements_surfaced_ids", ",".join(str(i) for i in ids))
 
     def _after_meeting(self, row, recap):
         """Fold a finished meeting into Cara's memory: social ones grow her life
@@ -3057,7 +3106,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         for row, recap in ended:
             self._after_meeting(row, recap)
             self.turn_lang = None
-            self.reply(row["chat_id"], T(self.lang(), "meeting_auto_ended"))
+            block, ids = self._pending_surface_agreements(row["chat_id"], self.lang())
+            sent = self.reply(row["chat_id"], T(self.lang(), "meeting_auto_ended")
+                              + ("\n\n" + block if block else ""))
+            if block and sent:
+                self._commit_surfaced(ids)
 
     def check_meeting_resummary(self):
         """Retry the recap for ended meetings whose summary failed to write (e.g. a budget/402
@@ -3423,6 +3476,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 delivered = True
         if delivered:
             store.kv_set(self.conn, "greeted_day", today)
+            # A reliable non-meeting moment to surface any auto-captured (curator-extracted)
+            # agreements for a "did we really agree this?" check — so a meeting-less boss
+            # still gets the sanity pass (they're not honored as fact until surfaced).
+            owner = self._owner_chat()
+            if owner is not None:
+                block, ids = self._pending_surface_agreements(owner, lang)
+                if block and self.reply(owner, block):
+                    self._commit_surfaced(ids)
 
     def check_proactive(self):
         """Evaluate the proactive heartbeat at most once per interval; it sends

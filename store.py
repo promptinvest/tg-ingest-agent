@@ -445,6 +445,8 @@ CREATE TABLE IF NOT EXISTS agreements (
   status TEXT NOT NULL DEFAULT 'open',    -- open|kept|cancelled
   source TEXT,                            -- explicit|meeting|conversation
   source_id INTEGER,
+  surfaced INTEGER NOT NULL DEFAULT 1,    -- 0 = auto-captured, not yet shown to the boss for a
+                                          -- "did we really agree this?" chance (surface-once)
   created_at TEXT NOT NULL,
   closed_at TEXT,
   trace_id TEXT
@@ -1081,10 +1083,11 @@ def world_set_status(conn, fact_id, status):
 # -- agreements (commitments either of them made; passive memory) -------------
 
 def agreement_add(conn, chat_id, text, party="both", due_utc=None,
-                  source="explicit", source_id=None):
+                  source="explicit", source_id=None, surfaced=1):
     """Record an agreement. Deduped against OPEN ones by casefolded text (a re-statement
-    just refreshes nothing — returns None). party in boss|cara|both. Returns the new id, or
-    None when empty or a duplicate."""
+    just refreshes nothing — returns None). party in boss|cara|both. surfaced=0 marks an
+    auto-captured one that hasn't yet been shown to the boss for a "did we really agree
+    this?" chance. Returns the new id, or None when empty or a duplicate."""
     text = (text or "").strip()[:400]
     if not text:
         return None
@@ -1096,21 +1099,45 @@ def agreement_add(conn, chat_id, text, party="both", due_utc=None,
             return None
     cur = conn.execute(
         "INSERT INTO agreements (chat_id, text, party, due_utc, status, source, source_id,"
-        " created_at, trace_id) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)",
-        (chat_id, text, party, due_utc, source, source_id, _now(), _trace_id()),
+        " surfaced, created_at, trace_id) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
+        (chat_id, text, party, due_utc, source, source_id, 1 if surfaced else 0,
+         _now(), _trace_id()),
     )
     conn.commit()
     return cur.lastrowid
 
 
-def agreements_open(conn, chat_id, limit=50):
+def agreements_open(conn, chat_id, limit=50, surfaced_only=False):
     """Open agreements for a chat — dated ones first (soonest due), then the most recent
-    open-ended ones. The contiguous order is also the boss-facing #1..N display order."""
+    open-ended ones. The contiguous order is also the boss-facing #1..N display order.
+    surfaced_only=True excludes auto-captured ones not yet shown to the boss — used for the
+    HONORED-context injection so an unconfirmed extracted commitment isn't treated as fact
+    before he's had a chance to correct it (the list view still shows all open ones)."""
+    where = "chat_id=? AND status='open'" + (" AND surfaced=1" if surfaced_only else "")
     return conn.execute(
-        "SELECT * FROM agreements WHERE chat_id=? AND status='open'"
+        f"SELECT * FROM agreements WHERE {where}"
         " ORDER BY (due_utc IS NULL), due_utc, id DESC LIMIT ?",
         (chat_id, limit),
     ).fetchall()
+
+
+def agreements_unsurfaced(conn, chat_id, limit=10):
+    """Open agreements auto-captured (meeting/curator) but not yet shown to the boss for
+    a 'did we really agree this?' chance. Oldest first, so we surface in capture order."""
+    return conn.execute(
+        "SELECT * FROM agreements WHERE chat_id=? AND status='open' AND surfaced=0"
+        " ORDER BY id LIMIT ?", (chat_id, limit),
+    ).fetchall()
+
+
+def agreements_mark_surfaced(conn, ids):
+    """Mark the given agreement ids as surfaced (shown once). No-op on an empty list."""
+    ids = [int(i) for i in (ids or [])]
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(f"UPDATE agreements SET surfaced=1 WHERE id IN ({placeholders})", ids)
+    conn.commit()
 
 
 def agreements_all(conn, chat_id, limit=50, status=None):
@@ -1433,6 +1460,14 @@ def _migrate(conn):
         # Existing rows are the boss's own turns (forwarded content wasn't tracked
         # before); default 'boss' is correct for them.
         conn.execute("ALTER TABLE conversation ADD COLUMN source TEXT NOT NULL DEFAULT 'boss'")
+    try:
+        agr_columns = {row["name"] for row in conn.execute("PRAGMA table_info(agreements)")}
+        if agr_columns and "surfaced" not in agr_columns:
+            # Existing agreements are treated as already-surfaced (default 1) — the
+            # surface-once "did we really agree this?" check applies only going forward.
+            conn.execute("ALTER TABLE agreements ADD COLUMN surfaced INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
     try:
         stk_columns = {row["name"] for row in conn.execute("PRAGMA table_info(stickers)")}
         if stk_columns and "description" not in stk_columns:

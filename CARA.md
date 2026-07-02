@@ -488,12 +488,23 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   agreements are injected into her context so she honors them), and you can **list** them ("что
   мы договорились?") or **close** them kept/cancelled. First‑class table (`agreements`), deduped,
   grounded — never invented. Distinct from a **reminder** (an active ping at a time, "напомни
-  мне") and from **notes** (`ingest`).
+  мне") and from **notes** (`ingest`). **Auto‑captured ones are surfaced once for a sanity
+  check (2026‑07‑02):** a commitment the model *extracted* (from a meeting recap or the chat
+  curator — not something you explicitly said "запомни, договорились") is **not honored until
+  shown** — surfaced to you once ("ещё отметила, что мы вроде договорились: …", at the meeting
+  recap, or at the daily good‑morning if you don't meet) — so a mis‑heard commitment never
+  silently becomes a held fact; a bare "не договаривались" right after removes exactly those
+  (your explicitly‑stated agreements are honored immediately and untouched).
 - **Your bond only deepens — she never "resets"** — closeness is ratcheted (a 1–5 stage
   that only goes up, plus an anti‑regression rule in the arc), so a quiet or busy day can't
   cool her back to a reserved register. As you grow closer and more open, she **meets you
   there** and is never surprised you're being intimate — like a real couple, it only
-  progresses.
+  progresses. **You stay in control of it (2026‑07‑02):** the stage is model‑authored, so
+  every step up is **audited** (logged as a relationship event with the evidence, visible in
+  the working history), and you can **set it directly** — "сбрось близость на 3" / "set
+  closeness to 2" (`closeness_set`) — the one path that can *lower* it, so a mistaken jump
+  is always correctable. The reset **sticks** (an owner ceiling the ratchet honors): the arc
+  can't quietly climb back past what you last set until you raise it again.
   A relational question — "что ты помнишь про нас?", "наши отношения", "что между нами?" —
   is routed to **`converse`** (where the arc lives) so she answers from your shared story,
   **not** to `boss_query` (which is a facts‑about‑you summary). Likewise her **feelings or
@@ -570,10 +581,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   names; if unsure she says so.
 - **Action‑truth:** she won't claim a real task was done unless the code did it; the
   `action_truth` guard keeps "done/saved/scheduled" wording out of draft templates.
-- **Persona sits below the hard rules:** her prompts place the security, routing,
-  confirmation, budget and data‑truth rules above the persona voice, so charm can
-  never override safety, confirmation, or truth. (`persona.py` documents the intended
-  layer order; the live converse/meeting prompts embed the rules directly.)
+- **Persona sits below the hard rules (structurally):** the live prompts that actually
+  reach the model (`converse.CHARACTER`, the router/ingest system prompts) write the
+  security, no‑fabrication, no‑fake‑action and no‑invented‑specifics rules **at the top**,
+  above the persona voice and her changeable life — so charm can never precede or override
+  safety, confirmation, or truth. (The old `persona.py` layer‑order *table* was inert —
+  nothing assembled prompts from it — and was removed 2026‑07‑02; the enforcement was
+  always the prompt content itself.)
 - Conversation and grounded answers are LLM‑generated; **transactional/system messages
   are deterministic `texts.py` templates** (bilingual, with tone variants).
 
@@ -602,7 +616,7 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ boss_model.py    boss profile (confirmed/inferred, sensitivity floors, dedup, address)
    ├─ memory_curator.py memory candidates + conversation learning + corrections
    ├─ relationship.py  grounded working history + the living relationship-storyline arc
-   ├─ persona.py       prompt-layer ordering (persona below rules)
+   ├─ persona.py       boss-preference hint (persona-below-rules is enforced in the prompts)
    ├─ proactive.py     suggestion-only heartbeat (throttle, quiet hours, gating)
    ├─ skill_manifest.py permission registry (risk · confirmation · proactive)
    ├─ trace.py         one trace per update/tick; staged events
@@ -761,7 +775,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 554 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+- **Tests:** 562 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
   the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an

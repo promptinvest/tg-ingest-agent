@@ -168,10 +168,28 @@ def update_arc(conn, cfg, trigger="meeting", meeting_id=None):
         arc = arc[:m.start()].rstrip()
         evidenced = int(m.group(1))
         try:
-            prior = int(store.kv_get(conn, "closeness_stage", "0") or 0)
+            prior_stage = int(store.kv_get(conn, "closeness_stage", "0") or 0)
         except (TypeError, ValueError):
-            prior = 0
-        store.kv_set(conn, "closeness_stage", max(prior, evidenced))
+            prior_stage = 0
+        # Owner ceiling: closeness_set stamps a ceiling so a manual reset STICKS — the
+        # stale arc text otherwise keeps re-emitting a high CLOSENESS and the ratchet would
+        # re-inflate the stage within one meeting. The ceiling caps the ratchet until the
+        # owner sets a higher value; unset (or 5) = the old unbounded organic ratchet.
+        try:
+            ceiling = int(store.kv_get(conn, "closeness_ceiling") or 5)
+        except (TypeError, ValueError):
+            ceiling = 5
+        new_stage = min(max(prior_stage, evidenced), ceiling)
+        if new_stage != prior_stage:
+            store.kv_set(conn, "closeness_stage", new_stage)
+            # Audit a stage-UP: the stage is LLM-authored and gates intimate behavior, so a
+            # jump is recorded (evidence + trigger) — inspectable in the working history, and
+            # reversible by the owner via closeness_set. (A ceiling-induced drop isn't logged
+            # here; the owner's set that established the ceiling is already logged.)
+            if new_stage > prior_stage:
+                log_event(conn, "closeness",
+                          f"closeness {prior_stage}→{new_stage} "
+                          f"(evidence {evidenced}, from {trigger} arc)", importance=2)
     arc = arc[:ARC_MAX]
     if not arc:
         return ""

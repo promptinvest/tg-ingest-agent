@@ -181,8 +181,10 @@ def _summarize_transcript(conn, cfg, m, transcript, auto):
         # date/sit-down is tracked and honored — closing the gap where meeting promises slipped.
         for t in (parsed.get("promises") or [])[:6]:
             if str(t).strip():
+                # surfaced=0: an LLM-extracted commitment is shown to the boss once for a
+                # "did we really agree this?" chance before it's treated as a held fact.
                 store.agreement_add(conn, m["chat_id"], str(t).strip(),
-                                    source="meeting", source_id=m["id"])
+                                    source="meeting", source_id=m["id"], surfaced=0)
         if social:  # remember the shared pet-names / playful phrasings that landed
             for e in (parsed.get("endearments") or [])[:4]:
                 store.intimacy_style_add(conn, str(e).strip())

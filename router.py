@@ -84,6 +84,7 @@ ACTIONS = {
     "agreement_add",     # params: text, party(boss|cara|both), due_utc(optional) — record a commitment we made
     "agreements_list",   # show our recorded agreements ("что мы договорились?")
     "agreement_close",   # params: id/query + outcome(kept|cancelled) — close out an agreement
+    "closeness_set",     # params: stage (1-5) — owner override of the relationship-closeness level (up OR down)
     "clarify",           # params: question
     "out_of_scope",
 }
@@ -115,6 +116,8 @@ NOTE: a move verb + a time is ALWAYS reminder_reschedule, even when the reminder
 "мы выполнили уговор про море" / "договорённость про отчёт закрыта, сделал" / "we kept our deal about the trip" -> {"action": "agreement_close", "params": {"query": "море", "outcome": "kept"}, "confidence": 0.88}
 "отмени нашу договорённость про кино" / "снимаем уговор про посуду" / "cancel our agreement about the dishes" -> {"action": "agreement_close", "params": {"query": "кино", "outcome": "cancelled"}, "confidence": 0.88}
 NOTE: an AGREEMENT is a mutual commitment to remember ("договорились", "уговор", "условились", "our deal/agreement", "let's agree"). It is PASSIVE memory — even one with a time is agreement_add, NOT a reminder (a reminder is "напомни мне" — an active ping at a time). "запомни/договорились" about a commitment -> agreement_add; "напомни" at a time -> reminder_create. Closing one ("выполнили/сделали/сняли/cancel/kept") -> agreement_close with outcome.
+"сбрось близость на 3" / "поставь близость 2" / "мы не настолько близки, сбавь" / "reset closeness to 3" / "dial our closeness back to 2" -> {"action": "closeness_set", "params": {"stage": 3}, "confidence": 0.9}
+NOTE: closeness_set is the owner's manual override of the relationship-closeness level (1-5, "близость"/"closeness") — the ONE way to LOWER it (it otherwise only ratchets up). Only an EXPLICIT set/reset with a number or a clear "сбавь/dial back" maps here; ordinary warmth/coolness in chat does NOT.
 "закрой напоминание про Рим" / "Азербайджан закрой" / "убери напоминание Азербайджан" / "close the Rome reminder" (close ONE reminder named by TITLE, in any word order) -> {"action": "reminder_cancel", "params": {"title_query": "Рим"}, "confidence": 0.9}
 "первое закрой" / "закрой второе" / "удали первое напоминание" / "убери третье" / "close the first reminder" (a LONE close naming ONE reminder by ordinal position) -> {"action": "reminder_cancel", "params": {"id": 1}, "confidence": 0.88}
 NOTE: a close verb ("закрой"/"удали"/"убери"/"close"/"delete") naming ONE reminder — by title OR by ordinal, in ANY word order ("Азербайджан закрой" == "закрой Азербайджан") — is reminder_cancel, NEVER clarify/converse. Only a message bundling two+ DIFFERENT commands ("закрой первое, второе перенеси") is multi_action.
@@ -472,6 +475,23 @@ def route(cfg, conn, chat_id, text, pending):
                 "'покажи их' / 'покажи' / 'какие' / 'show them' / 'which ones' here means "
                 "reminder_list (show the real reminder list) — NOT converse and NOT ask "
                 "(his notes/journal).\n\n")
+    # Just surfaced auto-captured agreements for a "did we really agree this?" check? A bare
+    # denial ("не договаривались" / "мы такого не договаривались" / "я такого не обещал" /
+    # "we didn't agree that" / "убери это") cancels exactly those — agreement_close, surfaced.
+    surfaced = store.kv_get(conn, "agreements_surfaced_at")
+    if surfaced:
+        try:
+            recent_surf = (datetime.now(timezone.utc)
+                           - datetime.fromisoformat(surfaced)).total_seconds() < 600
+        except (TypeError, ValueError):
+            recent_surf = False
+        if recent_surf and store.kv_get(conn, "agreements_surfaced_ids"):
+            user_content += (
+                "You JUST showed the boss agreements you auto-noted, for him to confirm. So a "
+                "bare denial here — 'не договаривались' / 'мы такого не договаривались' / 'я "
+                "такого не обещал' / 'убери это' / \"we didn't agree that\" / \"that's not right\" "
+                "— means agreement_close with params {\"surfaced\": true} (remove exactly those). "
+                "A specific 'отмени уговор про X' still targets by query.\n\n")
     user_content += f"<user_request>\n{text}\n</user_request>"
     messages = [
         {"role": "system", "content": system},

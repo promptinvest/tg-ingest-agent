@@ -227,8 +227,10 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
             world_added += 1
     for t in (parsed.get("promises") or [])[:5]:
         # A promise either of them made is a (passive) agreement Cara should honor.
+        # surfaced=0: shown to the boss once for a "did we really agree this?" chance
+        # before it's held as fact (an LLM extraction, not his explicit "запомни, договорились").
         if str(t).strip() and store.agreement_add(conn, chat_id, str(t).strip(),
-                                                  source="conversation"):
+                                                  source="conversation", surfaced=0):
             world_added += 1
     for t in (parsed.get("milestones") or [])[:5]:
         if str(t).strip() and store.world_add(conn, "milestone", str(t).strip()):

@@ -157,6 +157,8 @@ SKILLS = {
                         "title": {"en": "Our agreements", "ru": "Наши договорённости"}},
     "agreement_close": {"risk": "state_write", "writes_state": True, "persona_context": True,
                         "title": {"en": "Close an agreement", "ru": "Закрыть договорённость"}},
+    "closeness_set": {"risk": "state_write", "writes_state": True, "persona_context": True,
+                      "title": {"en": "Adjust closeness", "ru": "Настроить близость"}},
     "meeting_list": {"risk": "read_only", "persona_context": True,
                      "title": {"en": "Our meetings", "ru": "Наши встречи"}},
     # -- internal: the daily relationship reflection (grows the storyline arc)
