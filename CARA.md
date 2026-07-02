@@ -688,9 +688,13 @@ compacts on fire/cancel.
 - **Owner‑only** access on both chat and sender id, for messages, reactions, buttons.
 - Closed router action set; JSON‑only router output; untrusted‑content delimiters for
   forwarded/quoted text and stored notes (prompt‑injection defense); confidence gate.
+  **Forwarded content in the conversation log is fenced too** (2026‑07‑02): a forward
+  is stored `source='forward'` and replayed into the router/converse prompts as DATA,
+  never as the boss's own instruction — so a forwarded post can't inject via history.
 - **Fetch SSRF guard:** http/https only, no URL creds, every URL + redirect hop
   rejected if it resolves to a private/loopback/link‑local/reserved IP or the cloud
-  metadata endpoint.
+  metadata endpoint — and the socket is **pinned to the validated IP** (2026‑07‑02) so
+  a rebinding host can't flip to a private address between the check and the connect.
 - **Bulk purge** requires a typed confirmation phrase (handled before the router, so a
   stray "да" can't wipe data); pending actions carry a TTL and are swept when abandoned.
 - **Truthfulness:** action‑truth guard + no‑fabrication persona rule.
@@ -742,7 +746,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 537 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+- **Tests:** 547 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
   the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an

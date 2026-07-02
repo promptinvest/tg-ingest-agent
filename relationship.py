@@ -143,8 +143,11 @@ def update_arc(conn, cfg, trigger="meeting", meeting_id=None):
         blocks.append("Recent relationship beats:\n"
                       + "\n".join(f"- {e['summary']}" for e in events))
     if convo:
+        # Forwarded turns are fenced (convo_replay_text) so untrusted channel content
+        # can't be woven into the storyline as if the boss said it.
         blocks.append("Recent everyday conversation:\n" + "\n".join(
-            f"{'Boss' if r['role'] == 'user' else 'Cara'}: {r['text']}" for r in convo))
+            f"{'Boss' if r['role'] == 'user' else 'Cara'}: {store.convo_replay_text(r)}"
+            for r in convo))
     if turns:
         blocks.append("Recent time together — verbatim moments (most recent):\n" + "\n".join(
             f"{'Boss' if r['role'] == 'boss' else 'Cara'}: {r['text']}" for r in turns))

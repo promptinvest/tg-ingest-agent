@@ -199,11 +199,14 @@ def build_system(conn, lang, extra_context=None):
 
 def build_messages(conn, chat_id, lang, extra_context=None):
     """Full chat payload: Cara's system prompt + the recent dialogue (which already
-    ends with the boss's current message, stored before dispatch)."""
+    ends with the boss's current message, stored before dispatch). A forwarded turn
+    is UNTRUSTED channel content — it's fenced (not presented as the boss's own
+    words) so a forwarded post can't inject instructions into the conversation."""
     messages = [{"role": "system", "content": build_system(conn, lang, extra_context)}]
     for row in store.convo_recent(conn, chat_id, limit=12):
         role = "assistant" if row["role"] == "bot" else "user"
-        text = (row["text"] or "").strip()
-        if text:
-            messages.append({"role": role, "content": text})
+        if not (row["text"] or "").strip():
+            continue
+        content = store.convo_replay_text(row).strip()
+        messages.append({"role": role, "content": content})
     return messages

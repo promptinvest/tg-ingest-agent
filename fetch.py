@@ -6,19 +6,27 @@ Security: this runs inside the hardened VPS, so arbitrary-URL fetching is an
 SSRF surface. Every URL (and every redirect hop) is validated — http/https
 only, and the resolved IP must be public (no loopback/private/link-local/
 reserved, and explicitly not the cloud metadata endpoint 169.254.169.254).
+The connection is **pinned** to the exact IP we validated (`_pinned_ip` +
+`_PinnedHTTP(S)Connection`): urllib would otherwise resolve the host a SECOND
+time when it opens the socket, so a TTL=0 host could answer a public IP to the
+check and 169.254.169.254 / 127.0.0.1 to the connect (DNS-rebinding TOCTOU).
+Redirects are followed manually so each hop is re-validated and re-pinned.
 v1 handles HTML/text pages and the public t.me web view; binaries, file
 shares, and private channels are out of scope.
 """
+import http.client
 import ipaddress
 import re
 import socket
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import (HTTPRedirectHandler, HTTPHandler, HTTPSHandler, ProxyHandler,
+                            Request, build_opener)
 
 METADATA_IPS = {"169.254.169.254", "100.100.100.200", "fd00:ec2::254"}
 MAX_TEXT_CHARS = 8000
+MAX_REDIRECTS = 5
 
 
 class FetchError(Exception):
@@ -58,6 +66,71 @@ def validate_url(url):
         if _ip_blocked(info[4][0]):
             raise FetchError(f"resolves to a non-public address ({info[4][0]})", "fetch_private")
     return url.strip()
+
+
+def _pinned_ip(host, port, scheme):
+    """Resolve `host` ONCE, require every returned address to be public, and
+    return the IP to pin the socket to. This is the resolution the connection
+    actually uses — so validate-then-connect can't diverge (DNS rebinding)."""
+    try:
+        infos = socket.getaddrinfo(host, port or (443 if scheme == "https" else 80),
+                                   proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise FetchError(f"cannot resolve host: {exc}", "fetch_failed") from exc
+    ips = [info[4][0] for info in infos]
+    if not ips:
+        raise FetchError("cannot resolve host", "fetch_failed")
+    for ip in ips:
+        if _ip_blocked(ip):
+            raise FetchError(f"resolves to a non-public address ({ip})", "fetch_private")
+    return ips[0]
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, host, *args, pinned_ip=None, **kw):
+        super().__init__(host, *args, **kw)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        self.sock = socket.create_connection(
+            (self._pinned_ip or self.host, self.port), self.timeout, self.source_address)
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host, *args, pinned_ip=None, **kw):
+        super().__init__(host, *args, **kw)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        sock = socket.create_connection(
+            (self._pinned_ip or self.host, self.port), self.timeout, self.source_address)
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+            sock = self.sock
+        # SNI + certificate validation still use the real hostname, not the pinned IP.
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPHandler(HTTPHandler):
+    def __init__(self, pinned_ip):
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req, pinned_ip=self._pinned_ip)
+
+
+class _PinnedHTTPSHandler(HTTPSHandler):
+    def __init__(self, pinned_ip, context=None):
+        super().__init__(context=context)
+        self._pinned_ip = pinned_ip
+
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPSConnection, req, pinned_ip=self._pinned_ip,
+                            context=self._context)
 
 
 _TME_RE = re.compile(r"^https?://t\.me/([A-Za-z0-9_]+)/(\d+)/?$")
@@ -120,18 +193,30 @@ def extract_text(html):
     return parser.title, text[:MAX_TEXT_CHARS]
 
 
-class _NoPrivateRedirect(HTTPRedirectHandler):
+class _Redirect(Exception):
+    """Carries a redirect target out of the opener so fetch() can re-validate
+    and re-pin the next hop itself (auto-following would reuse this hop's pin
+    against a different host)."""
+    def __init__(self, url):
+        self.url = url
+
+
+class _CaptureRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        validate_url(newurl)  # re-check every hop; raises FetchError if unsafe
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        raise _Redirect(newurl)
 
 
-def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
-    """Fetch and extract text from a public HTTP(S) page. Returns
-    (final_url, title, text). Raises FetchError on any problem."""
-    url = normalize_tme(url)
+def _fetch_one(url, timeout, max_bytes):
+    """Fetch a single hop with the connection pinned to a validated IP. Returns
+    (kind, value): ('ok', (final_url, html)) or ('redirect', newurl)."""
     validate_url(url)
-    opener = build_opener(_NoPrivateRedirect())
+    parsed = urlparse(url)
+    pin = _pinned_ip(parsed.hostname, parsed.port, parsed.scheme)
+    # ProxyHandler({}) disables proxy support: build_opener would otherwise install a
+    # default ProxyHandler that honours HTTP(S)_PROXY env and routes through a proxy
+    # that does its own DNS/connect — bypassing the IP pin (and an SSRF vector itself).
+    opener = build_opener(ProxyHandler({}), _PinnedHTTPHandler(pin),
+                          _PinnedHTTPSHandler(pin), _CaptureRedirect())
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 (cara-assistant)"})
     try:
         with opener.open(request, timeout=timeout) as response:
@@ -144,8 +229,9 @@ def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
             charset = "utf-8"
             if "charset=" in ctype:
                 charset = ctype.split("charset=")[-1].split(";")[0].strip() or "utf-8"
-            html = raw.decode(charset, errors="replace")
-            final_url = response.geturl()
+            return "ok", (response.geturl(), raw.decode(charset, errors="replace"))
+    except _Redirect as r:
+        return "redirect", r.url
     except FetchError:
         raise
     except HTTPError as exc:
@@ -154,7 +240,20 @@ def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
         raise FetchError(f"request failed: {getattr(exc, 'reason', exc)}", "fetch_failed") from exc
     except Exception as exc:
         raise FetchError(f"unexpected: {exc}", "fetch_failed") from exc
-    title, text = extract_text(html)
-    if not text.strip():
-        raise FetchError("no readable text extracted", "fetch_failed")
-    return final_url, title, text
+
+
+def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
+    """Fetch and extract text from a public HTTP(S) page. Returns
+    (final_url, title, text). Raises FetchError on any problem. Redirects are
+    followed manually so every hop is independently validated AND pinned."""
+    url = normalize_tme(url)
+    for _ in range(MAX_REDIRECTS + 1):
+        kind, value = _fetch_one(url, timeout, max_bytes)
+        if kind == "ok":
+            final_url, html = value
+            title, text = extract_text(html)
+            if not text.strip():
+                raise FetchError("no readable text extracted", "fetch_failed")
+            return final_url, title, text
+        url = normalize_tme(value)   # 'redirect' -> re-validate + re-pin next loop
+    raise FetchError("too many redirects", "fetch_failed")

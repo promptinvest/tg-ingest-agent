@@ -130,8 +130,12 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
              if (r["text"] or "").strip()]
     if len(turns) < 2:
         return {"life": 0, "boss": 0}
+    # Fence forwarded turns (convo_replay_text): a forwarded channel post must not be
+    # mined as the boss's OWN fact/correction — otherwise a single forward could poison
+    # inferred memory (benign learned facts are auto-stored, not confirm-gated).
     transcript = "\n".join(
-        f"{'Boss' if r['role'] == 'user' else 'Cara'}: {r['text']}" for r in turns)
+        f"{'Boss' if r['role'] == 'user' else 'Cara'}: {store.convo_replay_text(r)}"
+        for r in turns)
     known = [r["text"] for r in store.life_facts(conn, limit=40)]
     known_block = "\n".join(f"- {t}" for t in known[-24:]) or "(none yet)"
     messages = [
