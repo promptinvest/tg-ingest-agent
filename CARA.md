@@ -785,7 +785,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 567 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
+- **Tests:** 568 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
   the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an

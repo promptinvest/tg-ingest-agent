@@ -126,6 +126,9 @@ CREATE TABLE IF NOT EXISTS facts (
   message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
   fact TEXT NOT NULL
 );
+-- Hot child-table lookups by message: per-note render, cascade delete, and the
+-- per-row facts fetch in list_messages_filtered's limited scan.
+CREATE INDEX IF NOT EXISTS idx_facts_message ON facts(message_id);
 
 CREATE TABLE IF NOT EXISTS chunks (
   id INTEGER PRIMARY KEY,
@@ -134,6 +137,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   text TEXT NOT NULL,
   embedding TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_chunks_message ON chunks(message_id);
 
 CREATE TABLE IF NOT EXISTS issues (
   id INTEGER PRIMARY KEY,
@@ -1915,34 +1919,44 @@ def list_messages(conn, category=None, query=None, limit=10):
 
 def list_messages_filtered(conn, category=None, query=None, limit=None):
     """Visible notes matching the filter, newest-first (Python-filtered for Cyrillic
-    casefold), the whole table scanned — no arbitrary pre-cap. limit=None returns the
-    full list (pagination callers slice); a limit stops the scan early, which keeps
-    the per-message hot-path callers (router recent-item hint, keyword context) cheap.
-    Confirmed journal entries are hidden from the general list (they have their own
-    dated journal) unless a category filter is given."""
-    rows = conn.execute(
-        "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested') ORDER BY id DESC"
-    ).fetchall()
-    facts_by_message = {}
-    if query:
-        for row in conn.execute(
-            "SELECT message_id, GROUP_CONCAT(fact, ' ') AS f FROM facts GROUP BY message_id"
-        ):
-            facts_by_message[row["message_id"]] = row["f"]
+    casefold). limit=None returns the full list (pagination callers slice); a limit
+    stops the scan EARLY. The messages cursor is iterated LAZILY (ORDER BY id DESC is a
+    reverse rowid scan), so a limited call fetches only as far as it needs — the router's
+    every-turn recent-item hint (limit=1, no query) touches a single row, not the whole
+    inbox. Facts: a full scan builds one GROUP_CONCAT map; a limited query looks facts up
+    per candidate (idx_facts_message). Confirmed journal entries are hidden from the general
+    list (own dated journal) unless a category filter is given."""
+    q = str(query).casefold() if query else None
+    cat = str(category).casefold() if category else None
     journals = {n.casefold() for n in journal_categories(conn)} if category is None else set()
+    # Unlimited query scans (pagination) aggregate facts once; a limited query fetches facts
+    # per candidate row instead of aggregating the whole facts table on every hot-path call.
+    facts_map = None
+    if q and limit is None:
+        facts_map = {r["message_id"]: r["f"] for r in conn.execute(
+            "SELECT message_id, GROUP_CONCAT(fact, ' ') AS f FROM facts GROUP BY message_id")}
+
+    def _facts(mid):
+        if facts_map is not None:
+            return facts_map.get(mid)
+        r = conn.execute("SELECT GROUP_CONCAT(fact, ' ') AS f FROM facts WHERE message_id = ?",
+                         (mid,)).fetchone()
+        return r["f"] if r else None
+
     out = []
-    for row in rows:
+    for row in conn.execute(  # lazy reverse-rowid cursor — stops fetching once `limit` is hit
+            "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested') ORDER BY id DESC"):
         row_category = row["category"] or row["suggested_category"] or ""
-        if category and row_category.casefold() != str(category).casefold():
+        if cat and row_category.casefold() != cat:
             continue
         if journals and (row["category"] or "").casefold() in journals:
             continue
-        if query:
+        if q:
             haystack = " ".join(filter(None, [
                 row["raw_text"], row["summary"], row_category, row["forward_origin_title"],
-                facts_by_message.get(row["id"]),
+                _facts(row["id"]),
             ])).casefold()
-            if str(query).casefold() not in haystack:
+            if q not in haystack:
                 continue
         out.append(row)
         if limit is not None and len(out) >= limit:

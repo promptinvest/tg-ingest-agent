@@ -5384,6 +5384,20 @@ class StoreRetentionTests(unittest.TestCase):
         hit = store.list_messages(self.conn, None, "note 0", limit=None)
         self.assertTrue(any(r["tg_message_id"] == 1 for r in hit))
 
+    def test_list_messages_limited_query_matches_via_facts(self):
+        # A LIMITED query must still match on a note's facts (the per-row facts lookup
+        # that replaced the whole-table aggregate — needs idx_facts_message).
+        mid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": 1, "received_at": "2026-01-01", "raw_text": "заметка"})
+        self.conn.execute("UPDATE messages SET status='confirmed' WHERE id=?", (mid,))
+        store.set_facts(self.conn, mid, ["рейс SU1234 в Париж"])   # searchable only via facts
+        self.conn.commit()
+        rows = store.list_messages(self.conn, None, "Париж", limit=5)
+        self.assertEqual([r["id"] for r in rows], [mid])
+        # the facts hot-path index exists
+        idx = {r["name"] for r in self.conn.execute("PRAGMA index_list(facts)")}
+        self.assertIn("idx_facts_message", idx)
+
     def test_prune_telemetry_keeps_live_and_spend(self):
         old = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
