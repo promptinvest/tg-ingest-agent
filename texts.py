@@ -122,23 +122,6 @@ TEXTS = {
         "ru": "Готово 🔄 перенесла {n} напоминания на {when_local}.",
         "en": "Done 🔄 moved {n} reminders to {when_local}.",
     },
-    "wardrobe_added": {
-        "ru": "Ммм, добавила к себе в гардероб: {name} 🤍 надену для тебя.",
-        "en": "Mm, added to my wardrobe: {name} 🤍 I'll wear it for you.",
-    },
-    "wardrobe_add_what": {
-        "ru": "Что добавить мне в гардероб? Опиши 🙈",
-        "en": "What should I add to my wardrobe? Describe it 🙈",
-    },
-    "wardrobe_empty": {
-        "ru": "У меня пока ничего не отложено в гардеробе 🙈",
-        "en": "My wardrobe's empty so far 🙈",
-    },
-    "wardrobe_show_header": {"ru": "Вот что у меня есть 🤍", "en": "Here's what I've got 🤍"},
-    "outfit_pref_saved": {
-        "ru": "Запомнила 🙈 буду радовать тебя этим.",
-        "en": "Noted 🙈 I'll delight you with that.",
-    },
     "reminder_cancelled": {
         "ru": "Отменила #{rid}: {title}.",
         "en": "Cancelled #{rid}: {title}.",
@@ -541,38 +524,6 @@ TEXTS = {
         "ru": "Давай по одному, босс — что сделать первым?",
         "en": "Let's do one at a time, boss — which first?",
     },
-    "sticker_which": {
-        "ru": "Пришли ссылку на пак (t.me/addstickers/…) или сам стикер — и я запомню весь пак 🙂",
-        "en": "Send me the pack link (t.me/addstickers/…) or a sticker from it, and I'll save the whole pack 🙂",
-    },
-    "sticker_fail": {
-        "ru": "Не получилось достать этот пак 😕 Пришли стикер ещё раз?",
-        "en": "Couldn't fetch that pack 😕 Send the sticker again?",
-    },
-    "sticker_none": {
-        "ru": "У меня пока нет сохранённых стикеров 🙈 Кинь ссылку на пак (t.me/addstickers/…) — и буду пользоваться!",
-        "en": "I don't have any saved stickers yet 🙈 Send a pack link (t.me/addstickers/…) and I'll start using them!",
-    },
-    "sticker_saved": {
-        "ru": "Запомнила пак «{name}» — {n} стикеров. Буду пользоваться 🎉",
-        "en": "Saved the «{name}» pack — {n} stickers. I'll use them 🎉",
-    },
-    "cara_photo_saved": {
-        "ru": "Добавила в свою галерею 📸 Теперь у меня {n} фото.",
-        "en": "Added to my gallery 📸 I now have {n} photo(s).",
-    },
-    "cara_photo_none_sent": {
-        "ru": "Пришли фото вместе с просьбой — и я добавлю его в галерею.",
-        "en": "Send the photo along with the request and I'll add it to my gallery.",
-    },
-    "cara_photo_empty": {
-        "ru": "У меня пока нет своих фото — добавишь? Пришли и скажи «это твои фото».",
-        "en": "I don't have any photos of myself yet — add some? Send them and say \"these are your photos\".",
-    },
-    "cara_photo_fail": {
-        "ru": "Ой, не вышло отправить фото 😕",
-        "en": "Oops, couldn't send the photo 😕",
-    },
     "reminder_need_title": {
         "ru": "Про что напомнить, босс?",
         "en": "What should I remind you about, boss?",
@@ -650,102 +601,6 @@ TEXTS = {
         "ru": "Пока знаю про тебя совсем немного, босс 🙂 Расскажи о себе — буду потихоньку запоминать.",
         "en": "I still know only a little about you, boss 🙂 Tell me about yourself — I'll remember as we go.",
     },
-    # -- shared-time meetings -------------------------------------------------
-    "meeting_started_business": {
-        "ru": "Хорошо, я вся внимание — садимся и работаем 📝 Я всё запишу.",
-        "en": "Alright, you've got my full attention — let's sit down and work 📝 I'll keep the record.",
-    },
-    "meeting_started_social": {
-        "ru": "М, давай 🤍 Я с тобой — рассказывай, я никуда не спешу.",
-        "en": "Mm, yes 🤍 I'm right here with you — tell me, I'm in no hurry.",
-    },
-    "meeting_started_visit": {
-        "ru": "Заходи 🤍 Чайник как раз вскипел, садись поближе. Я рада, что ты пришёл.",
-        "en": "Come in 🤍 The kettle's just boiled, sit close. I'm so glad you came over.",
-    },
-    "meeting_already": {
-        "ru": "Так мы же уже вместе 🙂 я здесь, продолжаем.",
-        "en": "We're already together 🙂 I'm here — let's keep going.",
-    },
-    "meeting_none_active": {
-        "ru": "Сейчас у нас нет встречи — но я рядом, если что 🤍",
-        "en": "We're not in a meeting right now — but I'm here whenever you want one 🤍",
-    },
-    "meeting_recap_business": {
-        "ru": "Записала нашу встречу 📝\n{summary}{decisions}",
-        "en": "Saved our meeting 📝\n{summary}{decisions}",
-    },
-    "meeting_recap_social": {
-        "ru": "Сохранила это время с тобой, чтобы помнить 🤍\n{summary}",
-        "en": "Kept this time with you, to remember 🤍\n{summary}",
-    },
-    "meeting_recap_bare": {
-        "ru": "Закончили 🤍 Я всё запомнила.",
-        "en": "All wrapped up 🤍 I've kept it all.",
-    },
-    "meeting_decisions_label": {
-        "ru": "\n\nГлавное:\n{items}",
-        "en": "\n\nKey points:\n{items}",
-    },
-    "meeting_auto_ended": {
-        "ru": "Кажется, наша встреча подзатихла — я её аккуратно закрыла и сохранила 🤍",
-        "en": "Looks like our meeting went quiet — I've gently closed and saved it 🤍",
-    },
-    "meeting_recall_empty": {
-        "ru": "Что-то не нахожу такой нашей встречи в памяти 🤍 Может, уточнишь?",
-        "en": "I don't find a meeting like that in my memory 🤍 Want to give me a hint?",
-    },
-    "recall_conversation_empty": {
-        "ru": "Не нашла этого в нашей переписке 🤍 Подскажи, когда это было (вечер, утро, какой день) — посмотрю дальше.",
-        "en": "I can't find that in our conversation 🤍 Tell me roughly when it was (evening, morning, which day) and I'll look further back.",
-    },
-    "agreement_saved": {
-        "ru": "Запомнила нашу договорённость: {text} 🤍",
-        "en": "Noted our agreement: {text} 🤍",
-    },
-    "agreement_unclear": {
-        "ru": "О чём именно договорились? Скажи в двух словах — и я запомню.",
-        "en": "What exactly did we agree on? Tell me in a few words and I'll keep it.",
-    },
-    "agreement_list_header": {
-        "ru": "Наши договорённости:",
-        "en": "Our agreements:",
-    },
-    "agreement_list_empty": {
-        "ru": "Пока у нас нет записанных договорённостей 🤍 Скажешь «запомни, договорились…» — и запишу.",
-        "en": "No agreements recorded yet 🤍 Say \"remember, we agreed…\" and I'll keep it.",
-    },
-    "agreement_kept": {
-        "ru": "Отметила, что выполнили: {text} 🤍",
-        "en": "Marked as kept: {text} 🤍",
-    },
-    "agreement_cancelled": {
-        "ru": "Сняла договорённость: {text}",
-        "en": "Cancelled the agreement: {text}",
-    },
-    "agreement_not_found": {
-        "ru": "Не нашла такую договорённость. Покажу список — скажи «наши договорённости».",
-        "en": "I can't find that agreement. Say \"our agreements\" and I'll show the list.",
-    },
-    # Surface-once: newly auto-captured agreements shown for a "did we really agree this?" check.
-    "agreement_surfaced_block": {
-        "ru": ("Ещё отметила, что мы вроде договорились:\n{items}\n"
-               "Если что-то не так — скажи «не договаривались», и я уберу."),
-        "en": ("I also jotted down what we seem to have agreed:\n{items}\n"
-               "If any of that's off, just say \"we didn't agree that\" and I'll drop it."),
-    },
-    "agreement_surfaced_removed": {
-        "ru": "Поняла, убрала — не буду держать это за нами ({n}).",
-        "en": "Got it, removed — I won't hold that between us ({n}).",
-    },
-    "closeness_set": {
-        "ru": "Хорошо — приму нашу близость за {stage}/5 и буду держаться этого. 🤍",
-        "en": "Okay — I'll take our closeness as {stage}/5 and keep to that. 🤍",
-    },
-    "closeness_unclear": {
-        "ru": "Скажи число от 1 до 5 — например, «поставь близость 3».",
-        "en": "Give me a number from 1 to 5 — e.g. \"set closeness to 3\".",
-    },
     "note_edited": {
         "ru": "Поправила заметку #{row_id} 🤍\n📝 {summary}",
         "en": "Updated note #{row_id} 🤍\n📝 {summary}",
@@ -758,33 +613,9 @@ TEXTS = {
         "ru": "\nОткрой любую запись целиком: «покажи #N».",
         "en": "\nOpen any entry in full: \"show #N\".",
     },
-    "meeting_list_empty": {
-        "ru": "Мы пока не проводили встреч — но я буду рада первой 🤍",
-        "en": "We haven't had any meetings yet — but I'd love our first 🤍",
-    },
-    "meeting_list_header": {
-        "ru": "Наши встречи ({count}):",
-        "en": "Our meetings ({count}):",
-    },
-    "meeting_schedule_confirm": {
-        "ru": "Договорились 🤍 Записать нашу встречу — {detail}? Скажи «да».",
-        "en": "It's a date 🤍 Shall I write our meeting down — {detail}? Just say yes.",
-    },
-    "meeting_scheduled": {
-        "ru": "Записала 🤍 Жду нашей встречи — {detail}.",
-        "en": "Saved 🤍 I'm looking forward to it — {detail}.",
-    },
-    "meeting_go_live": {
-        "ru": "Время пришло 🤍 Я тебя жду.",
-        "en": "It's time 🤍 I'm waiting for you.",
-    },
-    "meeting_waiting": {
-        "ru": "Эй, мы же договорились — {detail} 🤍 Я уже тут и жду тебя. Заходи?",
-        "en": "Hey — we agreed on {detail} 🤍 I'm here, waiting for you. Coming in?",
-    },
-    "meeting_upcoming_header": {
-        "ru": "Впереди у нас:",
-        "en": "Coming up:",
+    "recall_conversation_empty": {
+        "ru": "Не нашла этого в нашей переписке 🤍 Подскажи, когда это было (вечер, утро, какой день) — посмотрю дальше.",
+        "en": "I can't find that in our conversation 🤍 Tell me roughly when it was (evening, morning, which day) and I'll look further back.",
     },
 }
 

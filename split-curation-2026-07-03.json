@@ -1,0 +1,14 @@
+{
+  "_comment": "Cara/Nikki split — boss_profile_items curation proposal (Claude, 2026-07-03). Buckets: cara = business assistant keeps the row; nikki = companion gets the row (deleted from Cara); both = cross-cutting identity/style/discipline row kept in BOTH DBs (deliberate deviation from strict exclusivity — flagged to the operator). Unlisted ids (incl. rejected/deprecated audit rows) default to cara.",
+  "nikki": [9, 28, 30, 49, 52, 53, 58, 59, 60, 62, 63, 64, 65, 66, 71, 72, 73, 74, 75, 76,
+            77, 78, 79, 80, 81, 82, 83, 86, 87, 102, 103, 104, 105, 109, 110, 111, 112, 113,
+            116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 135, 138,
+            139, 140, 143, 145, 147, 148, 149, 150, 151, 152, 153, 156, 158, 159, 160, 161,
+            162, 163, 164, 167, 168, 169],
+  "both": [1, 2, 3, 4, 5, 7, 8, 16, 17, 22, 24, 26, 27, 29, 31, 32, 35, 36, 39, 40, 41, 42,
+           43, 45, 46, 47, 54, 55, 61, 69, 88, 90, 91, 92, 95, 96, 97, 108, 115, 131, 132,
+           134, 136, 137, 141, 142, 146, 154, 157],
+  "cara": [6, 10, 11, 12, 13, 14, 15, 18, 19, 20, 21, 23, 33, 37, 38, 44, 48, 50, 51, 56,
+           67, 68, 70, 84, 85, 89, 93, 94, 98, 99, 100, 101, 106, 107, 114, 130, 133, 144,
+           155, 165, 166]
+}

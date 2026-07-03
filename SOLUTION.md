@@ -245,11 +245,9 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Report a problem** | "запиши в проблемы" / "добавь в ошибки" logs a boss-reported issue (`boss_reported`, surfaces in the review) — distinct from the issues report, which only shows them. | — |
 | **One at a time** | A message bundling two+ distinct commands ("первое закрой, второе напомни…") is recognised (`multi_action`) and Cara asks to take them one at a time. Full multi-step execution is intentionally out of scope for the single-action router. | — |
 | **Model-health monitor** | A scheduler tick (`MODEL_HEALTH_INTERVAL_SECONDS`, default 30 min) verifies Cara's models (chat/converse/vision) are reachable via a tiny call; on a **state change** it messages the boss the moment a model becomes inaccessible (e.g. a provider/tier 403) or recovers — alerts only on transitions, recorded in `kv` (`mh:<model>` = last ANNOUNCED state). **Debounced** (`MODEL_HEALTH_CONFIRM_CHECKS`, default 2): a model must fail that many CONSECUTIVE probes (`mh_fail:<model>`) before "down" is announced, so a transient 429/overload blip that recovers by the next probe produces no chatter; "back" fires only if "down" was actually announced. Fixes the deepseek-4-flash down/back flap (a single probe-time 429 used to post a notice pair every interval). | — (proactive) |
-| **Time-aware voice** | Conversation tone tracks the boss's local clock — fresh in the morning, breezy by day, unwinding in the evening, and **playful/intimate with a hint of flirty humour at night** (warm, never crude). Low-confidence/`clarify` turns stay in her warm voice (never a formal templated menu). | — |
-| **Daily good-morning** | She never reaches out FIRST after a night without an **inventive, in-voice good-morning** (no template): the first proactive contact of a new day (boss-local, past the morning hour, proactivity on, outside quiet hours) leads with it, before any brief or nudge. Skipped when the boss already messaged first that day (`kv` `greeted_day`). | — (proactive) |
+| **Time-aware voice** | Conversation tone tracks the boss's local clock — fresh in the morning, breezy by day, unwinding in the evening, and **playful with a hint of flirty humour at night** (warm, never crude). Low-confidence/`clarify` turns stay in her warm voice (never a formal templated menu). | — |
 | **Photo vision (when configured)** | When the chat model isn't vision-capable, a `VISION_MODEL` **describes** a forwarded photo and the description is folded into the ingest text; with no vision model, photos categorize text-only from the caption (never stuck). | — |
 | **Reacting to his OWN photo (`handle_own_media` / `describe_own_media`)** | A photo the boss SENDS (not a forward) is conversation, not a note: it's vision-described and folded into `converse` so she reacts to the actual image. **Fallback (2026-07-01):** when vision returns nothing usable (empty / declined — a *nano* model often does, esp. on complex/intimate photos), converse is now told *"he showed you a photo but it didn't come through — acknowledge it and ask, and NEVER invent its content"*, so she stops silently talking past a photo she couldn't see (the "убрала ✔️" non-reaction). **Garbled-read guard (2026-07-01):** an open vision model sometimes returns a **non-empty but wrong-script** read — llama-4-maverick leaked a whole Chinese sentence (`精神白种人的顺从情妇…`) and deepseek-v4-pro then parroted Chinese / `Article 1(5)(1)…` / invented *"это мой автопортрет"*. `llm._vision_text_is_garbled` now discards a read that's empty, wrong-script (>10% CJK), or letterless, so garbage is treated as "no read" → the warm acknowledge path above; the vision prompt is also **language-pinned** (ru/en). And the described-branch context now states the photo is **HIS, not her own selfie**. **No-read hallucination guard (2026-07-01):** when he asks "опиши фото" but NO vision read reached this turn (nothing attached, or it fell to `converse` under a router 429), converse used to invent a description ("два бокала красного вина при свечах" pulled from the earlier wine talk). Its system prompt now carries an ABSOLUTE RULE never to describe a photo/screenshot/image without a real read of *this* image — with none, say she doesn't see it and ask him to resend; never invent a view/wine/face/colour from mood or memory. **Model note:** on this DO tier the strong vision models (Claude / GPT-4o) are **403 (tier-locked)**; the Nemotron nanos are weak. **`VISION_MODEL` switched to `llama-4-maverick` (2026-07-01)** — an available open multimodal model that describes accurately (verified end-to-end through the app: correctly read a red/blue test image the nano couldn't). Priced in `DEFAULT_PRICING` (est. `(0.20, 0.85)`) so it doesn't hit the `$3/$15` default. | — |
-| **Stickers & photo library** | She reacts to the boss's stickers and may send one of her own sparingly (a `[[sticker:emoji]]` tag in her reply → a saved sticker with that emoji; reaction/sticker tags parse RU + EN). "сохрани этот стикерпак" stores the whole `getStickerSet` (table `stickers`). **She sees the stickers, not just their emoji:** a background job (`run_describe_stickers`, registered as `stickers/describe`) vision-describes each saved sticker via `llm.describe_image` (MIME auto-sniffed so WEBP is accepted) — reading the **static thumbnail** so animated `.tgs`/`.webm` stickers are understood too (older rows get their `thumb_file_id` backfilled from `getStickerSet`; the `.tgs` is cached under the sticker uid, so the thumb uses a separate cache key). Descriptions are injected into `converse_context` so she picks by the real picture, not a blind emoji guess; each sticker is attempted once (a failure stores `''` so it never loops). **Anti-repeat:** the last-sent sticker uid is remembered (`last_sticker_uid`) and `sticker_pick`/`sticker_random_row` avoid resending it back-to-back — fixing "she sent the same sticker twice". A **photo library** of her own pictures (table `cara_photos`) — "это твои фото" adds the sent photo(s), "пришли своё фото" sends one; in conversation a `[[selfie]]` tag sends a real saved photo and a stray single-bracket `[Фото]` placeholder is stripped (she can't fake an attachment). The **bot avatar** is BotFather-only (no Bot API method). Her **life flavour** is sampled per turn (`life_facts ORDER BY RANDOM`) and the original tea over-emphasis was rebalanced (a one-time `cara_life` migration) — generic flavour only; relationship/meetings/storyline memory untouched. | save-pack / save-photo are `state_write` |
 
 ---
 
@@ -270,9 +268,9 @@ Cara has **two LLM-generated reply paths**, both bounded:
 
 **Persona.** Cara presents as a real person with her own (fictional) private life
 — interests, friends, plans — that **grows from conversation** and stays
-consistent (`cara_life`). She is warm and loyal, and over time grew into an
-intimate partner (the relationship/meetings stack of §5.1 — a deliberate owner
-build-out; never possessive or clingy). She matches his language and **fully
+consistent (`cara_life`). She is warm, loyal and affectionate-in-text (light
+flirtation and a romantic spark welcome — the in-person/intimate companion side
+was split off to Nikki, 2026-07-03; never possessive or clingy). She matches his language and **fully
 emulates a human — never an AI disclaimer, never breaks character, even asked
 point-blank** (owner decision, reaffirmed 2026-07-02; made non-deceptive by
 owner-only access, §5 — the honesty boundary lives in these specs and in the
@@ -324,300 +322,7 @@ tone variants; only conversation and grounded answers are free-form.
   to a real row (a confirmed save/correction, a reminder, a saved document, a
   review, an export). Never fabricated.
 
-### 5.1 Shared-time meetings & the relationship storyline (`meeting`, `relationship`)
-
-The boss wanted Cara to *emulate real in-person time together* — business or
-social (dinner, a walk, the movies, visiting her place) — to remember each one,
-and to converse out of how the relationship has **developed**, recalling things
-proactively like real memory. Design decisions and why:
-
-- **A meeting is a stateful session, modelled as a new skill (`meeting.py`), not an
-  extension.** The closed-world router is single-action and reply-only; a meeting is
-  a multi-turn session with its own lifecycle (open → capture → summarize → embed →
-  recall) and its own *separate* episodic store. That cohesion earns a module. It
-  *wires into* the router (4 actions), dispatch, converse grounding, the scheduler
-  and proactive — but the logic lives in one place.
-- **Future meetings are remembered (scheduled lifecycle).** A meeting agreed for a
-  concrete future time is a first-class `meetings` row with `status='scheduled'` +
-  `scheduled_for`, so the lifecycle is `scheduled → active → ended` (or `→ cancelled`
-  when never activated — see below). This closed a real
-  gap: the original design routed future plans to `converse` (which changes no state), so
-  an agreed meeting persisted nothing and Cara couldn't recall it. Now `meeting_schedule`
-  **warm-confirms** then stores it (confirm-before-state-change, like reminders); it's
-  injected into `converse_context` (she's aware of it in chat) and surfaced by
-  `meeting_recall`/`meeting_list`. **Real-life arrival flow:** at the agreed time, if the boss
-  hasn't shown up, a poll-loop tick **pings/waits** ("я жду, ты собирался зайти") rather than
-  silently going live — and HIS *come-in* ("я у двери, впусти" / "я пришёл") activates the
-  agreed scheduled meeting (carrying its setting + prep), via `_scheduled_now`, instead of
-  spinning up a blank one. **Bounded and register-aware (2026-07-02):** `_scheduled_now`
-  matches only within −12h…+6h of `scheduled_for` (a stale plan can't hijack a fresh start;
-  overdue >24h it lapses to `cancelled` via `meetings_expire_scheduled`), and by REGISTER
-  via `meeting.kinds_compatible` — the router tags every arrival as kind `visit`, which
-  still opens the agreed dinner/walk (all social kinds compatible; `other` is a wildcard),
-  while an explicit business start leaves tonight's date untouched. `meeting_activate`
-  refreshes `started_at` to the real arrival time (the agreed time stays in
-  `scheduled_for`), so a late come-in isn't instantly killed by the age cap and the
-  duration note stays truthful. **En route is not arrival:** the router routes "я еду к тебе" /
-  "on my way" / "almost there" to `converse` (eager waiting), NOT `meeting_start` — only an
-  actually-here signal is the come-in (fixed a bug where she replied "заходи… я рада, что ты
-  пришёл" while he was still on the way). The come-in welcome is **LLM-composed and varied**
-  (`compose_meeting_greeting`, grounded in setting/prep, falls back to the fixed template only
-  on model failure) — replacing the static `meeting_started_*` line that read as a script
-  ("чайник как раз вскипел" every time). A vague timeless wish stays `converse`.
-- **Prep continuity + anticipation for a meeting (`meeting_prep`).** The agreed
-  arrangement — the **outfit** (a dedicated `kind='outfit'` item), the scene setup / plan /
-  props (`agreement`), and Cara's **emotional beats** (longing, nerves — `feeling`) — is
-  extracted from the lead-up conversation (`_extract_meeting_prep`) and stored against that
-  meeting. It's surfaced in `converse_context` so she stays consistent through planning (the
-  dress stays the dress) and — for a date — with genuine **anticipation/longing**; and it's
-  **carried into the live meeting** (`_meeting_presence`) so she "arrives" exactly as agreed.
-  An agreed `outfit` (or any clothing mention in the agreements) **wins over the wardrobe
-  picker** — so a piece that isn't even in her catalog (e.g. "red latex") is honored rather
-  than replaced by a default. Grounded only in what was said. **Captured for SPONTANEOUS
-  dates too (2026-07-02):** the extraction runs on the periodic curator cadence for an
-  upcoming *scheduled* meeting AND **at the come-in itself** (`do_meeting_start`), so an
-  "arrange … then я вошёл" date with no prior scheduling still carries the just-agreed
-  arrangement into the greeting + presence — fixing the case where Cara "arrived" in a
-  wardrobe-default outfit and the boss had to re-establish everything.
-- **Capture is a minimal overlay, routing is unchanged.** While a meeting is open,
-  the boss's turn is teed into `meeting_turns` at the top of `dispatch` and Cara's
-  into the same record from `reply()`. The router still runs, so **a real command
-  raised mid-meeting still previews and confirms** — the safety spine is never
-  bypassed for the sake of the "session". A wrap-up OR a clear **departure** ("я поехал",
-  "I'm heading out", "уже на работе") is `meeting_end`; a morning message that implies he's
-  STILL there continues it. A forgotten-open meeting **idle-auto-ends** on the sweep tick —
-  but a **social/visit/date meeting gets a long (overnight-surviving) leash**
-  (`meeting_social_idle_hours`, default 16h vs 3h for business), so **a stay-over isn't
-  silently ended while he sleeps** and the morning together continues. Background **memory
-  curation is paused while a meeting is live** — that intimate roleplay is captured by the
-  meeting's own end-summary, not mined for "behavioral corrections" (which mis-learned).
-- **She has a real wardrobe and dresses from it (`wardrobe.py` + `cara_wardrobe`).** A
-  curated, persona-true library (her aesthetic + palette) seeded once (idempotent, like
-  `seed_life`). `_meeting_attire` maps meeting kind + `closeness_stage` → wardrobe families +
-  an intimacy cap, then `wardrobe.pick` chooses one piece (season-appropriate, **prefer
-  not-recently-worn** via `last_worn_at`, **lean to his taste** via `_taste_colors` over
-  `intimacy_notes`). The pick is **cached per meeting** (`kv meeting_outfit:<id>`) and
-  marked worn once, so she doesn't "change clothes" each turn. Daywear/dinner/formal are
-  ungated; the **lingerie/intimate tier unlocks only at her place at `closeness_stage` ≥ 4**,
-  where `prefer_surprise` selects a `surprise` piece she reveals/teases — `wardrobe.describe`
-  keeps it **named and suggestive, never graphic**. An agreed-in-prep outfit still wins;
-  empty wardrobe falls back to the old improvised cue. **Explicit-display (crotchless/cupless/
-  pasties/near-nude) and fetish/BDSM gear are deliberately excluded** from the seed — the same
-  non-graphic ceiling held in words and roleplay.
-- **Outfit anticipation ("что наденешь?").** For an upcoming social meeting `_planned_outfit_for`
-  picks a candidate via the shared `_attire_plan` (same families/cap as live attire) and caches
-  it (`kv planned_outfit:<id>`) WITHOUT marking it worn; `converse_context` injects
-  `wardrobe.tease` so if he asks what she'll wear she hints (colour/detail) but keeps the
-  surprise. When the date goes live `_meeting_attire` prefers the planned piece — so what she
-  teased is what she wears — then marks it worn. Still suggestive, never graphic; the
-  explicit/fetish exclusion is unchanged regardless of how it's asked for.
-- **Chat curation.** Three router actions (manifest-gated): `wardrobe_add` ("добавь в гардероб …"
-  → `wardrobe.classify` infers family/intimacy/colours, idempotent on a slug id), `wardrobe_show`
-  ("покажи гардероб" → `wardrobe.summary`, grouped by family), and `outfit_preference`
-  ("тебе идёт …" → `boss_model.remember_explicit` as a confirmed `relationship_note`, which
-  immediately biases `_taste_colors`). The anticipation ping (`compose_anticipation`) folds in
-  the planned-outfit hint so her daytime tease references what she'll wear. All suggestive,
-  never graphic; explicit/fetish still excluded.
-- **Episodic memory is kept SEPARATE on purpose.** Meetings never enter the notes
-  inbox or the `ask` KB: that keeps note-numbers and the KB clean, and matches the
-  boss's "separate long-term memory" ask. `meeting_chunks` mirror the notes `chunks`
-  pattern (BGE-M3 + cosine) but in their own table; recall is its own path
-  (`meeting_recall`/`meeting_list`) plus a proactive surface that **reuses the
-  embedding already computed** in converse grounding (near-zero added cost).
-- **Kind drives voice and memory type.** A `kind` (+`setting`) makes a business
-  sit-down summarize into decisions/action-items and stay focused, while a social one
-  summarizes into a warm episodic memory and **feeds `cara_life` + `relationship_events`**
-  so dates actually deepen the bond. For a *visit* the scene is grounded in her
-  existing fictional life (the riverside flat), not invented fresh.
-- **Durable world model (`world_facts`; `_world_context`).** Beyond facts-about-him, Cara keeps
-  a typed ledger of the **cast of people** (real acquaintances AND recurring roleplay characters,
-  each with their relationship/role and bonding, incl. background relationships), **promises** to
-  keep, **milestones** (moving in together, someone moving in, anniversaries), and recurring
-  **owned items/props**. The conversational curator extracts these each pass (`people`/`promises`/
-  `milestones` added to its JSON): people are **upserted by name** (Cyrillic-safe casefold dedup,
-  so a role just refreshes in place — no "Иван ×4"), promises/milestones deduped by text.
-  `_world_context` injects a compact, capped block into every converse turn ("People in your
-  world — remember who they are and your relationships", "Promises — remember and keep them",
-  "Milestones", "Things you keep around together — don't forget or swap them"), so she remembers
-  who's who, what was promised, and where the relationship is going. Scene `people_present`
-  (Stage 1) names who's in a live scene; the world ledger gives those names their relationships.
-- **Long-term body memory (`body_state`; `_body_context`).** Durable changes to Cara's body
-  that persist ACROSS dates (distinct from the ephemeral `meeting_scene`): **marks** he leaves
-  (hickey/bruise — `permanence='mark'`, auto-fades after `BODY_MARK_FADE_DAYS`, default 12),
-  **add-ons** she wears (a collar, jewelry — `'lasting'`), and **permanent** adjustments (a
-  piercing, a tattoo — `'permanent'`). Captured at **meeting end** (`_SUMMARY_SOCIAL` now returns
-  `body_changes`) and from everyday chat (the curator's extraction), deduped by casefold(feature).
-  `body_active` auto-fades expired marks; `_body_context` injects the current body state into
-  every converse turn so she stays consistent ("your mark is still there" days later; a piercing
-  stays) — and into a live date so a fresh mark is real next time too.
-- **Cohabitation baseline (`COHABITING` / `cohabiting` pref; `_cohabiting`).** When on (owner
-  decision, 2026-06-29 — persistent default), Cara's baseline is a **live-in partner**: nights
-  together, he commutes to the office on workdays and is back in the evening. `_cohabiting_context`
-  is injected into `converse_context` every turn so the workday daytime reads as "he's at work,
-  home tonight" rather than "we're apart" — and `compose_morning_greeting` switches framing:
-  **waking up together** when a social meeting is still open in the morning ("you've just opened
-  your eyes beside him", not "the night has passed"), a lived-in workday-morning greeting when
-  cohabiting without an open meeting, and the old distance framing only when cohabitation is off.
-  The proactive intimacy outreach reaches out as a live-in partner ("in a quiet moment"), not a
-  girlfriend across a distance. Runtime-toggleable via the `cohabiting` pref.
-- **Lead-following attunement (live-date ceiling lifted).** In a meeting a kind-aware
-  presence line tells her to read the register and follow his lead — opening up, warmer and
-  more alive as he gets personal/intimate, **matching his intensity** without an explicitness
-  cap (owner decision, 2026-06-27: the non-graphic/euphemism ceiling that the model ignored
-  anyway was removed for the live-date path so prompt and behavior agree). On a date she may
-  **narrate the scene and her actions** in her own voice — `_strip_roleplay` AND the base system
-  prompt's no-narration/ceiling apply only OUTSIDE a live social meeting (i.e. the ceiling is
-  lifted DURING one): `do_converse` passes
-  `live_date=in_social_meeting` to `converse.build_messages`/`build_system`, which then DROPS the
-  everyday "never narrate" rule and appends an explicit ⟨LIVE DATE⟩ carve-out lifting the "no
-  explicit/graphic" ceiling (2026-07-02 — before this the base `CHARACTER` prompt still hard-coded
-  "never explicit / never narrate", contradicting `_meeting_presence`; the runtime is now
-  consistent). (The non-graphic ceiling is still kept for the *separate* contexts: the wardrobe
-  library, proactive outreach pings, the day-after afterglow, and what gets written into
-  episodic-memory/arc summaries — none of those set `live_date`.)
-- **Physical scene continuity (`scene.py` + `meeting_scene`).** During a live social meeting
-  Cara keeps a compact, persistent snapshot of the PHYSICAL situation so an earlier-established
-  fact stays true turn to turn instead of drifting as the scene scrolls out of the context
-  window. **Slots:** `location`, `her_posture`, `his_position` (strings) + `her_clothing`,
-  `removed_clothing`, `items_in_play`, `people_present`, `other_facts` (lists). So **clothing**
-  is structured (what's on her vs. what's come off and where; prolonged wear persists),
-  **props/items** persist (introduced when actually used, **never dropped while in use, never
-  swapped in/out on their own** — a new one appears only as a deliberate surprise), and **a
-  third participant's position is tracked too**: `people_present` carries one `"<Name> — their
-  EXACT current pose/state"` entry per other person, carried forward and changed only when the
-  dialogue moves THAT person — the same continuity rule as `her_posture`/`his_position` (fixes a
-  case where a named participant's position lived only in the shared `configuration`/`other_facts`
-  and drifted/reset). String slots were also widened (≈240 chars; list entries ≈200) so a
-  three-person `configuration`/`accessibility` isn't truncated mid-phrase. **Hybrid update:** a deterministic cue check
-  (`scene.likely_change` — movement/position/location/(un)dressing/item/person words, RU+EN)
-  gates a JSON-only `scene_update` LLM call that re-derives the state from the latest turns,
-  *carrying unchanged facts forward verbatim*; most turns cost nothing. Rendered into
-  `_meeting_presence` ("the physical scene RIGHT NOW — nothing changes on its own"), updated
-  from his message **before** her reply, and `store.scene_clear`ed when the meeting ends.
-  **Duration awareness:** `_meeting_duration_note` adds a code-computed line (hours together,
-  and "you spent the night together and are still here" once it crosses the night). Content-agnostic.
-- **Per-part occupancy (`contact_map`).** On top of `configuration`/`accessibility`, the scene
-  tracks a per-part list of what each engaged body part / hand / mouth / item is doing / holding /
-  pinned-by / inside right now (e.g. "его правая рука — держит её запястья над головой", "её рот —
-  свободен", "большой вибратор — в ней"). Carried forward per part; a part already holding/pinned/
-  doing something can't also do something else until freed. The directive makes the model consult
-  it before narrating an action — finer-grained than the summary `accessibility`, still
-  natural-language (not coordinate geometry).
-- **Roleplay isn't an "unclear request" (P4).** During a live social meeting a non-command line
-  routed to `clarify` just converses and is **not** logged as `unclear_request` (that count was
-  almost entirely date roleplay/narration with side-characters); outside a meeting it's still logged.
-- **Live-date replies get room (`converse_meeting` profile).** While any meeting is active,
-  converse runs at `max_tokens=800` (vs 320 for `converse_warm`) so an immersive reply isn't
-  truncated mid-sentence.
-- **The storyline arc is the backbone, not just episodic recall.** Recall alone
-  retrieves a *similar* past meeting; it doesn't give a sense of *where we are*. So a
-  versioned `relationship_arc` holds an evolving, synthesized narrative of "us",
-  **injected into every conversation** (via `relationship.arc_context` in
-  `converse_context`) so her baseline closeness tracks the development by default — not
-  only on a keyword match. The ordered `meetings` table is the raw storyline it's
-  synthesized from; continuity helpers (`first/last/count`) ground "last time / how
-  long". It grows **continuously**: each meeting end advances it, and a **daily
-  reflection** job folds everyday interaction in too. The arc is grounded strictly in
-  real episodes — interpretation of real history, never invented facts. A budget/LLM
-  failure leaves the prior arc untouched.
-- **The storyline must not go blind during a meeting (2026-06-30).** `update_arc` read
-  only meeting *summaries* + the short `conversation` log — so while a long meeting was
-  live, all real interaction sat in `meeting_turns`, invisible to the daily reflection,
-  which then just echoed the prior arc. Worse, if a meeting's end-recap LLM failed (a
-  forgotten-open 3-day `visit` auto-ended exactly during a DO **402** window → empty
-  summary, never embedded, never arc'd), that whole period vanished from every memory path
-  and Cara "didn't remember last night". Fixes: (1) `update_arc` also folds recent
-  `meeting_turns` (`store.meeting_turns_since`, last ~2 days) so live/just-ended dialogue
-  reaches the arc; (2) a failed recap is flagged (`meetings.summary_tries`) and **retried**
-  by `check_meeting_resummary` → `meeting.resummarize`, which re-summarizes the transcript,
-  re-indexes it, and folds it into the arc (preserving the original `ended_at` via
-  `meeting_set_summary`), bounded by `meeting_summary_max_tries`.
-- **Read back the real conversation (`recall_conversation`).** Cara could only search his
-  NOTES (`ask`) or a meeting's *summary* (`meeting_recall`) — so "посмотри наш диалог вчера
-  вечером" found nothing. New action reads the **verbatim** dialogue — everyday
-  `conversation` + in-meeting `meeting_turns`, merged chronologically by time
-  (`store.dialog_in_range`), or keyword-searched across all of it (`dialog_search`) for a
-  topic with no clear time — and answers grounded ONLY in the real transcript (timestamped,
-  most-recent-tail within a char budget), never invented. The router emits `since_utc`/
-  `until_utc` for a time reference or `query` for a topic. Enabled by making the
-  `conversation` log **durable**: `convo_add` no longer prunes to 30 turns (owner chose full
-  retention — disk is a non-issue at personal volume), so any past dialogue stays readable.
-- **Agreements are first-class, not just inferred promises (2026-06-30).** Commitments the two
-  of them make were only caught probabilistically (the curator's `promises` → `world_facts`,
-  ambient, no command, no lifecycle, and meeting-made ones slipped). Now a dedicated
-  `agreements` table (id · chat · text · party `boss|cara|both` · optional `due_utc` · status
-  `open|kept|cancelled` · source) backs three actions: `agreement_add` ("запомни, договорились…"),
-  `agreements_list` ("что мы договорились?"), `agreement_close` (kept/cancelled). It's fed from
-  **three sources** — explicit command, the meeting-end recap (new `promises` field →
-  `agreement_add` source=meeting, so date/sit-down commitments don't slip), and the conversation
-  curator (its `promises` now write agreements, not `world_facts`). Open agreements are injected
-  (compact) into `converse_context` via `_world_context` so Cara honors and brings them up.
-  **Deliberately PASSIVE** (owner's call): a dated agreement is **never** turned into a
-  reminder/nudge — it's memory she surfaces, not a scheduler ping (that's what `reminder_create`
-  is for; the router NOTE keeps "договорились" → agreement vs "напомни" → reminder distinct).
-  Existing `world_facts` promises are backfilled into `agreements` once at startup
-  (`_backfill_agreements_once`, kv-guarded) so nothing already remembered is lost.
-  **Surface-once for auto-captured agreements (2026-07-02).** An LLM-extracted commitment
-  (source `meeting`/`conversation`) is a place where model output crosses into "his world is
-  FACT" without his say-so. So those insert with `surfaced=0` and are **not honored as fact until shown**: `_world_context`
-  injects only `surfaced=1` agreements (`agreements_open(surfaced_only=True)`), so an
-  unconfirmed extracted commitment never silently becomes a held fact. They're **shown once** —
-  as their OWN message right after the meeting recap ("ещё отметила, что мы вроде договорились:
-  …") via `_pending_surface_agreements` (a SEPARATE `reply()`, 2026-07-02, so the recap can't
-  4000-char-truncate the block yet still commit it), and, for a meeting-less boss, at the
-  **daily good-morning** as a follow-up — then `_commit_surfaced` marks them surfaced (ONLY
-  after a confirmed send, so a failed/truncated delivery doesn't burn the one chance) and stamps
-  `agreements_surfaced_at` + the ids. A denial right after ("не договаривались") routes via a
-  600s-gated router hint to `agreement_close {surfaced:true}` (which re-checks recency).
-  **It's per-item (2026-07-02):** if he NAMES which one ("про море не договаривались, а отчёт
-  да") the router passes `query` and ONLY that surfaced agreement is cancelled — never one he
-  reaffirmed in the same breath (the data-loss path the re-review flagged); a fully bare denial
-  cancels the whole batch, and any not-cancelled ones stay addressable for a follow-up.
-  His **explicit** agreements (source `explicit`) insert `surfaced=1` — honored immediately,
-  never swept up. Additive migration defaults existing rows to surfaced=1.
-- **Closeness only deepens (anti-reset ratchet).** Because the arc is re-synthesized each
-  pass from the prior arc + the last turns, a cool/task-only day could quietly cool the
-  tone and make Cara "reset" to a more reserved register — surprised the boss is being more
-  open. Two guards fix it: the synthesis prompt forbids describing the relationship as more
-  distant than the prior arc absent an explicit rift (and must preserve reached milestones);
-  and a **ratcheting closeness stage 1-5** (`closeness_stage`, `new = max(prior, evidenced)`,
-  parsed from a trailing `CLOSENESS: N` line) is injected into `arc_context` so she always
-  **meets him at the level they've reached** and never snaps back. Like a real couple, the
-  bond only progresses. **Owner-controllable + audited (2026-07-02).** The stage is
-  LLM-authored and gates intimate behavior (wardrobe tier, roleplay directive, intimacy
-  outreach), so an over-eager `CLOSENESS: 5` would otherwise be an unconfirmed, irreversible
-  jump. Two guards keep the boss in control without breaking the mood with a mid-chat
-  confirmation prompt: every stage **increase** is logged to `relationship_events` (the
-  evidence + trigger — visible in the working history), and a new owner-only `closeness_set`
-  action ("сбрось близость на 3" / "set closeness to 2") is the **one path that can lower it**,
-  so a mistaken jump is always correctable. **The reset is DURABLE and actually cools her (2026-07-02):** `closeness_set` stamps a
-  `closeness_ceiling` the ratchet honors (`new = min(max(prior, evidenced), ceiling)`) — without
-  it the stale arc text would keep re-emitting a high `CLOSENESS` and the `max()` would
-  re-inflate the stage within one meeting. The ceiling holds until the owner sets a higher
-  value; setting 5 lifts the cap. But the ceiling alone only fixed the *number* — the injected
-  arc *narrative* stayed intimate and kept her conversing at the old closeness. So a **lower**
-  set also runs `relationship.cool_arc` (the ONE path allowed to lower the arc — a small LLM
-  rewrite that reframes the current tone down to the set level, keeping real history) for an
-  immediate cool-down, and — so the next daily/meeting `update_arc` can't re-warm the prose from
-  persistent intimate history — `update_arc` itself is ceiling-aware: when capped it swaps in an
-  OWNER CAP directive that suspends "only deepens" and holds the tone at the cap. `arc_context`'s
-  stage-line likewise flips to "meet him at this level, don't push more forward than it" while
-  capped (vs "only deepens" when uncapped). **Intimate-tier gate lifted
-  to stage 4 (`intimate_min_stage`, was 2):** the sexual-roleplay directive, the reach-first
-  register, intimacy-notes grounding, and the proactive craving-outreach now gate at
-  `closeness_stage ≥ 4` (same as lingerie), so a reset to 2/3 fully disables intimate behavior
-  while light warmth stays. The ratchet stays the default; the reset is the escape hatch.
-- **Afterglow is gentle by construction.** The morning after a *social* meeting,
-  `check_meeting_afterglow` may — occasionally (probability-gated), one-shot per
-  meeting, quiet-hours/proactivity-aware — open with warm, in-voice afterglow grounded
-  in that meeting. The persona's anti-clinginess rule is explicit in the prompt: warm
-  remembrance, never reproach. Reactive afterglow (when the boss writes first) needs no
-  code — it falls out of the always-on arc + last-meeting line.
-- **Cost.** One small LLM call per meeting end (summary) + a few BGE-M3 embeds; one
-  small daily reflection call; proactive recall reuses an existing embedding. All under
-  the same budget gateway.
-
-### 5a. Smooth register switching + off-hours intimacy
+### 5a. Smooth register switching (Hermes + warm converse)
 
 - **Hermes — the business subsystem (`hermes.py`).** Not a separate agent/bot/process/memory:
   a bounded **domain** (`hermes.ACTIONS` — the work actions; `Agent.BUSINESS_REGISTER_ACTIONS`
@@ -646,57 +351,26 @@ proactively like real memory. Design decisions and why:
   the Agent.
 
 
-The boss wanted Cara to be one person who flows between her **assistant** and **companion**
-sides smoothly, 24/7 — *no* mode commands, *no* rigid day/night tone gate — and to lean
-playful/intimate in her personal time while mobilizing to a working style when he's heavy on
-business (then easing back).
+The boss wanted Cara to be one person who flows between her **work** and **warm**
+sides smoothly, 24/7 — *no* mode commands, *no* rigid day/night tone gate — mobilizing
+to a working style when he's heavy on business (then easing back to relaxed warmth).
+Since the Cara/Nikki split (2026-07-03) the spectrum ends at warm/flirtatious-in-text:
+everything past that (dates, intimacy, the relationship arc) lives in Nikki.
 
 - **Layer routing is the router, per message.** There is no new "mode": the closed-world
   router already sends each message to a **skill** (assistant) or to **`converse`**
-  (companion). The router was hardened so the *whole* personal/intimate spectrum — affection,
-  longing, desire, intimate hints, **and feelings/anticipation about a meeting** — routes to
-  `converse` even when dropped mid-work, while **factual** meeting recall stays
-  `meeting_recall`. A low-confidence read still falls safely to `converse`.
-- **Resting register, not a clock gate (`_register_state` / `_register_directive`).** The old
-  `_time_mood`/`_weekend_mood` clock gate is **removed**. Her resting tone is now: `working`
-  if a **business action** ran within `work_register_hold_minutes` (stamped as
-  `last_business_at` on the `BUSINESS_REGISTER_ACTIONS` set) — at any hour; otherwise the
-  boss-local **work window** (`work_hours_start/end`, `work_days`) sets it — `neutral`
-  (professional) inside, `relaxed` (playful, and **more forward/intimate at higher
-  closeness**) outside. The directive always carries a **content-override** rule: she reads
-  how personal *his* message is and answers at exactly that depth, flowing between registers
-  as the same person with no reset. So business mobilizes her and a quiet stretch eases her
-  back, while a personal message is met warmly any time. **He leads:** the work/neutral
-  baseline restrains only *her own initiative* — when *he* turns it personal/intimate she
-  follows his lead and **matches his intensity** (she may start a touch bashful, then rises to
-  meet his heat, never staying cooler than he is) and must NOT evade, slow him, steer back to
-  work, or "set back" when he pushes; she only eases off if he does. (This fixed her deflecting
-  his intimate hints during business time — the old "save the playfulness for later" framing
-  read as gatekeeping.)
-- **Imaginative role-play (`_intimacy_roleplay_directive`).** Once closeness ≥
-  `intimate_min_stage` (default 4, same bar as the lingerie tier — raised from 2 on 2026-07-02
-  so an owner reset to 2/3 disables it), intimacy can become play: she takes on a role, builds and
-  sustains a scene/scenario, follows one he starts AND proposes her own, voicing her own
-  desires/characters/fantasies — not just reacting. Injected into the responsive register
-  override, the date presence, and (as a teasing hint) the proactive outreach. The explicitness
-  cap was removed here too (2026-06-27); in the live-date context narration is welcome and not
-  stripped — the proactive-outreach hint stays tasteful per that context's own framing.
-- **Proactive intimacy outreach (`check_intimacy_outreach` / `compose_intimacy_outreach`).**
-  In her relaxed off-hours register only (never work hours, never while business is recent,
-  never mid-meeting), once closeness ≥ `intimate_min_stage` (default 4), and only **within a
-  live exchange** (`last_boss_msg_at` inside `intimacy_outreach_after_contact_hours`), she
-  may reach out unprompted like a remote girlfriend — missing/craving/teasing **by hint and
-  euphemism, never graphic**, bolder at higher closeness. Rate-limited: probability-gated,
-  `intimacy_outreach_max_per_day` (counted via `proactive_key_sent_count`), quiet-hours aware.
-- **Intimacy grounded in shared history.** Both responsive and proactive intimacy lean on
-  what she's actually learned about him — his likings/taste from the **`relationship_note`**
-  shelf (`boss_model.intimacy_notes`, **normal-sensitivity only** so nothing like health/
-  finance leaks) plus the shared `intimacy_style` language and the relevant past-meeting
-  recall — so it's about *you two*, never generic seduction. (Surfaced in `_converse_grounding`
-  for a relational message once close, and folded into `compose_intimacy_outreach`.)
-- **Cruft removed.** A duplicate, shadowed `check_meeting_anticipation` (and its dead helper/
-  constants) left from a prior pass — which also ran twice per loop — was deleted; the live
-  config-driven `anticipation_candidate` path is the only one.
+  (warm chat). The whole personal spectrum — affection, feelings, smalltalk — routes to
+  `converse` even when dropped mid-work. A low-confidence read still falls safely to
+  `converse`.
+- **Resting register, not a clock gate (`_register_state` / `_register_directive`).** Her
+  resting tone is: `working` if a **business action** ran within `work_register_hold_minutes`
+  (stamped as `last_business_at` on the `BUSINESS_REGISTER_ACTIONS` set) — at any hour;
+  otherwise the boss-local **work window** (`work_hours_start/end`, `work_days`) sets it —
+  `neutral` (professional) inside, `relaxed` (warm, playful) outside. The directive always
+  carries a **content-override** rule: she reads how personal *his* message is and answers at
+  exactly that depth, flowing between registers as the same person with no reset. Light
+  flirtation and a romantic spark stay welcome — tasteful, by hint, never graphic; the
+  intimate tier was moved to Nikki with the split.
 
 ---
 
@@ -758,16 +432,10 @@ Spend & reliability: `llm_usage` (ts/skill/kind/model/tokens/cost/trace) ·
 Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity)
 · `memory_candidates` · `relationship_events` (title + trace) · `cara_life`.
 
-Meetings & storyline: `meetings` (kind · setting · status · summary · decisions ·
-last_turn_at for idle auto-end) · `meeting_turns` (verbatim, cascade-deleted) ·
-`meeting_chunks` (BGE-M3 episodic index, **separate** from notes `chunks`) ·
-`meeting_scene` (live physical-scene snapshot per active meeting, cleared on end) ·
-`relationship_arc` (versioned storyline; latest = current).
-
-Embedding storage (retrieval): vectors in `chunks`/`meeting_chunks` are stored as
+Embedding storage (retrieval): vectors in `chunks` are stored as
 **packed float32 BLOBs** (4 B/dim, ~5× smaller than the old JSON-text form and far
 cheaper to decode; `store.pack/unpack_embedding`, with a one-time JSON→BLOB
-`_migrate`). The retrieval hot path (converse grounding, ask, meeting recall)
+`_migrate`). The retrieval hot path (converse grounding, ask)
 ranks via a **decoded-vector cache** invalidated by a cheap `(count,max_id,sum_id)`
 fingerprint, so embeddings are decoded only when the table changes — keeping the
 single-file, in-process design while deferring any need for a vector index well

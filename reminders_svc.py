@@ -325,7 +325,7 @@ class ReminderMixin:
         for row in store.reminders_due(self.conn, now_iso):
             # A reminder is an EXPLICIT alarm the boss set for a chosen time: it fires at that
             # time even inside quiet hours (quiet hours only silences Cara's PROACTIVE outreach
-            # — nudges/brief/good-morning) and is never frozen for a whole meeting. The ONLY
+            # — nudges/brief). The ONLY
             # in-conversation safety is the ~5-min lull: it won't land within
             # reminder_quiet_after_msg_minutes of his last message, so it never interrupts an
             # active exchange — EXCEPT the max-defer valve: an alarm overdue beyond

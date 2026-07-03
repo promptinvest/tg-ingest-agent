@@ -1,0 +1,162 @@
+{
+ "agreements": {
+  "count": 14,
+  "sha256": "be38a5ec11e7b4b62b190acfdbe47b36d160aac28bf201f5f0fcf1a982c805b7"
+ },
+ "body_state": {
+  "count": 16,
+  "sha256": "ff69e9d77c91b8b665c32e8b92396456eea20a83f59ff39f65111fc6d6294828"
+ },
+ "boss_profile_items": {
+  "count": 169,
+  "sha256": "f1081604a68a960480048378f099e485f0a9ee85c1995b79836deb935d4b4de5"
+ },
+ "cara_life": {
+  "count": 95,
+  "sha256": "c965472bdf6f3effd4a41d98ffca273c8501cdbede2eadeea57d8f997a44e05c"
+ },
+ "cara_photos": {
+  "count": 6,
+  "sha256": "f22bc8e1d92524b64091543d16aa3f621f2c47127e5442777dfe246867ab146a"
+ },
+ "cara_wardrobe": {
+  "count": 34,
+  "sha256": "12fcd562128f374d847959df3fc8bd7836cd53ffb8b468fa718ca362b93876e3"
+ },
+ "categories": {
+  "count": 19,
+  "sha256": "6fc701db29984f8857fddc6c5fcc1baa11cb9916e81a09b002b9fa92cef1d989"
+ },
+ "chunks": {
+  "count": 44,
+  "sha256": "48cbfb831b71fbf0e5a066b3e755a4f438668f40e7cb0a2495b8610c3af717fc"
+ },
+ "conversation": {
+  "count": 320,
+  "sha256": "24dfb4c7b00661fbb2d2e5a3c73138bd7dc3a9b2ac9607452fccbc8f4f5c943d"
+ },
+ "events": {
+  "count": 1854,
+  "sha256": "bf5696774e595dade621e5a275d8d45d63318ad281c30bd020096d464ca78147"
+ },
+ "facts": {
+  "count": 41,
+  "sha256": "e2d007b7269768923d5254acda677d031e1305f7b943a6ab0033613533309f03"
+ },
+ "feedback": {
+  "count": 18,
+  "sha256": "63876ec8b6e8021772916ed983496e4d331e01ff02c4fb862a731f8820a1cb39"
+ },
+ "files": {
+  "count": 4,
+  "sha256": "5513950f9754e3c28ce9e759b16145d03f73ede2f171ea4fbaddb51357cc62a3"
+ },
+ "images": {
+  "count": 4,
+  "sha256": "ca90984b72d6bcb74a853c8deba9d727ddb144faeaf1cdabfb47f654ba8b2ba2"
+ },
+ "intimacy_style": {
+  "count": 9,
+  "sha256": "57db0b7ab44c59577e2277e45a5d34a22d6d0fcd3701d759cb8cb6846730cdb7"
+ },
+ "issues": {
+  "count": 185,
+  "sha256": "ded7a2ff10bb94418ecbe022f3768c44c13254658b15c04b5b504094780640c1"
+ },
+ "jobs": {
+  "count": 16077,
+  "sha256": "5b96bf50047f340ee5efb5afd3b8555f906726c15de65b2524718def03bfa39d"
+ },
+ "kv": {
+  "count": 46,
+  "sha256": "9a8c16bc2f46fe04d416127e467b08a1e4a41ba0d885019632e701580a5922d3"
+ },
+ "list_views": {
+  "count": 1,
+  "sha256": "9358cfb2a6678fc30b54671b2bd513a0f7868dfafb56e75a50b782b22b55114a"
+ },
+ "llm_usage": {
+  "count": 5642,
+  "sha256": "8c8e6e07192a5bd15a3f8c55fcdeaa8be89c3e6ca678097c3460f84b0ee76ce3"
+ },
+ "meeting_chunks": {
+  "count": 463,
+  "sha256": "0804c9bf8f0557880711549e69e9e26aff282f4a7d574ad08a0870cc83bb1a50"
+ },
+ "meeting_prep": {
+  "count": 20,
+  "sha256": "2ce98ad0e321e004d3858694f834638e7e1615f84febd99fcdc6ba4b4fcf9646"
+ },
+ "meeting_scene": {
+  "count": 1,
+  "sha256": "b272baaad1fc7cd4ee52db82955e26c7462cdb3d41044fa9587b5e4b88732650"
+ },
+ "meeting_turns": {
+  "count": 1331,
+  "sha256": "2d40e1dd7f26bd900f082e50c44cbde0438d935cb642bd5304fff4385bb9a0a3"
+ },
+ "meetings": {
+  "count": 7,
+  "sha256": "e18d1c81bad9e3f93f21895a42571017fe6e75c805fafd14ab96ee252435194a"
+ },
+ "memory_candidates": {
+  "count": 135,
+  "sha256": "cba681e59e40c5d5a147c58a6e308b92edb3dced63aa8f64d67260e61ea069fa"
+ },
+ "messages": {
+  "count": 17,
+  "sha256": "6e639588329c42a7689908471c7975bd5fb8d54d687a8e861f1afe513d36e246"
+ },
+ "model_cooldowns": {
+  "count": 42,
+  "sha256": "6a166200ba82318b9209f1211a59a3a945bfe8852996ec5506ce737ee269bc99"
+ },
+ "pending_actions": {
+  "count": 0,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ "preferences": {
+  "count": 8,
+  "sha256": "8fb9b17c75bd8fb3d7d100fbb1357ba8b988ff9738f063b6dfe4857ecdc4d257"
+ },
+ "proactive_log": {
+  "count": 325,
+  "sha256": "502106fa5aa0e0bc015dd76acb16879b77ba5af0b785466d5528f3055fa88b65"
+ },
+ "relationship_arc": {
+  "count": 19,
+  "sha256": "c29faffa347175551d57cbb2c047550b692f371ecc152e04f1c82c4ec353dfe3"
+ },
+ "relationship_events": {
+  "count": 250,
+  "sha256": "10bf80428bad3d2bb573234f73bd0e529b99902ab4a59f8ee865129a4a3b725d"
+ },
+ "reminders": {
+  "count": 55,
+  "sha256": "f79530bff83fb126be7569421d76369799d9c8a03d9da5f7fd218f9970e67c07"
+ },
+ "self_facts": {
+  "count": 10,
+  "sha256": "f881b44cda407e8842f2034c4eaa8e6bfd11a4338473208a3cbb604b2f807a47"
+ },
+ "stickers": {
+  "count": 23,
+  "sha256": "03da492520e5ec4a2a4238ca208adc54e5737f1c90a8db14b35daa0059e61c82"
+ },
+ "trace_events": {
+  "count": 2389,
+  "sha256": "f54bbb319756ee82fa887135989cf870bf6ebef2995141f626cc174879e1f038"
+ },
+ "traces": {
+  "count": 18233,
+  "sha256": "1658bf71b39cc7810b97b0d5fcf5888a01fea1d85939a390e9399c3830712541"
+ },
+ "urls": {
+  "count": 7,
+  "sha256": "06ea4b79439a8f9e5c8fd19777796628f3a634c84c20098fb77a4a1018b65c73"
+ },
+ "world_facts": {
+  "count": 12,
+  "sha256": "2672930d956db3aa900bc9984c5f53c13157ed43468f1b80da35d7e0124783ee"
+ }
+}

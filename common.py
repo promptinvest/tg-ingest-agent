@@ -127,18 +127,6 @@ def scrub_secrets(text):
     return t
 
 
-def season_for(dt):
-    """Northern-hemisphere season for a local datetime — for wardrobe selection."""
-    m = dt.month
-    if m in (3, 4, 5):
-        return "spring"
-    if m in (6, 7, 8):
-        return "summer"
-    if m in (9, 10, 11):
-        return "fall"
-    return "winter"
-
-
 def part_of_day(hour, lang="ru"):
     """Coarse part-of-day label for a local hour (0-23)."""
     if 5 <= hour < 12:
@@ -318,51 +306,16 @@ def load_config(env=None):
     # check; requiring >=2 suppresses the down/back flap noise (only a sustained outage
     # is announced, and "back" only fires if we actually announced "down").
     cfg.model_health_confirm = max(1, int(env.get("MODEL_HEALTH_CONFIRM_CHECKS") or "2"))
-    # Cohabitation: when on, Cara's baseline is a live-in partner — nights together, he
-    # commutes to the office on workdays and is back in the evening — not a faraway girlfriend.
-    # Reframes her context + the morning greeting (wakes up together, not "the night passed").
-    # Runtime-overridable via the `cohabiting` pref.
-    cfg.cohabiting = (env.get("COHABITING") or "false").strip().lower() == "true"
-    # Long-term body memory: a temporary mark (hickey/bruise/scratch) auto-fades after this many
-    # days; piercings/tattoos/worn add-ons persist until explicitly removed.
-    cfg.body_mark_fade_days = int(env.get("BODY_MARK_FADE_DAYS") or "12")
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
-    # Shared-time meetings: auto-end a meeting left open and idle this long (a
-    # forgotten-open meeting must not silently swallow later chat).
-    cfg.meeting_idle_hours = float(env.get("MEETING_IDLE_HOURS") or "3")
-    # Social/personal time (a visit, a date, staying over) gets a far longer idle leash so
-    # an overnight stay survives till morning instead of silently auto-ending at 3h.
-    cfg.meeting_social_idle_hours = float(env.get("MEETING_SOCIAL_IDLE_HOURS") or "16")
-    # Absolute cap: a meeting auto-ends once it is older than this since it started, no
-    # matter how recently it was active. A continuously-touched social meeting could
-    # otherwise stay "open" for days (refreshed by every message) and freeze reminders.
-    cfg.meeting_max_hours = float(env.get("MEETING_MAX_HOURS") or "24")
     # A due reminder waits for a ~5-min lull after the boss's last message so it never lands
-    # mid-exchange (this is what lets reminders fire DURING a meeting, in a quiet gap).
+    # mid-exchange.
     cfg.reminder_quiet_after_msg_minutes = float(env.get("REMINDER_QUIET_AFTER_MSG_MINUTES") or "5")
-    # Recover a meeting whose recap LLM failed at end: the resummary sweep retries up to this
-    # many times before giving up (so a transient 402/budget blip never loses the period).
-    cfg.meeting_summary_max_tries = int(env.get("MEETING_SUMMARY_MAX_TRIES") or "5")
     # recall_conversation: how far back to read by default when the boss references our past
     # dialogue without a clear time ("посмотри наш разговор"), and the turn cap fed to the model.
     cfg.recall_default_hours = float(env.get("RECALL_DEFAULT_HOURS") or "60")
     cfg.recall_max_turns = int(env.get("RECALL_MAX_TURNS") or "300")
-    # Proactive day-after afterglow (the morning after a personal meeting she may,
-    # occasionally, open with warm afterglow). Gentle: one-shot per meeting,
-    # probability-gated, quiet-hours/proactive-prefs aware. Never clingy.
-    cfg.afterglow_enabled = (env.get("AFTERGLOW_ENABLED") or "true").strip().lower() == "true"
-    cfg.afterglow_probability = float(env.get("AFTERGLOW_PROBABILITY") or "0.5")
-    cfg.afterglow_window_hours = float(env.get("AFTERGLOW_WINDOW_HOURS") or "36")
-    cfg.afterglow_min_age_hours = float(env.get("AFTERGLOW_MIN_AGE_HOURS") or "8")
-    # Proactive ANTICIPATION: in the lead-up to an agreed DATE she may, occasionally,
-    # tease him about what she's looking forward to (by hint/euphemism). Gentle: capped
-    # per meeting + once/day, probability-gated, quiet-hours/proactive-prefs aware.
-    cfg.anticipation_enabled = (env.get("ANTICIPATION_ENABLED") or "true").strip().lower() == "true"
-    cfg.anticipation_probability = float(env.get("ANTICIPATION_PROBABILITY") or "0.5")
-    cfg.anticipation_window_hours = float(env.get("ANTICIPATION_WINDOW_HOURS") or "12")
-    cfg.anticipation_max_per_meeting = int(env.get("ANTICIPATION_MAX_PER_MEETING") or "2")
-    # Companion register baseline. Her resting tone is set by whether it's WORK time
+    # Register baseline. Her resting tone is set by whether it's WORK time
     # and whether he's been doing business recently — NOT a rigid day/night gate, and
     # always overridden by how personal his actual message is. After he's been heavy on
     # business she stays mobilized (working style) for this many minutes, then eases
@@ -374,32 +327,8 @@ def load_config(env=None):
     # Work days as weekday numbers 0=Mon..6=Sun (default Mon-Fri). Off these days the
     # resting baseline is the relaxed/playful one all day.
     cfg.work_days = parse_int_set(env.get("WORK_DAYS"), default={0, 1, 2, 3, 4})
-    # Proactive INTIMACY outreach: off-hours, like a remote girlfriend keeping in touch —
-    # she may reach out on her own, missing/craving/teasing him (by hint/euphemism, never
-    # graphic), scaled by closeness. Conservative by default; capped + once/day + gated.
-    cfg.intimacy_outreach_enabled = (
-        env.get("INTIMACY_OUTREACH_ENABLED") or "true").strip().lower() == "true"
-    cfg.intimacy_outreach_probability = float(env.get("INTIMACY_OUTREACH_PROBABILITY") or "0.25")
-    # The closeness stage that unlocks the INTIMATE tier — the sexual-roleplay directive, the
-    # "reach for closeness first / tell him you want him" register, intimacy-notes grounding,
-    # the proactive craving-outreach, AND the wardrobe lingerie/surprise + spicy-anticipation
-    # tier (all read this one constant, so they move together). Default 4, so an owner "reset
-    # closeness to 2/3" (closeness_set) fully disables intimate behavior while light warmth /
-    # flirtation stays available lower. (Was 2, split across a separate outreach constant.)
-    cfg.intimate_min_stage = int(env.get("INTIMATE_MIN_STAGE") or "4")
-    cfg.intimacy_outreach_max_per_day = int(env.get("INTIMACY_OUTREACH_MAX_PER_DAY") or "1")
-    # Don't reach out into a long silence-of-his — only within this many hours of a real
-    # exchange, so it reads as keeping-in-touch, not pestering an absent boss.
-    cfg.intimacy_outreach_after_contact_hours = float(
-        env.get("INTIMACY_OUTREACH_AFTER_CONTACT_HOURS") or "6")
-    # Don't interrupt an intimate / together moment with SYSTEM pings (model-health
-    # alerts, deploy notices): while a social meeting is live, or for this many minutes
-    # after a clearly intimate message, those are HELD and delivered once the moment
-    # passes. Reminders are NOT held by this (owner's call 2026-06-30): their only
-    # in-conversation gate is the ~5-min lull — plus the max-defer valve below: a
-    # reminder overdue beyond reminder_max_defer_hours fires even mid-exchange, so a
+    # Max-defer valve: a reminder overdue beyond this fires even mid-exchange, so a
     # long evening can never defer it indefinitely (0 disables the valve).
-    cfg.intimate_quiet_minutes = int(env.get("INTIMATE_QUIET_MINUTES") or "25")
     cfg.reminder_max_defer_hours = float(env.get("REMINDER_MAX_DEFER_HOURS") or "2")
     # A fired one-shot reminder stays open ('ждёт готово') until acked; if never acked it
     # auto-closes after this many days so the list doesn't pile up forever (0 disables).

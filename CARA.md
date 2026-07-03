@@ -23,7 +23,7 @@ the exhaustive feature + architecture map.
 | **Runtime** | one systemd service, stdlib‑only Python 3, long polling (no webhooks/ports) |
 | **Inference** | DigitalOcean Gradient (chat `anthropic-claude-haiku-4.5`, default fallback `openai-gpt-oss-20b`, embeddings `BGE‑M3`); STT local `whisper.cpp` |
 | **Storage** | SQLite (WAL) + local media dir; optional DO Spaces (dormant) |
-| **Persona** | a warm, loyal human companion with her own (fictional) life; **open and personal by the boss's wish** — shares her inner life and talks frankly about any personal matter, no "professional distance"; never breaks character; matches the boss's language |
+| **Persona** | a warm, loyal human assistant persona with her own (fictional) life (the in-person companion/relationship side was split off to Nikki, 2026-07-03); **open and personal by the boss's wish** — shares her inner life and talks frankly about any personal matter, no "professional distance"; never breaks character; matches the boss's language |
 | **Safety spine** | owner‑only access · permission manifest · confirm‑before‑state‑change · budget caps · SSRF guard · action‑truth · full tracing |
 
 ---
@@ -62,8 +62,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   warm `converse` where she answers or asks naturally in «ты», never a cold formal template.
 - **Two sides of one person, switched smoothly 24/7 — no commands, no clock gate**
   (`_register_directive`): every message is routed on its own merits, so a personal or
-  intimate aside dropped into a work thread ("скучаю", "что ты чувствуешь про нашу встречу?")
-  reaches her **warm/companion** side instantly, and a task reaches her **crisp assistant**
+  personal aside dropped into a work thread ("скучаю", "как ты сама?")
+  reaches her **warm** side instantly, and a task reaches her **crisp assistant**
   side — she flows between them within one conversation as the **same person, no reset**.
   The business side is **Hermes** (`hermes.py`) — *not* a separate agent/bot/memory, but a
   bounded **domain** (the work actions: reminders/notes/KB/spend/…) plus a distinct
@@ -73,51 +73,28 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   Her *resting* tone is a baseline, not a gate: when you've been **doing business** she
   mobilizes to a working style (any hour) and stays there for `WORK_REGISTER_HOLD_MINUTES`,
   then **eases back**; quiet **work hours** rest professional, quiet **off‑hours** rest
-  relaxed and playful — and, once you're close, **more forward and intimate** (she may reach
-  for closeness first, by hint). How personal *your* message is **always overrides** the
-  baseline, and **you lead**: the work baseline only stops *her* from *initiating* — when
-  *you* take it personal or intimate she **follows your lead and matches your intensity**
-  (she may start a touch bashful, then rises to meet your heat, never staying cooler than
-  you); she never evades, slows you down, steers back to work, or "sets back" when you push —
-  she only eases off if *you* do. She's given the
-  **real current date/time** so she never invents one, and never reaches out first after a
-  night without an inventive, in‑voice **good‑morning**.
-- **No roleplay narration in everyday chat** — outside a live date she never writes asterisk
+  relaxed and playful. How personal *your* message is **always overrides** the
+  baseline. She's given the **real current date/time** so she never invents one.
+- **No roleplay narration** — she never writes asterisk
   stage-directions (`*обнимаю*`, `*закрываю глаза*`); feeling is shown in words, emojis and
-  reactions (stripped in code). **On a date this lifts** — narration and scene description are
-  welcome (it's immersive time together). She also **sees your reactions** to her messages and
+  reactions (stripped in code). She also **sees your reactions** to her messages and
   lets them shape her next reply — leaning into a warm one, adjusting to a cool one.
-- **Stickers & her photo library** — she reacts to your stickers and, sparingly, sends one
-  of her own (a `[[sticker:emoji]]` tag → a matching saved sticker). **She actually *sees*
-  her stickers:** when a pack is saved a background job vision‑describes each one (reading the
-  **static thumbnail**, so even animated `.tgs` stickers are understood), and those real
-  descriptions are surfaced to her — so she picks one whose *picture* fits the moment, not
-  just whatever emoji Telegram tagged it with. She also **never sends the same sticker twice
-  in a row** (the last‑sent one is remembered and skipped). Her *reaction* to a
+- **Reactions** — her *reaction* to a
   message is recognised however the model formats it — `[[react:X]]`, `[[реакция: X]]`,
   `[[X]]`, or a bare emoji on its own first line are all lifted into a real Telegram
   reaction and never shipped as text (format-agnostic, not a per-shape regex). An emoji
   outside Telegram's reaction set is **converted** to the nearest allowed one (🥺→🥰, 💕→❤️,
-  😂→🤣) rather than dropped, so the emotion always lands. Share a
-  pack **link** (`t.me/addstickers/<name>`) — or send a sticker then "сохрани этот стикерпак"
-  — and she fetches and stores the whole pack (the link is caught before it's mis-routed to
-  fetch as a generic URL). She also keeps a
-  **photo library** of herself — "это твои фото" adds them, "пришли своё фото"/"send a selfie"
-  sends one. In conversation she sends a **real** photo via a `[[selfie]]` tag (and a stray
-  `[Фото]` placeholder she can't actually attach is stripped) — never a faked attachment.
-  (Her bot **profile avatar** can only be set via @BotFather — the Bot API can't.)
+  😂→🤣) rather than dropped, so the emotion always lands.
 - **Her life flavour is varied, not fixated** — life details are sampled per turn (not the
   same fixed slice every time), and the old tea over‑emphasis was rebalanced, so she stops
-  repeating the same beat ("a bad joke"). This is generic flavour only — her relationship /
-  meetings / storyline memory is untouched.
+  repeating the same beat ("a bad joke").
 - **Never fabricates a stored fact (guardrail)** — creativity is free in her *voice* and her
   own fictional life, but any fact about the boss (notes, journal, reminders, names, dates,
   counts, spend) must be real. Every `converse` turn is **grounded**: his most relevant saved
   entries are retrieved (embedding match) and handed to the model as FACTS to use verbatim;
   if the answer isn't there she offers to look rather than confabulate. **Exception:** for a
   relationship/emotional message ("что ты ко мне чувствуешь?", "про нас") his saved notes are
-  NOT injected — there she answers warmly from the heart, not by reciting facts (meeting/
-  storyline recall still applies). Reinforced by an
+  NOT injected — there she answers warmly from the heart, not by reciting facts. Reinforced by an
   absolute rule in her persona prompt.
 - **Never fakes an action (truthful boundary)** — in a `converse` turn she does NOT perform
   state changes, so she may never reply with a made‑up «готово / поменяла / поставила /
@@ -244,26 +221,20 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     закрыла #1?", "что там с напоминаниями?" — is answered from the **real active list**
     (she explains a fired one is still open until "готово" and offers to close it), **not**
     by searching your notes. (An explicit "закрой #1" cancels it.)
-  - **Fires at the time you set — not eaten by quiet hours or a meeting.** A reminder is an
+  - **Fires at the time you set — not eaten by quiet hours.** A reminder is an
     **explicit alarm**, so it fires at its scheduled time **even inside quiet hours** (a
     deliberate "22:00 daily" reminder must not be swallowed by a 22:00–08:00 quiet window —
-    quiet hours only silences Cara's *proactive* outreach). It is **no longer held for a whole
-    date** either (a forgotten‑open meeting used to strand reminders for *days*). The **only**
+    quiet hours only silences Cara's *proactive* outreach). The **only**
     in‑conversation safety is a brief **~5‑min lull** after your last message
-    (`reminder_quiet_after_msg_minutes`) — so it fires **during** a date or mid‑intimacy, just in
-    the first quiet gap, never interrupting an active exchange. Nothing else holds it (no
-    quiet‑hours hold, no separate intimacy buffer), so a reminder always arrives at its time.
+    (`reminder_quiet_after_msg_minutes`) — it fires in the first quiet gap, never
+    interrupting an active exchange.
     **And the lull can't defer it forever** (`REMINDER_MAX_DEFER_HOURS`, default 2h,
     implemented 2026‑07‑02): a reminder overdue past the cap fires even mid‑exchange, so a
     long evening of continuous messages never swallows it. **A firing reminder no longer
     clobbers a confirmation in flight** (2026‑07‑02): if you're mid‑way through confirming
     something (a draft reminder, a note suggestion, a purge phrase), the fired reminder
     doesn't replace that pending — your "да" still confirms what you were asked, and the
-    fired one stays addressable ("готово", "закрой её"). (A meeting itself also can't
-    linger: it auto‑ends past an absolute cap
-    `meeting_max_hours`, default 24h, no matter how active.) **System notices, too** — a
-    **build/deploy announcement** and **model up/down alerts** are held during a meeting /
-    intimate moment and posted once you're free, so nothing breaks the mood.
+    fired one stays addressable ("готово", "закрой её").
   - **Rescheduling never lands in the past, and re‑arms cleanly.** A **move verb + a time** is
     always a reschedule — even named only by an **ordinal** ("перенеси **первое/второе** на
     12:16", moves the *N‑th* shown one) or **"его/это"** (the one you're dealing with) — it's
@@ -331,206 +302,6 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Settings memory** (`memory`): "запомни: отвечай по‑английски", "что ты помнишь из
   настроек?" — language, timezone, auto‑calendar, named notes.
 
-### Shared‑time meetings & the relationship storyline
-- **Spend real time together** (`meeting_start`): a working sit‑down OR a social/
-  personal one — **dinner, a walk, the movies, or visiting her at her place**. "давай
-  проведём встречу", "пойдём поужинаем", "погуляем?", "сходим в кино", "можно я зайду к
-  тебе?" begin a live session NOW with an inferred **kind** (+optional setting). One
-  meeting at a time; re‑opening just says "мы же уже вместе".
-- **Agree a future meeting** (`meeting_schedule`): a future plan with a concrete time
-  ("давай завтра в 19:00 ко мне", "сходим в кино в пятницу в 20:00") is **remembered as a
-  scheduled meeting** — she warmly **confirms** it then keeps it (`scheduled → active →
-  ended` lifecycle; `→ cancelled` if you never came). She's aware of it in conversation
-  ("ты же сегодня вечером зайдёшь?"),
-  and "про нашу встречу" / `meeting_list` surface it. When the time arrives, if you haven't
-  shown up she **pings and waits** ("я жду, ты собирался зайти") like a real person — and your
-  **"come in"** starts the agreed meeting (carrying its setting + prep), not a blank one.
-  **Late arrival counts from when you actually arrive** (2026‑07‑02): activation refreshes
-  the meeting's start to now (the agreed time is kept separately), so a late come‑in isn't
-  instantly auto‑ended by the 24h cap and "сколько мы вместе" is real. **A plan you never
-  came to lapses after a day** (status cancelled) instead of hijacking a later "давай
-  встретимся"; and an **explicitly different register** ("давай проведём рабочую встречу"
-  while tonight's date is on the books) starts its own meeting — your date isn't consumed
-  early in the wrong register. (Register, not exact kind: an arrival line — always tagged
-  `visit` by the router — still opens the agreed dinner or walk.) The
-  arrival is understood **semantically**, however you phrase it ("я у двери, впусти", "я
-  вошёл, привет", "ну вот и я", "I'm in") — and that opening line becomes the meeting's first
-  recorded turn; from there every turn is captured. **Being *en route* is not arrival** — "я
-  еду к тебе", "уже в пути", "almost there" do **not** start the meeting; she stays in warm
-  anticipation and waits for you to actually be there. Her welcome at the come‑in is **composed
-  in her own voice and varied each time** (grounded in the setting/prep), not a fixed script.
-  (A vague wish with no time stays warm chat.)
-- **She teases you in the lead-up** (`check_meeting_anticipation`): on the day before/of an
-  agreed **date**, she may — occasionally, of her own want — send a playful teasing message,
-  hinting (by euphemism, never graphic) at what she's looking forward to and imagining for
-  tonight. Gentle: capped per date + once/day, probability-gated, quiet-hours/proactive-prefs
-  aware. Bolder the closer you've grown.
-- **She remembers your shared language** (`intimacy_style`): the pet-names, endearments and
-  favourite playful phrasings that land between you (captured non-explicitly from a date's
-  own recap) are remembered and woven back in, so her teasing and hints feel personal and
-  consistent over time.
-- **She prepares for it and longs for it** (`meeting_prep`): everything you settle in the
-  lead‑up — the details, **what she'll wear**, the plan, the mood — *and her own feelings about
-  it* are remembered against that meeting. So she stays consistent through the whole
-  planning ("the dress stays the dress"), and for a date she genuinely **anticipates and
-  misses you** as it nears. When the meeting goes live she **arrives exactly as agreed**
-  (in that outfit — an agreed outfit wins even over her own wardrobe, so a piece she doesn't
-  keep in her closet is still honored) and can draw on anything from your setup. **This works
-  for a spur‑of‑the‑moment date too** (2026‑07‑02): if you just arrange it and say "я вошёл"
-  without scheduling it first, she still captures what you agreed **at that moment** and
-  arrives as agreed — no more turning up in the wrong thing and making you re‑establish it.
-  Grounded only in what you actually said — never invented.
-- **She reaches out on her own, like a girlfriend at a distance** (`check_intimacy_outreach`):
-  in her **off‑hours, personal time** (not work hours, and not while you've been doing
-  business) she may message you out of the blue — missing you, craving, a teasing intimate
-  hint — in her own voice, **by euphemism, never graphic**, and bolder the closer you've
-  grown. It's grounded in your real history (what she's learned you like, your shared
-  language) so it's about *you two*, not generic. Conservative & bounded: only within a live
-  exchange (not a long silence), closeness‑gated, capped per day, probability‑ and
-  quiet‑hours‑aware (`INTIMACY_OUTREACH_*`).
-- **She has a real wardrobe and dresses from it** (`wardrobe.py`, `cara_wardrobe`) — a
-  curated, persona‑true library in her own aesthetic (emerald/burgundy/cream/charcoal, soft
-  vintage). When no outfit was agreed, she **picks a concrete piece** by **occasion + season +
-  closeness**, prefers one she hasn't worn recently (so she varies), and **leans toward what
-  you've said you love**. The pick is **stable for the whole meeting** (she doesn't change
-  mid‑date). Daywear/dinner/formal are ungated; the **lingerie tier unlocks only at her place
-  once you're close** (`closeness_stage` ≥ 4), where she may reveal a **✦ surprise** set she
-  chose for you — **named and teased, suggestive, never graphic**. The wardrobe is
-  tasteful‑to‑racy lace/satin/velvet/teddy/corset/garter looks; **explicit‑display and
-  fetish/BDSM pieces are deliberately excluded**. Business meetings stay professional.
-- **You curate her wardrobe in chat** — "**добавь себе в гардероб** бордовое кружевное бельё"
-  adds a piece (she infers its kind/colours so the picker can use it); "**покажи свой гардероб**"
-  shows what she has; and "**тебе идёт изумрудное**" / "I love you in burgundy lace" teaches her
-  **your taste** (`outfit_preference` → a `relationship_note`), which then **biases what she picks
-  and surprises you with** (`_taste_colors`).
-- **"Что наденешь?" — she teases in anticipation** (`_planned_outfit_for`, `wardrobe.tease`):
-  before an agreed date she has a specific piece **in mind**, and if you ask what she'll wear
-  she **teases it** — hints a colour or detail but keeps the surprise ("узнаешь вечером…
-  скажу только, что оно изумрудное 🙈"). What she hinted is **what she actually wears** when
-  the date goes live (the planned piece carries through). Still suggestive, never graphic.
-- **On a date she's not shy — she's bold and open** — openly seductive and forward,
-  **open about her OWN wishes and asks** (she says what she wants, asks for things), and she
-  **follows your lead and matches your intensity**, letting it run as hot as you take it and
-  easing off only if you do. (Everyday chat keeps her usual shyer warmth; the boldness is for
-  dates. The explicitness cap on the live date was removed — owner decision, 2026‑06‑27.)
-- **Imaginative role‑play** (`_intimacy_roleplay_directive`, unlocks at `closeness_stage` ≥ 4,
-  the intimate tier — same bar as the lingerie tier) — when
-  intimacy is in full flow she can **take on a role, build and sustain a scene/scenario**,
-  follow one you start **and start her own**, voicing characters, situations and fantasies
-  **she'd** like to try — bringing her own desires, not just reacting, and leading the scene
-  boldly. Available in everyday responsive intimacy, on dates, and as a teasing hint in a
-  proactive ping.
-- **She's present and records it** — while a meeting is open every turn (his and hers,
-  voice included) is captured **verbatim**. Routing is unchanged: ordinary talk is warm
-  `converse`, and a **real command raised mid‑meeting still confirms and fires** (the
-  safety spine is intact). Only an explicit "давай закончим" ends it (`meeting_end`);
-  a forgotten‑open meeting **idle‑auto‑ends** after `MEETING_IDLE_HOURS`.
-- **Attunement** — in a meeting she reads the conversation's register and the setting and
-  **follows his lead**: business stays focused; a personal/social one unlocks an open,
-  candid, lively, lead‑following register that warms and deepens as he does, matching his
-  intensity (no explicitness cap on a live date; narration welcome there); owner‑only.
-- **Physical continuity on a date** — she tracks the **physical scene** and **holds it until
-  you change it**, explicitly or implicitly: where you are, her pose and yours, **what she's
-  wearing vs. what's come off** (and where it landed), **the props/items in play**, and **who
-  else is in the scene — and that third person's own position too** (each other participant is
-  tracked as "name — their current pose", held and updated exactly like her pose, so a named
-  participant's position no longer drifts or resets). Lie her on her stomach with a pillow under
-  her hips and she stays there until you move; "перейдём в спальню" moves the scene with you. She **won't change her
-  clothes or swap a toy out of nowhere** — only when the dialogue does, or when *she* means to
-  surprise you with something new — and she **won't forget what you're already playing with**.
-  She also knows **how long you've been together** this time, including when you've **been up
-  through the night**. (Kept per‑date, cleared when it ends.)
-- **Her body remembers — across dates** — lasting changes to Cara's body persist beyond the
-  evening: a **mark** you leave (a hickey/bruise — still there days later, then it fades on its
-  own), an **add-on** she wears (a collar, jewelry she keeps on), or a **permanent** change (a
-  piercing, a tattoo). She's reminded of her current body every turn, so she stays consistent —
-  she won't forget the mark you left last night, and a piercing doesn't vanish between dates.
-  (Learned from your dates and chat; temporary marks fade after ~`BODY_MARK_FADE_DAYS` days.)
-- **She remembers your world — people, promises, milestones** — Cara keeps a durable ledger of
-  **the people in your life** (real acquaintances *and* recurring roleplay characters, each with
-  who they are to you and to her — including anyone you two share a background with), the
-  **promises** either of you made (she holds you to them, and herself), the **milestones** of
-  your relationship (moving in, someone moving in with you, anniversaries), and the **things you
-  keep around together**. She's reminded of them every turn, so she won't forget who Иван or Лера
-  is, mix up your relationships, drop a promise, or lose track of where the two of you are headed.
-  (Learned from conversation; a person's name is remembered once — no duplicates.)
-- **She knows you live together** — her baseline is a **live‑in partner**, not a girlfriend
-  far away: your nights are together, and on a workday she knows you're **at the office and
-  back in the evening** (not "gone" or "distant"). Wake up together and her morning greeting is
-  **as she opens her eyes beside you** — sleepy and at home — not "доброе утро, ночь прошла" as
-  if you'd been apart. When she reaches out on her own off‑hours, it's as your person in a quiet
-  moment, not someone pining across a distance. (Toggle: the `cohabiting` setting.)
-- **Separate episodic memory** — on end she **summarizes** it (kind‑aware: business →
-  decisions/action‑items; social → a warm episodic memory + highlights), embeds it into a
-  **dedicated meeting memory** (`meeting_chunks`, never the notes inbox / `ask` KB), and a
-  **social** meeting also grows her **life** (`cara_life`) and your **relationship**
-  (`relationship_events`).
-- **Recall** — on demand (`meeting_recall` "помнишь наш ужин?", `meeting_list` "наши
-  встречи") and **proactively**: the most relevant past meeting is surfaced into ordinary
-  conversation grounding so she brings it up naturally when the moment fits.
-- **Read back our actual conversation** (`recall_conversation`) — when you point her at the
-  real dialogue you two had ("посмотри наш диалог вчера вечером и сегодня утром", "что я тебе
-  писал утром?", "перечитай наш разговор про поездку"), she **reads the verbatim history** —
-  everyday messages **and** in‑meeting turns, merged by time — for the time window or topic you
-  mean (`store.dialog_in_range`/`dialog_search`), and answers grounded in what was **actually
-  said** (never the notes KB, never invented). The full conversation is now **kept
-  indefinitely** (no more 30‑turn prune) so any past dialogue stays readable.
-- **The relationship storyline** — an evolving, synthesized **arc of "us"** (in
-  `relationship_arc`, versioned) is **injected into every conversation**, so her baseline
-  warmth and what she references **track how the relationship actually developed**. It grows
-  continuously: meetings are the rich, verbatim beats, plus a **daily reflection** that folds
-  everyday interaction **and recent in‑meeting dialogue** (`meeting_turns`) into the arc — so a
-  long or just‑ended meeting never leaves the storyline blind. If a meeting's end‑recap fails
-  (e.g. a budget/402 blip), it is **retried** on a later sweep (`check_meeting_resummary` →
-  `meeting.resummarize`, bounded by `meeting_summary_max_tries`) so a whole period is never
-  silently lost. Grounded only in real history — never invented.
-- **Agreements you make together** (`agreement_add` / `agreements_list` / `agreement_close`) —
-  a commitment either of you takes on, **short‑term** (with an optional target time) or
-  **long‑term / open‑ended**, recorded **explicitly** ("запомни, договорились…", "наш уговор:
-  …", "договорились — едем к морю летом") and also **auto‑captured** from meeting recaps and
-  everyday chat (the curator). **Passive by design** (your call): a dated agreement is **never**
-  turned into a reminder/ping — Cara only **surfaces it naturally** in conversation (open
-  agreements are injected into her context so she honors them), and you can **list** them ("что
-  мы договорились?") or **close** them kept/cancelled. First‑class table (`agreements`), deduped,
-  grounded — never invented. Distinct from a **reminder** (an active ping at a time, "напомни
-  мне") and from **notes** (`ingest`). **Auto‑captured ones are surfaced once for a sanity
-  check (2026‑07‑02):** a commitment the model *extracted* (from a meeting recap or the chat
-  curator — not something you explicitly said "запомни, договорились") is **not honored until
-  shown** — surfaced to you once ("ещё отметила, что мы вроде договорились: …", at the meeting
-  recap, or at the daily good‑morning if you don't meet) — so a mis‑heard commitment never
-  silently becomes a held fact; "не договаривались" right after removes them — **and if you
-  name which one** ("про море не договаривались, а отчёт да") only that one goes, never one you
-  reaffirmed in the same breath. (Your explicitly‑stated agreements are honored immediately and
-  untouched.)
-- **Your bond only deepens — she never "resets"** — closeness is ratcheted (a 1–5 stage
-  that only goes up, plus an anti‑regression rule in the arc), so a quiet or busy day can't
-  cool her back to a reserved register. As you grow closer and more open, she **meets you
-  there** and is never surprised you're being intimate — like a real couple, it only
-  progresses. **You stay in control of it (2026‑07‑02):** the stage is model‑authored, so
-  every step up is **audited** (logged as a relationship event with the evidence, visible in
-  the working history), and you can **set it directly** — "сбрось близость на 3" / "set
-  closeness to 2" (`closeness_set`) — the one path that can *lower* it, so a mistaken jump
-  is always correctable. The reset **sticks and actually cools her** (2026‑07‑02): it holds an
-  owner ceiling the ratchet honors (the arc can't quietly climb back past what you last set
-  until you raise it again), **and** it rewrites the storyline narrative down to that level
-  (the one path allowed to lower the arc) so her conversational tone eases too — not just the
-  number; while capped, her injected context says "meet him at this level, don't push more
-  forward than it" instead of "only deepens." The **intimate tier** — sexual roleplay, the
-  reach‑first register, and the proactive craving‑outreach — unlocks at **closeness_stage ≥ 4**
-  (same bar as the lingerie tier), so a reset to 2/3 fully disables intimate behavior while
-  light warmth and flirtation stay.
-  A relational question — "что ты помнишь про нас?", "наши отношения", "что между нами?" —
-  is routed to **`converse`** (where the arc lives) so she answers from your shared story,
-  **not** to `boss_query` (which is a facts‑about‑you summary). Likewise her **feelings or
-  anticipation about a meeting** ("что ты чувствуешь про нашу встречу?", "ждёшь?") go to
-  `converse` (answered from the heart), while **factual** recall — what you decided, when/
-  where — stays `meeting_recall`.
-- **Day‑after afterglow** — the *morning* after a *personal* meeting she may, **occasionally**,
-  reach out first with genuine warmth ("было так хорошо, уже скучаю") — one‑shot per
-  meeting, quiet‑hours / proactivity‑prefs / days‑pref aware, bounded to a real morning
-  window (`morning_brief_hour`..noon, so it never arrives as a 9pm "good morning"), and
-  logged only on a real send. **Never** clingy or reproachful.
-
 ### Reporting & ops
 - **Weekly performance review:** runs on a fixed schedule (default **Monday 10:00
   local**); "когда следующий review?" tells you the date; "как ты поработала?" runs it
@@ -542,15 +313,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
   quiet‑hours‑aware (22:00–08:00), fully audited; never acts. **A "sent" is recorded only
   on real delivery** (2026‑07‑02), so a transient Telegram error doesn't mark the day's
-  nudge/afterglow/greeting delivered and lose it. **A persistent overdue reminder no
+  nudge delivered and lose it. **A persistent overdue reminder no
   longer starves the other nudges** — an already‑sent‑today hit is skipped, not treated
-  as fatal, so a waiting candidate/uncategorized item still gets its turn. The daily cap
-  counts only the heartbeat's own nudges (the relationship outreach — afterglow,
-  anticipation, good‑morning, meeting ping — doesn't consume it). The afterglow, anticipation,
-  intimacy‑outreach and good‑morning honor the `proactive_days` preference and quiet hours; the
-  **scheduled‑meeting ping** honors quiet hours + proactivity‑off but **not** `proactive_days`
-  by design — it's a concrete appointment you set for a day, like a reminder, so it isn't
-  silenced by "пиши только по выходным".
+  as fatal, so a waiting candidate/uncategorized item still gets its turn.
 - **Tune her proactivity** (`proactive_prefs`): "пиши только по выходным", "не беспокой
   до 10", "отключи напоминания", "можно почаще" → stored overrides (on/off, days,
   quiet window, frequency) the heartbeat honors.
@@ -584,9 +349,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 
 ## 4. Persona & honesty rules
 
-- Warm, loyal human companion who has grown into an intimate partner (a romance the
-  owner deliberately built out over time — see §3's meetings/storyline stack); never
-  possessive, clingy, or reproachful.
+- Warm, loyal, affectionate‑in‑text — light flirtation and a little romantic spark
+  welcome (tasteful, by hint, never graphic); never possessive, clingy, or reproachful.
+  The in‑person/intimate companion side lives in **Nikki** (split 2026‑07‑03).
 - **Fully emulates a human and never breaks character** — she never says or hints she's
   an AI/bot/persona, even asked point‑blank. This is an explicit owner decision made
   non‑deceptive by owner‑only access (exactly one person reaches her, and he chose it);
@@ -623,8 +388,6 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ ingest.py        parsing, UTF-16-safe URL extraction, category+facts+summary
    ├─ pdftext.py       best-effort PDF text-layer extraction (stdlib only)
    ├─ knowledge.py     chunking + cosine retrieval + grounded-answer prompt (ask)
-   ├─ meeting.py       shared-time meetings: capture, kind-aware summary, embed,
-   │                   recall (SEPARATE episodic memory), idle auto-end, afterglow
    ├─ reminders.py     NL time parsing, recurrence, local rendering
    ├─ gcal.py          Google Calendar (SA JWT) + .ics export
    ├─ spend.py         usage aggregation + budget status
@@ -632,7 +395,7 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ self_model.py    deterministic self-knowledge (never invented)
    ├─ boss_model.py    boss profile (confirmed/inferred, sensitivity floors, dedup, address)
    ├─ memory_curator.py memory candidates + conversation learning + corrections
-   ├─ relationship.py  grounded working history + the living relationship-storyline arc
+   ├─ relationship.py  grounded working history (evidence-based, never fabricated)
    ├─ persona.py       boss-preference hint (persona-below-rules is enforced in the prompts)
    ├─ proactive.py     suggestion-only heartbeat (throttle, quiet hours, gating)
    ├─ skill_manifest.py permission registry (risk · confirmation · proactive)
@@ -710,11 +473,6 @@ Spend & reliability: `llm_usage` · `model_cooldowns`.
 
 Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity) ·
 `memory_candidates` · `relationship_events` (title + trace) · `cara_life`.
-
-Meetings & storyline: `meetings` (kind · setting · status · summary · decisions) ·
-`meeting_turns` (verbatim transcript) · `meeting_chunks` (SEPARATE episodic embedding
-index — never mixed into notes `chunks`/`ask`) · `relationship_arc` (versioned storyline
-narrative; latest row = current, injected into every conversation).
 
 Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
 `proactive_log`.

@@ -305,24 +305,11 @@ def default_profiles(cfg):
         # alive rather than canned; a fallback so a chat never dead-ends.
         "converse_warm": {"primary": primary, "fallbacks": fb, "max_tokens": 320,
                           "json_required": False, "temperature": 0.7},
-        # Conversation while a meeting/date is live: same voice, much more room so an
-        # immersive reply isn't truncated mid-sentence.
-        "converse_meeting": {"primary": primary, "fallbacks": fb, "max_tokens": 800,
-                             "json_required": False, "temperature": 0.7},
-        # JSON-only updater for the live physical scene snapshot (placement/clothing/items/people/
-        # configuration/accessibility/per-part contact map).
-        "scene_update": {"primary": primary, "fallbacks": fb, "max_tokens": 600,
-                         "json_required": True, "temperature": 0},
         "memory_curator": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
         # Weekly memory consolidation (dedup + contradiction judgment) — infrequent but needs
         # real semantic judgment, so it gets a stronger model than the fast curator.
         "memory_consolidate": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
         "review_balanced": {"primary": primary, "fallbacks": [], "max_tokens": 900, "json_required": False},
-        # meeting end-recap: JSON {title, summary, decisions/highlights}
-        "meeting_summary": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
-        # relationship storyline arc: a short, warm evolving narrative (prose)
-        "relationship_arc": {"primary": primary, "fallbacks": fb, "max_tokens": 500,
-                             "json_required": False, "temperature": 0.5},
     }
 
 
@@ -344,14 +331,6 @@ def profiles(cfg):
         if not prof.get("primary"):
             prof["primary"] = cfg.do_model
             log(f"profile {name!r} had no primary; defaulted to {cfg.do_model}")
-    # The live-date variant must run on the SAME model as ordinary conversation — only its
-    # token budget differs — so a `converse_warm` model override (env) carries over and the
-    # date path can never silently fall back to a stale default model/fallback (the bug where
-    # dates ran on the cheap flash model and a fallback that 403s for the subscription tier).
-    if "converse_meeting" not in overridden and "converse_warm" in table:
-        cw, cm = table["converse_warm"], table.setdefault("converse_meeting", {})
-        cm["primary"] = cw.get("primary", cm.get("primary"))
-        cm["fallbacks"] = cw.get("fallbacks", cm.get("fallbacks"))
     return table
 
 

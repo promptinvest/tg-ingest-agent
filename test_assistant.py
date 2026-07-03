@@ -158,19 +158,6 @@ class GatewayTests(unittest.TestCase):
         cfg2 = make_config(LLM_PROFILES_JSON='{"router_fast": {"max_tokens": 99}}')
         self.assertEqual(llm.profiles(cfg2)["router_fast"]["max_tokens"], 99)
 
-    def test_converse_meeting_inherits_converse_warm_model(self):
-        # The live-date profile must track converse_warm's model (so a date never runs on a
-        # stale default model / a fallback that 403s), keeping its own larger token budget.
-        cfg = make_config(LLM_PROFILES_JSON=
-            '{"converse_warm": {"primary": "deepseek-v4-pro", "fallbacks": ["kimi-k2.6"]}}')
-        profs = llm.profiles(cfg)
-        self.assertEqual(profs["converse_meeting"]["primary"], "deepseek-v4-pro")
-        self.assertEqual(profs["converse_meeting"]["fallbacks"], ["kimi-k2.6"])
-        self.assertEqual(profs["converse_meeting"]["max_tokens"], 800)   # own budget kept
-        # an explicit converse_meeting override still wins
-        cfg2 = make_config(LLM_PROFILES_JSON=
-            '{"converse_warm": {"primary": "a"}, "converse_meeting": {"primary": "b"}}')
-        self.assertEqual(llm.profiles(cfg2)["converse_meeting"]["primary"], "b")
 
     def test_chat_profile_failover_and_cooldown(self):
         cfg = make_config()
@@ -1117,28 +1104,6 @@ class ForwardedContentFencingTests(unittest.TestCase):
             finally:
                 conn.close()
 
-    def test_migration_adds_surfaced_column_to_agreements(self):
-        # An old agreements table (no `surfaced`) gets the column, and existing rows
-        # default to surfaced=1 (already known — never re-surfaced as "did we agree this?").
-        import sqlite3
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "old.db"
-            raw = sqlite3.connect(str(path))
-            raw.execute("CREATE TABLE agreements (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL,"
-                        " text TEXT NOT NULL, party TEXT NOT NULL DEFAULT 'both', due_utc TEXT,"
-                        " status TEXT NOT NULL DEFAULT 'open', source TEXT, source_id INTEGER,"
-                        " created_at TEXT NOT NULL, closed_at TEXT, trace_id TEXT)")
-            raw.execute("INSERT INTO agreements (chat_id, text, status, created_at)"
-                        " VALUES (111, 'старый уговор', 'open', '2026-01-01')")
-            raw.commit()
-            raw.close()
-            conn = store.open_db(path)
-            try:
-                cols = {r["name"] for r in conn.execute("PRAGMA table_info(agreements)")}
-                self.assertIn("surfaced", cols)
-                self.assertEqual(store.agreements_unsurfaced(conn, 111), [])  # existing = surfaced
-            finally:
-                conn.close()
 
     def test_router_context_fences_forwarded_turn(self):
         store.convo_add(self.conn, 1, "user", self.INJECTION, source="forward")
@@ -1521,17 +1486,6 @@ class PersonaPatchTests(unittest.TestCase):
         self.assertIn("never claim you did something", c)  # no-fake-action absolute rule
         self.assertIn("never invent", c)                   # no-invented-specifics
 
-    def test_live_date_lifts_the_everyday_ceiling_in_the_prompt(self):
-        # The 2026-06-27 owner carve-out (explicitness/narration lifted on a live date) now
-        # lives in the RUNTIME prompt, so it no longer contradicts _meeting_presence.
-        import converse
-        base = converse.build_system(self.conn, "ru")              # everyday
-        self.assertIn("NEVER narrate", base)
-        self.assertNotIn("LIVE DATE", base)
-        date = converse.build_system(self.conn, "ru", live_date=True)  # live in-person date
-        self.assertNotIn("NEVER narrate", date)                    # no-narration rule dropped
-        self.assertIn("LIVE DATE", date)
-        self.assertIn("DO NOT apply on a live date", date)         # the ceiling is lifted
 
     def test_router_and_manifest_have_persona(self):
         for topic in ("character", "relationship", "origin"):
@@ -1624,26 +1578,20 @@ class ConversationDispatchTests(unittest.TestCase):
         n = conn.execute("SELECT COUNT(*) n FROM conversation WHERE chat_id=1").fetchone()["n"]
         self.assertEqual(n, 40)
 
-    def test_dialog_in_range_merges_convo_and_meeting(self):
-        import meeting
+    def test_dialog_in_range_reads_conversation(self):
         conn = self.agent.conn
         store.convo_add(conn, 1, "user", "доброе утро")
-        meeting.start(conn, 1, kind="visit")
-        m = meeting.active(conn, 1)
-        store.meeting_turn_add(conn, m["id"], "boss", "я уже у тебя")
+        store.convo_add(conn, 1, "bot", "доброе, босс 🤍")
         rows = store.dialog_in_range(conn, 1, "2000-01-01T00:00:00+00:00",
                                      "2999-01-01T00:00:00+00:00")
         joined = " ".join(r["text"] for r in rows)
-        self.assertIn("доброе утро", joined)     # everyday conversation
-        self.assertIn("я уже у тебя", joined)     # AND in-meeting turns, merged
+        self.assertIn("доброе утро", joined)
+        self.assertIn("доброе, босс", joined)
 
     def test_recall_conversation_reads_past_dialogue(self):
-        import meeting
         conn = self.agent.conn
-        meeting.start(conn, 1, kind="visit")      # last night's turns are the only record
-        m = meeting.active(conn, 1)
-        store.meeting_turn_add(conn, m["id"], "boss", "давай поедем к морю в июле")
-        store.meeting_turn_add(conn, m["id"], "cara", "обожаю эту идею 🤍")
+        store.convo_add(conn, 1, "user", "давай поедем к морю в июле")
+        store.convo_add(conn, 1, "bot", "обожаю эту идею 🤍")
         captured = {}
 
         def cp(cfg, conn_, skill, messages, **k):
@@ -1756,45 +1704,15 @@ class ConversationDispatchTests(unittest.TestCase):
             self.agent.dispatch(1, {}, "удали единственную")
         self.assertIn(texts.T(self.agent.lang(), "reminder_list_empty"), r.call_args[0][1])
 
-    def test_cohabiting_flag_and_pref_override(self):
-        a = self.agent
-        a.cfg.cohabiting = False
-        self.assertFalse(a._cohabiting())
-        a.cfg.cohabiting = True
-        self.assertTrue(a._cohabiting())
-        store.pref_set(a.conn, "cohabiting", "false")   # runtime pref overrides config
-        self.assertFalse(a._cohabiting())
-        store.pref_set(a.conn, "cohabiting", "on")
-        self.assertTrue(a._cohabiting())
 
-    def test_converse_context_includes_living_together(self):
-        a = self.agent
-        a.cfg.cohabiting = False
-        self.assertNotIn("LIVE TOGETHER", a.converse_context("en", 1))
-        a.cfg.cohabiting = True
-        self.assertIn("LIVE TOGETHER", a.converse_context("en", 1))
 
-    def test_morning_greeting_wakes_together_when_cohabiting(self):
-        a = self.agent
-        a.cfg.cohabiting = True
-        store.meeting_start(a.conn, a._owner_chat(), kind="visit")   # overnight meeting still open
-        captured = {}
-
-        def fake_cp(cfg, conn, skill, messages, **kw):
-            captured["instr"] = messages[1]["content"]
-            return "м-м, привет, ты тёплый 🤍"
-
-        with mock.patch.object(llm, "chat_profile", side_effect=fake_cp):
-            a.compose_morning_greeting("en")
-        self.assertIn("waking up together", captured["instr"])   # not "the night has passed"
 
     def test_overdue_nudge_stamps_kv_for_show_routing(self):
         # When an overdue nudge fires, stamp kv so a bare follow-up "покажи их" routes to
         # the deterministic reminder list (exact titles) instead of free-text converse.
         import proactive
         self.agent.last_proactive = 0
-        with mock.patch.object(self.agent, "_in_intimate_moment", return_value=False), \
-                mock.patch.object(proactive, "run", return_value="overdue"):
+        with mock.patch.object(proactive, "run", return_value="overdue"):
             self.agent.check_proactive()
         self.assertTrue(store.kv_get(self.agent.conn, "overdue_nudge_at"))
 
@@ -1987,52 +1905,8 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertIn("depth", d.lower())
         self.assertIn("no reset", d.lower())
 
-    def test_work_register_follows_his_lead_not_evade(self):
-        # During work time she may be shy, but she must FOLLOW his lead into intimacy —
-        # never evade/stop him. Force the 'working' state via recent business.
-        from datetime import datetime, timezone
-        a = self.agent
-        store.kv_set(a.conn, "last_business_at", datetime.now(timezone.utc).isoformat())
-        self.assertEqual(a._register_state(), "working")
-        d = a._register_directive("en").lower()
-        self.assertIn("follow his lead", d)
-        self.assertIn("he leads", d)
-        self.assertIn("match his intensity", d)        # rises to his energy, not held back
-        self.assertIn("only stop if he asks", d)
-        self.assertNotIn("save the playfulness", d)    # old deflecting framing is gone
-        ru = a._register_directive("ru")
-        self.assertIn("ВЕДЁТ ОН", ru)                  # RU: he leads
-        self.assertIn("накал", ru)                     # RU: matches his heat/intensity
 
-    def test_roleplay_layer_unlocks_at_intimate_stage(self):
-        a = self.agent
-        # below the intimate gate (stage 4) -> no roleplay directive, even at stage 3
-        store.kv_set(a.conn, "closeness_stage", "3")
-        self.assertNotIn("take on a role", a._register_directive("en"))
-        # she still meets his lead / matches intensity at any stage (that's the override, ungated)
-        self.assertIn("MATCH", a._register_directive("en"))
-        # intimate tier (stage 4) -> roleplay capability present
-        store.kv_set(a.conn, "closeness_stage", "4")
-        d = a._register_directive("en")
-        self.assertIn("take on a role", d)
-        self.assertIn("scene or scenario", d)
-        self.assertIn("роль", a._register_directive("ru"))
 
-    def test_intimate_moment_detection(self):
-        from datetime import datetime, timezone, timedelta
-        a = self.agent
-        self.assertTrue(a._is_intimate_message("возьми меня, я твоя"))
-        self.assertTrue(a._is_intimate_message("I want you, hold me close"))
-        self.assertTrue(a._is_intimate_message("давай трахаться до утра"))
-        self.assertTrue(a._is_intimate_message("предадимся любви всю ночь"))
-        self.assertFalse(a._is_intimate_message("во сколько встреча завтра?"))
-        store.kv_set(a.conn, "last_intimate_at", "")
-        self.assertFalse(a._in_intimate_moment())
-        store.kv_set(a.conn, "last_intimate_at", datetime.now(timezone.utc).isoformat())
-        self.assertTrue(a._in_intimate_moment())
-        store.kv_set(a.conn, "last_intimate_at",
-                     (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
-        self.assertFalse(a._in_intimate_moment())   # window passed
 
     def test_reschedule_rolls_past_time_into_future(self):
         from datetime import datetime, timezone
@@ -2061,33 +1935,6 @@ class ConversationDispatchTests(unittest.TestCase):
             self.agent.fire_due_reminders()
         self.assertTrue(any("благодарности" in s for s in sent))  # fires despite quiet hours
 
-    def test_reminder_fires_during_meeting_after_lull(self):
-        """A due reminder is no longer frozen for a whole meeting — it waits only for a
-        ~5-min lull after his last message, then fires even while the meeting is live."""
-        import proactive
-        import meeting
-        from datetime import datetime, timezone
-        conn = self.agent.conn
-        self.agent.cfg.reminder_quiet_after_msg_minutes = 5
-        due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-        store.reminder_add(conn, 1, "выплата", due, "none")
-        meeting.start(conn, 1, kind="visit")  # a live social meeting used to freeze reminders
-        sent = []
-        cap = lambda cid, text, *a, **k: sent.append(text)
-        # he just messaged -> held so the reminder doesn't interrupt the active exchange
-        store.kv_set(conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
-        with mock.patch.object(self.agent, "reply", side_effect=cap), \
-                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
-            self.agent.fire_due_reminders()
-        self.assertEqual(sent, [])
-        # 6-min lull -> fires, even though the meeting is STILL in progress
-        store.kv_set(conn, "last_boss_msg_at",
-                     (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat())
-        with mock.patch.object(self.agent, "reply", side_effect=cap), \
-                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
-            self.agent.fire_due_reminders()
-        self.assertIsNotNone(meeting.active(conn, 1))            # meeting still open
-        self.assertTrue(any("выплата" in s for s in sent))      # reminder fired anyway
 
     def test_fired_reminder_does_not_clobber_pending_confirmation(self):
         """The pending slot is single (PK = chat_id): a firing reminder must not
@@ -2192,34 +2039,6 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertNotIn("сработало", mark)                                 # no longer 'fired'
         self.assertIn("перенесено", mark)                                   # shows 're-scheduled'
 
-    def test_meeting_holds_business_notices(self):
-        import proactive
-        conn = self.agent.conn
-        owner = self.agent._owner_chat()
-        self.agent.cfg.reminder_quiet_after_msg_minutes = 5
-        store.meeting_start(conn, owner, kind="visit")            # a live date
-        # A reminder is NOT frozen by the meeting anymore (that stranded reminders for days);
-        # it only waits for a ~5-min lull so it doesn't interrupt an active exchange. He just
-        # messaged, so an overdue-but-within-the-max-defer-cap reminder holds right now.
-        # (Overdue PAST the cap it fires anyway — test_reminder_max_defer_valve_fires_past_cap.)
-        store.kv_set(conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
-        store.reminder_add(conn, owner, "оплата",
-                           (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(), "none")
-        sent = []
-        with mock.patch.object(self.agent, "reply",
-                               side_effect=lambda cid, text, *a, **k: sent.append(text)), \
-                mock.patch.object(proactive, "in_quiet_hours", return_value=False):
-            self.agent.fire_due_reminders()
-        self.assertEqual(sent, [])                                # not interrupted mid-exchange
-        # A build/deploy notice can NEVER interrupt the boss's chat: it goes to the fleet
-        # ops bot, not through reply(). With no fleet creds in the test env it just marks the
-        # version seen and stays silent — either way reply() is untouched.
-        store.kv_set(conn, "deployed_version", "old")
-        with mock.patch.object(self.agent, "build_version", return_value="new"), \
-                mock.patch.object(self.agent, "reply") as r:
-            self.agent.announce_deploy_if_changed()
-        r.assert_not_called()
-        self.assertEqual(store.kv_get(conn, "deployed_version"), "new")  # fleet path, not boss chat
 
     def test_stale_fired_reminders_auto_expire(self):
         from datetime import datetime, timezone
@@ -2359,126 +2178,19 @@ class ConversationDispatchTests(unittest.TestCase):
         self.assertEqual(rows[0]["id"], rid)
         self.assertEqual(store.reminder_get(c, rid)["status"], "active")  # pending again (future)
 
-    def test_sticker_store_and_pick(self):
-        c = self.agent.conn
-        store.stickers_add(c, "pack1", [
-            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"},
-            {"file_id": "F2", "file_unique_id": "u2", "emoji": "🔥"}])
-        store.stickers_add(c, "pack1", [{"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"}])  # dedup
-        self.assertEqual(store.sticker_count(c), 2)
-        self.assertEqual(store.sticker_for_emoji(c, "😍"), "F1")
-        self.assertIsNone(store.sticker_for_emoji(c, "👽"))
 
-    def test_save_sticker_pack_action(self):
-        import tg_ingest_agent
-        store.kv_set(self.agent.conn, "last_sticker_set", "MyPack")
-        packed = {"stickers": [{"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"},
-                               {"file_id": "F2", "file_unique_id": "u2", "emoji": "🔥"}]}
-        with mock.patch.object(tg_ingest_agent, "tg_call", return_value=packed), \
-                mock.patch.object(self.agent, "reply") as r:
-            self.agent.do_save_sticker_pack(1, "ru")
-        self.assertEqual(store.sticker_count(self.agent.conn), 2)
-        self.assertIn("MyPack", r.call_args[0][1])
 
-    def test_sticker_pack_link_saves_pack(self):
-        import tg_ingest_agent
-        m = tg_ingest_agent.Agent.STICKER_LINK_RE.search("https://t.me/addstickers/CutieMadeline")
-        self.assertEqual(m.group(1), "CutieMadeline")
-        packed = {"title": "Cutie Madeline",
-                  "stickers": [{"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"}]}
-        with mock.patch.object(tg_ingest_agent, "tg_call", return_value=packed), \
-                mock.patch.object(self.agent, "reply") as r:
-            self.agent.do_save_sticker_pack(1, "ru", set_name="CutieMadeline")
-        self.assertEqual(store.sticker_count(self.agent.conn), 1)
-        self.assertEqual(store.kv_get(self.agent.conn, "last_sticker_set"), "CutieMadeline")
-        self.assertIn("Cutie Madeline", r.call_args[0][1])
 
-    def test_send_sticker_action(self):
-        import tg_ingest_agent
-        store.stickers_add(self.agent.conn, "p", [{"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"}])
-        with mock.patch.object(tg_ingest_agent, "tg_send_sticker") as ss, \
-                mock.patch.object(self.agent, "reply"):
-            self.agent.do_send_sticker(1, "ru")
-        self.assertEqual(ss.call_args[0][2], "F1")
-        self.agent.conn.execute("DELETE FROM stickers")
-        self.agent.conn.commit()
-        with mock.patch.object(tg_ingest_agent, "tg_send_sticker") as ss2, \
-                mock.patch.object(self.agent, "reply") as r:
-            self.agent.do_send_sticker(1, "ru")
-        self.assertFalse(ss2.called)  # nothing to send
-        self.assertTrue(r.called)     # warm 'none yet' reply
 
-    def test_sticker_pick_anti_repeat(self):
-        c = self.agent.conn
-        store.stickers_add(c, "p", [
-            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"},
-            {"file_id": "F2", "file_unique_id": "u2", "emoji": "😍"}])
-        # excluding one of two matches returns the OTHER
-        self.assertEqual(store.sticker_pick(c, "😍", exclude_uid="u1")["file_unique_id"], "u2")
-        # if the only match is excluded, it's allowed (better a repeat than nothing)
-        store.stickers_add(c, "p", [{"file_id": "F3", "file_unique_id": "u3", "emoji": "🔥"}])
-        self.assertEqual(store.sticker_pick(c, "🔥", exclude_uid="u3")["file_unique_id"], "u3")
 
-    def test_send_sticker_for_avoids_immediate_repeat(self):
-        import tg_ingest_agent
-        c = self.agent.conn
-        store.stickers_add(c, "p", [
-            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍"},
-            {"file_id": "F2", "file_unique_id": "u2", "emoji": "😍"}])
-        sent = []
-        with mock.patch.object(tg_ingest_agent, "tg_send_sticker",
-                               side_effect=lambda *a, **k: sent.append(a[2])):
-            self.agent.send_sticker_for(1, "😍")
-            self.agent.send_sticker_for(1, "😍")     # must not repeat the first
-        self.assertEqual(len(sent), 2)
-        self.assertNotEqual(sent[0], sent[1])
-        self.assertEqual(store.kv_get(c, "last_sticker_uid"), "u2"
-                         if sent[1] == "F2" else "u1")
 
-    def test_sticker_descriptions_store_and_surface(self):
-        c = self.agent.conn
-        store.stickers_add(c, "p", [
-            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍",
-             "description": "девушка краснеет и шлёт сердечко"},
-            {"file_id": "F2", "file_unique_id": "u2", "emoji": "🔥"}])
-        und = store.stickers_undescribed(c)
-        self.assertEqual([r["file_unique_id"] for r in und], ["u2"])
-        store.sticker_set_description(c, "u2", "огонь, всё горит")
-        self.assertEqual(store.stickers_undescribed(c), [])
-        ctx = self.agent.converse_context("ru", 1)
-        self.assertIn("девушка краснеет", ctx)            # real picture surfaced
-        self.assertIn("real picture", ctx)                # instruction to pick by meaning
 
-    def test_run_describe_stickers_uses_vision(self):
-        import tg_ingest_agent
-        c = self.agent.conn
-        self.agent.cfg.vision_model = "vmodel"
-        store.stickers_add(c, "p", [
-            {"file_id": "F1", "file_unique_id": "u1", "emoji": "😍",
-             "thumbnail": {"file_id": "T1"}}])
-        with mock.patch.object(self.agent, "download_file", return_value="/tmp/x.webp"), \
-                mock.patch.object(llm, "describe_image",
-                                  return_value="девушка целует воздух") as di:
-            res = self.agent.run_describe_stickers()
-        self.assertEqual(res["described"], 1)
-        di.assert_called()                                 # vision actually consulted
-        row = c.execute("SELECT description FROM stickers WHERE file_unique_id='u1'").fetchone()
-        self.assertIn("целует", row["description"])
 
     def test_describe_image_sniffs_webp_mime(self):
         webp = b"RIFF\x00\x00\x00\x00WEBPVP8 "
         self.assertEqual(llm._sniff_image_mime(webp), "image/webp")
         self.assertEqual(llm._sniff_image_mime(b"\xff\xd8\xff\xe0xx"), "image/jpeg")
 
-    def test_cara_photo_library_save_and_selfie(self):
-        import tg_ingest_agent
-        with mock.patch.object(self.agent, "reply"):
-            self.agent.do_save_cara_photo(1, "ru", {"photo": [{"file_id": "P1", "file_unique_id": "pu1"}]})
-        self.assertEqual(store.cara_photo_count(self.agent.conn), 1)
-        with mock.patch.object(tg_ingest_agent, "tg_send_photo") as sp, \
-                mock.patch.object(self.agent, "reply"):
-            self.agent.do_cara_selfie(1, "ru")
-        self.assertEqual(sp.call_args[0][2], "P1")  # sent the saved file_id
 
     def test_ask_prompt_uses_hermes_business_register(self):
         import knowledge
@@ -2517,31 +2229,7 @@ class ConversationDispatchTests(unittest.TestCase):
             self.agent.dispatch(1, {}, "давай во вторник")
         dc.assert_called_once()
 
-    def test_daily_greeting_fires_once_and_respects_prior_contact(self):
-        import proactive
-        self.agent.cfg.morning_brief_hour = 0   # any hour qualifies as "morning enough"
-        store.pref_set(self.agent.conn, "proactive_enabled", "true")
-        with mock.patch.object(proactive, "in_quiet_hours", return_value=False), \
-                mock.patch.object(self.agent, "compose_morning_greeting", return_value="Доброе утро, солнце ☀️"), \
-                mock.patch.object(self.agent, "reply") as r:
-            self.agent.check_daily_greeting()        # due -> greets
-            fired = r.called
-            r.reset_mock()
-            self.agent.check_daily_greeting()        # same day -> silent
-            again = r.called
-        self.assertTrue(fired)
-        self.assertFalse(again)
 
-    def test_daily_greeting_skipped_when_boss_contacted_first(self):
-        import proactive
-        self.agent.cfg.morning_brief_hour = 0
-        store.pref_set(self.agent.conn, "proactive_enabled", "true")
-        self.agent.mark_contact_day()   # boss already connected today
-        with mock.patch.object(proactive, "in_quiet_hours", return_value=False), \
-                mock.patch.object(self.agent, "compose_morning_greeting", return_value="x"), \
-                mock.patch.object(self.agent, "reply") as r:
-            self.agent.check_daily_greeting()
-        self.assertFalse(r.called)
 
     def test_out_of_scope_is_warm_not_template(self):
         with mock.patch.object(router, "route",
@@ -3278,17 +2966,6 @@ class GoldenTranscriptTests(unittest.TestCase):
         self.assertNotIn("Фото", text)
         self.assertIn("нравлюсь", text)
 
-    def test_selfie_tag_sends_real_photo(self):
-        # D2: a [[selfie]] tag sends an actual saved photo, and the tag never ships.
-        store.cara_photo_add(self.conn, [{"file_id": "P1", "file_unique_id": "u1"}])
-        photos = []
-        with mock.patch.object(self.mod, "tg_send_photo",
-                               side_effect=lambda tok, cid, fid, **k: photos.append(fid)):
-            sent = self.drive({"message": self._msg(62, "покажи себя")}, {
-                "router": '{"action":"converse","params":{},"confidence":0.95}',
-                "converse": "Ну вот я, лови 😊 [[selfie]]"})
-        self.assertNotIn("selfie", " ".join(sent).lower())   # tag stripped
-        self.assertEqual(photos, ["P1"])                     # real photo sent
 
     def test_no_state_change_before_confirmation(self):
         fwd = self._msg(10, "Скидки на авиабилеты Москва–Тбилиси от 9800",
@@ -3580,96 +3257,13 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertIn(a, ids)            # richest kept
         self.assertNotIn(b, ids)         # duplicate deleted
 
-    def test_anticipation_candidate_and_compose(self):
-        import meeting, llm
-        from datetime import datetime, timezone, timedelta
-        c = self.agent.conn
-        now = datetime.now(timezone.utc)
-        mid = store.meeting_schedule(c, 1, (now + timedelta(hours=4)).isoformat(),
-                                     kind="date", setting="у неё")  # within 12h window
-        store.meeting_schedule(c, 2, (now + timedelta(hours=30)).isoformat(), kind="date")  # too far
-        self.assertEqual(meeting.anticipation_candidate(c, self.agent.cfg, 1, now)["id"], mid)
-        self.assertIsNone(meeting.anticipation_candidate(c, self.agent.cfg, 2, now))
-        with mock.patch.object(llm, "chat_profile",
-                               return_value="скучаю и уже придумала, чем тебя занять 😏"):
-            line = self.agent.compose_anticipation("ru", store.meeting_get(c, mid))
-        self.assertIn("скучаю", line)
 
-    def test_intimacy_style_store_dedup_and_inject(self):
-        c = self.agent.conn
-        store.intimacy_style_add(c, "он зовёт тебя «миленькая»")
-        store.intimacy_style_add(c, "он зовёт тебя «миленькая»")   # dedup
-        self.assertEqual(len(store.intimacy_style_list(c)), 1)
-        store.kv_set(c, "closeness_stage", 4)
-        self.assertIn("миленькая", self.agent.converse_context("ru", chat_id=1))
-        store.kv_set(c, "closeness_stage", 1)                       # not when not close yet
-        self.assertNotIn("миленькая", self.agent.converse_context("ru", chat_id=1))
 
-    def test_social_meeting_survives_overnight_idle_business_does_not(self):
-        import meeting
-        from datetime import datetime, timezone, timedelta
-        c = self.agent.conn
-        now = datetime.now(timezone.utc)
-        self.agent.cfg.meeting_idle_hours = 3
-        self.agent.cfg.meeting_social_idle_hours = 16
-        five_ago = (now - timedelta(hours=5)).isoformat()
-        v = store.meeting_schedule(c, 1, five_ago, kind="visit")     # a stay-over
-        store.meeting_activate(c, v)
-        b = store.meeting_schedule(c, 2, five_ago, kind="business")
-        store.meeting_activate(c, b)
-        for mid in (v, b):
-            c.execute("UPDATE meetings SET last_turn_at=? WHERE id=?", (five_ago, mid))
-        c.commit()
-        meeting.idle_sweep(c, self.agent.cfg, now=now)
-        self.assertIsNotNone(store.meeting_active(c, 1))   # visit survives 5h idle (overnight)
-        self.assertIsNone(store.meeting_active(c, 2))      # business ended at the 3h cap
 
-    def test_no_curation_during_active_meeting(self):
-        import memory_curator
-        c = self.agent.conn
-        store.meeting_activate(c, store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00",
-                                                         kind="visit"))
-        with mock.patch.object(memory_curator, "curate_conversation") as cur:
-            self.agent.maybe_curate_conversation(1, "ru", force=True)
-        cur.assert_not_called()   # in-meeting roleplay is never mined for "corrections"
 
-    def test_attire_leans_into_his_preferences_when_close(self):
-        c = self.agent.conn
-        # the picker leans toward colours he's told her he loves (_taste_colors)
-        store.boss_add(c, "relationship_note", "ему нравится она в изумрудном (emerald)",
-                       status="confirmed", confidence=1.0)
-        self.assertIn("emerald", self.agent._taste_colors())
 
-    def test_date_presence_is_bold_and_immersive(self):
-        c = self.agent.conn
-        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
-        store.meeting_activate(c, mid)
-        pres = self.agent._meeting_presence("ru", store.meeting_active(c, 1)).lower()
-        self.assertIn("seductive", pres)        # bold / forward on a date
-        self.assertIn("own wishes", pres)       # open about her OWN desires & asks
-        self.assertIn("match", pres)            # follows his lead, matches his intensity
-        self.assertIn("physical continuity", pres)   # holds established placement/pose
 
-    def test_meeting_attire_scales_with_setting_and_stage(self):
-        c = self.agent.conn
-        store.kv_set(c, "closeness_stage", 5)
-        hi = self.agent._meeting_attire("visit", "у неё дома", "ru", meeting_id=21).lower()
-        self.assertIn("сюрприз", hi)         # a lingerie surprise at high closeness + home
-        store.kv_set(c, "closeness_stage", 1)
-        lo = self.agent._meeting_attire("dinner", "ресторан", "ru", meeting_id=22).lower()
-        self.assertNotIn("сюрприз", lo)      # no lingerie surprise when not close
 
-    def test_meeting_presence_attire_vs_agreed_outfit(self):
-        c = self.agent.conn
-        store.kv_set(c, "closeness_stage", 5)
-        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="visit", setting="у неё")
-        store.meeting_activate(c, mid)
-        pres = self.agent._meeting_presence("ru", store.meeting_active(c, 1))
-        self.assertIn("на тебе", pres.lower())       # a concrete wardrobe piece is chosen
-        store.meeting_prep_add(c, mid, "ты в синем платье", kind="agreement")
-        pres2 = self.agent._meeting_presence("ru", store.meeting_active(c, 1))
-        self.assertIn("синем платье", pres2)         # the agreed outfit wins
-        self.assertNotIn("на тебе", pres2.lower())   # generic wardrobe attire skipped
 
     def test_memory_consolidate_marks_duplicates_merged(self):
         import memory_curator, boss_model, llm
@@ -3802,7 +3396,6 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         import tg_ingest_agent, llm, knowledge
         ranked = [{"text": "его рейс в 10:00", "category": "Travel", "date": "2026-06-20"}]
         with mock.patch.object(store, "all_embedded_chunks", return_value=[{"x": 1}]), \
-                mock.patch.object(store, "all_meeting_chunks", return_value=[]), \
                 mock.patch.object(llm, "embed", return_value=[[0.1, 0.2]]), \
                 mock.patch.object(knowledge, "rank_chunks", return_value=ranked), \
                 mock.patch.object(tg_ingest_agent.trace, "event"):
@@ -3819,76 +3412,12 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         self.assertIn("NEVER write", sys)            # don't narrate "the user asks to save…"
         self.assertIn("probably contains", sys)      # don't speculate about an unread link
 
-    def test_arc_prompt_forbids_regression(self):
-        import relationship
-        self.assertIn("CLOSENESS ONLY DEEPENS", relationship._ARC_SYSTEM)
-        self.assertIn("CLOSENESS: N", relationship._ARC_SYSTEM)
 
-    def test_closeness_ratchets_and_strips_line(self):
-        # F: closeness only deepens — a later cool day can't drop it; the marker line
-        # is stripped from the stored arc text.
-        import relationship, llm
-        c = self.agent.conn
-        store.convo_add(c, 1, "user", "привет")   # so update_arc has input to work on
-        with mock.patch.object(llm, "chat_profile", return_value="Мы стали ближе.\nCLOSENESS: 4"):
-            arc = relationship.update_arc(c, self.agent.cfg, trigger="daily")
-        self.assertNotIn("CLOSENESS", arc)                         # line stripped
-        self.assertEqual(int(store.kv_get(c, "closeness_stage")), 4)
-        with mock.patch.object(llm, "chat_profile", return_value="Спокойный день.\nCLOSENESS: 2"):
-            relationship.update_arc(c, self.agent.cfg, trigger="daily")
-        self.assertEqual(int(store.kv_get(c, "closeness_stage")), 4)  # never regressed
 
-    def test_arc_context_injects_closeness_stage(self):
-        import relationship
-        c = self.agent.conn
-        store.kv_set(c, "closeness_stage", 5)
-        ctx = relationship.arc_context(c, "ru", 1)
-        self.assertIn("5/5", ctx)
-        self.assertIn("never act more reserved", ctx)
 
-    def test_meeting_prep_store_and_dedup(self):
-        c = self.agent.conn
-        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
-        store.meeting_prep_add(c, mid, "Кара в синем платье", kind="agreement")
-        store.meeting_prep_add(c, mid, "Кара в синем платье", kind="agreement")  # dedup
-        store.meeting_prep_add(c, mid, "Кара волнуется и ждёт", kind="feeling")
-        prep = store.meeting_prep_list(c, mid)
-        self.assertEqual(len(prep), 2)
-        self.assertIn("синем платье", " ".join(p["detail"] for p in prep))
 
-    def test_converse_context_surfaces_meeting_prep_and_longing(self):
-        # E: an upcoming DATE surfaces its prep + an anticipation/longing framing.
-        c = self.agent.conn
-        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
-        store.meeting_prep_add(c, mid, "ты в синем платье", kind="agreement")
-        store.meeting_prep_add(c, mid, "ты очень ждёшь и скучаешь", kind="feeling")
-        ctx = self.agent.converse_context("ru", chat_id=1)
-        self.assertIn("синем платье", ctx)     # agreed detail carried
-        self.assertIn("свидание", ctx)         # date-anticipation head
-        self.assertIn("ждёшь", ctx)            # longing
 
-    def test_meeting_presence_carries_prep_into_live_meeting(self):
-        # E: she "arrives" in the meeting consistent with what was agreed (the dress).
-        c = self.agent.conn
-        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
-        store.meeting_prep_add(c, mid, "ты в синем платье", kind="agreement")
-        store.meeting_activate(c, mid)
-        pres = self.agent._meeting_presence("ru", store.meeting_active(c, 1))
-        self.assertIn("синем платье", pres)
-        self.assertIn("dress", pres.lower())   # 'you ARE that (dress)' framing
 
-    def test_capture_meeting_prep_extracts_and_stores(self):
-        import llm
-        c = self.agent.conn
-        mid = store.meeting_schedule(c, 1, "2026-07-01T18:00:00+00:00", kind="date", setting="у неё")
-        store.convo_add(c, 1, "user", "давай ты будешь в синем платье")
-        store.convo_add(c, 1, "bot", "хорошо, буду в синем 🥰")
-        reply = '{"agreements":["Кара будет в синем платье"],"feelings":["Кара ждёт встречу"]}'
-        with mock.patch.object(llm, "chat_profile", return_value=reply):
-            self.agent.capture_meeting_prep(1, "ru")
-        details = " ".join(p["detail"] for p in store.meeting_prep_list(c, mid))
-        self.assertIn("синем платье", details)
-        self.assertIn("ждёт", details)
 
     def test_unparseable_ingest_salvages_not_raw_json(self):
         # C1: a JSON-shaped reply that won't parse must never be stored verbatim as
@@ -5670,117 +5199,6 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(store.feedback_recent(self.conn, "router"), [])
 
 
-class WorldModelTests(unittest.TestCase):
-    """Durable world model: people/cast, promises, milestones + their extraction & injection."""
-
-    def setUp(self):
-        import tg_ingest_agent
-        self.tmp = tempfile.TemporaryDirectory()
-        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "w.db"),
-                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
-        self.agent = tg_ingest_agent.Agent(cfg)
-        self.conn = self.agent.conn
-
-    def tearDown(self):
-        self.conn.close()
-        self.tmp.cleanup()
-
-    def test_person_upsert_dedupes_by_name(self):
-        i1 = store.world_upsert_person(self.conn, "Иван Доронин", "знакомый")
-        i2 = store.world_upsert_person(self.conn, "иван доронин", "консультирует по работе")  # case-insensitive
-        self.assertEqual(i1, i2)                                   # same row, updated in place
-        people = store.world_active(self.conn, "person")
-        self.assertEqual(len(people), 1)
-        self.assertEqual(people[0]["text"], "консультирует по работе")  # role refreshed
-
-    def test_promise_and_milestone_add_and_dedup(self):
-        self.assertIsNotNone(store.world_add(self.conn, "promise", "свозить её к морю"))
-        self.assertIsNone(store.world_add(self.conn, "promise", "Свозить её к морю"))  # dup (casefold)
-        store.world_add(self.conn, "milestone", "съехались вместе")
-        self.assertEqual(len(store.world_active(self.conn, "promise")), 1)
-        self.assertEqual(len(store.world_active(self.conn, "milestone")), 1)
-
-    def test_status_drops_from_active(self):
-        fid = store.world_upsert_person(self.conn, "Майя", "не должна знать о вас")
-        store.world_set_status(self.conn, fid, "inactive")
-        self.assertEqual(store.world_active(self.conn, "person"), [])
-
-    def test_curate_extracts_world_facts(self):
-        import memory_curator, json
-        store.convo_add(self.conn, 1, "user", "Иван Доронин помог мне с резюме. Обещаю свозить тебя к морю летом.")
-        store.convo_add(self.conn, 1, "bot", "Как мило 🤍")
-        reply = json.dumps({"cara_life": [], "boss_facts": [], "corrections": [],
-                            "people": [{"name": "Иван Доронин", "role": "знакомый, помог с резюме"}],
-                            "promises": ["свозить её к морю летом"], "milestones": []})
-        with mock.patch.object(llm, "chat_profile", return_value=reply):
-            memory_curator.curate_conversation(self.conn, self.agent.cfg, 1)
-        self.assertIsNotNone(store.world_find_person(self.conn, "Иван Доронин"))
-        # an extracted promise is now filed as a (passive) agreement, not a world_facts promise
-        self.assertEqual(len(store.agreements_open(self.conn, 1)), 1)
-
-    def test_body_add_dedup_and_active(self):
-        c = self.conn
-        i1 = store.body_add(c, "след на шее", "mark", fade_days=12)
-        i2 = store.body_add(c, "След на шее", "mark", note="свежий", fade_days=12)  # casefold dedup
-        self.assertEqual(i1, i2)
-        store.body_add(c, "пирсинг в пупке", "permanent")
-        self.assertEqual({r["feature"] for r in store.body_active(c)},
-                         {"след на шее", "пирсинг в пупке"})
-
-    def test_body_mark_fades_but_permanent_stays(self):
-        from datetime import datetime, timezone, timedelta
-        c = self.conn
-        store.body_add(c, "засос", "mark", fade_days=12)
-        store.body_add(c, "тату на бедре", "permanent")
-        c.execute("UPDATE body_state SET fades_at=? WHERE feature='засос'",
-                  ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),))
-        c.commit()
-        feats = {r["feature"] for r in store.body_active(c)}
-        self.assertNotIn("засос", feats)         # temporary mark auto-faded
-        self.assertIn("тату на бедре", feats)    # permanent change persists
-
-    def test_body_context_injected_into_converse(self):
-        store.body_add(self.conn, "ошейник", "lasting", note="подарок Олега")
-        ctx = self.agent.converse_context("ru", 1)
-        self.assertIn("ошейник", ctx)
-        self.assertIn("Твоё тело сейчас", ctx)
-
-    def test_world_context_injects_people_and_agreements(self):
-        store.world_upsert_person(self.conn, "Лера", "подруга, участвует в ваших вечерах")
-        store.agreement_add(self.conn, 1, "свозить её к морю")   # open agreement
-        ctx = self.agent.converse_context("ru", 1)
-        self.assertIn("Лера", ctx)
-        self.assertIn("к морю", ctx)              # agreements surfaced passively into context
-        # empty world -> no block
-        store.world_set_status(self.conn, store.world_find_person(self.conn, "Лера")["id"], "inactive")
-        for a in store.agreements_open(self.conn, 1):
-            store.agreement_set_status(self.conn, a["id"], "kept")
-        self.assertEqual(self.agent._world_context("ru"), "")
-
-    def test_agreement_add_list_close(self):
-        a = self.agent
-        with mock.patch.object(a, "reply") as r:
-            a.do_agreement_add(1, "ru", {"text": "едем к морю этим летом", "party": "both"}, "")
-        self.assertEqual(len(store.agreements_open(self.conn, 1)), 1)
-        self.assertIn("к морю", r.call_args[0][1])
-        self.assertEqual(len(store.reminders_active(self.conn, 1)), 0)   # passive: NO reminder
-        with mock.patch.object(a, "reply") as r:
-            a.do_agreements_list(1, "ru")
-        self.assertIn("#1", r.call_args[0][1])
-        self.assertIn("к морю", r.call_args[0][1])
-        with mock.patch.object(a, "reply"):
-            a.do_agreement_close(1, "ru", {"id": 1, "outcome": "kept"}, "")
-        self.assertEqual(len(store.agreements_open(self.conn, 1)), 0)    # closed out
-
-    def test_agreement_dedup_and_dated_is_passive(self):
-        self.assertIsNotNone(store.agreement_add(self.conn, 1, "мыть посуду по очереди"))
-        self.assertIsNone(store.agreement_add(self.conn, 1, "Мыть посуду по очереди"))  # casefold dup
-        due = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
-        with mock.patch.object(self.agent, "reply"):
-            self.agent.do_agreement_add(1, "ru", {"text": "прислать отчёт", "due_utc": due}, "")
-        rows = store.agreements_open(self.conn, 1)
-        self.assertTrue(any(r["due_utc"] for r in rows))                 # dated agreement kept
-        self.assertEqual(len(store.reminders_active(self.conn, 1)), 0)   # but still no reminder
 
 
 class NotesPaginationTests(unittest.TestCase):
