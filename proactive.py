@@ -98,9 +98,7 @@ def _items_need_category(conn, cfg, lang, now):
 # urgent first, then by usefulness
 CHECKS = (_overdue_reminders, _memory_candidates, _items_need_category)
 # The "≤ max_per_day non-urgent" cap counts only the NON-URGENT heartbeat nudges.
-# Urgent ones (overdue) bypass the cap, so they must not consume it either; and the
-# separate relationship outreach (afterglow/anticipation/greeting/meeting ping) has its
-# own gates and never counts here.
+# Urgent ones (overdue) bypass the cap, so they must not consume it either.
 NONURGENT_KEYS = ("candidates", "unsorted")
 
 

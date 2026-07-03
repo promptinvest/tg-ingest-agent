@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import meeting
+import knowledge
 import store
 
 
@@ -46,57 +46,66 @@ class StorageFormatTests(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
-    def _meeting_with_chunks(self, pairs):
-        mid = store.meeting_start(self.conn, 111, kind="dinner")
-        store.set_meeting_chunks(self.conn, mid, pairs)
+    _next_tg_id = 0
+
+    def _note_with_chunks(self, pairs):
+        StorageFormatTests._next_tg_id += 1
+        mid = store.insert_message(self.conn, {"chat_id": 111,
+                                               "tg_message_id": StorageFormatTests._next_tg_id,
+                                               "received_at": store._now(),
+                                               "raw_text": "note"})
+        store.set_chunks(self.conn, mid, pairs)
         return mid
 
     def test_embeddings_stored_as_blob(self):
-        self._meeting_with_chunks([("ужин у реки", [1.0, 0.0, 0.5])])
+        self._note_with_chunks([("ужин у реки", [1.0, 0.0, 0.5])])
         t = self.conn.execute(
-            "SELECT typeof(embedding) t FROM meeting_chunks WHERE embedding IS NOT NULL"
+            "SELECT typeof(embedding) t FROM chunks WHERE embedding IS NOT NULL"
         ).fetchone()["t"]
         self.assertEqual(t, "blob")
 
     def test_decoded_accessor_returns_vec_and_meta(self):
-        self._meeting_with_chunks([("ужин у реки", [1.0, 0.0, 0.5])])
-        rows = store.all_meeting_chunks(self.conn)
+        self._note_with_chunks([("ужин у реки", [1.0, 0.0, 0.5])])
+        rows = store.all_embedded_chunks(self.conn)
         self.assertEqual(len(rows), 1)
         self.assertIn("vec", rows[0])
         self.assertAlmostEqual(rows[0]["vec"][0], 1.0, places=5)
-        self.assertEqual(rows[0]["kind"], "dinner")
 
     def test_legacy_json_migrated_to_blob(self):
         # Simulate an old row written as JSON text, then run the migration.
-        mid = store.meeting_start(self.conn, 111, kind="dinner")
+        mid = store.insert_message(self.conn, {"chat_id": 111, "tg_message_id": 2,
+                                               "received_at": store._now(),
+                                               "raw_text": "note"})
         self.conn.execute(
-            "INSERT INTO meeting_chunks (meeting_id, chunk_index, text, embedding)"
+            "INSERT INTO chunks (message_id, chunk_index, text, embedding)"
             " VALUES (?, 0, ?, ?)", (mid, "вечер", json.dumps([0.2, 0.4, 0.6])))
         self.conn.commit()
         self.assertEqual(self.conn.execute(
-            "SELECT typeof(embedding) t FROM meeting_chunks").fetchone()["t"], "text")
+            "SELECT typeof(embedding) t FROM chunks").fetchone()["t"], "text")
         store._migrate(self.conn)                       # the one-time conversion
         self.assertEqual(self.conn.execute(
-            "SELECT typeof(embedding) t FROM meeting_chunks").fetchone()["t"], "blob")
-        rows = store.all_meeting_chunks(self.conn)
+            "SELECT typeof(embedding) t FROM chunks").fetchone()["t"], "blob")
+        rows = store.all_embedded_chunks(self.conn)
         self.assertAlmostEqual(rows[0]["vec"][1], 0.4, places=5)  # still decodes
 
     def test_cache_reuses_then_refreshes_on_mutation(self):
-        self._meeting_with_chunks([("a", [1.0, 0.0]), ("b", [0.0, 1.0])])
-        a = store.all_meeting_chunks(self.conn)
-        b = store.all_meeting_chunks(self.conn)
+        self._note_with_chunks([("a", [1.0, 0.0])])
+        self._note_with_chunks([("b", [0.0, 1.0])])
+        a = store.all_embedded_chunks(self.conn)
+        b = store.all_embedded_chunks(self.conn)
         self.assertIs(a, b)                              # cache hit -> same object
         self.assertEqual(len(a), 2)
         # a new chunk changes the (count,max_id,sum_id) fingerprint -> cache refreshes
-        self._meeting_with_chunks([("c", [0.5, 0.5])])
-        c = store.all_meeting_chunks(self.conn)
+        self._note_with_chunks([("c", [0.5, 0.5])])
+        c = store.all_embedded_chunks(self.conn)
         self.assertIsNot(c, a)
         self.assertEqual(len(c), 3)
 
     def test_rank_works_over_blob_backed_rows(self):
-        self._meeting_with_chunks([("flight 14", [1.0, 0.0]), ("weather", [0.0, 1.0])])
-        rows = store.all_meeting_chunks(self.conn)
-        ranked = meeting._rank([1.0, 0.05], rows, 6, 6000)   # decodes from BLOB via `vec`
+        self._note_with_chunks([("flight 14", [1.0, 0.0])])
+        self._note_with_chunks([("weather", [0.0, 1.0])])
+        rows = store.all_embedded_chunks(self.conn)
+        ranked = knowledge.rank_chunks([1.0, 0.05], rows, 6, 6000)  # decodes via `vec`
         self.assertTrue(ranked)
         self.assertEqual(ranked[0]["text"], "flight 14")     # nearest first
 

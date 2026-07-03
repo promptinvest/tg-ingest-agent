@@ -71,8 +71,8 @@ def is_business(action):
 
 
 class HermesMixin:
-    """Cara's remaining business handlers: the knowledge base (ask/fetch), spend/review/export,
-    and agreements. The reminder subsystem lives in `reminders_svc.ReminderMixin` and the
+    """Cara's remaining business handlers: the knowledge base (ask/fetch) and
+    spend/review/export. The reminder subsystem lives in `reminders_svc.ReminderMixin` and the
     notes/inbox + journals + problem log in `notes_svc.NotesMixin`. Mixed into the Agent, so
     `self` is the Agent — every `self.reply`/`self.conn`/`self.reminder_no`/`self.tz_offset()`
     resolves on it exactly as before. Pure relocation, no behaviour change."""
@@ -172,91 +172,6 @@ class HermesMixin:
 
     # -- spend / review / export ----------------------------------------------
 
-    # -- agreements (passive memory of commitments we made) -------------------
-
-    def do_agreement_add(self, chat_id, lang, params, text):
-        import agreements
-        now = datetime.now(timezone.utc)
-        draft = agreements.validate_add(params, now)
-        if not draft:  # router gave no clean text -> fall back to the raw message
-            draft = agreements.validate_add(
-                {"text": params.get("text") or text, "party": params.get("party"),
-                 "due_utc": params.get("due_utc")}, now)
-        if not draft:
-            self.reply(chat_id, T(lang, "agreement_unclear"))
-            return
-        store.agreement_add(self.conn, chat_id, draft["text"], party=draft["party"],
-                            due_utc=draft["due_utc"], source="explicit")
-        relationship.log_event(self.conn, "agreement", f"agreed: {draft['text']}", importance=2)
-        self.reply(chat_id, T(lang, "agreement_saved", text=draft["text"]))
-
-    def do_agreements_list(self, chat_id, lang):
-        import agreements
-        rows = store.agreements_open(self.conn, chat_id)
-        self.reply(chat_id, agreements.format_list(rows, self.tz_offset(), lang))
-
-    def do_agreement_close(self, chat_id, lang, params, text):
-        import agreements
-        # "не договаривались" right after Cara surfaced newly auto-captured agreements:
-        # cancel exactly the ones she just showed (a mis-heard commitment, corrected on
-        # the spot). params.surfaced is set by the router hint keyed on agreements_surfaced_at.
-        if params.get("surfaced"):
-            # Recency guard (belt-and-suspenders): only act on a JUST-surfaced batch, so a
-            # stray/hallucinated {surfaced:true} outside the router's 600s hint window can't
-            # cancel a stale batch of ids that lingered after the boss simply accepted them.
-            at = store.kv_get(self.conn, "agreements_surfaced_at")
-            recent = False
-            if at:
-                try:
-                    from datetime import datetime, timezone
-                    recent = (datetime.now(timezone.utc)
-                              - datetime.fromisoformat(at)).total_seconds() < 600
-                except (TypeError, ValueError):
-                    recent = False
-            raw = store.kv_get(self.conn, "agreements_surfaced_ids") or ""
-            ids = [int(x) for x in raw.split(",") if x.strip().isdigit()] if recent else []
-            rows = [store.agreement_get(self.conn, i) for i in ids]
-            rows = [r for r in rows if r and r["status"] == "open"]
-            # If he NAMED which one ("про море не договаривались, а отчёт да"), cancel ONLY the
-            # surfaced ones matching that subject — never nuke a commitment he reaffirmed in the
-            # same breath. A fully bare denial ("не договаривались") cancels the whole batch.
-            # Only params.query (the named subject) narrows the batch — NOT params.text: the
-            # router advertises only `query`, so a bare denial arrives with no query and must
-            # reliably cancel ALL surfaced (a stray `text` must not degrade that into a filter).
-            query = str(params.get("query") or "").strip().casefold()
-            if query:
-                # Substring match (like the other agreement resolvers). If a Russian inflection
-                # means it matches none (query "море" vs text "к морю"), we cancel NOTHING —
-                # the SAFE direction: never over-delete a reaffirmed one; he can rephrase/say "все".
-                targeted = [r for r in rows if query in (r["text"] or "").casefold()]
-                if not targeted:
-                    self.reply(chat_id, T(lang, "agreement_not_found"))  # named one not in the set
-                    return
-            else:
-                targeted = rows
-            for r in targeted:
-                store.agreement_set_status(self.conn, r["id"], "cancelled")
-            # Keep any NOT-cancelled surfaced ones addressable (a follow-up "и X тоже нет" can
-            # still hit them within the window); clear the pointer only when the batch is empty.
-            done = {r["id"] for r in targeted}
-            remaining = [r["id"] for r in rows if r["id"] not in done]
-            store.kv_set(self.conn, "agreements_surfaced_ids",
-                         ",".join(str(i) for i in remaining))
-            if targeted:
-                self.reply(chat_id, T(lang, "agreement_surfaced_removed", n=len(targeted)))
-            else:
-                self.reply(chat_id, T(lang, "agreement_not_found"))
-            return
-        rows = store.agreements_open(self.conn, chat_id)
-        row = agreements.find(rows, params)
-        if row is None:
-            self.reply(chat_id, T(lang, "agreement_not_found"))
-            return
-        outcome = str(params.get("outcome") or "kept").strip().lower()
-        cancelled = outcome in ("cancel", "cancelled", "отмена", "отменить", "сними", "снять")
-        store.agreement_set_status(self.conn, row["id"], "cancelled" if cancelled else "kept")
-        self.reply(chat_id, T(lang, "agreement_cancelled" if cancelled else "agreement_kept",
-                              text=row["text"]))
 
     def do_budget_set(self, chat_id, lang, params):
         """Change the AI spend cap on the boss's explicit request — a runtime

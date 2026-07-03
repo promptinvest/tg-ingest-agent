@@ -17,7 +17,6 @@ import store
 # deliberately NOT a job — it stays synchronous (P0.4 background-only).
 JOB_KINDS = (
     ("memory_curator", "run_memory_curator"),  # daily memory curation
-    ("relationship", "run_reflection"),        # daily relationship-storyline reflection
     ("maintenance", "retry_sweep"),            # reprocess pending ingests
     ("maintenance", "media_cleanup"),          # prune orphan media / old exports
     ("maintenance", "pending_expire"),         # drop abandoned pending actions

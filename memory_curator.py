@@ -80,23 +80,7 @@ _EXTRACT_SYSTEM = (
     "her own life) and her boss. Return STRICT JSON only, no prose:\n"
     '{"cara_life": [{"kind": "...", "text": "..."}], '
     '"boss_facts": [{"kind": "...", "text": "..."}], '
-    '"corrections": [{"kind": "...", "text": "..."}], '
-    '"people": [{"name": "...", "role": "..."}], '
-    '"promises": ["..."], "milestones": ["..."], '
-    '"body_changes": [{"feature": "...", "permanence": "...", "note": "..."}]}\n'
-    "people: NAMED persons who recur — real acquaintances OR roleplay characters — with their "
-    "RELATIONSHIP/role to the boss or to Cara, including how they bond and any background "
-    "relationship. role is a short phrase in his language, e.g. {\"name\": \"Иван Доронин\", "
-    "\"role\": \"его знакомый, консультирует по поиску работы\"}. Skip a one-off mention with no "
-    "relationship. If a known person's role is clarified, re-state them (it updates in place).\n"
-    "promises: a commitment EITHER of them made to keep (e.g. 'ты обещал свозить её к морю'). "
-    "Short, in his language. Skip vague intentions.\n"
-    "milestones: a MAJOR relationship/life development worth remembering (moving in together, "
-    "someone moving in with you, an anniversary, a big decision). Short, in his language.\n"
-    "body_changes: a LASTING change to CARA's body to remember going forward — a mark he left "
-    "(hickey/bruise → permanence \"mark\", fades), an add-on she now wears (collar/jewelry → "
-    "\"lasting\"), or a permanent change (piercing/tattoo → \"permanent\"). {\"feature\": short, "
-    "\"permanence\": mark|lasting|permanent, \"note\": brief}. Only real, lasting ones.\n"
+    '"corrections": [{"kind": "...", "text": "..."}]}\n'
     "cara_life: NEW, lasting details Cara revealed about HER OWN life (a hobby, a "
     "friend, a place, a plan, a taste). Each a short statement addressed to Cara in "
     "her language, e.g. 'Ты любишь джаз.' / 'You're learning to bake.' Skip anything "
@@ -216,35 +200,8 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
         learned.append(text)
         corrections_added += 1
 
-    # World model: the cast of people (upserted by name, so a role just refreshes), promises
-    # to keep, and relationship milestones — Cara's durable sense of "who's who and where
-    # we're going", injected (compact) into her context.
-    world_added = 0
-    for p in (parsed.get("people") or [])[:6]:
-        if isinstance(p, dict) and str(p.get("name") or "").strip():
-            store.world_upsert_person(conn, str(p["name"]).strip(),
-                                      str(p.get("role") or "").strip())
-            world_added += 1
-    for t in (parsed.get("promises") or [])[:5]:
-        # A promise either of them made is a (passive) agreement Cara should honor.
-        # surfaced=0: shown to the boss once for a "did we really agree this?" chance
-        # before it's held as fact (an LLM extraction, not his explicit "запомни, договорились").
-        if str(t).strip() and store.agreement_add(conn, chat_id, str(t).strip(),
-                                                  source="conversation", surfaced=0):
-            world_added += 1
-    for t in (parsed.get("milestones") or [])[:5]:
-        if str(t).strip() and store.world_add(conn, "milestone", str(t).strip()):
-            world_added += 1
-    for b in (parsed.get("body_changes") or [])[:5]:
-        if isinstance(b, dict) and str(b.get("feature") or "").strip():
-            perm = str(b.get("permanence") or "lasting").strip().lower()
-            store.body_add(conn, str(b["feature"]).strip(), perm,
-                           note=str(b.get("note") or "").strip() or None,
-                           fade_days=cfg.body_mark_fade_days if perm == "mark" else 0)
-            world_added += 1
-
     return {"life": life_added, "boss": boss_added, "corrections": corrections_added,
-            "world": world_added, "learned": learned, "unresolved": unresolved}
+            "learned": learned, "unresolved": unresolved}
 
 
 def render_review(conn, lang, limit=8):
