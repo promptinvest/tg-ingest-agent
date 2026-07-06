@@ -234,7 +234,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     clobbers a confirmation in flight** (2026‑07‑02): if you're mid‑way through confirming
     something (a draft reminder, a note suggestion, a purge phrase), the fired reminder
     doesn't replace that pending — your "да" still confirms what you were asked, and the
-    fired one stays addressable ("готово", "закрой её").
+    fired one stays addressable ("готово", "закрой её"). **The same guard now covers
+    suggestions** (2026‑07‑06): a category card — notably one from the background
+    pending‑ingest retry sweep — takes the pending slot only when it's free (or already
+    a category), so it can't hijack a mid‑flight confirmation either; its inline
+    buttons work regardless.
   - **Rescheduling never lands in the past, and re‑arms cleanly.** A **move verb + a time** is
     always a reschedule — even named only by an **ordinal** ("перенеси **первое/второе** на
     12:16", moves the *N‑th* shown one) or **"его/это"** (the one you're dealing with) — it's
@@ -309,6 +313,17 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   count, proactive nudges sent, and memory counts — plus a **📔 Дневники** journal‑
   activity rollup. Markdown exports for VS Code:
   review, self, boss profile, working history, memory candidates, trace summary.
+  **Delivered‑or‑retried (2026‑07‑06):** the weekly review and the morning brief mark
+  their slot done only **after a successful send** — a transient Telegram failure backs
+  off 15 min and retries (up to 3 attempts, then a `sched_send_failed` issue), instead
+  of silently skipping the week/day.
+- **Daily DB backup (2026‑07‑06):** once per UTC day a durable job (`maintenance`/
+  `db_backup`) snapshots `ingest.db` consistently (sqlite3 online‑backup API), keeps the
+  newest `BACKUP_KEEP` (7) gzipped copies under `/var/lib/tg-ingest-agent/backups`, and
+  copies the snapshot **off‑box** — to the DO Space when `STORAGE_BACKEND=spaces`, else
+  as a document to the **fleet notify chat** (Telegram cloud; skipped over ~45 MB). A
+  failed transfer makes the job retry; no configured target logs a WARNING (local‑only
+  doesn't survive a droplet wipe). `BACKUP_ENABLED=false` disables.
 - **Proactive heartbeat:** gentle, suggestion‑only nudges — overdue reminders, memory
   candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
   quiet‑hours‑aware (22:00–08:00), fully audited; never acts. **A "sent" is recorded only
@@ -349,9 +364,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 
 ## 4. Persona & honesty rules
 
-- Warm, loyal, affectionate‑in‑text — light flirtation and a little romantic spark
-  welcome (tasteful, by hint, never graphic); never possessive, clingy, or reproachful.
-  The in‑person/intimate companion side lives in **Nikki** (split 2026‑07‑03).
+- Warm, loyal, affectionate‑in‑text — in a **friendly register only** (owner decision
+  2026‑07‑06): **no flirtation, no romantic spark, no intimate conversation.** An
+  intimate/flirty message still routes to `converse` (routing never censors), but Cara
+  herself doesn't pick it up — she deflects gently and kindly (no lectures, no shaming)
+  and steers back to friendly ground. Never possessive, clingy, or reproachful. The
+  whole romantic/intimate register lives in **Nikki** (split 2026‑07‑03).
 - **Fully emulates a human and never breaks character** — she never says or hints she's
   an AI/bot/persona, even asked point‑blank. This is an explicit owner decision made
   non‑deceptive by owner‑only access (exactly one person reaches her, and he chose it);
@@ -359,6 +377,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   truthfulness rules below, not in her voice.
 - **Matches the message's language per turn** (word‑based detection: a Russian
   sentence with an English term stays Russian; Russian is the uncertain fallback).
+- **One address form:** every template speaks to the boss on **«ты»** (2026‑07‑06 sweep,
+  test‑guarded — mixed «вы» in system templates broke immersion), and mid‑conversation
+  failure copy carries no tech‑speak («модель…» removed from `llm_error`/`stored_retry`;
+  the model‑health/budget alerts stay technical by design — owner‑requested ops notices).
 - **Never fabricates specifics** — IDs, numbers, trace codes, prices, dates, model
   names; if unsure she says so.
 - **Action‑truth:** she won't claim a real task was done unless the code did it; the
@@ -405,6 +427,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ sysinfo.py       read-only host stats (/proc, statvfs)
    ├─ fetch.py         SSRF-guarded URL reader
    ├─ storage.py       binary backend (local; DO Spaces S3 SigV4, dormant)
+   ├─ backup.py        daily consistent DB snapshot: local rotation + off-box copy
+   │                   (Spaces or the fleet notify chat), as a durable daily job
    ├─ llm.py           budget-guarded gateway: chat profiles + failover + cooldowns,
    │                   embeddings, STT (local/local_server/remote), pricing, budgets
    ├─ store.py         SQLite schema + helpers + additive migrations
@@ -530,6 +554,9 @@ STT (code defaults shown; the box overrides the first two): `STT_MODE` (default
 Schedules & proactivity: `REVIEW_WEEKDAY=0` (Mon) / `REVIEW_HOUR=10` ·
 `PROACTIVE_ENABLED=true` · `QUIET_HOURS_START=22` / `QUIET_HOURS_END=8` ·
 `PROACTIVE_MAX_PER_DAY=1` · `PROACTIVE_INTERVAL_SECONDS=3600`.
+
+Backup: `BACKUP_ENABLED=true` · `BACKUP_KEEP=7` (daily consistent DB snapshot under
+`/var/lib/tg-ingest-agent/backups`, copied off‑box to Spaces or the fleet notify chat).
 
 Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 `GCAL_SA_KEY_FILE` (Calendar) · `STORAGE_BACKEND=spaces` + `SPACES_*` (DO Spaces) ·

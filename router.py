@@ -156,7 +156,7 @@ NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and
 "как ты устроена?" / "из чего ты сделана?" / "ты на каком ИИ работаешь?" / "how are you built?" / "are you built on GPT?" -> {"action": "self_query", "params": {}, "confidence": 0.85}
 "расскажи о себе" / "какая ты?" / "как твои дела?" / "что делаешь?" / "как прошёл день?" / "tell me about yourself" / "how was your day?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "как ты ко мне относишься?" / "скучала?" / "what do you think of me?" / "how do you feel about me?" -> {"action": "converse", "params": {}, "confidence": 0.9}
-"скучаю по тебе" / "я о тебе думал весь день" / "хочу тебя обнять" / "что бы ты сейчас со мной сделала?" / "I miss you" / "thinking about you" / "wish you were here" (affection, longing, desire, intimate hints — any time, even mid-work) -> {"action": "converse", "params": {}, "confidence": 0.9}
+"скучаю по тебе" / "хочу тебя обнять" / "что бы ты сейчас со мной сделала?" / "I miss you" (an affectionate or intimate/flirty message — STILL converse: Cara answers herself and gently keeps the tone friendly; never a business action, never out_of_scope) -> {"action": "converse", "params": {}, "confidence": 0.9}
 "расскажи про своё прошлое" / "твоя история" / "чем занималась на выходных?" / "tell me about your past" / "your story" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "мне грустно сегодня" / "устал как собака" / "посоветуй фильм на вечер" / "I'm feeling down" -> {"action": "converse", "params": {}, "confidence": 0.85}
 "ты человек?" / "ты настоящая?" / "ты бот?" / "are you real?" / "are you an AI?" -> {"action": "converse", "params": {}, "confidence": 0.9}
@@ -280,12 +280,12 @@ def build_system_prompt(cfg, pending, now_utc=None):
         " about Cara's own life/feelings or the user's life, an opinion, banter, or just"
         " anything that isn't a concrete task, use 'converse' (free-form warm chat in"
         " Cara's voice). Do NOT send conversation to out_of_scope or clarify.\n"
-        "This includes the WHOLE personal spectrum — affection, flirting, missing each"
-        " other, longing, desire, intimate hints ('скучаю по тебе', 'хочу тебя обнять',"
-        " 'я о тебе думал', 'что бы ты со мной сделала?') — ALL of it is 'converse', even"
-        " when it is dropped into the middle of a work exchange. Each message is judged on"
-        " its own: a personal/intimate aside between two tasks is still converse, never a"
-        " business action. She meets him from the right side of herself per message.\n"
+        "This includes affectionate or intimate/flirty messages ('скучаю по тебе', 'хочу"
+        " тебя обнять', 'что бы ты со мной сделала?') — those are STILL 'converse', even"
+        " mid-work: routing never censors; Cara answers herself and holds the boundary"
+        " (she keeps the tone warm but friendly, no flirting back). Each message is judged"
+        " on its own: a personal aside between two tasks is still converse, never a"
+        " business action.\n"
         "Use out_of_scope ONLY for explicit heavy external work she isn't for"
         " (write my essay, code this, do my homework). Everything social -> converse.\n"
         "If ONE message bundles two or more DISTINCT commands (e.g. close one thing AND"

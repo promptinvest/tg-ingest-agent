@@ -54,7 +54,7 @@ def render_working_history(conn, lang, days=30):
     if ru:
         lines.append(f"• Сохранила и разложила: {confirmed} сообщений по {cats} категориям")
         lines.append(f"• Поставила напоминаний: {reminders_n}")
-        lines.append(f"• Запомнила о вас (подтверждено): {confirmed_prefs}")
+        lines.append(f"• Запомнила о тебе (подтверждено): {confirmed_prefs}")
     else:
         lines.append(f"• Saved & filed: {confirmed} messages across {cats} categories")
         lines.append(f"• Reminders set: {reminders_n}")

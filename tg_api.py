@@ -114,11 +114,6 @@ def tg_send_document_file_id(token, chat_id, file_id, caption=None):
     return tg_call(token, "sendDocument", params)
 
 
-def tg_send_sticker(token, chat_id, file_id):
-    """Re-send a sticker by its file_id (no upload, free)."""
-    return tg_call(token, "sendSticker", {"chat_id": chat_id, "sticker": file_id})
-
-
 def tg_send_photo(token, chat_id, photo, caption=None, by_file_id=True):
     """Send a photo. by_file_id=True re-sends a stored file_id (no upload,
     free); otherwise `photo` is (filename, bytes) uploaded via multipart."""

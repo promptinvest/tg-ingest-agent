@@ -2346,7 +2346,7 @@ class NameHandlingTests(unittest.TestCase):
         self.agent.store_owner_name("Олег / Owen")
         out_ru = boss_model.render_profile(self.conn, "ru")
         self.assertIn("Олег", out_ru)
-        self.assertIn("Вас зовут", out_ru)
+        self.assertIn("Тебя зовут", out_ru)
         out_en = boss_model.render_profile(self.conn, "en")
         self.assertIn("Owen", out_en)
         self.assertIn("Your name is", out_en)
@@ -5268,6 +5268,178 @@ class NotesPaginationTests(unittest.TestCase):
         with mock.patch.object(self.agent, "reply") as r:
             self.agent.do_list_items(1, "ru", {})
         self.assertEqual(r.call_args[0][1], texts.T("ru", "items_empty"))
+
+
+class ReviewBatch2026_07_06Tests(unittest.TestCase):
+    """The 2026-07-06 review batch: daily off-box DB backup, the pending-slot
+    guard on suggestions, marker-after-send for scheduled sends, the «ты»
+    template sweep, and the friendly-register persona (no flirtation — the
+    intimate register lives with Nikki; owner decision 2026-07-06)."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "pd.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        store.pref_set(self.agent.conn, "quiet_start", "0")
+        store.pref_set(self.agent.conn, "quiet_end", "0")
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    # -- daily DB backup -------------------------------------------------------
+
+    def test_backup_snapshot_is_consistent_and_rotation_keeps_newest(self):
+        import gzip
+        import sqlite3 as sq
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        store.kv_set(conn, "marker", "42")
+        gz = backup.snapshot(cfg, conn)
+        self.assertTrue(gz.name.endswith(".db.gz"))
+        raw = gz.parent / "restored.db"                 # snapshot restores to a working DB
+        raw.write_bytes(gzip.decompress(gz.read_bytes()))
+        rconn = sq.connect(str(raw))
+        rconn.row_factory = sq.Row
+        self.assertEqual(store.kv_get(rconn, "marker"), "42")
+        rconn.close()
+        for i in range(3):                              # plant older snapshots
+            (backup.backups_dir(cfg) / f"ingest-2020010{i}T000000Z.db.gz").write_bytes(b"x")
+        cfg.backup_keep = 2
+        backup.rotate(cfg)
+        left = sorted(p.name for p in backup.backups_dir(cfg).glob("ingest-*.db.gz"))
+        self.assertEqual(len(left), 2)
+        self.assertIn(gz.name, left)                    # the newest survives rotation
+
+    def test_backup_offsite_prefers_spaces_then_telegram(self):
+        import backup
+        cfg = self.agent.cfg
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / "ingest-20260101T000000Z.db.gz"
+        f.write_bytes(b"data")
+        self.assertEqual(backup.offsite(cfg, f), "")    # no target -> local-only ('' -> warned)
+        cfg.fleet_notify_token, cfg.fleet_notify_chat_id = "t", "5"
+        with mock.patch.object(backup, "tg_send_document") as send:
+            self.assertEqual(backup.offsite(cfg, f), "telegram:fleet")
+        self.assertEqual(send.call_args[0][2], f.name)  # posted as a document
+        cfg.storage_backend, cfg.spaces_key = "spaces", "k"
+        cfg.spaces_secret, cfg.spaces_bucket = "s", "b"
+        with mock.patch.object(backup.storage, "put_object",
+                               return_value="media/backups/x") as put:
+            self.assertTrue(backup.offsite(cfg, f).startswith("spaces:"))
+        self.assertTrue(put.called)                     # Spaces preferred over Telegram
+
+    def test_daily_backup_enqueued_once_per_day_with_registered_handler(self):
+        conn = self.agent.conn
+        self.agent.check_daily_backup()
+        self.agent.check_daily_backup()                 # same day -> still one job
+        n = conn.execute("SELECT COUNT(*) FROM jobs WHERE action='db_backup'").fetchone()[0]
+        self.assertEqual(n, 1)
+        self.assertIn(("maintenance", "db_backup"), runtime._HANDLERS)
+
+    # -- pending-slot guard ------------------------------------------------------
+
+    def test_suggestion_never_clobbers_a_foreign_pending(self):
+        # A background retry_sweep suggestion used to replace a mid-flight reminder
+        # draft — the boss's next "да" then confirmed a category he was never asked.
+        conn = self.agent.conn
+        store.pending_set(conn, 1, "reminder",
+                          {"title": "банк", "due_utc": "2099-01-01T10:00:00+00:00",
+                           "recurrence": "none"})
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 7}):
+            self.agent.present_suggestion(1, 1, None, "news", [], "s", "")
+        self.assertEqual(store.pending_get(conn, 1)["kind"], "reminder")   # draft survived
+        store.pending_clear(conn, 1)
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 8}):
+            self.agent.present_suggestion(1, 1, None, "news", [], "s", "")
+        self.assertEqual(store.pending_get(conn, 1)["kind"], "category")   # free slot taken
+
+    # -- scheduled sends mark done only after delivery ----------------------------
+
+    def test_morning_brief_marks_day_only_after_delivery(self):
+        conn = self.agent.conn
+        store.pref_set(conn, "morning_brief", "on")
+        self.agent.cfg.morning_brief_hour = 0
+        with mock.patch.object(review, "morning_brief", return_value="brief!"), \
+                mock.patch.object(self.agent, "reply", return_value=None):   # send fails
+            self.agent.check_morning_brief()
+        self.assertIsNone(store.kv_get(conn, "morning_brief_day"))      # day NOT burned
+        self.assertTrue(store.kv_get(conn, "morning_brief_retry_at"))   # backoff armed
+        store.kv_set(conn, "morning_brief_retry_at", "")                # let it retry now
+        with mock.patch.object(review, "morning_brief", return_value="brief!"), \
+                mock.patch.object(self.agent, "reply", return_value={"message_id": 1}):
+            self.agent.check_morning_brief()
+        self.assertTrue(store.kv_get(conn, "morning_brief_day"))        # delivered -> done
+
+    def test_morning_brief_gives_up_after_attempt_cap(self):
+        conn = self.agent.conn
+        store.pref_set(conn, "morning_brief", "on")
+        self.agent.cfg.morning_brief_hour = 0
+        for _ in range(self.agent.SCHED_SEND_MAX_ATTEMPTS):
+            store.kv_set(conn, "morning_brief_retry_at", "")
+            with mock.patch.object(review, "morning_brief", return_value="brief!"), \
+                    mock.patch.object(self.agent, "reply", return_value=None):
+                self.agent.check_morning_brief()
+        self.assertTrue(store.kv_get(conn, "morning_brief_day"))        # gave up for the day
+        self.assertIsNotNone(conn.execute(
+            "SELECT 1 FROM issues WHERE kind='sched_send_failed'").fetchone())
+
+    def test_weekly_review_advances_schedule_only_after_delivery(self):
+        conn = self.agent.conn
+        due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        store.kv_set(conn, "next_review_utc", due)
+        with mock.patch.object(review, "chat_text", return_value="report"), \
+                mock.patch.object(self.agent, "reply", return_value=None):   # send fails
+            self.agent.check_weekly_review()
+        self.assertEqual(store.kv_get(conn, "next_review_utc"), due)    # NOT advanced
+        store.kv_set(conn, "weekly_review_retry_at", "")
+        with mock.patch.object(review, "chat_text", return_value="report"), \
+                mock.patch.object(self.agent, "reply", return_value={"message_id": 1}):
+            self.agent.check_weekly_review()
+        self.assertGreater(store.kv_get(conn, "next_review_utc"), due)  # advanced after send
+
+    # -- friendly register only (owner decision 2026-07-06) -----------------------
+
+    def test_persona_is_friendly_register_only(self):
+        c = converse.CHARACTER.lower()
+        self.assertIn("do not flirt", c)
+        self.assertIn("not his romantic partner", c)
+        for banned in ("playful flirtation", "romantic spark when",
+                       "be emotionally open and intimate"):
+            self.assertNotIn(banned, c)
+        for lang, needle in (("ru", "без флирта"), ("en", "no flirting")):
+            self.assertIn(needle, self.agent._register_directive(lang).lower())
+        # dead split residue is gone
+        self.assertFalse(hasattr(boss_model, "intimacy_notes"))
+        self.assertFalse(hasattr(tg_api, "tg_send_sticker"))
+
+    def test_router_routes_intimate_to_converse_without_courting_it(self):
+        system = router.build_system_prompt(make_config(), None)
+        self.assertIn("keeps the tone warm but friendly", system)
+        self.assertNotIn("desire", system.lower())      # no courting of intimacy
+        # an intimate hint still routes to converse (safe: converse changes no state)
+        self.assertIn('"что бы ты сейчас со мной сделала?"', router.ROUTER_EXAMPLES)
+
+    # -- «ты» voice sweep ---------------------------------------------------------
+
+    def test_templates_address_the_boss_on_ty(self):
+        import re as _re
+        vy = _re.compile(r"(?<![\w-])(вас|вам|ваша?|ваши|вашей?|вашего|пришлите|попробуйте|"
+                         r"скажите|нажмите|давайте|хотите|откройте|повторите|волнуйтесь|"
+                         r"пересылайте|пишите|говорите)(?![\w-])", _re.IGNORECASE)
+        for key, entry in texts.TEXTS.items():
+            variants = entry["ru"] if isinstance(entry["ru"], (list, tuple)) else [entry["ru"]]
+            for v in variants:
+                self.assertIsNone(vy.search(v), f"{key}: {v!r}")
+
+    def test_llm_error_keeps_human_voice(self):
+        # A mid-conversation failure must not leak tech-speak ("модель") in her voice.
+        self.assertNotIn("модел", texts.T("ru", "llm_error").lower())
+        self.assertNotIn("model", texts.T("en", "llm_error").lower())
+        self.assertNotIn("модель", texts.T("ru", "stored_retry", row_id=1).lower())
 
 
 if __name__ == "__main__":

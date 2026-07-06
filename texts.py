@@ -10,10 +10,10 @@ deterministic side of her voice. Warm and personal, but structurally fixed.
 
 TEXTS = {
     "start": {
-        "ru": ("Привет, {name}! Я Кара — ваш личный ассистент 🤗\n"
-               "Пересылайте мне посты, пишите или наговаривайте: сохраню и разложу по полочкам, "
+        "ru": ("Привет, {name}! Я Кара — твой личный ассистент 🤗\n"
+               "Пересылай мне посты, пиши или наговаривай: сохраню и разложу по полочкам, "
                "напомню о важном, добавлю в календарь, посчитаю расходы на AI. "
-               "Категории предлагаю сама — вы только подтверждаете."),
+               "Категории предлагаю сама — ты только подтверждаешь."),
         "en": ("Hi {name}! I'm Cara — your personal assistant 🤗\n"
                "Forward me posts, write or speak: I'll save and organize things, remind you "
                "of what matters, add events to your calendar, track AI spend. "
@@ -65,21 +65,21 @@ TEXTS = {
     },
     "dup_confirmed": {"ru": "категория: {category}", "en": "category: {category}"},
     "dup_suggested": {
-        "ru": "я предложила «{category}», ждёт вашего слова",
+        "ru": "я предложила «{category}», ждёт твоего слова",
         "en": "I suggested \"{category}\", awaiting your word",
     },
     "dup_pending": {"ru": "ещё разбираюсь", "en": "still working on it"},
     "stored_retry": {
-        "ru": "Сохранила #{row_id}, но модель не ответила — попробую ещё раз чуть позже 🙏",
-        "en": "Saved #{row_id}, but the model didn't answer — I'll retry a bit later 🙏",
+        "ru": "Сохранила #{row_id}, но разобрать с первого раза не вышло — попробую ещё раз чуть позже 🙏",
+        "en": "Saved #{row_id}, but I couldn't sort it on the first try — I'll retry a bit later 🙏",
     },
     # Fix 6: truthful failure copy. Cara does NOT keep the voice file and has no
     # STT retry queue, so she must not claim "saved / I'll retry" — she asks to
     # resend. (state=failed_final, no false final verbs.)
     "stt_failed": {
         "ru": [
-            "Не расслышала голосовое 😔 Пришлите ещё раз или текстом, пожалуйста.",
-            "Транскрипция в этот раз не прошла, босс. Повторите голосом или текстом?",
+            "Не расслышала голосовое 😔 Пришли ещё раз или текстом, пожалуйста.",
+            "Не разобрала голосовое в этот раз, босс. Повтори голосом или текстом?",
         ],
         "en": [
             "I couldn't make out the voice note 😔 Please resend it, or send it as text.",
@@ -91,7 +91,7 @@ TEXTS = {
         "en": "🎤 I heard: \"{transcript}\"",
     },
     "reminder_draft": {
-        "ru": "⏰ Напомнить: {title}\nКогда: {when_local} (ваше время)\nПовтор: {recurrence}\nСтавлю?",
+        "ru": "⏰ Напомнить: {title}\nКогда: {when_local} (твоё время)\nПовтор: {recurrence}\nСтавлю?",
         "en": "⏰ Remind you: {title}\nWhen: {when_local} (your time)\nRepeat: {recurrence}\nShall I?",
     },
     "reminder_set": {
@@ -144,7 +144,7 @@ TEXTS = {
     },
     "budget_stop": {
         "ru": ("⛔ Бюджет AI на {period} закончился (${spent:.2f} из ${limit:.2f}). "
-               "Не волнуйтесь — я всё сохраняю и обработаю, как только бюджет обновится."),
+               "Не волнуйся — я всё сохраняю и обработаю, как только бюджет обновится."),
         "en": ("⛔ The AI budget for {period} is used up (${spent:.2f} of ${limit:.2f}). "
                "No worries — I keep saving everything and will catch up once it resets."),
     },
@@ -152,7 +152,7 @@ TEXTS = {
     "period_week": {"ru": "неделю", "en": "this week"},
     "period_month": {"ru": "месяц", "en": "month"},
     "boss_profile_header": {
-        "ru": "Босс, вот что я о вас знаю — отдельно по уверенности.",
+        "ru": "Босс, вот что я о тебе знаю — отдельно по уверенности.",
         "en": "Boss, here's what I know about you — split by confidence.",
     },
     "boss_confirmed": {"ru": "Подтверждено:", "en": "Confirmed:"},
@@ -161,7 +161,7 @@ TEXTS = {
         "ru": "Можно сказать: «забудь #id», «подтверди #id» или «запомни про меня …».",
         "en": "You can say: \"forget #id\", \"confirm #id\", or \"remember about me …\".",
     },
-    "boss_remembered": {"ru": "Запомнила про вас: {value} 📝", "en": "Remembered about you: {value} 📝"},
+    "boss_remembered": {"ru": "Запомнила про тебя: {value} 📝", "en": "Remembered about you: {value} 📝"},
     "boss_sensitive_confirm": {
         "ru": ("Это похоже на личное ({s}). Сохранить в профиль? "
                "Я буду держать это закрытым и не выгружать без отдельной просьбы. (да/нет)"),
@@ -170,7 +170,7 @@ TEXTS = {
     },
     "boss_forgotten": {"ru": "Забыла: {value} 🙈", "en": "Forgotten: {value} 🙈"},
     "boss_confirmed_ok": {"ru": "Подтвердила: {value} ✅", "en": "Confirmed: {value} ✅"},
-    "boss_not_found": {"ru": "Не нашла такой записи о вас.", "en": "I couldn't find that about you."},
+    "boss_not_found": {"ru": "Не нашла такой записи о тебе.", "en": "I couldn't find that about you."},
     "style_warmer": {"ru": "Хорошо, босс, буду теплее 🤗", "en": "Okay boss, I'll be warmer 🤗"},
     "style_concise": {"ru": "Поняла — короче и по делу 👌", "en": "Got it — shorter and to the point 👌"},
     "style_neutral": {"ru": "Хорошо, нейтральный тон.", "en": "Okay, neutral tone."},
@@ -191,7 +191,7 @@ TEXTS = {
         "en": "Nothing to propose yet — nothing new has built up 🌿",
     },
     "memory_review_hint": {
-        "ru": "Нажмите кнопку под каждым пунктом — «Запомнить» или «Пропустить».",
+        "ru": "Нажми кнопку под каждым пунктом — «Запомнить» или «Пропустить».",
         "en": "Tap a button under each item — \"Remember\" or \"Skip\".",
     },
     "memory_candidate_kept": {"ru": "Запомнила ✅", "en": "Remembered ✅"},
@@ -199,7 +199,7 @@ TEXTS = {
     "mc_remember": {"ru": "✅ Запомнить", "en": "✅ Remember"},
     "mc_skip": {"ru": "✖️ Пропустить", "en": "✖️ Skip"},
     "working_history_header": {
-        "ru": "Босс, вот как я вам помогала за {days} дн.:",
+        "ru": "Босс, вот как я тебе помогала за {days} дн.:",
         "en": "Boss, here's how I've helped you over {days} days:",
     },
     "working_history_moments": {"ru": "Заметные моменты:", "en": "Notable moments:"},
@@ -208,10 +208,10 @@ TEXTS = {
         "en": "We've only just started working together — not much history yet 😊",
     },
     "memory_empty": {
-        "ru": "Я пока только знакомлюсь с вами — запомнить ничего не успела 😊",
+        "ru": "Я пока только знакомлюсь с тобой — запомнить ничего не успела 😊",
         "en": "I'm still getting to know you — nothing remembered yet 😊",
     },
-    "memory_header": {"ru": "Вот что я о вас помню:", "en": "Here's what I remember about you:"},
+    "memory_header": {"ru": "Вот что я о тебе помню:", "en": "Here's what I remember about you:"},
     "remember_saved": {"ru": "Запомнила: {value} 📝", "en": "Got it, remembered: {value} 📝"},
     "forgotten": {"ru": "Забыла: {value} 🙈", "en": "Forgotten: {value} 🙈"},
     "forget_not_found": {
@@ -219,8 +219,8 @@ TEXTS = {
         "en": "I couldn't find that in my memory.",
     },
     "habit_proposal": {
-        "ru": ("Я заметила: последние {n} постов из «{source}» вы относите к «{category}». "
-               "Давайте я буду подтверждать их сама?"),
+        "ru": ("Я заметила: последние {n} постов из «{source}» ты относишь к «{category}». "
+               "Давай я буду подтверждать их сама?"),
         "en": ("I noticed the last {n} posts from \"{source}\" all went to \"{category}\". "
                "Want me to confirm those on my own?"),
     },
@@ -233,7 +233,7 @@ TEXTS = {
         "en": "Filed under \"{category}\" on my own (#{row_id}). In short: {summary}",
     },
     "no_categories": {
-        "ru": "Категорий пока нет — они появятся, когда вы подтвердите первые предложения 🌱",
+        "ru": "Категорий пока нет — они появятся, когда ты подтвердишь первые предложения 🌱",
         "en": "No categories yet — they'll grow as you confirm my first suggestions 🌱",
     },
     "categories_header": {
@@ -243,14 +243,14 @@ TEXTS = {
     "stats_empty": {"ru": "Пока ничего не сохраняли.", "en": "Nothing saved yet."},
     "capabilities": {
         "ru": ("Вот чем я могу помочь 💛\n"
-               "• Сохранять и раскладывать сообщения — пересылайте посты, фото, ссылки; "
-               "предложу категорию и краткое содержание, вы подтверждаете\n"
+               "• Сохранять и раскладывать сообщения — пересылай посты, фото, ссылки; "
+               "предложу категорию и краткое содержание, ты подтверждаешь\n"
                "• Напоминания — «напомни завтра в 10 позвонить в банк», разово или регулярно\n"
                "• Календарь — «добавь в календарь...» (пришлю .ics или запишу в Google Calendar)\n"
                "• Расходы на AI — «сколько потратили за месяц?», слежу за бюджетом\n"
                "• Память — «запомни: ...», «что ты обо мне знаешь?», «забудь...»\n"
                "• Обзор — «что у тебя есть?», «покажи сохранённое про X», «что в категории Y?»\n"
-               "Пишите или говорите голосом — по-русски или по-английски."),
+               "Пиши или говори голосом — по-русски или по-английски."),
         "en": ("Here's how I can help 💛\n"
                "• Save and organize messages — forward posts, photos, links; "
                "I suggest a category and summary, you confirm\n"
@@ -338,7 +338,7 @@ TEXTS = {
         "en": "Link reading is currently disabled.",
     },
     "fetch_no_url": {
-        "ru": "Пришлите ссылку, которую нужно прочитать 🙂",
+        "ru": "Пришли ссылку, которую нужно прочитать 🙂",
         "en": "Send me the link you'd like me to read 🙂",
     },
     "discarded": {
@@ -351,8 +351,8 @@ TEXTS = {
     },
     "purge_preview": {
         "ru": ("⚠️ Это удалит безвозвратно:\n{impact}\n"
-               "Сохраню: ваши настройки и историю расходов AI.\n"
-               "Если уверены — пришлите ровно эту фразу:\n«{phrase}»"),
+               "Сохраню: твои настройки и историю расходов AI.\n"
+               "Если уверен — пришли ровно эту фразу:\n«{phrase}»"),
         "en": ("⚠️ This will permanently delete:\n{impact}\n"
                "I'll keep: your preferences and the AI-spend history.\n"
                "If you're sure, send exactly this phrase:\n\"{phrase}\""),
@@ -380,8 +380,8 @@ TEXTS = {
         "en": "Added to Google Calendar: {title} 📅\n{link}",
     },
     "calendar_ics": {
-        "ru": ("Google Calendar пока не подключён — вот файл .ics: откройте его, "
-               "и «{title}» появится в вашем календаре 📅"),
+        "ru": ("Google Calendar пока не подключён — вот файл .ics: открой его, "
+               "и «{title}» появится в твоём календаре 📅"),
         "en": ("Google Calendar isn't connected yet — here's an .ics file: open it "
                "and \"{title}\" lands in your calendar 📅"),
     },
@@ -410,8 +410,8 @@ TEXTS = {
         "en": "Deleted {n} items — text and files 🗑",
     },
     "llm_error": {
-        "ru": "Модель сейчас не отвечает 😔 Попробуйте чуть позже — я ничего не потеряла.",
-        "en": "The model isn't answering right now 😔 Try again soon — nothing is lost.",
+        "ru": "Ой, у меня тут заминка — не получилось ответить с первого раза 😔 Повтори чуть позже, я ничего не потеряла.",
+        "en": "Oops, I hit a little snag and couldn't answer just now 😔 Try me again in a bit — nothing is lost.",
     },
     "stats_status": {"ru": "По статусам:", "en": "By status:"},
     "stats_categories": {"ru": "Подтверждено по категориям:", "en": "Confirmed by category:"},
@@ -443,12 +443,12 @@ TEXTS = {
         "en": "Report ready, boss — feed it to VS Code 📎",
     },
     "review_schedule": {
-        "ru": "Наш performance review — еженедельно, в {weekday}. Следующий: {date} в {time}. Хотите, проведу прямо сейчас?",
+        "ru": "Наш performance review — еженедельно, в {weekday}. Следующий: {date} в {time}. Хочешь, проведу прямо сейчас?",
         "en": "Our performance review is weekly, on {weekday}. Next one: {date} at {time}. Want me to run it now?",
     },
     # Proactive nudges (suggestion-only; Cara never acts on them herself).
     "nudge_candidates": {
-        "ru": "Босс, у меня накопилось {n} предложений в память. Скажете «обзор памяти» — покажу, и решите.",
+        "ru": "Босс, у меня накопилось {n} предложений в память. Скажешь «обзор памяти» — покажу, и решишь.",
         "en": "Boss, I've got {n} memory suggestions waiting. Say \"memory review\" and you decide.",
     },
     "nudge_unsorted": {

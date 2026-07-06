@@ -259,7 +259,7 @@ def chat_text(conn, cfg, lang, period="week"):
                        + ", ".join(data["new_categories"][:8]))
     if data["corrections"]:
         pairs = "; ".join(f"«{r['suggested']}»→«{r['corrected']}»" for r in data["corrections"][:5])
-        learned.append(("ваши поправки: " if ru else "your corrections: ") + pairs)
+        learned.append(("твои поправки: " if ru else "your corrections: ") + pairs)
     if data["habits"]:
         learned.append((f"авто-привычки: {len(data['habits'])}" if ru
                         else f"auto-habits: {len(data['habits'])}"))
@@ -299,9 +299,9 @@ def chat_text(conn, cfg, lang, period="week"):
                   f"{data['confirmed_count'] - data['corrections_count']}/{data['confirmed_count']}"))
     if data["pending_candidates"]:
         n = len(data["pending_candidates"])
-        lines.append((f"📋 Хочу уточнить ({n}) — скажите «обзор памяти»" if ru
+        lines.append((f"📋 Хочу уточнить ({n}) — скажи «обзор памяти»" if ru
                       else f"📋 I'd like to confirm {n} — say \"memory review\""))
-    lines.append(("Скажите «сделай отчёт файлом» — пришлю .md для VS Code." if ru
+    lines.append(("Скажи «сделай отчёт файлом» — пришлю .md для VS Code." if ru
                   else "Say \"export the review as md\" and I'll send a .md for VS Code."))
     return "\n".join(lines)
 

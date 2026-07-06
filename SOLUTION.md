@@ -245,7 +245,10 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Report a problem** | "запиши в проблемы" / "добавь в ошибки" logs a boss-reported issue (`boss_reported`, surfaces in the review) — distinct from the issues report, which only shows them. | — |
 | **One at a time** | A message bundling two+ distinct commands ("первое закрой, второе напомни…") is recognised (`multi_action`) and Cara asks to take them one at a time. Full multi-step execution is intentionally out of scope for the single-action router. | — |
 | **Model-health monitor** | A scheduler tick (`MODEL_HEALTH_INTERVAL_SECONDS`, default 30 min) verifies Cara's models (chat/converse/vision) are reachable via a tiny call; on a **state change** it messages the boss the moment a model becomes inaccessible (e.g. a provider/tier 403) or recovers — alerts only on transitions, recorded in `kv` (`mh:<model>` = last ANNOUNCED state). **Debounced** (`MODEL_HEALTH_CONFIRM_CHECKS`, default 2): a model must fail that many CONSECUTIVE probes (`mh_fail:<model>`) before "down" is announced, so a transient 429/overload blip that recovers by the next probe produces no chatter; "back" fires only if "down" was actually announced. Fixes the deepseek-4-flash down/back flap (a single probe-time 429 used to post a notice pair every interval). | — (proactive) |
-| **Time-aware voice** | Conversation tone tracks the boss's local clock — fresh in the morning, breezy by day, unwinding in the evening, and **playful with a hint of flirty humour at night** (warm, never crude). Low-confidence/`clarify` turns stay in her warm voice (never a formal templated menu). | — |
+| **Time-aware voice** | Conversation tone tracks the boss's local clock — fresh in the morning, breezy by day, unwinding and more relaxed in the evening (friendly register only, per §4/§5a; no flirty tier since 2026-07-06). Low-confidence/`clarify` turns stay in her warm voice (never a formal templated menu). All templates address the boss on **«ты»** (the 2026-07-06 sweep removed the last mixed-«вы» forms, test-guarded), and mid-conversation failure copy carries **no tech-speak** ("модель…" removed from `llm_error`/`stored_retry`; the model-health alerts stay technical by design — they're owner-requested ops notices). | — |
+| **Daily DB backup (`backup.py`, 2026-07-06)** | Everything Cara is lives in one SQLite file on one droplet (which was wiped once before). A daily durable job (`maintenance`/`db_backup`, enqueued once per UTC day by `check_daily_backup`, retried by the job runner) takes a **consistent snapshot** via the sqlite3 online-backup API, gzips it under `/var/lib/tg-ingest-agent/backups` (newest `BACKUP_KEEP`, default 7), and copies it **off-box**: to the DO Space when `STORAGE_BACKEND=spaces`, else posted as a document to the **fleet notify chat** (Telegram cloud; skipped over ~45 MB). A failed off-box transfer raises so the job retries; with no target configured the snapshot stays local-only and a WARNING is logged. `BACKUP_ENABLED=false` disables. | — (background job) |
+| **Scheduled sends mark done only after delivery (2026-07-06)** | The morning brief and the weekly review used to stamp their "done" marker *before* sending — one transient Telegram failure silently cost the day's brief / the week's review. Now `morning_brief_day` / `next_review_utc` advance **only after `_send_all` confirms at least one successful delivery**; a failure backs off 15 min (`*_retry_at`) and gives up after 3 attempts for that slot (logged as a `sched_send_failed` issue) so a dead Telegram day can't wedge the schedule. | — |
+| **Suggestion never clobbers a pending (2026-07-06)** | The pending slot is single per chat. `present_suggestion` (notably from the background `retry_sweep`) used to overwrite whatever confirmation was mid-flight — a reminder draft's next "да" then confirmed a category the boss was never asked. It now takes the slot only when it's free or already `category`; the suggestion stays fully confirmable by its inline buttons either way. | — |
 | **Photo vision (when configured)** | When the chat model isn't vision-capable, a `VISION_MODEL` **describes** a forwarded photo and the description is folded into the ingest text; with no vision model, photos categorize text-only from the caption (never stuck). | — |
 | **Reacting to his OWN photo (`handle_own_media` / `describe_own_media`)** | A photo the boss SENDS (not a forward) is conversation, not a note: it's vision-described and folded into `converse` so she reacts to the actual image. **Fallback (2026-07-01):** when vision returns nothing usable (empty / declined — a *nano* model often does, esp. on complex/intimate photos), converse is now told *"he showed you a photo but it didn't come through — acknowledge it and ask, and NEVER invent its content"*, so she stops silently talking past a photo she couldn't see (the "убрала ✔️" non-reaction). **Garbled-read guard (2026-07-01):** an open vision model sometimes returns a **non-empty but wrong-script** read — llama-4-maverick leaked a whole Chinese sentence (`精神白种人的顺从情妇…`) and deepseek-v4-pro then parroted Chinese / `Article 1(5)(1)…` / invented *"это мой автопортрет"*. `llm._vision_text_is_garbled` now discards a read that's empty, wrong-script (>10% CJK), or letterless, so garbage is treated as "no read" → the warm acknowledge path above; the vision prompt is also **language-pinned** (ru/en). And the described-branch context now states the photo is **HIS, not her own selfie**. **No-read hallucination guard (2026-07-01):** when he asks "опиши фото" but NO vision read reached this turn (nothing attached, or it fell to `converse` under a router 429), converse used to invent a description ("два бокала красного вина при свечах" pulled from the earlier wine talk). Its system prompt now carries an ABSOLUTE RULE never to describe a photo/screenshot/image without a real read of *this* image — with none, say she doesn't see it and ask him to resend; never invent a view/wine/face/colour from mood or memory. **Model note:** on this DO tier the strong vision models (Claude / GPT-4o) are **403 (tier-locked)**; the Nemotron nanos are weak. **`VISION_MODEL` switched to `llama-4-maverick` (2026-07-01)** — an available open multimodal model that describes accurately (verified end-to-end through the app: correctly read a red/blue test image the nano couldn't). Priced in `DEFAULT_PRICING` (est. `(0.20, 0.85)`) so it doesn't hit the `$3/$15` default. | — |
 
@@ -268,9 +271,12 @@ Cara has **two LLM-generated reply paths**, both bounded:
 
 **Persona.** Cara presents as a real person with her own (fictional) private life
 — interests, friends, plans — that **grows from conversation** and stays
-consistent (`cara_life`). She is warm, loyal and affectionate-in-text (light
-flirtation and a romantic spark welcome — the in-person/intimate companion side
-was split off to Nikki, 2026-07-03; never possessive or clingy). She matches his language and **fully
+consistent (`cara_life`). She is warm, loyal and affectionate-in-text — in a
+**friendly register only** (owner decision 2026-07-06): no flirtation, no romantic
+spark, no intimate conversation; an intimate/flirty message still routes to
+`converse` (routing never censors) but she deflects gently and steers back to
+friendly ground — the whole romantic/intimate side lives in Nikki (split
+2026-07-03); never possessive or clingy. She matches his language and **fully
 emulates a human — never an AI disclaimer, never breaks character, even asked
 point-blank** (owner decision, reaffirmed 2026-07-02; made non-deceptive by
 owner-only access, §5 — the honesty boundary lives in these specs and in the
@@ -354,8 +360,9 @@ tone variants; only conversation and grounded answers are free-form.
 The boss wanted Cara to be one person who flows between her **work** and **warm**
 sides smoothly, 24/7 — *no* mode commands, *no* rigid day/night tone gate — mobilizing
 to a working style when he's heavy on business (then easing back to relaxed warmth).
-Since the Cara/Nikki split (2026-07-03) the spectrum ends at warm/flirtatious-in-text:
-everything past that (dates, intimacy, the relationship arc) lives in Nikki.
+Since the Cara/Nikki split (2026-07-03) — tightened 2026-07-06 — the spectrum ends at
+**warm-friendly-in-text**: everything past that (flirtation, romance, intimacy, dates,
+the relationship arc) lives in Nikki.
 
 - **Layer routing is the router, per message.** There is no new "mode": the closed-world
   router already sends each message to a **skill** (assistant) or to **`converse`**
@@ -368,9 +375,10 @@ everything past that (dates, intimacy, the relationship arc) lives in Nikki.
   otherwise the boss-local **work window** (`work_hours_start/end`, `work_days`) sets it —
   `neutral` (professional) inside, `relaxed` (warm, playful) outside. The directive always
   carries a **content-override** rule: she reads how personal *his* message is and answers at
-  exactly that depth, flowing between registers as the same person with no reset. Light
-  flirtation and a romantic spark stay welcome — tasteful, by hint, never graphic; the
-  intimate tier was moved to Nikki with the split.
+  exactly that depth, flowing between registers as the same person with no reset — and a
+  **boundary** rule: no flirting and no romance from her side, ever (owner decision
+  2026-07-06); if he steers intimate, she gently keeps it friendly. The whole
+  flirtatious/romantic/intimate tier lives in Nikki.
 
 ---
 

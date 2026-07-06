@@ -82,12 +82,13 @@ KB for SSH/deploy/model details.
   `memory_curator.py` (proposes candidates, confirm-before-store; reply-only,
   pulled via memory_review), `relationship.py` (evidence-based working history),
   `proactive.py` (heartbeat — suggestion-only, throttled, quiet-hours/weekday gated).
-  Proactive is ENABLED: heartbeat nudges, opt-in morning brief, a daily inventive
-  good-morning (never reaches out first after a night without one), and a
-  model-health monitor that alerts the boss when a model goes down/recovers
-  (skipped while budget-stopped). Persona: time-of-day & weekend-aware voice,
-  tasteful flirtation, stickers + her own photo library; she NEVER fabricates a
-  stored fact (creative in voice, factual about his data).
+  Proactive is ENABLED: heartbeat nudges (overdue reminders / memory candidates /
+  unsorted items), an opt-in morning brief, and a model-health monitor that alerts
+  the boss when a model goes down/recovers (skipped while budget-stopped).
+  Persona: time-of-day & weekend-aware voice in a FRIENDLY register only — no
+  flirtation or intimate conversation (owner decision 2026-07-06; that register
+  lives with Nikki since the 2026-07-03 split); she NEVER fabricates a stored
+  fact (creative in voice, factual about his data).
 - `tg_api.py` · `texts.py` (bilingual ru/en templates, Cara's voice) ·
   `common.py` (config).
 - Persona: `prompts/cara_persona.md` — templates carry the transactional voice;

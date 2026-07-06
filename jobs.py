@@ -20,6 +20,7 @@ JOB_KINDS = (
     ("maintenance", "retry_sweep"),            # reprocess pending ingests
     ("maintenance", "media_cleanup"),          # prune orphan media / old exports
     ("maintenance", "pending_expire"),         # drop abandoned pending actions
+    ("maintenance", "db_backup"),              # daily DB snapshot + off-box copy
 )
 
 

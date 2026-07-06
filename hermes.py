@@ -5,8 +5,8 @@ Cara is one person with two registers. HERMES is her *businesslike* side: the
 sharp, efficient assistant mode that runs the work — reminders, notes, files, the
 knowledge base, spend, reviews. It is NOT a separate agent, bot, process or memory;
 it's a bounded domain (ACTIONS), a distinct VOICE (PERSONA), and the business
-handler logic (HermesMixin) — all governed by the one Cara. The companion
-(warm/personal/intimate) side stays in `converse.py` / the Agent.
+handler logic (HermesMixin) — all governed by the one Cara. The warm/personal
+(friendly-register) side stays in `converse.py` / the Agent.
 
 HermesMixin is mixed into the Agent (`class Agent(hermes.HermesMixin)`), so its
 methods run on the SAME object: `self` is the Agent, `self.reply` / `self.conn` /

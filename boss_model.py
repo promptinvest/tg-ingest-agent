@@ -97,7 +97,7 @@ def _name_line(conn, lang):
     if not (name or name_ru or name_en):
         return ""
     both = " / ".join(p for p in dict.fromkeys([name_ru, name_en]) if p) or name
-    return (f"Вас зовут {both}." if lang == "ru" else f"Your name is {both}.")
+    return (f"Тебя зовут {both}." if lang == "ru" else f"Your name is {both}.")
 
 
 def _norm(s):
@@ -280,28 +280,6 @@ def standing_guidance(conn, max_items=8, max_chars=600):
                 continue
             line = f"- {value}"
             if used + len(line) > max_chars:
-                return out
-            out.append(line)
-            used += len(line)
-            seen.add(value)
-    return out
-
-
-# What Cara has learned about HIM in the relationship — his likings, taste and what
-# he responds to. Drawn from the relationship_note shelf (normal sensitivity only, so
-# nothing sensitive like health/finance leaks); used to ground intimacy in real,
-# personal facts rather than generic seduction.
-def intimacy_notes(conn, max_items=6, max_chars=500):
-    out, used, seen = [], 0, set()
-    for status in ("confirmed", "inferred"):
-        for row in store.boss_items(conn, status, sensitivities=("normal",), limit=20):
-            if row["kind"] != "relationship_note":
-                continue
-            value = (row["value"] or "").strip()
-            if not value or value in seen:
-                continue
-            line = f"- {value}"
-            if used + len(line) > max_chars or len(out) >= max_items:
                 return out
             out.append(line)
             used += len(line)

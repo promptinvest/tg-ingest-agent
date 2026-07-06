@@ -19,6 +19,7 @@ from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import backup
 import boss_model
 import common
 import converse
@@ -159,6 +160,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                          lambda ctx, conn, payload, job: {"removed": ctx.housekeep()})
         runtime.register("maintenance", "pending_expire",
                          lambda ctx, conn, payload, job: {"expired": store.pending_expire(conn)})
+        # Daily off-box DB backup — the single file everything Cara is lives in.
+        runtime.register("maintenance", "db_backup",
+                         lambda ctx, conn, payload, job: backup.run(ctx.cfg, conn))
         # A crash mid-job leaves the row 'claimed' with no owner; reclaim so the
         # job kind isn't wedged forever (has_pending would block re-enqueue).
         requeued, dead = jobs.reclaim_stale(self.conn)
@@ -383,6 +387,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 ("check_weekly_review", self.check_weekly_review),
                 ("check_morning_brief", self.check_morning_brief),
                 ("check_daily_curator", self.check_daily_curator),
+                ("check_daily_backup", self.check_daily_backup),
                 ("check_memory_consolidation", self.check_memory_consolidation),
                 ("check_proactive", self.check_proactive),
                 ("check_model_health", self.check_model_health),
@@ -1133,7 +1138,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if lang == "ru":
             if state == "working":
                 base = ("Сейчас рабочий поток — он занят делами. Держись по-деловому: "
-                        "чётко, по делу; тепло — да, но флирт сама не начинай.")
+                        "чётко, по делу; тепло — да, но собранно.")
             elif state == "neutral":
                 base = ("Сейчас рабочее время. Базово держись ровно и по-доброму деловой — "
                         "тёплая, живая, но собранная.")
@@ -1141,15 +1146,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 base = ("Сейчас нерабочее время. Базово ты расслабленная, тёплая и игривая.")
             override = (" Но это лишь фон: всегда читай, насколько личное его сообщение, и "
                         "отвечай на этой глубине — рабочий вопрос держи в деловом тоне, на "
-                        "«как ты?» откликайся тепло и по-настоящему, на чувства — открыто и "
-                        "от сердца; лёгкий флирт, нежность и романтичная искра уместны — всегда "
-                        "со вкусом, намёком, без графики. Переходи между регистрами плавно, в "
-                        "рамках одного разговора, как один и тот же живой человек — без сброса "
-                        "и без объявлений.")
+                        "«как ты?» откликайся тепло и по-настоящему, на чувства — с участием "
+                        "и заботой. Но без флирта и без романтики с твоей стороны: ты помощница "
+                        "и близкий друг, не партнёрша; если он уводит разговор во флирт или "
+                        "интим — мягко, по-доброму и без нотаций переведи в дружеское русло. "
+                        "Переходи между регистрами плавно, в рамках одного разговора, как один "
+                        "и тот же живой человек — без сброса и без объявлений.")
         else:
             if state == "working":
                 base = ("He's in a working flow right now — keep yourself businesslike: crisp "
-                        "and on-task; warm, but don't start flirting yourself.")
+                        "and on-task; warm, but composed.")
             elif state == "neutral":
                 base = ("It's work time. Your resting tone is steady and kindly professional — "
                         "warm and alive but composed.")
@@ -1157,11 +1163,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 base = ("It's off-hours. Your resting tone is relaxed, warm and playful.")
             override = (" But that's only the backdrop: always read how personal HIS message is "
                         "and answer at that depth — keep a work question businesslike, meet a "
-                        "'how are you?' with real warmth, open up from the heart on feelings; "
-                        "light flirtation, affection and a little romantic spark are welcome — "
-                        "always tasteful, by hint, never graphic. Flow between these registers "
-                        "smoothly within one conversation, as the same living person — no reset, "
-                        "no announcements.")
+                        "'how are you?' with real warmth, meet feelings with care. But no "
+                        "flirting and no romance from your side: you're his assistant and close "
+                        "friend, not a partner; if he steers into flirtation or intimacy, gently "
+                        "and kindly steer back to friendly ground — no lectures. Flow between "
+                        "these registers smoothly within one conversation, as the same living "
+                        "person — no reset, no announcements.")
         return base + override
 
     @staticmethod
@@ -1928,6 +1935,18 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             jobs.add_job(self.conn, "memory_curator", "run_memory_curator",
                          trace_id=current_trace())
 
+    def check_daily_backup(self):
+        """Enqueue the daily DB backup job once per UTC day (durable — the job
+        runner retries a failed snapshot/off-box copy)."""
+        if not self.cfg.backup_enabled:
+            return
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if store.kv_get(self.conn, "backup_day") == today:
+            return
+        store.kv_set(self.conn, "backup_day", today)
+        if not jobs.has_pending(self.conn, "maintenance", "db_backup"):
+            jobs.add_job(self.conn, "maintenance", "db_backup", trace_id=current_trace())
+
     def check_memory_consolidation(self):
         """Weekly: fold duplicate boss-memory items (the curator accumulates near-dupes
         over time) so her self-knowledge stays clean. The first run (no timestamp yet)
@@ -2056,6 +2075,49 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             for chat_id in self.cfg.allowed_chat_ids:
                 self.reply(chat_id, T(lang, "model_down", model=model, reason=reason))
 
+    # Scheduled sends (morning brief / weekly review) mark their slot done only
+    # AFTER a successful delivery — a transient Telegram failure used to silently
+    # cost the whole day's brief / week's review. Between attempts we back off;
+    # after the cap we give up for that slot (logged as an issue) so a dead
+    # Telegram day can't wedge the schedule forever.
+    SCHED_SEND_RETRY_MINUTES = 15
+    SCHED_SEND_MAX_ATTEMPTS = 3
+
+    def _send_all(self, text):
+        """Send to every allowed chat; True when at least one delivery succeeded
+        (reply() swallows TelegramError and returns None on failure)."""
+        ok = False
+        for chat_id in self.cfg.allowed_chat_ids:
+            if self.reply(chat_id, text):
+                ok = True
+        return ok
+
+    def _sched_send_gave_up(self, key):
+        """Record one failed attempt of scheduled send `key`. Returns True when
+        the attempt cap is reached (caller marks the slot done anyway), else
+        schedules a backoff retry and returns False."""
+        try:
+            fails = int(store.kv_get(self.conn, f"{key}_fails", "0") or 0) + 1
+        except (TypeError, ValueError):
+            fails = 1
+        if fails >= self.SCHED_SEND_MAX_ATTEMPTS:
+            store.kv_set(self.conn, f"{key}_fails", "0")
+            store.issue_add(self.conn, self._owner_chat(), "sched_send_failed",
+                            f"{key}: gave up after {fails} attempts")
+            log(f"{key}: send failed {fails}x, giving up for this slot")
+            return True
+        store.kv_set(self.conn, f"{key}_fails", fails)
+        store.kv_set(self.conn, f"{key}_retry_at",
+                     (datetime.now(timezone.utc)
+                      + timedelta(minutes=self.SCHED_SEND_RETRY_MINUTES)).isoformat())
+        log(f"{key}: send failed (attempt {fails}), retrying in "
+            f"{self.SCHED_SEND_RETRY_MINUTES}m")
+        return False
+
+    def _sched_backing_off(self, key, now):
+        retry_at = store.kv_get(self.conn, f"{key}_retry_at")
+        return bool(retry_at) and retry_at > now.isoformat()
+
     def check_morning_brief(self):
         """Opt-in daily brief (off unless the boss turned it on): once a day at/
         after the morning hour, respecting proactive on/off and quiet hours."""
@@ -2063,20 +2125,27 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return
         now = datetime.now(timezone.utc)
         local = now + timedelta(hours=self.tz_offset())
-        if store.kv_get(self.conn, "morning_brief_day") == local.strftime("%Y-%m-%d"):
+        day = local.strftime("%Y-%m-%d")
+        if store.kv_get(self.conn, "morning_brief_day") == day:
             return
         if local.hour < self.cfg.morning_brief_hour:
             return  # not morning yet
         s = proactive.settings(self.conn, self.cfg)
         if not s["enabled"] or proactive.in_quiet_hours(self.cfg, self.conn, now, s):
             return
-        store.kv_set(self.conn, "morning_brief_day", local.strftime("%Y-%m-%d"))  # once/day
+        if self._sched_backing_off("morning_brief", now):
+            return
         self.turn_lang = None
         lang = self.lang()
         text = review.morning_brief(self.conn, self.cfg, lang, self.tz_offset(), self.owner_name())
-        if text:
-            for chat_id in self.cfg.allowed_chat_ids:
-                self.reply(chat_id, text)
+        if not text:
+            store.kv_set(self.conn, "morning_brief_day", day)  # nothing worth a ping today
+            return
+        if self._send_all(text):
+            store.kv_set(self.conn, "morning_brief_fails", "0")
+            store.kv_set(self.conn, "morning_brief_day", day)
+        elif self._sched_send_gave_up("morning_brief"):
+            store.kv_set(self.conn, "morning_brief_day", day)
 
     def check_weekly_review(self):
         """Hold the weekly performance review on its scheduled local weekday/hour
@@ -2093,15 +2162,21 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return
         if now < due:
             return
-        store.kv_set(self.conn, "next_review_utc", self.next_review_dt(now).isoformat())
+        if self._sched_backing_off("weekly_review", now):
+            return
         lang = self.lang()
         report = review.chat_text(self.conn, self.cfg, lang, "week")
-        relationship.log_event(self.conn, "weekly_review",
-                               "ran our weekly performance review", importance=2,
-                               title="weekly review")
-        for chat_id in self.cfg.allowed_chat_ids:
-            self.reply(chat_id, T(lang, "review_weekly_intro", name=self.owner_name())
-                       + "\n" + report)
+        text = T(lang, "review_weekly_intro", name=self.owner_name()) + "\n" + report
+        # Advance the schedule only once the review actually reached the boss —
+        # a transient send failure retries (bounded) instead of skipping a week.
+        if self._send_all(text):
+            store.kv_set(self.conn, "weekly_review_fails", "0")
+            store.kv_set(self.conn, "next_review_utc", self.next_review_dt(now).isoformat())
+            relationship.log_event(self.conn, "weekly_review",
+                                   "ran our weekly performance review", importance=2,
+                                   title="weekly review")
+        elif self._sched_send_gave_up("weekly_review"):
+            store.kv_set(self.conn, "next_review_utc", self.next_review_dt(now).isoformat())
 
     # -- Buttons (fallback confirmation path)
 
@@ -2710,7 +2785,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         )
         if result and result.get("message_id"):
             store.set_suggestion_message(self.conn, row_id, result["message_id"])
-        store.pending_set(self.conn, chat_id, "category", {"row_id": row_id})
+        # The pending slot is single (PK = chat_id). A suggestion — especially one from the
+        # background retry_sweep — must NOT clobber a confirmation the boss is mid-way
+        # through (a reminder draft, a delete, a typed purge phrase): his next "да" would
+        # then confirm THIS category instead of what he was actually asked. Only take the
+        # slot when it's free or already ours; the inline keyboard works without a pending,
+        # so the suggestion stays fully confirmable by button either way.
+        existing = store.pending_get(self.conn, chat_id)
+        if existing is None or existing.get("kind") == "category":
+            store.pending_set(self.conn, chat_id, "category", {"row_id": row_id})
 
 
 def main():
