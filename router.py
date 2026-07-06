@@ -197,6 +197,7 @@ NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and
 "это скорее крипта" (pending category) -> {"action": "amend", "params": {"category": "крипта"}, "confidence": 0.9}
 "категория - Документы" / "категория: крипта" / "в категорию Документы" / "set category to Documents" (pending category) -> {"action": "amend", "params": {"category": "Документы"}, "confidence": 0.92}
 "готово" (pending fired reminder) -> {"action": "amend", "params": {"done": true}, "confidence": 0.9}
+"сегодня пропустим" / "пропусти сегодня" / "сегодня не надо" / "skip today" (pending fired reminder — close TODAY's instance; a recurring one still fires tomorrow as scheduled) -> {"action": "amend", "params": {"done": true}, "confidence": 0.9}
 "через полчаса" (pending fired reminder) -> {"action": "amend", "params": {"snooze_minutes": 30}, "confidence": 0.9}
 "отложи на час" / "ещё часок" / "на 2 часа" / "snooze an hour" (pending fired reminder) -> {"action": "amend", "params": {"snooze_minutes": 60}, "confidence": 0.9}
 "отложи до завтра" / "напомни завтра утром" / "remind me tomorrow at 9" (pending fired reminder) -> {"action": "amend", "params": {"due_utc": "<tomorrow 09:00 local in UTC>"}, "confidence": 0.9}

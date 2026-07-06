@@ -5559,5 +5559,66 @@ class NotesHandlingTests(unittest.TestCase):
         self.assertTrue(u.startswith("threads.com/@reddtimes"))
 
 
+class SkipAndSnoozeFixesTests(unittest.TestCase):
+    """2026-07-06 live incidents: a snooze on a fired RECURRING reminder must not
+    shift its daily anchor (благодарности drifted 22:00 → 23:01 → 23:33 over two
+    snoozes), «сегодня пропустим» is a deterministic ack, and Cara never starts
+    side conversations («Как день прошёл вообще?» after a close)."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "pd.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_snooze_on_recurring_echoes_without_moving_the_anchor(self):
+        anchor = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0)
+        rid = store.reminder_add(self.conn, 1, "благодарности", anchor.isoformat(), "daily")
+        pending = {"kind": "reminder_fired",
+                   "payload": {"reminder_id": rid, "title": "благодарности"}}
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_pending(1, "amend", {"snooze_minutes": 30}, pending, "ru")
+        # the daily anchor is untouched…
+        self.assertEqual(store.reminder_get(self.conn, rid)["due_utc"], anchor.isoformat())
+        # …and a ONE-SHOT echo fires at the snoozed time instead
+        echoes = [r for r in store.reminders_active(self.conn, 1)
+                  if r["id"] != rid and r["recurrence"] == "none"]
+        self.assertEqual(len(echoes), 1)
+        echo_due = reminders.parse_iso_utc(echoes[0]["due_utc"])
+        self.assertLess(abs((echo_due - datetime.now(timezone.utc)).total_seconds() - 1800),
+                        120)
+
+    def test_snooze_on_one_shot_still_rearms_in_place(self):
+        one = store.reminder_add(self.conn, 1, "разовое",
+                                 (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat())
+        pending = {"kind": "reminder_fired", "payload": {"reminder_id": one, "title": "разовое"}}
+        n_before = len(store.reminders_active(self.conn, 1))
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_pending(1, "amend", {"snooze_minutes": 30}, pending, "ru")
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), n_before)  # no new row (B4)
+        self.assertGreater(
+            reminders.parse_iso_utc(store.reminder_get(self.conn, one)["due_utc"]),
+            datetime.now(timezone.utc))
+
+    def test_skip_today_is_a_deterministic_ack(self):
+        self.assertTrue(self.agent._is_reminder_ack("Сегодня пропустим"))
+        self.assertTrue(self.agent._is_reminder_ack("skip today"))
+        # substantive content near a fired reminder is still saved, not eaten as an ack
+        self.assertFalse(self.agent._is_reminder_ack("запиши благодарность: тёплый вечер"))
+        self.assertIn("сегодня пропустим", router.ROUTER_EXAMPLES)
+
+    def test_persona_forbids_side_conversations(self):
+        c = converse.CHARACTER.lower()
+        self.assertIn("side conversations", c)
+        self.assertIn("how was your day", c)
+        self.assertIn("как день прошёл", converse.CHARACTER)
+
+
 if __name__ == "__main__":
     unittest.main()

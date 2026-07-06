@@ -225,9 +225,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Reminders:** natural‑language times (RU/EN), one‑shot / daily / weekly, fired from
   the poll loop (~1 min precision), survive restarts/reboots.
   - **A fired reminder stays open** (visible, still pending) until you explicitly say
-    "готово" — she never auto‑closes it on a misread. **Snooze** by minutes, hours, or an
+    "готово" — she never auto‑closes it on a misread. «Сегодня пропустим» / "skip today"
+    counts as that ack (deterministic — today's instance closes; a recurring one still
+    fires tomorrow on schedule). **Snooze** by minutes, hours, or an
     absolute time ("через полчаса", "отложи на час", "до завтра в 9") **re‑arms the same
-    reminder** (keeps its id, recurrence and history — no orphaned new row). The reminder
+    ONE‑SHOT reminder** (keeps its id and history — no orphaned new row); on a
+    **recurring** reminder a snooze is a **one‑time deferral**: a one‑shot echo fires at
+    the snoozed time and the daily/weekly schedule stays exactly where you set it
+    (2026‑07‑06 fix — snoozes used to shift the daily anchor: благодарности drifted
+    22:00 → 23:33 over two snoozes). The reminder
     **list marks status** — a one‑shot that already fired shows *"⚠️ сработало, ждёт «готово»"*
     and a past‑due one *"⚠️ просрочено"*, so an old reminder never looks like a future one.
   - **She knows her own reminders in conversation.** Asking *about* a reminder — "почему не
@@ -390,6 +396,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   truthfulness rules below, not in her voice.
 - **Matches the message's language per turn** (word‑based detection: a Russian
   sentence with an English term stays Russian; Russian is the uncertain fallback).
+- **No side conversations** (owner decision 2026‑07‑06): warmth lives in *how* she
+  responds — she never asks unprompted questions about your day/life/plans/feelings
+  («как день прошёл?») and never opens topics you didn't bring up; an instruction or a
+  close gets a warm confirmation and a full stop. You start personal conversations;
+  she meets them.
 - **One address form:** every template speaks to the boss on **«ты»** (2026‑07‑06 sweep,
   test‑guarded — mixed «вы» in system templates broke immersion), and mid‑conversation
   failure copy carries no tech‑speak («модель…» removed from `llm_error`/`stored_retry`;

@@ -782,7 +782,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                 "later", "remind", "минут", "завтра", "час")):
             return True   # snooze
         acks = ("готов", "сделал", "сделано", "выполн", "done", "ок", "okay", "okey",
-                "ok", "окей", "да", "yes", "yep", "ага", "+", "✅", "👍", "закры")
+                "ok", "окей", "да", "yes", "yep", "ага", "+", "✅", "👍", "закры",
+                "пропуст", "skip")  # "сегодня пропустим" closes today's instance
         return len(t) <= 25 and any(w in t for w in acks)
 
     # The Hermes (business) domain — routing one of these means "he's working": it
@@ -1021,10 +1022,17 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     except (TypeError, ValueError):
                         minutes = 30
                     due = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
-                # B4: re-arm the ORIGINAL reminder (moving due_utc into the future re-arms
-                # it past last_fired_at) — keeps its id, recurrence and history, instead of
-                # spawning a fresh one-shot row that dropped all of that.
-                if rid is not None and store.reminder_get(self.conn, rid) is not None:
+                # B4: re-arm the ORIGINAL one-shot (moving due_utc into the future re-arms
+                # it past last_fired_at) — keeps its id and history, instead of spawning a
+                # fresh row. But snoozing a fired RECURRING reminder is a ONE-TIME deferral:
+                # it gets a one-shot ECHO at the snoozed time and the series stays put —
+                # reminder_update_due on the recurring row shifted its daily anchor to the
+                # snooze clock forever (благодарности drifted 22:00 → 23:01 → 23:33 over
+                # two snoozes; the boss never asked to move the schedule).
+                rem = store.reminder_get(self.conn, rid) if rid is not None else None
+                if rem is not None and rem["recurrence"] != "none":
+                    rid = store.reminder_add(self.conn, chat_id, rem["title"], due)
+                elif rem is not None:
                     store.reminder_update_due(self.conn, rid, due)
                 else:
                     rid = store.reminder_add(self.conn, chat_id, payload["title"], due)
