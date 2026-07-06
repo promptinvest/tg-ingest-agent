@@ -142,6 +142,19 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   not cut off at Telegram's length limit. Gratitude (and any **journal** entry) lands in
   the right journal even when the model writes a singular/variant of its name; a
   referential save with no resolvable subject keeps its real text instead of a blank note.
+- **Link‑aware ingest (2026‑07‑06):** a **link‑centric** note (short text + a URL) has
+  its first URL **fetched** through the SSRF‑guarded reader — the summary describes the
+  ACTUAL page (no more "вероятно, содержит…") and the page text is **indexed**, so `ask`
+  answers from what the link really says. Rich forwarded posts aren't delayed by a fetch
+  (only raw text < 400 chars triggers it); a failed fetch degrades to today's behavior.
+  Toggle: `INGEST_READ_LINKS` (on), prompt cap `INGEST_FETCH_CHARS` (3500). A
+  **meta‑summary** ("Пользователь просит записать…") is dropped in code, not just
+  forbidden in the prompt — the note falls back to its real text. **Category near‑
+  variants are snapped** to the canonical existing name at suggestion time ("AI tools"
+  reuses "AI Tools & Resources" instead of coining a duplicate), and the weekly review
+  lists remaining look‑alike pairs with a merge hint. **List cosmetics:** previews cut on
+  a word boundary with «…», and URLs show as host+path (no tracking params) in lists —
+  the full URL stays in the detail card.
 - **Forwarded‑message rules:** **text is parsed first**; only **images** (vision) and
   **PDFs** (text extraction — pdfminer.six, with a stdlib regex fallback) are analyzed;
   **every other file** (voice, audio, video, documents…) is **stored**, fetchable later

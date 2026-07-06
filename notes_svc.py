@@ -131,7 +131,7 @@ class NotesMixin:
                 lines.append(f"\n📅 {day}")
                 last_day = day
             body = (e["summary"] or e["raw_text"] or "").strip()
-            snippet = body.splitlines()[0][:120] if body else "—"
+            snippet = self._ellipsize(body.splitlines()[0], 120) if body else "—"
             lines.append(f"  #{self.note_no(e['id'])} • {snippet}")
         lines.append(T(lang, "journal_open_hint"))
         self.reply_chunks(chat_id, "\n".join(lines))
@@ -169,6 +169,33 @@ class NotesMixin:
 
     NOTES_PAGE_SIZE = 8
 
+    @staticmethod
+    def _ellipsize(text, limit):
+        """Trim to `limit` on a word boundary with an ellipsis — a hard slice cut
+        previews mid-word («Сервис п»). Short text passes through unchanged."""
+        text = (text or "").strip()
+        if len(text) <= limit:
+            return text
+        cut = text[:limit]
+        if " " in cut[limit // 2:]:          # only back up when a word break is near
+            cut = cut[:cut.rfind(" ")]
+        return cut.rstrip(" ,;:·—-") + "…"
+
+    @staticmethod
+    def _short_url(url):
+        """Compact list-view form of a URL: host + a path stub, no query/fragment
+        (tracking params took whole lines). The full URL stays in the detail card."""
+        from urllib.parse import urlparse
+        try:
+            p = urlparse(str(url or ""))
+        except ValueError:
+            return str(url or "")[:40]
+        host = p.netloc[4:] if p.netloc.startswith("www.") else p.netloc
+        path = (p.path or "").rstrip("/")
+        if len(path) > 24:
+            path = path[:24] + "…"
+        return (host + path) or str(url or "")[:40]
+
     def _note_line(self, lang, row):
         """One note's compact block for a list: '📄 #N · category' (N = stable note number),
         a preview, and any attachment/url marks. Shared by the plain list and the paginated view."""
@@ -177,7 +204,7 @@ class NotesMixin:
             "без категории" if ru else "uncategorized")
         pending = " ⏳" if row["status"] != "confirmed" else ""
         item = [f"📄 #{self.note_no(row['id'])} · {row_category}{pending}"]
-        text = (row["summary"] or row["raw_text"] or "").replace("\n", " ").strip()[:110]
+        text = self._ellipsize((row["summary"] or row["raw_text"] or "").replace("\n", " "), 110)
         if text:
             item.append(f"   {text}")
         marks = []
@@ -190,7 +217,7 @@ class NotesMixin:
             marks.append(f"🖼 {len(images)}")
         urls = store.message_urls(self.conn, row["id"])
         if urls:
-            marks.append(f"🌐 {urls[0]['url']}")
+            marks.append(f"🌐 {self._short_url(urls[0]['url'])}")
         if marks:
             item.append("   " + " · ".join(marks))
         return "\n".join(item)

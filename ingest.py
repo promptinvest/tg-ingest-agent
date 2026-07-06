@@ -236,7 +236,7 @@ def _salvage_reply(reply, known):
     if mc:
         cat = llm.normalize_category(_unescape_json_str(mc.group(1)))
         if cat:
-            cat = llm.match_category(cat, known) or cat
+            cat = llm.match_category_fuzzy(cat, known) or cat
     summary = ""
     ms = _SUMMARY_RE.search(reply)
     if ms:
@@ -300,7 +300,9 @@ def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
         # the model's JSON) rather than dumping the raw reply.
         cat, summary = _salvage_reply(reply, known)
         return _snap_to_journal(cat or cfg.fallback_category, journals), [], summary, []
-    category = _snap_to_journal(llm.match_category(category, known) or category, journals)
+    # Fuzzy snap: a near-variant of an existing category ("AI tools" beside
+    # "AI Tools & Resources") reuses the canonical name instead of coining a dupe.
+    category = _snap_to_journal(llm.match_category_fuzzy(category, known) or category, journals)
     alternatives = []
     raw_alternatives = parsed.get("alternatives")
     if isinstance(raw_alternatives, list):
@@ -308,7 +310,7 @@ def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
             alt = llm.normalize_category(alt)
             if not alt:
                 continue
-            alt = llm.match_category(alt, known) or alt
+            alt = llm.match_category_fuzzy(alt, known) or alt
             taken = [category.casefold()] + [a.casefold() for a in alternatives]
             if alt.casefold() not in taken:
                 alternatives.append(alt)

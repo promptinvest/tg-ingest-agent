@@ -10,10 +10,24 @@ from the database.
 """
 from datetime import datetime, timedelta, timezone
 
+import llm
 import store
 from texts import TEXTS
 
 PERIOD_DAYS = {"day": 1, "week": 7, "month": 30}
+
+
+def similar_categories(conn):
+    """Pairs of existing categories whose names look like variants of one
+    another ("AI tools" ↔ "AI Tools & Resources") — surfaced in the review so
+    the boss can fold them with «объедини X в Y». Deterministic, no LLM."""
+    names = [r["name"] for r in store.category_counts(conn)]
+    pairs = []
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            if llm.match_category_fuzzy(a, [b]):
+                pairs.append((a, b))
+    return pairs
 
 
 def journal_digest(conn, lang, days=7):
@@ -273,6 +287,13 @@ def chat_text(conn, cfg, lang, period="week"):
         lines.append(("⚠️ Проблемы: " if ru else "⚠️ Issues: ") + issues)
     else:
         lines.append("✅ " + ("Проблем не было" if ru else "No issues"))
+    dupes = similar_categories(conn)
+    if dupes:
+        pretty = "; ".join(f"«{a}» ↔ «{b}»" for a, b in dupes[:3])
+        lines.append(("🗂 Похожие категории: " + pretty
+                      + " — скажи «объедини X в Y», и я их сложу." if ru else
+                      "🗂 Similar categories: " + pretty
+                      + " — say \"merge X into Y\" and I'll fold them."))
     digest = journal_digest(conn, lang, days=PERIOD_DAYS.get(data["period"], 7))
     if digest:
         lines.append(digest)

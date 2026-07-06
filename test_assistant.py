@@ -729,7 +729,7 @@ class AgentViewTests(unittest.TestCase):
         row = store.get_message(self.agent.conn, self.row_id)
         line = self.agent._note_line("ru", row)  # the live list/paginated renderer
         self.assertIn("📄 #%d · Flight Deals" % self.row_id, line)
-        self.assertIn("🌐 https://vandrouki.ru/x/", line)
+        self.assertIn("🌐 vandrouki.ru/x", line)     # compact form: host+path, no scheme/query
 
     def test_note_edit_updates_summary_only(self):
         original_raw = store.get_message(self.agent.conn, self.row_id)["raw_text"]
@@ -5440,6 +5440,123 @@ class ReviewBatch2026_07_06Tests(unittest.TestCase):
         self.assertNotIn("модел", texts.T("ru", "llm_error").lower())
         self.assertNotIn("model", texts.T("en", "llm_error").lower())
         self.assertNotIn("модель", texts.T("ru", "stored_retry", row_id=1).lower())
+
+
+class NotesHandlingTests(unittest.TestCase):
+    """Notes-handling improvements (2026-07-06): link-centric notes summarized from
+    the ACTUAL fetched page (and the page indexed for `ask`), meta-summaries dropped,
+    near-variant categories snapped to the canonical name (+ surfaced in the review),
+    and list cosmetics (word-boundary previews, compact URLs)."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "pd.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_link_centric_note_reads_the_page(self):
+        # The screenshot's #12: a thin "запиши про Google" + Threads link was summarized
+        # as a guess. Now the page is fetched, folded into the prompt, and indexed.
+        import fetch as fetch_mod
+        import ingest
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 901,
+                                               "received_at": store._now(),
+                                               "raw_text": "интересная статья https://example.com/a"})
+        store.insert_url(self.conn, mid, "https://example.com/a")
+        seen, indexed = {}, {}
+
+        def fake_suggest(cfg, c, known, text_block, images, lang="ru"):
+            seen["block"] = text_block
+            return "Интересное", [], "Статья о X.", []
+
+        with mock.patch.object(fetch_mod, "fetch",
+                               return_value=("https://example.com/a", "Заголовок",
+                                             "PAGE-CONTENT " * 10)), \
+                mock.patch.object(ingest, "suggest", side_effect=fake_suggest), \
+                mock.patch.object(self.agent, "index_message",
+                                  side_effect=lambda rid, t: indexed.update(text=t)):
+            self.agent.suggest_row(store.get_message(self.conn, mid))
+        self.assertIn("PAGE-CONTENT", seen["block"])       # page folded into the prompt
+        self.assertIn("Заголовок", seen["block"])
+        self.assertIn("PAGE-CONTENT", indexed["text"])     # page indexed for `ask`
+
+    def test_link_read_skips_long_posts_and_survives_fetch_failure(self):
+        import fetch as fetch_mod
+        import ingest
+        # A rich forwarded post (long text) is NOT delayed by a fetch.
+        long_mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 902,
+                                                    "received_at": store._now(),
+                                                    "raw_text": "x" * 500})
+        store.insert_url(self.conn, long_mid, "https://example.com/long")
+        with mock.patch.object(fetch_mod, "fetch") as f, \
+                mock.patch.object(ingest, "suggest", return_value=("Разное", [], "s", [])), \
+                mock.patch.object(self.agent, "index_message"):
+            self.agent.suggest_row(store.get_message(self.conn, long_mid))
+        f.assert_not_called()
+        # A failing fetch degrades to today's behavior (no crash, still suggested).
+        short_mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 903,
+                                                     "received_at": store._now(),
+                                                     "raw_text": "см. https://example.com/b"})
+        store.insert_url(self.conn, short_mid, "https://example.com/b")
+        with mock.patch.object(fetch_mod, "fetch",
+                               side_effect=fetch_mod.FetchError("boom")), \
+                mock.patch.object(ingest, "suggest", return_value=("Разное", [], "s", [])), \
+                mock.patch.object(self.agent, "index_message"):
+            result = self.agent.suggest_row(store.get_message(self.conn, short_mid))
+        self.assertIsNotNone(result)
+
+    def test_meta_summary_is_dropped(self):
+        import ingest
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 904,
+                                               "received_at": store._now(),
+                                               "raw_text": "запиши про Google"})
+        with mock.patch.object(
+                ingest, "suggest",
+                return_value=("Интересное", [],
+                              'Пользователь просит записать заметку "про Google".', [])), \
+                mock.patch.object(self.agent, "index_message"):
+            self.agent.suggest_row(store.get_message(self.conn, mid))
+        # the meta-summary is dropped -> the note shows/indexes its raw_text instead
+        self.assertEqual(store.get_message(self.conn, mid)["summary"] or "", "")
+        # real summaries pass; EN meta shapes are caught too
+        self.assertFalse(self.agent._is_meta_summary("Иван расширил список компаний до 80+."))
+        self.assertTrue(self.agent._is_meta_summary("The user asks to save a note about Google."))
+        self.assertTrue(self.agent._is_meta_summary("Босс хочет сохранить ссылку на пост."))
+
+    def test_category_fuzzy_snap(self):
+        self.assertEqual(llm.match_category_fuzzy("AI tools", ["AI Tools & Resources"]),
+                         "AI Tools & Resources")
+        self.assertEqual(llm.match_category_fuzzy("карьера", ["Карьера"]), "Карьера")
+        self.assertIsNone(llm.match_category_fuzzy("Карьера", ["Фильмы", "Languages"]))
+
+    def test_review_surfaces_similar_categories(self):
+        store.ensure_category(self.conn, "AI tools")
+        store.ensure_category(self.conn, "AI Tools & Resources")
+        store.ensure_category(self.conn, "Фильмы")
+        pairs = [set(p) for p in review.similar_categories(self.conn)]
+        self.assertIn({"AI tools", "AI Tools & Resources"}, pairs)
+        self.assertNotIn({"AI tools", "Фильмы"}, pairs)
+        text = review.chat_text(self.conn, self.agent.cfg, "ru")
+        self.assertIn("Похожие категории", text)
+
+    def test_list_cosmetics(self):
+        # word-boundary preview, no mid-word cuts
+        s = self.agent._ellipsize("Пост из Instagram рекламирует бесплатный челлендж", 30)
+        self.assertTrue(s.endswith("…"))
+        self.assertNotIn("реклами…", s)                    # not cut mid-word
+        self.assertLessEqual(len(s), 31)
+        self.assertEqual(self.agent._ellipsize("коротко", 30), "коротко")
+        # compact URL: host + path stub, query/tracking params gone
+        u = self.agent._short_url(
+            "https://www.threads.com/@reddtimes/post/DZ0hiKPgZ55?xmt=AQG0ZBCS3Qzr9RihrJ")
+        self.assertNotIn("xmt=", u)
+        self.assertTrue(u.startswith("threads.com/@reddtimes"))
 
 
 if __name__ == "__main__":

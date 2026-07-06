@@ -605,3 +605,28 @@ def match_category(value, categories):
         if value.casefold() == category.casefold():
             return category
     return None
+
+
+def match_category_fuzzy(value, categories):
+    """The existing category `value` is a near-variant of, or None.
+
+    Beyond the exact casefold match: when the significant-token set of one name
+    is a SUBSET of the other's ("AI tools" vs "AI Tools & Resources"), it's the
+    same category — the model keeps coining such variants next to an existing
+    one and the operator keeps merging them by hand. Used to SNAP a fresh
+    suggestion to the canonical existing name; never renames stored data."""
+    exact = match_category(value, categories)
+    if exact:
+        return exact
+
+    def toks(s):
+        return {t for t in re.split(r"[^\w]+", str(s or "").casefold()) if len(t) >= 2}
+
+    vt = toks(value)
+    if not vt:
+        return None
+    for category in categories:
+        ct = toks(category)
+        if ct and (vt <= ct or ct <= vt):
+            return category
+    return None

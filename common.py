@@ -347,6 +347,11 @@ def load_config(env=None):
     cfg.fetch_enabled = (env.get("FETCH_ENABLED") or "true").strip().lower() == "true"
     cfg.fetch_timeout = int(env.get("FETCH_TIMEOUT_SECONDS") or "20")
     cfg.fetch_max_bytes = int(env.get("FETCH_MAX_BYTES") or str(2 * 1024 * 1024))
+    # Ingest link reading: a LINK-CENTRIC note (short text + a URL) has its first
+    # URL fetched so the summary and search index cover the actual page (not a
+    # guess). Uses the same SSRF-guarded fetcher and its timeout/size caps.
+    cfg.ingest_read_links = (env.get("INGEST_READ_LINKS") or "true").strip().lower() == "true"
+    cfg.ingest_fetch_chars = int(env.get("INGEST_FETCH_CHARS") or "3500")
     # Daily DB backup (backup.py): a consistent snapshot, rotated locally and
     # copied off-box (Spaces when configured, else the fleet notify bot's chat).
     cfg.backup_enabled = (env.get("BACKUP_ENABLED") or "true").strip().lower() == "true"
