@@ -216,10 +216,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     # -- Telegram helpers
 
     def reply(self, chat_id, text, reply_to=None, reply_markup=None, record=True):
-        if record:
-            store.convo_add(self.conn, chat_id, "bot", text)
         try:
-            return tg_call(
+            result = tg_call(
                 self.cfg.token,
                 "sendMessage",
                 {
@@ -233,6 +231,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         except TelegramError as exc:
             log(f"sendMessage failed: {exc}")
             return None
+        # Conversation history is a record of what the boss actually received.
+        # Recording before Telegram acknowledged delivery created phantom turns
+        # that the next LLM call treated as visible conversation.
+        if record:
+            store.convo_add(self.conn, chat_id, "bot", text)
+        return result
 
     def reply_chunks(self, chat_id, text):
         """Send a long message in <=4000-char pieces split on line boundaries — a long
@@ -333,7 +337,6 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         version = self.build_version()
         if not version or store.kv_get(self.conn, "deployed_version") == version:
             return
-        store.kv_set(self.conn, "deployed_version", version)
         token = self.cfg.fleet_notify_token
         chat_id = self.cfg.fleet_notify_chat_id
         if not token or not chat_id:
@@ -346,8 +349,57 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             })
         except TelegramError as exc:
             log(f"fleet deploy notice failed: {exc}")
+            return
+        store.kv_set(self.conn, "deployed_version", version)
 
     # -- Main loop
+
+    def process_update_batch(self, updates):
+        """Dispatch a Telegram batch with durable retry and dead-letter state.
+
+        A retryable failure stops before that update so Telegram redelivers it.
+        At the configured cap, its raw payload remains stored as failed and the
+        offset can advance, preventing one poison update from wedging the bot.
+        """
+        processed_max = None
+        for update in updates or []:
+            if self.stop:
+                break
+            update_id = int(update["update_id"])
+            chat_id = self._update_chat_id(update)
+            inbox = store.telegram_update_receive(self.conn, update, chat_id)
+            if inbox["status"] in ("done", "failed"):
+                processed_max = update_id
+                continue
+            attempts = store.telegram_update_attempt(self.conn, update_id)
+            tid = trace.start(self.conn, "inbound", chat_id)
+            try:
+                self.handle_update(update)
+            except ShutdownInterrupt:
+                log(f"update {update_id} left for redelivery (shutdown)")
+                trace.finish(self.conn, tid, "suppressed", "shutdown mid-update")
+                break
+            except Exception as exc:  # never let one bad update kill the poll loop
+                terminal = attempts >= self.cfg.update_max_attempts
+                store.telegram_update_fail(self.conn, update_id, repr(exc), terminal=terminal)
+                log(f"error handling update {update_id} (attempt {attempts}/"
+                    f"{self.cfg.update_max_attempts}): {exc!r}")
+                trace.event(self.conn, tid, trace.ISSUE_LOGGED, repr(exc), level="error")
+                trace.finish(self.conn, tid, "failed", repr(exc)[:200])
+                events.record_done(self.conn, "telegram_message_received", chat_id=chat_id,
+                                   trace_id=tid, status="failed", error=repr(exc)[:200])
+                if not terminal:
+                    break
+                store.issue_add(self.conn, chat_id, "telegram_update_failed",
+                                f"update_id={update_id}; {repr(exc)[:220]}")
+                processed_max = update_id
+                continue
+            store.telegram_update_done(self.conn, update_id)
+            trace.finish(self.conn, tid, "ok")
+            events.record_done(self.conn, "telegram_message_received",
+                               chat_id=chat_id, trace_id=tid)
+            processed_max = update_id
+        return processed_max
 
     def _tick(self, name, fn):
         """Run one scheduler tick, isolating an UNEXPECTED failure so it can't exit the poll
@@ -432,28 +484,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 log(f"getUpdates failed ({exc}), retrying in {delay}s")
                 time.sleep(delay)
                 continue
-            processed_max = None
-            for update in updates or []:
-                if self.stop:
-                    break  # unprocessed updates redeliver after restart
-                chat_id = self._update_chat_id(update)
-                tid = trace.start(self.conn, "inbound", chat_id)
-                try:
-                    self.handle_update(update)
-                    trace.finish(self.conn, tid, "ok")
-                    events.record_done(self.conn, "telegram_message_received",
-                                       chat_id=chat_id, trace_id=tid)
-                except ShutdownInterrupt:
-                    log(f"update {update.get('update_id')} left for redelivery (shutdown)")
-                    trace.finish(self.conn, tid, "suppressed", "shutdown mid-update")
-                    break  # do not count this update as processed
-                except Exception as exc:  # never let one bad update kill the loop
-                    log(f"error handling update {update.get('update_id')}: {exc!r}")
-                    trace.event(self.conn, tid, trace.ISSUE_LOGGED, repr(exc), level="error")
-                    trace.finish(self.conn, tid, "failed", repr(exc)[:200])
-                    events.record_done(self.conn, "telegram_message_received", chat_id=chat_id,
-                                       trace_id=tid, status="failed", error=repr(exc)[:200])
-                processed_max = update["update_id"]
+            processed_max = self.process_update_batch(updates)
             if processed_max is not None:
                 offset = processed_max + 1
                 store.kv_set(self.conn, "offset", offset)
@@ -472,12 +503,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         flag = f"budget_notice:{state}:{period}:{period_value}"
         if store.kv_get(self.conn, flag):
             return
-        store.kv_set(self.conn, flag, "1")
         lang = self.lang()
         key = "budget_warn" if state == "warn" else "budget_stop"
         text = T(lang, key, spent=spent, limit=limit, period=T(lang, f"period_{period}"))
-        for chat_id in self.cfg.allowed_chat_ids:
-            self.reply(chat_id, text)
+        if self._send_all(text):
+            store.kv_set(self.conn, flag, "1")
 
     def retry_sweep(self):
         rows = store.pending_messages(self.conn, self.cfg.llm_max_attempts)
@@ -1385,7 +1415,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         blocks = []
         # His own saved notes/journal entries relevant to what he just said.
         ctx = knowledge.rank_chunks(qvec, rows, self.cfg.ask_top_k,
-                                    self.cfg.ask_context_chars)
+                                    self.cfg.ask_context_chars,
+                                    self.cfg.ask_min_score)
         lines = []
         for c in ctx:
             snippet = " ".join((c.get("text") or "").split())[:300]
@@ -1451,10 +1482,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if not reaction:
                 self.reply(chat_id, T(lang, "llm_error"))
             return
-        self.reply(chat_id, reply)
-        # Learn immediately when he's correcting me; otherwise on the usual cadence.
-        self.maybe_curate_conversation(chat_id, lang=lang,
-                                       force=self.looks_like_correction(text))
+        if self.reply(chat_id, reply):
+            # Learn only from dialogue that was actually delivered.
+            self.maybe_curate_conversation(chat_id, lang=lang,
+                                           force=self.looks_like_correction(text))
 
     def _owner_chat(self):
         try:
@@ -1938,10 +1969,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if store.kv_get(self.conn, "curator_day") == today:
             return
-        store.kv_set(self.conn, "curator_day", today)
         if not jobs.has_pending(self.conn, "memory_curator", "run_memory_curator"):
             jobs.add_job(self.conn, "memory_curator", "run_memory_curator",
                          trace_id=current_trace())
+        store.kv_set(self.conn, "curator_day", today)
 
     def check_daily_backup(self):
         """Enqueue the daily DB backup job once per UTC day (durable — the job
@@ -1951,9 +1982,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if store.kv_get(self.conn, "backup_day") == today:
             return
-        store.kv_set(self.conn, "backup_day", today)
         if not jobs.has_pending(self.conn, "maintenance", "db_backup"):
             jobs.add_job(self.conn, "maintenance", "db_backup", trace_id=current_trace())
+        store.kv_set(self.conn, "backup_day", today)
 
     def check_memory_consolidation(self):
         """Weekly: fold duplicate boss-memory items (the curator accumulates near-dupes
@@ -2061,10 +2092,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if ok:
                 store.kv_set(self.conn, f"mh_fail:{model}", "0")
                 if prev == "down":
-                    store.kv_set(self.conn, f"mh:{model}", "ok")
-                    log(f"model health: {model} down -> ok ({reason})")
-                    for chat_id in self.cfg.allowed_chat_ids:
-                        self.reply(chat_id, T(lang, "model_back", model=model))
+                    if self._send_all(T(lang, "model_back", model=model)):
+                        store.kv_set(self.conn, f"mh:{model}", "ok")
+                        log(f"model health: {model} down -> ok ({reason})")
                 elif prev is None:
                     store.kv_set(self.conn, f"mh:{model}", "ok")  # first sighting, healthy: quiet
                 continue
@@ -2078,10 +2108,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             store.kv_set(self.conn, f"mh_fail:{model}", str(fails))
             if prev == "down" or fails < self.cfg.model_health_confirm:
                 continue  # already announced, or not yet confirmed (likely transient)
-            store.kv_set(self.conn, f"mh:{model}", "down")
-            log(f"model health: {model} ok -> down ({reason}) after {fails} checks")
-            for chat_id in self.cfg.allowed_chat_ids:
-                self.reply(chat_id, T(lang, "model_down", model=model, reason=reason))
+            if self._send_all(T(lang, "model_down", model=model, reason=reason)):
+                store.kv_set(self.conn, f"mh:{model}", "down")
+                log(f"model health: {model} ok -> down ({reason}) after {fails} checks")
 
     # Scheduled sends (morning brief / weekly review) mark their slot done only
     # AFTER a successful delivery — a transient Telegram failure used to silently

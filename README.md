@@ -1,7 +1,7 @@
 # tg-ingest-agent
 
 Conversational personal assistant on Telegram, running on the PD-VPS
-(`174.138.108.85`; Pilot-VPS is a cold standby).
+(`174.138.108.85`). The former Pilot-VPS was retired in 2026-06.
 
 One dedicated bot, no slash commands needed: you write or **speak** (voice
 notes) in Russian or English, a closed-world intent router decides which
@@ -101,13 +101,16 @@ under the non-root user `tg-ingest`.
    differs from `whisper-large-v3` (voice input degrades gracefully when the
    endpoint is unavailable).
 
-## Deploy (from Windows, repo root)
+## Deploy (from Git Bash, repo root)
 
-```powershell
-ssh -i ~/.ssh/do-pilot -p 49191 -o UserKnownHostsFile=known_hosts_pilot_rnd root@209.38.175.16 "mkdir -p /root/tg-ingest-agent-stage"
-scp -i ~/.ssh/do-pilot -P 49191 -o UserKnownHostsFile=known_hosts_pilot_rnd *.py install-tg-ingest-agent-pilot-remote.sh root@209.38.175.16:/root/tg-ingest-agent-stage/
-ssh -i ~/.ssh/do-pilot -p 49191 -o UserKnownHostsFile=known_hosts_pilot_rnd root@209.38.175.16 "bash /root/tg-ingest-agent-stage/install-tg-ingest-agent-pilot-remote.sh"
+```bash
+DEPLOY_HOST=root@174.138.108.85 DEPLOY_PORT=22 \
+  DEPLOY_KEY="$HOME/.ssh/digitalocean-dataplatform-asus" \
+  DEPLOY_KH=known_hosts_pd_dataplatform bash deploy.sh
 ```
+
+`DEPLOY_HOST`, `DEPLOY_KEY`, and `DEPLOY_KH` are required; the script has no
+retired-host fallback. Use `--test` for the disposable test stage only.
 
 The installer is idempotent: it backs up replaced files to
 `/root/codex-hardening-backups/<ts>-tg-ingest-agent/`, preserves an existing
@@ -117,10 +120,10 @@ Fill `/etc/tg-ingest-agent.env` **in an SSH session on the box** (never push
 it from PowerShell with `Out-File`/redirect — UTF-16/BOM trap), then
 `systemctl start tg-ingest-agent`.
 
-Bootstrap your chat id: message the bot once, then
-`journalctl -u tg-ingest-agent | grep ignored` shows
-`ignored message from chat_id=...`; put that id into `ALLOWED_CHAT_IDS` and
-restart.
+Bootstrap your chat id while the service is stopped: message the bot once, then
+run `python3 bootstrap_chat_id.py <expected_numeric_chat_id>`. The helper accepts
+one exact private owner and refuses an ambiguous pending queue; it never
+allowlists every sender it sees.
 
 ## Behavior details
 
@@ -133,6 +136,9 @@ restart.
 - **Duplicates**: redelivered updates are dropped via
   `UNIQUE(chat_id, tg_message_id)`; re-forwarded posts get `status=duplicate`
   with the original's classification copied, no LLM call.
+- **Unexpected update failures**: raw Telegram updates are persisted in
+  `telegram_updates`, retried `UPDATE_MAX_ATTEMPTS` times, then retained as a
+  failed dead letter so one poison update cannot wedge long polling or disappear.
 - **LLM outage / budget stop**: store-first. Pending rows retry every
   `RETRY_INTERVAL_SECONDS` (max `LLM_MAX_ATTEMPTS`, then `failed`).
 - **Voice**: OGG voice notes are downloaded, transcribed, quoted back to
@@ -152,19 +158,25 @@ restart.
   future task.
 - Only one poller per bot token: never run the agent or test `getUpdates`
   calls against the same token elsewhere (causes HTTP 409).
-- Recurrence is limited to daily/weekly; no calendar sync yet.
+- Recurrence is limited to daily/weekly.
 - The STT model slug on DO must be verified once at deploy time.
 
 ## Tests
 
-Offline unit tests (no network, temp SQLite):
+There are 456 offline unit tests (no network, temp SQLite), also run by GitHub
+Actions on every push and pull request. On this Windows/OneDrive workstation,
+run them only in the disposable VPS stage:
 
-```powershell
-python -m unittest discover -p "test_*.py" -v
+```bash
+DEPLOY_HOST=root@174.138.108.85 DEPLOY_PORT=22 \
+  DEPLOY_KEY="$HOME/.ssh/digitalocean-dataplatform-asus" \
+  DEPLOY_KH=known_hosts_pd_dataplatform bash deploy.sh --test
 ```
 
-(No Python on the Windows workstation? Run them on the VPS from the stage
-dir: `python3 -m unittest discover -p "test_*.py"`.)
+Off-box database backups require `BACKUP_ENCRYPTION_KEY_FILE` (default
+`/etc/tg-ingest-agent-backup.key`). Keep a recovery copy outside both the VPS
+and this repo. Restore an `.enc` object with OpenSSL AES-256-CBC, PBKDF2 and
+`-iter 200000`, then gunzip the resulting `.db.gz`.
 
 ## Quick verification queries (on the VPS)
 

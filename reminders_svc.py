@@ -334,8 +334,14 @@ class ReminderMixin:
             if recent_msg and not (defer_cutoff and (row["due_utc"] or "") < defer_cutoff):
                 continue
             lang = self.lang()
-            self.reply(row["chat_id"], T(lang, "reminder_fired",
-                                         name=self.owner_name(), title=row["title"]))
+            delivered = self.reply(row["chat_id"], T(lang, "reminder_fired",
+                                                      name=self.owner_name(), title=row["title"]))
+            if not delivered:
+                # Prefer at-least-once delivery to silently consuming an alarm.
+                # Telegram may have accepted an ambiguously timed-out request, so
+                # this can duplicate a reminder; losing it is the worse outcome.
+                log(f"reminder #{row['id']} delivery failed; left due for retry")
+                continue
             # The pending slot is single (PK = chat_id). A firing reminder must NOT
             # clobber a confirmation the boss is mid-way through (a reminder draft,
             # an ingest suggestion, a typed purge phrase): his next "да" would then

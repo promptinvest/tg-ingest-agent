@@ -111,7 +111,10 @@ class NotesMixin:
             hint = ("\n" + ", ".join(journals)) if journals else ""
             self.reply(chat_id, T(lang, "journal_which") + hint)
             return
-        canonical = self._match_journal_category(name, journals) or store.ensure_category(self.conn, name)
+        canonical = self._match_journal_category(name, journals)
+        if not canonical:
+            self.reply(chat_id, T(lang, "journal_empty", category=name))
+            return
         period = str(params.get("period") or "").strip().lower() or "month"
         if period not in ("day", "week", "month", "all"):
             period = "month"
@@ -578,4 +581,3 @@ class NotesMixin:
             store.pending_set(self.conn, chat_id, "delete", {"row_ids": ids})
             listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
             self.reply(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
-

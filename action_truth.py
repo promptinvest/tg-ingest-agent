@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Action-truth guard (spec §0.1.3): persona must never claim a final action
 ('saved', 'scheduled', 'remembered', …) before the deterministic code path
-that performs it has completed. This is a TEST-ONLY guard — templates carry
-`final_verbs` + `allowed_states` metadata, and a test asserts no template uses
-a final verb in a state where that action hasn't happened.
+that performs it has completed. Every rendered template is checked in
+production, and the catalogue-wide test requires every final-action template
+to declare its lifecycle state here.
 """
+import re
 
 FINAL_VERBS = {
     "saved", "filed", "scheduled", "remembered", "deleted", "purged",
@@ -26,10 +27,39 @@ STATE_ALLOWED_FINAL_VERBS = {
     "done": FINAL_VERBS,                      # read-only/completed ops
 }
 
+# A template key is the deterministic action boundary: call sites render it
+# only after that named operation. New final-action copy must be reviewed and
+# mapped here or both runtime rendering and the catalogue test fail closed.
+TEMPLATE_STATES = {
+    "counts": "stored_original",
+    "already_confirmed": "confirmed",
+    "stored_retry": "stored_original",
+    "reminder_set": "done",
+    "boss_remembered": "done",
+    "memory_candidate_kept": "done",
+    "memory_empty": "done",
+    "remember_saved": "done",
+    "auto_confirmed": "done",
+    "stats_empty": "done",
+    "capabilities": "done",
+    "purge_done": "done",
+    "calendar_added": "done",
+    "deleted": "done",
+    "deleted_multi": "done",
+    "nudge_unsorted": "done",
+    "correction_learned": "done",
+    "correction_needs_code": "done",
+    "journal_saved": "done",
+    "problem_logged": "done",
+    "reminder_no_prev": "done",
+    "files_empty": "done",
+}
+
 
 def verbs_in(text):
     low = str(text or "").lower()
-    return {v for v in FINAL_VERBS if v in low}
+    return {v for v in FINAL_VERBS
+            if re.search(rf"(?<!\w){re.escape(v)}(?!\w)", low)}
 
 
 def assert_template_allowed(template_key, state, text):
@@ -39,3 +69,24 @@ def assert_template_allowed(template_key, state, text):
     if forbidden:
         raise ValueError(
             f"Template {template_key!r} uses final verbs {sorted(forbidden)} in state {state!r}")
+
+
+def assert_template_key_allowed(template_key, text):
+    """Production guard for one rendered template."""
+    found = verbs_in(text)
+    if not found:
+        return
+    state = TEMPLATE_STATES.get(template_key)
+    if not state:
+        raise ValueError(
+            f"Template {template_key!r} uses final verbs but declares no lifecycle state")
+    assert_template_allowed(template_key, state, text)
+
+
+def assert_catalogue(catalogue):
+    """Validate every language and variant, not a hand-selected sample."""
+    for key, entry in catalogue.items():
+        for localized in entry.values():
+            variants = localized if isinstance(localized, (list, tuple)) else [localized]
+            for text in variants:
+                assert_template_key_allowed(key, text)

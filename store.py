@@ -20,6 +20,20 @@ CREATE TABLE IF NOT EXISTS kv (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS telegram_updates (
+  update_id INTEGER PRIMARY KEY,
+  chat_id INTEGER,
+  payload TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  received_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_telegram_updates_status
+  ON telegram_updates(status, updated_at);
+
 CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -874,6 +888,54 @@ def kv_set(conn, key, value):
     conn.commit()
 
 
+# -- durable Telegram update inbox ------------------------------------------
+
+def telegram_update_receive(conn, update, chat_id=None):
+    """Persist an update before dispatch. Redelivery never resets attempts."""
+    now = _now()
+    conn.execute(
+        "INSERT OR IGNORE INTO telegram_updates"
+        " (update_id, chat_id, payload, status, attempts, received_at, updated_at)"
+        " VALUES (?, ?, ?, 'pending', 0, ?, ?)",
+        (int(update["update_id"]), chat_id,
+         json.dumps(update, ensure_ascii=False, separators=(",", ":")), now, now),
+    )
+    conn.commit()
+    return telegram_update_get(conn, update["update_id"])
+
+
+def telegram_update_get(conn, update_id):
+    return conn.execute(
+        "SELECT * FROM telegram_updates WHERE update_id = ?", (int(update_id),)
+    ).fetchone()
+
+
+def telegram_update_attempt(conn, update_id):
+    now = _now()
+    conn.execute(
+        "UPDATE telegram_updates SET attempts = attempts + 1, status = 'pending',"
+        " updated_at = ? WHERE update_id = ?", (now, int(update_id)))
+    conn.commit()
+    row = telegram_update_get(conn, update_id)
+    return int(row["attempts"])
+
+
+def telegram_update_done(conn, update_id):
+    conn.execute(
+        "UPDATE telegram_updates SET status = 'done', last_error = NULL, updated_at = ?"
+        " WHERE update_id = ?", (_now(), int(update_id)))
+    conn.commit()
+
+
+def telegram_update_fail(conn, update_id, error, terminal=False):
+    conn.execute(
+        "UPDATE telegram_updates SET status = ?, last_error = ?, updated_at = ?"
+        " WHERE update_id = ?",
+        ("failed" if terminal else "pending", str(error or "")[:1000], _now(), int(update_id)),
+    )
+    conn.commit()
+
+
 # -- categories (norm_key uses Python casefold: SQLite NOCASE is ASCII-only
 #    and would treat 'Крипта' and 'крипта' as different categories) ----------
 
@@ -1123,6 +1185,7 @@ def set_chunks(conn, message_id, chunks):
 
 _NOTE_CHUNK_SQL = (
     "SELECT c.message_id AS message_id, c.text AS text, c.embedding AS embedding,"
+    " m.note_no AS note_no,"
     " m.category AS category, m.suggested_category AS suggested_category,"
     " m.forward_origin_title AS title, m.received_at AS received_at"
     " FROM chunks c JOIN messages m ON m.id = c.message_id"
@@ -1133,7 +1196,7 @@ def all_embedded_chunks(conn):
     """Every embedded note chunk with its message's category/title, DECODED and
     CACHED (the vector is in `vec`; re-decoded only when the table changes)."""
     return _cached_vectors(conn, "chunks", _NOTE_CHUNK_SQL,
-                           ("message_id", "text", "category", "suggested_category",
+                           ("message_id", "note_no", "text", "category", "suggested_category",
                             "title", "received_at"))
 
 
@@ -1666,6 +1729,10 @@ def prune_telemetry(conn, cutoff_iso):
                           (cutoff_iso,)).rowcount
     total += conn.execute("DELETE FROM model_cooldowns WHERE until_at < ?",
                           (cutoff_iso,)).rowcount
+    # Terminal failures are recovery evidence and remain until explicitly
+    # handled; only successfully consumed update payloads are retention data.
+    total += conn.execute("DELETE FROM telegram_updates WHERE status = 'done'"
+                          " AND updated_at < ?", (cutoff_iso,)).rowcount
     conn.commit()
     return total
 
@@ -1873,5 +1940,3 @@ def reminder_close(conn, rid, status="done"):
         (status, _now(), rid),
     )
     conn.commit()
-
-

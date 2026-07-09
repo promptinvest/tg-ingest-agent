@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=tg-ingest
 Group=tg-ingest
+UMask=0077
 EnvironmentFile=/etc/tg-ingest-agent.env
 ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/agent.py
 Restart=always

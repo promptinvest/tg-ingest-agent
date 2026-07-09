@@ -135,7 +135,8 @@ class HermesMixin:
             qvec = llm.embed(self.cfg, self.conn, "ask", [question])[0]
             rows = store.all_embedded_chunks(self.conn)
             context = knowledge.rank_chunks(qvec, rows, self.cfg.ask_top_k,
-                                            self.cfg.ask_context_chars)
+                                            self.cfg.ask_context_chars,
+                                            self.cfg.ask_min_score)
             if not context:  # nothing indexed/matched -> keyword fallback
                 context = self._keyword_context(question)
             hint = persona.boss_preference_hint(self.conn)
@@ -163,6 +164,7 @@ class HermesMixin:
             for row in store.list_messages(self.conn, query=term, limit=3):
                 if not any(c["message_id"] == row["id"] for c in items):
                     items.append({"message_id": row["id"],
+                                  "note_no": self.note_no(row["id"]),
                                   "text": (row["raw_text"] or row["summary"] or "")[:1500],
                                   "category": row["category"] or row["suggested_category"] or "?",
                                   "title": row["forward_origin_title"]})

@@ -1,0 +1,23 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Python
+        run: python -m compileall -q .
+      - name: Run unit tests
+        run: python -m unittest discover -p 'test_*.py'
+      - name: Check shell syntax
+        run: find . -maxdepth 1 -name '*.sh' -print0 | xargs -0 -n1 bash -n

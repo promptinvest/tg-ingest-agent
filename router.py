@@ -371,11 +371,12 @@ def route(cfg, conn, chat_id, text, pending):
         recent = store.list_messages(conn, limit=1)
         if recent:
             r = recent[0]
+            note_no = store.ensure_note_no(conn, r["id"])
             cat = r["category"] or r["suggested_category"] or "?"
             summ = (r["summary"] or r["raw_text"] or "").replace("\n", " ")[:80]
-            user_content += (f"The item he most recently saved is #{r['id']} [{cat}] {summ}. "
+            user_content += (f"The item he most recently saved is #{note_no} [{cat}] {summ}. "
                              f"If this message is an instruction about it ('это'/'this'), target "
-                             f"#{r['id']}.\n\n")
+                             f"#{note_no}.\n\n")
     # Just showed the active reminders? Then a bare "удали/закрой/убери #N" targets that
     # REMINDER (reminder_cancel by display number), not a saved note (item_delete).
     listed = store.kv_get(conn, "reminders_listed_at")

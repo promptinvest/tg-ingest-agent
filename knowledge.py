@@ -27,11 +27,15 @@ def chunk_text(text, max_chars=800):
         if not para:
             continue
         if len(para) > max_chars:
-            # hard-split an oversized paragraph on line boundaries
-            for line in para.splitlines():
+            # Split on line boundaries first, then hard-split an individual
+            # oversized line (minified text and some PDFs have no newlines).
+            for line in para.splitlines() or [para]:
                 if len(buf) + len(line) + 1 > max_chars and buf:
                     chunks.append(buf.strip())
                     buf = ""
+                while len(line) > max_chars:
+                    chunks.append(line[:max_chars])
+                    line = line[max_chars:]
                 buf += line + "\n"
             continue
         if len(buf) + len(para) + 2 > max_chars and buf:
@@ -54,7 +58,7 @@ def cosine(a, b):
     return dot / (na * nb)
 
 
-def rank_chunks(query_vec, rows, top_k, context_chars):
+def rank_chunks(query_vec, rows, top_k, context_chars, min_score=0.0):
     """rows: store.all_embedded_chunks() output. Returns the top-K most
     similar chunks (parsed) within the character budget, best first."""
     scored = []
@@ -71,13 +75,21 @@ def rank_chunks(query_vec, rows, top_k, context_chars):
     picked = []
     used = 0
     for score, row in scored[:top_k]:
-        if score <= 0:
+        if score < min_score:
             continue
-        text = row["text"]
-        if used + len(text) > context_chars and picked:
+        remaining = max(0, context_chars - used)
+        if remaining <= 0:
             break
+        text = row["text"][:remaining]
+        if not text:
+            continue
+        try:
+            note_no = row["note_no"]
+        except (KeyError, IndexError):
+            note_no = None
         picked.append({
             "message_id": row["message_id"],
+            "note_no": note_no,
             "text": text,
             "category": row["category"] or row["suggested_category"] or "?",
             "title": row["title"],
@@ -95,7 +107,8 @@ def build_ask_messages(question, context_items, preference_hint=""):
     if context_items:
         blocks = []
         for item in context_items:
-            head = f"[#{item['message_id']}"
+            display_no = item.get("note_no") or item["message_id"]
+            head = f"[#{display_no}"
             if item.get("title"):
                 head += f" — {item['title']}"
             head += f" · {item['category']}]"

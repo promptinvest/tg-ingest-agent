@@ -39,7 +39,7 @@ class ConfigTests(unittest.TestCase):
     def test_load_config_defaults(self):
         cfg = make_config()
         self.assertEqual(cfg.allowed_chat_ids, {111, 222})
-        self.assertEqual(cfg.do_model, "anthropic-claude-haiku-4.5")
+        self.assertEqual(cfg.do_model, "deepseek-4-flash")
         self.assertEqual(cfg.router_model, cfg.do_model)
         self.assertEqual(cfg.poll_timeout, 50)
         self.assertEqual(cfg.seed_categories, [])
@@ -50,6 +50,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.budget_daily_usd, 1.0)
         self.assertEqual(cfg.budget_monthly_usd, 15.0)
         self.assertEqual(cfg.habit_threshold, 10)
+        self.assertEqual(cfg.update_max_attempts, 3)
+        self.assertEqual(cfg.ask_min_score, 0.25)
 
     def test_load_config_required(self):
         for missing in ("TELEGRAM_BOT_TOKEN", "ALLOWED_CHAT_IDS", "DO_MODEL_ACCESS_KEY"):

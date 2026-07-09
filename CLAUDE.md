@@ -47,7 +47,7 @@ Surface the trade-off or the concern and get a decision.
 One bot, one long-poll process, skills as modules under a closed-world intent
 router. Stdlib-only Python 3; deployed on the **PD VPS (`174.138.108.85`)** as a
 systemd service (`tg-ingest-agent`), installed as `/opt/tg-ingest-agent/agent.py`
-(Pilot-VPS is a cold standby — migrated off it). No inbound ports (long polling).
+(the former Pilot-VPS was retired in 2026-06). No inbound ports (long polling).
 All model calls go through the budget-guarded gateway in `llm.py`. See the PD-VPS
 KB for SSH/deploy/model details.
 

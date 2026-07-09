@@ -2,8 +2,8 @@
 
 **Cara** (`@cara_assist_bot`) is a personal, conversational AI assistant that lives
 in Telegram and is self-hosted on the **PD‑VPS** (`174.138.108.85`, a DigitalOcean
-droplet shared with the PD platform; Pilot‑VPS is a cold standby — migrated off it
-2026‑06).
+droplet repurposed after the PD platform retired). The former Pilot‑VPS was retired
+in 2026‑06; there is no active standby there.
 She talks like a warm human, ingests and organizes what her owner ("boss") forwards
 her, runs reminders, answers from his own notes, learns from how they work together,
 and quietly flags things worth attention — all from **one stdlib‑only Python process**
@@ -21,7 +21,7 @@ the exhaustive feature + architecture map.
 |---|---|
 | **Surface** | Telegram bot, single owner, free‑form Russian/English, text + voice + forwards |
 | **Runtime** | one systemd service, stdlib‑only Python 3, long polling (no webhooks/ports) |
-| **Inference** | DigitalOcean Gradient (chat `anthropic-claude-haiku-4.5`, default fallback `openai-gpt-oss-20b`, embeddings `BGE‑M3`); STT local `whisper.cpp` |
+| **Inference** | DigitalOcean Gradient (chat default/current `deepseek-4-flash`, default fallback `openai-gpt-oss-20b`, embeddings `BGE‑M3`); STT local `whisper.cpp` |
 | **Storage** | SQLite (WAL) + local media dir; optional DO Spaces (dormant) |
 | **Persona** | a warm, loyal human assistant persona with her own (fictional) life (the in-person companion/relationship side was split off to Nikki, 2026-07-03); **open and personal by the boss's wish** — shares her inner life and talks frankly about any personal matter, no "professional distance"; never breaks character; matches the boss's language |
 | **Safety spine** | owner‑only access · permission manifest · confirm‑before‑state‑change · budget caps · SSRF guard · action‑truth · full tracing |
@@ -32,6 +32,8 @@ the exhaustive feature + architecture map.
 
 ```
 Telegram update (owner-only: chat AND sender must be on the allowlist)
+   │
+   ├─ durable inbox → retry unexpected failures 3x; retain terminal payload as a dead letter
    │
    ├─ message_reaction → note the boss's reaction (log, learn, surface next chat)
    ├─ callback_query   → inline-button confirmations
@@ -336,13 +338,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   their slot done only **after a successful send** — a transient Telegram failure backs
   off 15 min and retries (up to 3 attempts, then a `sched_send_failed` issue), instead
   of silently skipping the week/day.
-- **Daily DB backup (2026‑07‑06):** once per UTC day a durable job (`maintenance`/
+- **Daily DB backup (hardened 2026‑07‑10):** once per UTC day a durable job (`maintenance`/
   `db_backup`) snapshots `ingest.db` consistently (sqlite3 online‑backup API), keeps the
   newest `BACKUP_KEEP` (7) gzipped copies under `/var/lib/tg-ingest-agent/backups`, and
-  copies the snapshot **off‑box** — to the DO Space when `STORAGE_BACKEND=spaces`, else
-  as a document to the **fleet notify chat** (Telegram cloud; skipped over ~45 MB). A
-  failed transfer makes the job retry; no configured target logs a WARNING (local‑only
-  doesn't survive a droplet wipe). `BACKUP_ENABLED=false` disables.
+  encrypts every **off‑box** copy with AES‑256‑CBC/PBKDF2 (200,000 iterations) using
+  `BACKUP_ENCRYPTION_KEY_FILE` before sending it to Spaces or the fleet notify chat.
+  A missing key or failed transfer makes the durable job retry; plaintext is refused.
+  With no target, the snapshot stays local and logs a WARNING. The passphrase recovery
+  copy must live outside the VPS and repo. `BACKUP_ENABLED=false` disables.
 - **Proactive heartbeat:** gentle, suggestion‑only nudges — overdue reminders, memory
   candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
   quiet‑hours‑aware (22:00–08:00), fully audited; never acts. **A "sent" is recorded only
@@ -407,8 +410,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   the model‑health/budget alerts stay technical by design — owner‑requested ops notices).
 - **Never fabricates specifics** — IDs, numbers, trace codes, prices, dates, model
   names; if unsure she says so.
-- **Action‑truth:** she won't claim a real task was done unless the code did it; the
-  `action_truth` guard keeps "done/saved/scheduled" wording out of draft templates.
+- **Action‑truth:** she won't claim a real task was done unless the code did it; every
+  rendered template is checked in production and a catalogue‑wide test requires every
+  "done/saved/scheduled" template to declare its lifecycle state.
 - **Persona sits below the hard rules (structurally):** the live prompts that actually
   reach the model (`converse.CHARACTER`, the router/ingest system prompts) write the
   security, no‑fabrication, no‑fake‑action and no‑invented‑specifics rules **at the top**,
@@ -451,8 +455,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ sysinfo.py       read-only host stats (/proc, statvfs)
    ├─ fetch.py         SSRF-guarded URL reader
    ├─ storage.py       binary backend (local; DO Spaces S3 SigV4, dormant)
-   ├─ backup.py        daily consistent DB snapshot: local rotation + off-box copy
-   │                   (Spaces or the fleet notify chat), as a durable daily job
+   ├─ backup.py        daily consistent DB snapshot: local rotation + encrypted off-box
+   │                   copy (Spaces or fleet notify chat), as a durable daily job
    ├─ llm.py           budget-guarded gateway: chat profiles + failover + cooldowns,
    │                   embeddings, STT (local/local_server/remote), pricing, budgets
    ├─ store.py         SQLite schema + helpers + additive migrations
@@ -568,8 +572,9 @@ Required: `TELEGRAM_BOT_TOKEN`, `ALLOWED_CHAT_IDS` (owner only), `DO_MODEL_ACCES
 
 Common optional (defaults): `BOT_LANGUAGE=ru` · `TIMEZONE_OFFSET_HOURS=3` ·
 `CARA_TIMEZONE_OFFSET_HOURS` (= boss's) · `BUDGET_DAILY_USD=1.0` /
-`BUDGET_MONTHLY_USD=15.0` (runtime‑overridable) · `DO_CHAT_MODEL=anthropic-claude-haiku-4.5`
-· `ROUTER_MODEL` · `DO_EMBEDDING_MODEL=BGE-M3` · `ROUTER_CONFIDENCE_THRESHOLD=0.6`.
+`BUDGET_MONTHLY_USD=15.0` (runtime‑overridable) · `DO_CHAT_MODEL=deepseek-4-flash`
+· `ROUTER_MODEL` · `DO_EMBEDDING_MODEL=BGE-M3` · `ROUTER_CONFIDENCE_THRESHOLD=0.6`
+· `ASK_MIN_SCORE=0.25` · `UPDATE_MAX_ATTEMPTS=3`.
 
 STT (code defaults shown; the box overrides the first two): `STT_MODE` (default
 `remote`, box `local_server`) · `STT_LANGUAGE` (default `auto`, box `ru`) ·
@@ -579,8 +584,9 @@ Schedules & proactivity: `REVIEW_WEEKDAY=0` (Mon) / `REVIEW_HOUR=10` ·
 `PROACTIVE_ENABLED=true` · `QUIET_HOURS_START=22` / `QUIET_HOURS_END=8` ·
 `PROACTIVE_MAX_PER_DAY=1` · `PROACTIVE_INTERVAL_SECONDS=3600`.
 
-Backup: `BACKUP_ENABLED=true` · `BACKUP_KEEP=7` (daily consistent DB snapshot under
-`/var/lib/tg-ingest-agent/backups`, copied off‑box to Spaces or the fleet notify chat).
+Backup: `BACKUP_ENABLED=true` · `BACKUP_KEEP=7` ·
+`BACKUP_ENCRYPTION_KEY_FILE=/etc/tg-ingest-agent-backup.key` (local gzip plus encrypted
+off‑box copy; recovery key retained separately from the VPS/repo).
 
 Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 `GCAL_SA_KEY_FILE` (Calendar) · `STORAGE_BACKEND=spaces` + `SPACES_*` (DO Spaces) ·
@@ -592,7 +598,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 
 - **Host:** PD‑VPS (`174.138.108.85`, SSH key‑only; connection details in the PD‑VPS
   KB). Service `tg-ingest-agent`; app `/opt/tg-ingest-agent/`; state
-  `/var/lib/tg-ingest-agent/`. Pilot‑VPS is a cold standby (migrated 2026‑06).
+  `/var/lib/tg-ingest-agent/`. The former Pilot‑VPS is retired.
 - **Deploy:** single‑connection `deploy.sh` (tar → test → install → verify) with an
   idempotent installer (backs up, preserves env, `py_compile` gate, restarts only when
   secrets are complete); `--pull` / `--rollback <sha>` supported. The installer stamps
@@ -601,8 +607,9 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 570 offline unit tests (as of 2026‑07‑02; no network; temp SQLite), run on
-  the box as part of every deploy — including a **golden‑transcript harness** that replays end‑to‑end
+- **Tests:** 456 offline unit tests (as of 2026‑07‑10; no network; temp SQLite), run on
+  the box as part of every deploy and in GitHub Actions — including a
+  **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an
   un‑scripted LLM call fails the scenario.

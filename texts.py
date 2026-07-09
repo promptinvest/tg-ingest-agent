@@ -650,4 +650,10 @@ def T(lang, key, **kwargs):
     template = entry.get(lang) or entry["en"]
     if isinstance(template, (list, tuple)):  # variant family
         template = _pick(list(template), kwargs)
+    # Lazy import avoids a module cycle while making the action-truth check a
+    # production invariant instead of a pair of hand-picked unit tests. Check
+    # before interpolation: nested values (for example the independently
+    # checked `counts` template inside `suggestion`) retain their own lifecycle.
+    from action_truth import assert_template_key_allowed
+    assert_template_key_allowed(key, template)
     return template.format(**kwargs) if kwargs else template

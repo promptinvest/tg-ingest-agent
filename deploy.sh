@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One-connection deploy. Production is the PD-VPS (override via env, see below
-# and CLAUDE.md); the baked-in defaults still point at Pilot-VPS (cold standby).
+# One-connection deploy. The target is intentionally explicit: retired or
+# repurposed hosts must never remain as an executable default.
 #
 # Why: many rapid ssh/scp calls trip the hardened box's fail2ban/MaxStartups
 # (connection resets, banner timeouts). Windows OpenSSH has no ControlMaster
@@ -16,13 +16,16 @@
 # GitHub repo (key at /root/.ssh/github-tg-ingest-deploy). They give
 # provable "deployed == this commit" and one-command rollback.
 #
-# Override connection via env: DEPLOY_KEY, DEPLOY_PORT, DEPLOY_HOST, DEPLOY_KH
+# Required: DEPLOY_KEY, DEPLOY_HOST, DEPLOY_KH. Optional: DEPLOY_PORT (default 22).
 set -euo pipefail
 
-KEY="${DEPLOY_KEY:-$HOME/.ssh/do-pilot}"
-PORT="${DEPLOY_PORT:-49191}"
-HOST="${DEPLOY_HOST:-root@209.38.175.16}"
-KH="${DEPLOY_KH:-known_hosts_pilot_rnd}"
+: "${DEPLOY_KEY:?set DEPLOY_KEY to the Cara host private key}"
+: "${DEPLOY_HOST:?set DEPLOY_HOST (for example root@Cara-host)}"
+: "${DEPLOY_KH:?set DEPLOY_KH to the pinned known_hosts file}"
+KEY="$DEPLOY_KEY"
+PORT="${DEPLOY_PORT:-22}"
+HOST="$DEPLOY_HOST"
+KH="$DEPLOY_KH"
 STAGE="/root/tg-ingest-agent-stage"
 SRC="/opt/tg-ingest-agent-src"
 BOX_KEY="/root/.ssh/github-tg-ingest-deploy"

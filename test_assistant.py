@@ -1437,6 +1437,7 @@ class PersonaPatchTests(unittest.TestCase):
 
     # Fix 5: action-truth guard
     def test_action_truth_guard(self):
+        action_truth.assert_catalogue(texts.TEXTS)
         action_truth.assert_template_allowed(
             "suggestion", "suggested", texts.T("en", "suggestion", category="X",
                                                summary="s", counts="c"))  # no final verb: ok
@@ -1446,6 +1447,8 @@ class PersonaPatchTests(unittest.TestCase):
             action_truth.assert_template_allowed("x", "suggested", "I saved and filed it")
         with self.assertRaises(ValueError):
             action_truth.assert_template_allowed("x", "suggested", "Готово, сохранила")
+        with self.assertRaises(ValueError):
+            action_truth.assert_template_key_allowed("new_unreviewed_key", "I saved it")
 
     # Fix 6: truthful STT failure copy (Cara doesn't keep the file / can't retry)
     def test_stt_copy_truthful(self):
@@ -1930,7 +1933,8 @@ class ConversationDispatchTests(unittest.TestCase):
         store.reminder_add(conn, 1, "благодарности", due, "none")
         sent = []
         with mock.patch.object(self.agent, "reply",
-                               side_effect=lambda cid, text, *a, **k: sent.append(text)), \
+                               side_effect=lambda cid, text, *a, **k:
+                               (sent.append(text) or {"message_id": 1})), \
                 mock.patch.object(proactive, "in_quiet_hours", return_value=True):
             self.agent.fire_due_reminders()
         self.assertTrue(any("благодарности" in s for s in sent))  # fires despite quiet hours
@@ -1978,7 +1982,8 @@ class ConversationDispatchTests(unittest.TestCase):
                            (now - timedelta(hours=3)).isoformat(), "none")
         sent = []
         with mock.patch.object(self.agent, "reply",
-                               side_effect=lambda cid, text, *a, **k: sent.append(text)), \
+                               side_effect=lambda cid, text, *a, **k:
+                               (sent.append(text) or {"message_id": 1})), \
                 mock.patch.object(proactive, "in_quiet_hours", return_value=False):
             self.agent.fire_due_reminders()
         self.assertTrue(any("выплата по кредиту" in s for s in sent))  # past the 2h cap
@@ -2076,7 +2081,7 @@ class ConversationDispatchTests(unittest.TestCase):
         due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
         store.reminder_add(conn, 1, "благодарности", due, "none")
         sent = []
-        cap = lambda cid, text, *a, **k: sent.append(text)
+        cap = lambda cid, text, *a, **k: (sent.append(text) or {"message_id": 1})
         # intimate moment AND he just messaged -> held by the 5-min lull
         store.kv_set(conn, "last_intimate_at", datetime.now(timezone.utc).isoformat())
         store.kv_set(conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
@@ -2740,8 +2745,8 @@ class MaintenanceJobTests(unittest.TestCase):
         self.assertEqual(tg.call_args[0][2]["chat_id"], "160568780")
 
     def test_deploy_notice_skipped_when_fleet_unconfigured(self):
-        # No fleet creds -> mark the version seen and stay silent (never falls back to
-        # the boss's chat).
+        # No fleet creds -> stay silent (never falls back to the boss's chat),
+        # but do not claim that a notice was delivered.
         self.agent.cfg.fleet_notify_token = ""
         self.agent.cfg.fleet_notify_chat_id = ""
         with mock.patch("tg_ingest_agent.tg_call") as tg, \
@@ -2750,7 +2755,7 @@ class MaintenanceJobTests(unittest.TestCase):
             self.agent.announce_deploy_if_changed()
         tg.assert_not_called()
         reply.assert_not_called()
-        self.assertEqual(store.kv_get(self.agent.conn, "deployed_version"), "v9")
+        self.assertIsNone(store.kv_get(self.agent.conn, "deployed_version"))
 
     def test_drain_runs_maintenance_and_expires_pending(self):
         import runtime
@@ -2826,19 +2831,26 @@ class ReactionAndContextTests(unittest.TestCase):
         self.assertTrue(any(p in ctx for p in ("утро", "день", "вечер", "ночь")))
 
     def test_router_points_at_recent_item_for_this(self):
+        # Burn an internal row id without assigning a user-facing note number,
+        # so this test catches accidental leakage of messages.id.
+        store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 99,
+                                         "received_at": store._now(), "raw_text": "pending"})
         mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
                                                "received_at": store._now(), "raw_text": "Расписка.pdf"})
         store.set_suggestion(self.conn, mid, "uncategorized", "filename only", "m")
+        note_no = store.ensure_note_no(self.conn, mid)
+        self.assertNotEqual(mid, note_no)
         captured = {}
 
         def fake_chat(cfg, conn, skill, messages, **kw):
             captured["user"] = messages[1]["content"]
             return ('{"action":"recategorize","params":{"id":%d,"category":"Документы"},'
-                    '"confidence":0.9}' % mid)
+                    '"confidence":0.9}' % note_no)
 
         with mock.patch.object(llm, "chat_profile", side_effect=fake_chat):
             router.route(self.agent.cfg, self.conn, 1, "переложи это в Документы", None)
-        self.assertIn(f"#{mid}", captured["user"])             # item pointed out to the router
+        self.assertIn(f"#{note_no}", captured["user"])         # stable note number, not row id
+        self.assertNotIn(f"#{mid}", captured["user"])
         self.assertIn("recently saved", captured["user"])
 
 
@@ -3512,6 +3524,13 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         body = "\n".join(sent)
         self.assertIn("долгожданную систему", body)              # real entry shown
         self.assertNotIn("**", body)                             # deterministic render, no empty bold
+
+    def test_show_unknown_journal_does_not_create_a_category(self):
+        before = set(store.known_categories(self.conn))
+        with mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_journal_show(1, "ru", {"category": "Несуществующий дневник"})
+        self.assertEqual(set(store.known_categories(self.conn)), before)
+        self.assertIn("Несуществующий дневник", reply.call_args[0][1])
 
     def test_converse_system_forbids_hand_rendered_lists(self):
         import converse
@@ -4612,6 +4631,9 @@ class KnowledgeTests(unittest.TestCase):
         chunks = knowledge.chunk_text(doc, max_chars=400)
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(len(c) <= 800 for c in chunks))
+        one_long_line = knowledge.chunk_text("x" * 1001, max_chars=200)
+        self.assertEqual("".join(one_long_line), "x" * 1001)
+        self.assertTrue(all(len(c) <= 200 for c in one_long_line))
 
     def test_cosine(self):
         self.assertAlmostEqual(knowledge.cosine([1, 0], [1, 0]), 1.0)
@@ -4623,7 +4645,7 @@ class KnowledgeTests(unittest.TestCase):
         import json as _json
         rows = [
             {"message_id": 1, "text": "flight info", "embedding": _json.dumps([1.0, 0.0]),
-             "category": "Plan", "suggested_category": None, "title": "Trip"},
+             "note_no": 41, "category": "Plan", "suggested_category": None, "title": "Trip"},
             {"message_id": 2, "text": "weather", "embedding": _json.dumps([0.0, 1.0]),
              "category": "Misc", "suggested_category": None, "title": None},
             {"message_id": 3, "text": "bad", "embedding": "not-json",
@@ -4635,16 +4657,22 @@ class KnowledgeTests(unittest.TestCase):
         # context budget caps how many chunks are included
         tight = knowledge.rank_chunks([1.0, 1.0], rows, top_k=6, context_chars=5)
         self.assertEqual(len(tight), 1)
+        self.assertEqual(tight[0]["text"], "fligh")
+        self.assertLessEqual(sum(len(r["text"]) for r in tight), 5)
+        none = knowledge.rank_chunks([1.0, 0.0], rows[1:2], 6, 6000, min_score=0.25)
+        self.assertEqual(none, [])
 
     def test_build_ask_messages_grounding(self):
         msgs = knowledge.build_ask_messages(
             "когда рейс?",
-            [{"message_id": 7, "text": "Рейс 14 июня 10:05", "category": "Plan", "title": "Trip"}])
+            [{"message_id": 7, "note_no": 42, "text": "Рейс 14 июня 10:05",
+              "category": "Plan", "title": "Trip"}])
         sys = msgs[0]["content"]
         self.assertIn("ONLY", sys)
         self.assertIn("did", sys.lower()) if "didn't find" in sys.lower() else None
         self.assertIn("Рейс 14 июня 10:05", sys)
-        self.assertIn("#7", sys)
+        self.assertIn("#42", sys)
+        self.assertNotIn("#7", sys)
         self.assertEqual(msgs[1]["content"], "когда рейс?")
         # no context -> still grounded, explicit no-match marker
         empty = knowledge.build_ask_messages("q", [])
@@ -5293,12 +5321,15 @@ class ReviewBatch2026_07_06Tests(unittest.TestCase):
 
     def test_backup_snapshot_is_consistent_and_rotation_keeps_newest(self):
         import gzip
+        import stat
         import sqlite3 as sq
         import backup
         conn, cfg = self.agent.conn, self.agent.cfg
         store.kv_set(conn, "marker", "42")
         gz = backup.snapshot(cfg, conn)
         self.assertTrue(gz.name.endswith(".db.gz"))
+        self.assertEqual(stat.S_IMODE(gz.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(gz.parent.stat().st_mode), 0o700)
         raw = gz.parent / "restored.db"                 # snapshot restores to a working DB
         raw.write_bytes(gzip.decompress(gz.read_bytes()))
         rconn = sq.connect(str(raw))
@@ -5318,19 +5349,48 @@ class ReviewBatch2026_07_06Tests(unittest.TestCase):
         cfg = self.agent.cfg
         d = backup.backups_dir(cfg)
         d.mkdir(parents=True, exist_ok=True)
-        f = d / "ingest-20260101T000000Z.db.gz"
-        f.write_bytes(b"data")
-        self.assertEqual(backup.offsite(cfg, f), "")    # no target -> local-only ('' -> warned)
+        plain = d / "ingest-20260101T000000Z.db.gz"
+        encrypted = d / "ingest-20260101T000000Z.db.gz.enc"
+        plain.write_bytes(b"plaintext")
+        encrypted.write_bytes(b"ciphertext")
+        self.assertEqual(backup.offsite(cfg, plain), "")  # no target -> local-only
         cfg.fleet_notify_token, cfg.fleet_notify_chat_id = "t", "5"
+        with self.assertRaises(backup.BackupEncryptionError):
+            backup.offsite(cfg, plain)                    # plaintext is never sent off-box
         with mock.patch.object(backup, "tg_send_document") as send:
-            self.assertEqual(backup.offsite(cfg, f), "telegram:fleet")
-        self.assertEqual(send.call_args[0][2], f.name)  # posted as a document
+            self.assertEqual(backup.offsite(cfg, encrypted), "telegram:fleet")
+        self.assertEqual(send.call_args[0][2], encrypted.name)
+        self.assertEqual(send.call_args.kwargs["content_type"], "application/octet-stream")
         cfg.storage_backend, cfg.spaces_key = "spaces", "k"
         cfg.spaces_secret, cfg.spaces_bucket = "s", "b"
         with mock.patch.object(backup.storage, "put_object",
                                return_value="media/backups/x") as put:
-            self.assertTrue(backup.offsite(cfg, f).startswith("spaces:"))
+            self.assertTrue(backup.offsite(cfg, encrypted).startswith("spaces:"))
         self.assertTrue(put.called)                     # Spaces preferred over Telegram
+
+    def test_backup_encryption_uses_key_file_and_atomic_output(self):
+        import backup
+        cfg = self.agent.cfg
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        plain = d / "ingest-20260101T000000Z.db.gz"
+        plain.write_bytes(b"sensitive")
+        key = Path(self.tmp.name) / "backup.key"
+        key.write_text("test-passphrase", encoding="utf-8")
+        cfg.backup_encryption_key_file = key
+
+        def fake_openssl(command, **kwargs):
+            out = Path(command[command.index("-out") + 1])
+            out.write_bytes(b"encrypted")
+            return mock.MagicMock(returncode=0)
+
+        with mock.patch.object(backup.subprocess, "run", side_effect=fake_openssl) as run:
+            encrypted = backup.encrypt_snapshot(cfg, plain)
+        self.assertEqual(encrypted.read_bytes(), b"encrypted")
+        self.assertTrue(encrypted.name.endswith(".db.gz.enc"))
+        command = run.call_args[0][0]
+        self.assertIn(f"file:{key}", command)
+        self.assertNotIn("test-passphrase", command)
 
     def test_daily_backup_enqueued_once_per_day_with_registered_handler(self):
         conn = self.agent.conn
@@ -5618,6 +5678,91 @@ class SkipAndSnoozeFixesTests(unittest.TestCase):
         self.assertIn("side conversations", c)
         self.assertIn("how was your day", c)
         self.assertIn("как день прошёл", converse.CHARACTER)
+
+
+class ReviewFixes2026_07_10Tests(unittest.TestCase):
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "review.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def test_reply_records_only_acknowledged_delivery(self):
+        with mock.patch.object(self.mod, "tg_call", return_value={"message_id": 1}):
+            self.assertTrue(self.agent.reply(1, "delivered"))
+        self.assertEqual([r["text"] for r in store.convo_recent(self.agent.conn, 1)],
+                         ["delivered"])
+        with mock.patch.object(self.mod, "tg_call",
+                               side_effect=tg_api.TelegramError("network timeout")):
+            self.assertIsNone(self.agent.reply(1, "phantom"))
+        self.assertEqual([r["text"] for r in store.convo_recent(self.agent.conn, 1)],
+                         ["delivered"])
+
+    def test_failed_reminder_delivery_leaves_alarm_due(self):
+        due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        rid = store.reminder_add(self.agent.conn, 1, "critical alarm", due)
+        with mock.patch.object(self.agent, "reply", return_value=None):
+            self.agent.fire_due_reminders()
+        row = store.reminder_get(self.agent.conn, rid)
+        self.assertEqual(row["due_utc"], due)
+        self.assertIsNone(row["last_fired_at"])
+        self.assertIsNone(store.pending_get(self.agent.conn, 1))
+
+    def test_failed_budget_notice_is_retried(self):
+        with mock.patch.object(llm, "budget_state", return_value=("warn", "day", 0.8, 1.0)), \
+                mock.patch.object(self.agent, "reply", return_value=None):
+            self.agent.check_budget_notice()
+        flags = self.agent.conn.execute(
+            "SELECT key FROM kv WHERE key LIKE 'budget_notice:%'").fetchall()
+        self.assertEqual(flags, [])
+        with mock.patch.object(llm, "budget_state", return_value=("warn", "day", 0.8, 1.0)), \
+                mock.patch.object(self.agent, "reply", return_value={"message_id": 1}):
+            self.agent.check_budget_notice()
+        flags = self.agent.conn.execute(
+            "SELECT key FROM kv WHERE key LIKE 'budget_notice:%'").fetchall()
+        self.assertEqual(len(flags), 1)
+
+    def test_updates_retry_then_dead_letter_without_losing_payload(self):
+        update = {"update_id": 700, "message": {"chat": {"id": 1}, "text": "boom"}}
+        with mock.patch.object(self.agent, "handle_update", side_effect=RuntimeError("bad update")):
+            self.assertIsNone(self.agent.process_update_batch([update]))
+            self.assertIsNone(self.agent.process_update_batch([update]))
+            self.assertEqual(self.agent.process_update_batch([update]), 700)
+        row = store.telegram_update_get(self.agent.conn, 700)
+        self.assertEqual((row["status"], row["attempts"]), ("failed", 3))
+        self.assertIn('"text":"boom"', row["payload"])
+        self.assertIn("bad update", row["last_error"])
+
+    def test_successful_update_is_not_dispatched_twice(self):
+        update = {"update_id": 701, "message": {"chat": {"id": 1}, "text": "ok"}}
+        with mock.patch.object(self.agent, "handle_update") as handle:
+            self.assertEqual(self.agent.process_update_batch([update]), 701)
+            self.assertEqual(self.agent.process_update_batch([update]), 701)
+        handle.assert_called_once_with(update)
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 701)["status"], "done")
+
+    def test_bootstrap_selects_exactly_one_private_owner(self):
+        import bootstrap_chat_id
+        payload = {"result": [
+            {"message": {"chat": {"id": 10, "type": "private"}, "from": {"id": 10}}},
+            {"message": {"chat": {"id": -20, "type": "group"}, "from": {"id": 10}}},
+        ]}
+        self.assertEqual(bootstrap_chat_id.select_owner(payload), 10)
+        payload["result"].append(
+            {"message": {"chat": {"id": 11, "type": "private"}, "from": {"id": 11}}})
+        with self.assertRaises(ValueError):
+            bootstrap_chat_id.select_owner(payload)
+        self.assertEqual(bootstrap_chat_id.select_owner(payload, 10), 10)
+        out = bootstrap_chat_id.write_owner(
+            "TELEGRAM_BOT_TOKEN=x\nALLOWED_CHAT_IDS=REPLACE_ME\n", 10)
+        self.assertIn("ALLOWED_CHAT_IDS=10", out)
+        self.assertNotIn("11", out)
 
 
 if __name__ == "__main__":

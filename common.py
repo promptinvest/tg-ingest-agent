@@ -235,13 +235,14 @@ def load_config(env=None):
     # suggestions in the categories table.
     cfg.seed_categories = load_categories(env)
     cfg.fallback_category = (env.get("FALLBACK_CATEGORY") or "uncategorized").strip()
-    cfg.do_model = (env.get("DO_CHAT_MODEL") or "anthropic-claude-haiku-4.5").strip()
+    cfg.do_model = (env.get("DO_CHAT_MODEL") or "deepseek-4-flash").strip()
     cfg.router_model = (env.get("ROUTER_MODEL") or cfg.do_model).strip()
     cfg.embedding_model = (env.get("DO_EMBEDDING_MODEL") or "BGE-M3").strip()
     cfg.do_base_url = (env.get("DO_INFERENCE_BASE_URL") or "https://inference.do-ai.run/v1").strip()
     cfg.db_path = Path(env.get("DB_PATH") or "/var/lib/tg-ingest-agent/ingest.db")
     cfg.media_dir = Path(env.get("MEDIA_DIR") or "/var/lib/tg-ingest-agent/media")
     cfg.poll_timeout = int(env.get("POLL_TIMEOUT_SECONDS") or "50")
+    cfg.update_max_attempts = max(1, int(env.get("UPDATE_MAX_ATTEMPTS") or "3"))
     cfg.album_settle = float(env.get("ALBUM_SETTLE_SECONDS") or "3")
     cfg.max_llm_images = int(env.get("MAX_LLM_IMAGES") or "4")
     cfg.llm_timeout = int(env.get("LLM_TIMEOUT_SECONDS") or "90")
@@ -342,6 +343,7 @@ def load_config(env=None):
     # Knowledge Q&A (ask): semantic retrieval over the KB
     cfg.ask_top_k = int(env.get("ASK_TOP_K") or "6")
     cfg.ask_context_chars = int(env.get("ASK_CONTEXT_CHARS") or "6000")
+    cfg.ask_min_score = float(env.get("ASK_MIN_SCORE") or "0.25")
     cfg.chunk_chars = int(env.get("CHUNK_CHARS") or "800")
     # Remote fetch (read a URL the operator sends; SSRF-guarded)
     cfg.fetch_enabled = (env.get("FETCH_ENABLED") or "true").strip().lower() == "true"
@@ -353,9 +355,11 @@ def load_config(env=None):
     cfg.ingest_read_links = (env.get("INGEST_READ_LINKS") or "true").strip().lower() == "true"
     cfg.ingest_fetch_chars = int(env.get("INGEST_FETCH_CHARS") or "3500")
     # Daily DB backup (backup.py): a consistent snapshot, rotated locally and
-    # copied off-box (Spaces when configured, else the fleet notify bot's chat).
+    # encrypted before any off-box copy (Spaces or fleet notify chat).
     cfg.backup_enabled = (env.get("BACKUP_ENABLED") or "true").strip().lower() == "true"
     cfg.backup_keep = max(1, int(env.get("BACKUP_KEEP") or "7"))
+    cfg.backup_encryption_key_file = Path(
+        env.get("BACKUP_ENCRYPTION_KEY_FILE") or "/etc/tg-ingest-agent-backup.key")
     # Binary storage backend: 'local' (default) or 'spaces' (DO Spaces, S3).
     # Built now, dormant until a Space + keys are configured.
     cfg.storage_backend = (env.get("STORAGE_BACKEND") or "local").strip().lower()
