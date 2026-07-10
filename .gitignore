@@ -10,3 +10,6 @@ media/
 
 # Cara migration staging (transiently holds DB + env secrets)
 .migrate-stage/
+
+# Codegraph local index (machine-local, never committed)
+.codegraph/
