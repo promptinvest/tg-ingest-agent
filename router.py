@@ -74,6 +74,25 @@ ACTIONS = {
 }
 PENDING_ONLY = {"confirm", "amend", "cancel"}
 
+
+_REVIEW_EXPORT_SHORTCUTS = {
+    "md", ".md", "давай md", "давай .md", "в md", "в .md",
+    "пришли md", "пришли .md", "сделай md", "сделай .md",
+    "send md", "send the md", "make it md", "as md", "in md",
+}
+
+
+def detect_review_export(text):
+    """Resolve the short follow-up printed by the weekly review itself.
+
+    A bare ``Давай md`` is unambiguous in Cara: the only offered generic Markdown
+    artifact is the performance review. Keeping this deterministic prevents a
+    low-confidence router result from falling into converse, where no document can
+    be created or uploaded.
+    """
+    normalized = " ".join(str(text or "").casefold().strip().rstrip(".!?").split())
+    return normalized in _REVIEW_EXPORT_SHORTCUTS
+
 ROUTER_EXAMPLES = """Examples:
 "напомни завтра в 10 позвонить в банк" -> {"action": "reminder_create", "params": {"title": "позвонить в банк", "due_utc": "<tomorrow 10:00 local converted to UTC>", "recurrence": "none"}, "confidence": 0.95}
 "remind me every Monday at 9 to file the report" -> {"action": "reminder_create", "params": {"title": "file the report", "due_utc": "<next Monday 09:00 local in UTC>", "recurrence": "weekly"}, "confidence": 0.95}
@@ -149,6 +168,7 @@ NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and
 "когда у нас следующий performance review?" / "когда по плану ревью?" / "when is our next performance review?" -> {"action": "review", "params": {"schedule": true}, "confidence": 0.92}
 "какие корректировки ты запомнила?" / "что ты исправила по моим замечаниям?" / "что нельзя пофиксить?" / "what corrections have you learned?" -> {"action": "review", "params": {"focus": "corrections"}, "confidence": 0.9}
 "сделай отчёт файлом" / "export the review as md" -> {"action": "review", "params": {"period": "week", "export": true}, "confidence": 0.9}
+"давай md" / "пришли .md" / "send the md" -> {"action": "review", "params": {"period": "week", "export": true}, "confidence": 1.0}
 "когда мой рейс?" / "when is my flight?" -> {"action": "ask", "params": {"question": "когда мой рейс?"}, "confidence": 0.9}
 "что у нас по плану на сегодня?" / "what's the plan for today?" -> {"action": "ask", "params": {"question": "что у нас по плану на сегодня?"}, "confidence": 0.9}
 "почему не закрыла #1?" / "почему #2 ещё не закрыто?" / "что с напоминанием про банк?" / "why didn't you close #1?" (asking about one of HER reminders) -> {"action": "converse", "params": {}, "confidence": 0.9}
@@ -336,6 +356,9 @@ def validate_route(parsed, has_pending):
 
 def route(cfg, conn, chat_id, text, pending):
     """Classify one user message; always returns a valid route dict."""
+    if pending is None and detect_review_export(text):
+        return {"action": "review", "params": {"period": "week", "export": True},
+                "confidence": 1.0}
     system = build_system_prompt(cfg, pending)
     history = store.convo_recent(conn, chat_id, limit=14)
     # A forwarded turn is UNTRUSTED channel content — fence it so a forwarded post

@@ -19,6 +19,7 @@ from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import action_truth
 import backup
 import boss_model
 import common
@@ -1472,11 +1473,18 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # emoji leading the message. Apply it as a real reaction; never ship it as text.
         tag_reaction, reply = self._extract_reaction(reply)
         reaction = reaction or tag_reaction
-        if reaction:
-            self.react(chat_id, message_id, reaction)
         reply = self._strip_roleplay(reply)
         reply = self._strip_technical_ids(reply)   # never ship trace ids / file blobs as content
         reply = re.sub(r"\n{3,}", "\n\n", self.PHOTO_PLACEHOLDER_RE.sub("", reply)).strip()
+        if reply and action_truth.freeform_claims_artifact(reply):
+            # Converse cannot create/upload files. Fail closed instead of letting an LLM
+            # render a local-looking name or claim an attachment that Telegram never saw.
+            store.issue_add(self.conn, chat_id, "converse_artifact_claim", reply[:300])
+            log("blocked fabricated artifact claim from converse")
+            self.reply(chat_id, T(lang, "artifact_not_sent"))
+            return
+        if reaction:
+            self.react(chat_id, message_id, reaction)
         if not reply:
             # A reaction on its own IS a complete response — not an error.
             if not reaction:

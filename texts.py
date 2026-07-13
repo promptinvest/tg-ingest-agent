@@ -434,6 +434,10 @@ TEXTS = {
     "issue_kind_calendar_failed": {"ru": "проблемы с календарём", "en": "calendar trouble"},
     "issue_kind_fetch_failed": {"ru": "ссылки, которые не открылись", "en": "links I couldn't open"},
     "issue_kind_ask_no_context": {"ru": "вопросы без ответа в заметках", "en": "questions with no note match"},
+    "issue_kind_converse_artifact_claim": {
+        "ru": "заблокированные выдуманные файлы",
+        "en": "blocked fabricated file claims",
+    },
     "review_weekly_intro": {
         "ru": "📊 {name}, моя еженедельная сводка — как я поработала:",
         "en": "📊 {name}, my weekly check-in — how I did:",
@@ -441,6 +445,12 @@ TEXTS = {
     "review_file_caption": {
         "ru": "Отчёт готов, босс — можно отдать его в VS Code 📎",
         "en": "Report ready, boss — feed it to VS Code 📎",
+    },
+    "artifact_not_sent": {
+        "ru": ("Не буду делать вид, что файл прикреплён: в этом ответе его нет. "
+               "Скажи «сделай отчёт файлом» — пришлю настоящий .md."),
+        "en": ("I won't pretend a file is attached when it isn't. "
+               "Say “export the review as md” and I'll send the real .md."),
     },
     "review_schedule": {
         "ru": "Наш performance review — еженедельно, в {weekday}. Следующий: {date} в {time}. Хочешь, проведу прямо сейчас?",

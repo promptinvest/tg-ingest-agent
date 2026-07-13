@@ -15,6 +15,21 @@ FINAL_VERBS = {
     "выгрузила", "отправила",
 }
 
+# A free-form conversation turn has no attachment channel. These shapes are
+# therefore proof that the model is pretending an artifact exists. The real
+# review/export handlers upload through sendDocument and never describe the file
+# in an ordinary sendMessage.
+_BARE_ARTIFACT_LINK_RE = re.compile(
+    r"\[[^\]\n]+\.(?:md|txt|pdf|csv|json|docx?|xlsx?|zip|ics)\](?!\s*\()",
+    re.IGNORECASE,
+)
+_ARTIFACT_CLAIM_RE = re.compile(
+    r"(?:\bвот\s+(?:твой\s+)?файл\b|\bфайл\s+готов\b|\bприкрепила\s+файл\b|"
+    r"\bотправила\s+(?:тебе\s+)?файл\b|\bhere(?:'s|\s+is)\s+(?:your\s+|the\s+)?file\b|"
+    r"\bthe\s+file\s+is\s+ready\b|\bi\s+(?:sent|attached)\s+(?:you\s+)?the\s+file\b)",
+    re.IGNORECASE,
+)
+
 # Which final verbs are legitimate in each lifecycle state.
 STATE_ALLOWED_FINAL_VERBS = {
     "received": set(),
@@ -90,3 +105,9 @@ def assert_catalogue(catalogue):
             variants = localized if isinstance(localized, (list, tuple)) else [localized]
             for text in variants:
                 assert_template_key_allowed(key, text)
+
+
+def freeform_claims_artifact(text):
+    """True when ordinary chat text falsely presents a file as attached/created."""
+    value = str(text or "")
+    return bool(_BARE_ARTIFACT_LINK_RE.search(value) or _ARTIFACT_CLAIM_RE.search(value))

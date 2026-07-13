@@ -298,6 +298,19 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(defaulted["params"], {})
         self.assertEqual(defaulted["confidence"], 0.5)
 
+    def test_short_review_export_bypasses_router_model(self):
+        for phrase in ("Давай md", "пришли .md", "send the md"):
+            with self.subTest(phrase=phrase), mock.patch.object(
+                    llm, "chat_profile") as chat_profile:
+                decision = router.route(self.cfg, self.conn, 1, phrase, None)
+            chat_profile.assert_not_called()
+            self.assertEqual(decision, {
+                "action": "review",
+                "params": {"period": "week", "export": True},
+                "confidence": 1.0,
+            })
+        self.assertFalse(router.detect_review_export("давай обсудим markdown"))
+
     def test_system_prompt_mentions_pending_and_timezone(self):
         prompt = router.build_system_prompt(self.cfg, None)
         self.assertIn("NO pending action", prompt)
@@ -628,8 +641,9 @@ class CalendarTests(unittest.TestCase):
 class ReviewTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.conn = store.open_db(Path(self.tmp.name) / "test.db")
-        self.cfg = make_config()
+        db_path = Path(self.tmp.name) / "test.db"
+        self.conn = store.open_db(db_path)
+        self.cfg = make_config(DB_PATH=str(db_path))
         row = self.conn.execute(
             "INSERT INTO messages (chat_id, tg_message_id, received_at, raw_text,"
             " suggested_category, category, status) VALUES (1, 1, ?, 'x', 'news', 'крипта',"
@@ -677,6 +691,24 @@ class ReviewTests(unittest.TestCase):
         ok = router.validate_route(
             {"action": "review", "params": {"period": "week", "export": True}}, False)
         self.assertEqual(ok["action"], "review")
+
+    def test_review_export_uploads_real_markdown_document(self):
+        import hermes
+
+        class Handler:
+            conn = self.conn
+            cfg = self.cfg
+            reply = mock.Mock()
+
+        with mock.patch.object(hermes, "tg_send_document") as send_document:
+            hermes.HermesMixin.do_review(
+                Handler(), 1, "ru", {"period": "week", "export": True})
+        send_document.assert_called_once()
+        args = send_document.call_args.args
+        self.assertTrue(args[2].startswith("cara-review-week-"))
+        self.assertTrue(args[2].endswith(".md"))
+        self.assertIn(b"# Cara performance review", args[3])
+        self.assertEqual(send_document.call_args.kwargs["content_type"], "text/markdown")
 
     def test_new_digest_sections_and_trace_export(self):
         import trace
@@ -1449,6 +1481,11 @@ class PersonaPatchTests(unittest.TestCase):
             action_truth.assert_template_allowed("x", "suggested", "Готово, сохранила")
         with self.assertRaises(ValueError):
             action_truth.assert_template_key_allowed("new_unreviewed_key", "I saved it")
+        self.assertTrue(action_truth.freeform_claims_artifact(
+            "Вот файл: [Review-2026-07-13.md]"))
+        self.assertTrue(action_truth.freeform_claims_artifact("The file is ready."))
+        self.assertFalse(action_truth.freeform_claims_artifact(
+            "Open [Review.md](https://example.com/Review.md)"))
 
     # Fix 6: truthful STT failure copy (Cara doesn't keep the file / can't retry)
     def test_stt_copy_truthful(self):
@@ -2474,9 +2511,12 @@ class ConversationLearningTests(unittest.TestCase):
 
     def test_extraction_routes_by_sensitivity(self):
         payload = (
-            '{"cara_life": [{"kind": "hobby", "text": "Ты учишься печь хлеб."}],'
-            ' "boss_facts": [{"kind": "tone", "text": "Не любит длинные ответы."},'
-            '                {"kind": "personal_fact", "text": "Аллергия на орехи."}]}'
+            '{"cara_life": [{"kind": "hobby", "text": "Ты учишься печь хлеб.",'
+            '                 "evidence": "я как раз учусь печь хлеб 🥖"}],'
+            ' "boss_facts": [{"kind": "tone", "text": "Не любит длинные ответы.",'
+            '                 "evidence": "я терпеть не могу длинные ответы"},'
+            '                {"kind": "personal_fact", "text": "Аллергия на орехи.",'
+            '                 "evidence": "у меня аллергия на орехи"}]}'
         )
         before = store.life_count(self.conn)
         with mock.patch.object(llm, "chat_profile", return_value=payload):
@@ -2513,7 +2553,8 @@ class ConversationLearningTests(unittest.TestCase):
         self.assertNotIn("Boss: Меня зовут Виктор", transcript)
 
     def test_extraction_dedups_on_rerun(self):
-        payload = '{"cara_life": [{"kind": "hobby", "text": "Ты учишься печь хлеб."}], "boss_facts": []}'
+        payload = ('{"cara_life": [{"kind": "hobby", "text": "Ты учишься печь хлеб.",'
+                   ' "evidence": "я как раз учусь печь хлеб 🥖"}], "boss_facts": []}')
         with mock.patch.object(llm, "chat_profile", return_value=payload):
             self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
             again = self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
@@ -2523,8 +2564,11 @@ class ConversationLearningTests(unittest.TestCase):
         import boss_model
         import converse
         rule = "Отвечай на том языке, на котором он пишет."
+        evidence = "Отвечай на том языке, на котором он пишет."
+        store.convo_add(self.conn, 1, "user", evidence)
         payload = ('{"cara_life": [], "boss_facts": [],'
-                   ' "corrections": [{"kind": "workflow", "text": "' + rule + '"}]}')
+                   ' "corrections": [{"kind": "workflow", "text": "' + rule
+                   + '", "evidence": "' + evidence + '"}]}')
         with mock.patch.object(llm, "chat_profile", return_value=payload):
             result = self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
         self.assertEqual(result["corrections"], 1)
@@ -2538,8 +2582,10 @@ class ConversationLearningTests(unittest.TestCase):
         self.assertIn(rule, converse.build_system(self.conn, "ru"))
 
     def test_correction_not_relogged_on_rerun(self):
+        store.convo_add(self.conn, 1, "user", "Будь короче.")
         payload = ('{"cara_life": [], "boss_facts": [],'
-                   ' "corrections": [{"kind": "tone", "text": "Будь короче."}]}')
+                   ' "corrections": [{"kind": "tone", "text": "Будь короче.",'
+                   ' "evidence": "Будь короче."}]}')
         with mock.patch.object(llm, "chat_profile", return_value=payload):
             self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
             self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
@@ -2548,8 +2594,10 @@ class ConversationLearningTests(unittest.TestCase):
 
     def test_recurring_correction_escalates_to_needs_code(self):
         rule = "Отвечай на том языке, на котором он пишет."
+        store.convo_add(self.conn, 1, "user", rule)
         payload = ('{"cara_life": [], "boss_facts": [],'
-                   ' "corrections": [{"kind": "workflow", "text": "' + rule + '"}]}')
+                   ' "corrections": [{"kind": "workflow", "text": "' + rule
+                   + '", "evidence": "' + rule + '"}]}')
         with mock.patch.object(llm, "chat_profile", return_value=payload):
             first = self.memory_curator.curate_conversation(
                 self.conn, self.cfg, 1, correction_mode=True)
@@ -2563,6 +2611,22 @@ class ConversationLearningTests(unittest.TestCase):
         n = self.conn.execute(
             "SELECT COUNT(*) AS n FROM issues WHERE kind='correction_unresolved'").fetchone()["n"]
         self.assertEqual(n, 1)
+
+    def test_unattributed_or_unrelated_memory_is_rejected(self):
+        # Reproduces the incident: the model turned a bare export follow-up into a
+        # weekly-format preference that the boss never stated.
+        store.convo_add(self.conn, 1, "user", "Давай md")
+        store.convo_add(self.conn, 1, "bot", "Вот файл: [Review-2026-07-13.md]")
+        invented = "Присылай еженедельную сводку без пояснений и смайликов."
+        payload = (
+            '{"cara_life": [], "boss_facts": [], "corrections": ['
+            '{"kind": "workflow", "text": "' + invented + '",'
+            ' "evidence": "Давай md"}]}'
+        )
+        with mock.patch.object(llm, "chat_profile", return_value=payload):
+            result = self.memory_curator.curate_conversation(self.conn, self.cfg, 1)
+        self.assertEqual(result["corrections"], 0)
+        self.assertNotIn(invented, [r["value"] for r in store.boss_items(self.conn, "inferred")])
 
     def test_corrections_report_lists_both(self):
         import review
@@ -2819,6 +2883,20 @@ class ReactionAndContextTests(unittest.TestCase):
         sr.assert_called_once()
         self.assertEqual(sr.call_args[0][3], "🔥")
         self.assertEqual(r.call_args[0][1], "огонь, босс!")     # the tag is stripped from text
+
+    def test_converse_blocks_fabricated_file_claim(self):
+        fake = "Вот файл: [Review-2026-07-13.md] — открывай в VS Code."
+        with mock.patch.object(llm, "chat_profile", return_value=fake), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "maybe_curate_conversation") as curate, \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_converse(1, "ru", "Давай md", message_id=42)
+        reply.assert_called_once_with(1, texts.T("ru", "artifact_not_sent"))
+        curate.assert_not_called()
+        issue = self.agent.conn.execute(
+            "SELECT kind, detail FROM issues ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertEqual(issue["kind"], "converse_artifact_claim")
+        self.assertIn("Review-2026-07-13.md", issue["detail"])
 
     def test_part_of_day_and_context(self):
         self.assertEqual(common.part_of_day(8, "ru"), "утро")
@@ -4073,7 +4151,8 @@ class Tier1ResearchTests(unittest.TestCase):
         store.convo_add(self.conn, 1, "user", "я люблю длинные подробные ответы")
         store.convo_add(self.conn, 1, "bot", "ок")
         payload = ('{"cara_life":[],"boss_facts":[{"kind":"tone",'
-                   '"text":"Любит длинные подробные ответы."}]}')
+                   '"text":"Любит длинные подробные ответы.",'
+                   '"evidence":"я люблю длинные подробные ответы"}]}')
         with mock.patch.object(llm, "chat_profile", return_value=payload):
             memory_curator.curate_conversation(self.conn, self.agent.cfg, 1)
         inferred = [r["value"] for r in store.boss_items(self.conn, "inferred")]

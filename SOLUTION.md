@@ -53,7 +53,10 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
    persona rule) from *inventing* one — no made-up «готово / поменяла / перенесла».
    Real saves/reminders/renames/reschedules are executed by the skills and report
    the actual result; an unrouted request gets a warm "I'm on it / can't do that
-   yet", never a fake confirmation. Conversation and grounded Q&A are LLM-generated;
+   yet", never a fake confirmation. **Artifact truth is code-enforced:** `converse`
+   cannot upload a document, so bare file links and claims such as “вот файл” are
+   rejected before `sendMessage`; only deterministic handlers may call Telegram
+   `sendDocument`. Conversation and grounded Q&A are LLM-generated;
    **transactional and system messages stay deterministic templates.** **She never
    fabricates a stored fact** — creativity is free in her voice and fictional life, but any fact about
    the boss must be real: every `converse` turn is grounded with his most relevant
@@ -232,10 +235,10 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Self & persona** | "что ты умеешь?" → capabilities generated from the manifest (dormant features named as dormant); "расскажи о себе / какая ты?" → in-character. | — |
 | **Boss profile & memory** | "запомни: …", "что ты обо мне знаешь?" (a warm, deduped summary), "забудь…", "как меня зовут?". Confirmed vs inferred kept separate; sensitive facts gated. | Consent-first; auditable & deletable. |
 | **Memory provenance** | "откуда ты это знаешь?" / "почему ты это помнишь?" → she cites *how* she learned a fact, in character ("ты сам мне это сказал", "заметила из наших разговоров", with the date). | — |
-| **Corrections that stick** | When the boss corrects her behavior she **says** she learned it, **applies** it (injected into her prompt), and **reports** it in the review; a *recurring* correction is flagged as **needing a code fix** rather than pretended-fixed. | — |
+| **Corrections that stick** | When the boss corrects her behavior she **says** she learned it, **applies** it (injected into her prompt), and **reports** it in the review; a *recurring* correction is flagged as **needing a code fix** rather than pretended-fixed. Every extracted correction requires a verbatim genuine-boss quote plus lexical support; wrong-speaker/unrelated evidence is rejected before storage. | — |
 | **Memory review** | Cara proposes durable-memory **candidates** from evidence; "обзор памяти" lists them with confirm/skip buttons. A learned fact that **contradicts a confirmed one** is proposed, not auto-stored. | Durable memory only after a yes. |
 | **Working history** | "как ты мне помогала?" → a grounded summary of real confirmed actions (saves, reminders, corrections, reviews, exports). | — |
-| **Review** | "как ты поработала за неделю?" → digest with a **scorecard** (first-guess category accuracy, unclear-request count, proactive nudges, memory counts) and a **📔 Дневники** journal-activity rollup; "когда следующий performance review?" → next scheduled date; weekly review runs on a fixed schedule. Markdown exports for VS Code. | — |
+| **Review** | "как ты поработала за неделю?" → digest with a **scorecard** (first-guess category accuracy, unclear-request count, proactive nudges, memory counts) and a **📔 Дневники** journal-activity rollup; "когда следующий performance review?" → next scheduled date; weekly review runs on a fixed schedule. Markdown exports for VS Code. `Давай md` / `send the md` is a deterministic shortcut to the real review export and Telegram document upload, never free-form chat. | — |
 | **Show media** | "покажи фото/файл из #2" → re-sends stored photos and documents by `file_id` (no re-upload). | — |
 | **Fetch** | "прочитай https://…" → fetches a public page (or public t.me web view), extracts text, ingests it. SSRF-guarded. | As ingest. |
 | **VPS stats** | "как сервер?" → CPU load, memory, disk, uptime, Cara's own footprint. | — |
@@ -314,7 +317,11 @@ tone variants; only conversation and grounded answers are free-form.
   that **contradicts something already confirmed** — become confirm-first
   candidates, never auto-stored. It also captures **behavioral corrections** as
   standing guidance (injected into her prompt) and escalates recurring ones as
-  "needs a code fix".
+  "needs a code fix". Every extracted item includes a verbatim evidence quote;
+  boss facts/corrections are accepted only from genuine non-forwarded boss turns,
+  Cara-life only from Cara turns, and the evidence must lexically support the
+  normalized text. This prevents the model from mining Cara's own invented wording
+  into the boss profile or attaching an unrelated real quote to a fabricated rule.
 - **Consolidation (`memory_curator.consolidate`).** The curator accumulates near-duplicate
   facts over time (the same trait restated). A **weekly** pass (first run fires immediately;
   on-demand via the `memory_cleanup` action, "почисти память") asks the model to GROUP genuine
@@ -539,7 +546,7 @@ ids that attachments/embeddings/memory/calendar/fired-pending references rely on
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 456 offline unit tests (as of 2026-07-10; no network; temp SQLite), run
+- **Tests:** 460 offline unit tests (as of 2026‑07‑13; no network; temp SQLite), run
   on the VPS as part of every deploy and in GitHub Actions — including a
   **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram

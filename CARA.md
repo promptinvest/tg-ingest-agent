@@ -312,7 +312,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   lists them with confirm/skip buttons. Durable memory only after a yes; benign facts
   learned from chat are stored as correctable "inferred" items — **but a fact that
   contradicts something you already confirmed is proposed for confirmation, not
-  silently auto‑stored**. A candidate the consolidation already folded (`merged`/
+  silently auto‑stored**. **Speaker-bound evidence (2026‑07‑13):** every LLM-extracted
+  boss fact or correction must carry an exact quote from a genuine, non-forwarded boss
+  turn and share meaningful words with the normalized memory; Cara-life facts require
+  a Cara quote. Missing, wrong-speaker, or unrelated evidence is rejected in code, so
+  Cara's own reply can never round-trip into a made-up boss preference. A candidate the
+  consolidation already folded (`merged`/
   `superseded`) is **never re‑proposed** (2026‑07‑02) — the curator's dedup no longer
   churns the same text through propose→fold every pass.
 - **Memory provenance** (`memory_why`): "откуда ты это знаешь?" / "почему ты это
@@ -321,7 +326,7 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Corrections that stick:** when you correct her behavior she **says** she learned
   it, **applies** it (injected into her prompt), and **reports** it in the review. If
   the same correction recurs she flags it as **needing a code fix** instead of
-  pretending to fix it.
+  pretending to fix it. She says “Запомнила” only after the evidence checks above pass.
 - **Working history:** "как ты мне помогала?" → a grounded summary of real actions
   (saves, corrections, reminders, reviews, exports) — never fabricated.
 - **Settings memory** (`memory`): "запомни: отвечай по‑английски", "что ты помнишь из
@@ -334,6 +339,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   count, proactive nudges sent, and memory counts — plus a **📔 Дневники** journal‑
   activity rollup. Markdown exports for VS Code:
   review, self, boss profile, working history, memory candidates, trace summary.
+  **Real-file boundary (2026‑07‑13):** the short follow-up `Давай md` / `send the md`
+  is resolved deterministically to `review(export=true)` without an LLM router call;
+  the existing handler writes the report and uploads it through Telegram `sendDocument`.
+  Free-form `converse` cannot create attachments: a bare `[Review.md]` or “here's the
+  file” claim is blocked and logged instead of being delivered as a fake link.
   **Delivered‑or‑retried (2026‑07‑06):** the weekly review and the morning brief mark
   their slot done only **after a successful send** — a transient Telegram failure backs
   off 15 min and retries (up to 3 attempts, then a `sched_send_failed` issue), instead
@@ -553,7 +563,9 @@ compacts on fire/cancel.
   a rebinding host can't flip to a private address between the check and the connect.
 - **Bulk purge** requires a typed confirmation phrase (handled before the router, so a
   stray "да" can't wipe data); pending actions carry a TTL and are swept when abandoned.
-- **Truthfulness:** action‑truth guard + no‑fabrication persona rule.
+- **Truthfulness:** action‑truth guard + no‑fabrication persona rule. Free-form output
+  is also fail-closed for claimed artifacts: conversation cannot name/present a file as
+  attached because only deterministic document handlers own Telegram `sendDocument`.
 - Secrets in `/etc/tg-ingest-agent.env` (0600), staged via files (never argv/journal);
   access keys redacted from logged HTTP errors. Dedicated bot token + DO key.
 - systemd hardening: non‑root user, `NoNewPrivileges`, `ProtectSystem=strict`,
@@ -607,7 +619,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 456 offline unit tests (as of 2026‑07‑10; no network; temp SQLite), run on
+- **Tests:** 460 offline unit tests (as of 2026‑07‑13; no network; temp SQLite), run on
   the box as part of every deploy and in GitHub Actions — including a
   **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and

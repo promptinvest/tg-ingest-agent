@@ -10,6 +10,8 @@ the boss pulls candidates via the memory_review action).
 Deterministic by default (spec §21: deterministic candidates first). An
 optional LLM extraction pass is gated behind MEMORY_CURATOR_LLM.
 """
+import re
+
 import boss_model
 import store
 from texts import T
@@ -78,9 +80,9 @@ GUIDANCE_KINDS = {"tone", "workflow", "avoidance", "quality_bar"}
 _EXTRACT_SYSTEM = (
     "You extract durable memory from a chat between Cara (a warm assistant who has "
     "her own life) and her boss. Return STRICT JSON only, no prose:\n"
-    '{"cara_life": [{"kind": "...", "text": "..."}], '
-    '"boss_facts": [{"kind": "...", "text": "..."}], '
-    '"corrections": [{"kind": "...", "text": "..."}]}\n'
+    '{"cara_life": [{"kind": "...", "text": "...", "evidence": "exact Cara quote"}], '
+    '"boss_facts": [{"kind": "...", "text": "...", "evidence": "exact Boss quote"}], '
+    '"corrections": [{"kind": "...", "text": "...", "evidence": "exact Boss quote"}]}\n'
     "cara_life: NEW, lasting details Cara revealed about HER OWN life (a hobby, a "
     "friend, a place, a plan, a taste). Each a short statement addressed to Cara in "
     "her language, e.g. 'Ты любишь джаз.' / 'You're learning to bake.' Skip anything "
@@ -97,9 +99,46 @@ _EXTRACT_SYSTEM = (
     "avoidance, quality_bar. Capture it even if he complained only once. Do NOT "
     "capture insults, venting, emotions, or one-off task content — only durable "
     "behavioral rules Cara can actually follow.\n"
-    "Never invent — only what the text plainly supports. Use empty arrays when "
-    "nothing durable is new."
+    "EVIDENCE IS REQUIRED for every item. Copy one exact, verbatim quote from the "
+    "speaker named above; never cite the other speaker or forwarded data. The quote "
+    "must directly support the normalized text, not merely occur nearby. An item with "
+    "no exact supporting quote must be omitted. Never invent — only what the text "
+    "plainly supports. Use empty arrays when nothing durable is new."
 )
+
+
+_EVIDENCE_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_EVIDENCE_STOP = {
+    "and", "the", "that", "this", "with", "from", "your", "you", "his", "her",
+    "для", "как", "что", "это", "его", "она", "они", "тебе", "тебя", "мне", "меня",
+}
+
+
+def _normalized_evidence(value):
+    return " ".join(str(value or "").casefold().replace("ё", "е").split())
+
+
+def _evidence_stems(value):
+    words = [w for w in _EVIDENCE_WORD_RE.findall(_normalized_evidence(value))
+             if len(w) >= 3 and w not in _EVIDENCE_STOP]
+    return {w[:5] for w in words}
+
+
+def _supported_item(item, source_texts):
+    """Require a verbatim source quote plus lexical support for the normalized item.
+
+    The exact-quote check enforces speaker attribution. Stem overlap prevents the
+    model from attaching an unrelated real quote (for example ``Давай md``) to an
+    invented weekly-summary preference.
+    """
+    evidence = str(item.get("evidence") or "").strip()
+    text = str(item.get("text") or "").strip()
+    if not evidence or not text:
+        return False
+    needle = _normalized_evidence(evidence)
+    if len(needle) < 3 or not any(needle in _normalized_evidence(src) for src in source_texts):
+        return False
+    return bool(_evidence_stems(evidence) & _evidence_stems(text))
 
 
 def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
@@ -120,6 +159,9 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
     transcript = "\n".join(
         f"{'Boss' if r['role'] == 'user' else 'Cara'}: {store.convo_replay_text(r)}"
         for r in turns)
+    boss_sources = [r["text"] for r in turns
+                    if r["role"] == "user" and store.convo_row_source(r) != "forward"]
+    cara_sources = [r["text"] for r in turns if r["role"] != "user"]
     known = [r["text"] for r in store.life_facts(conn, limit=40)]
     known_block = "\n".join(f"- {t}" for t in known[-24:]) or "(none yet)"
     messages = [
@@ -136,7 +178,7 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
 
     life_added = 0
     for item in (parsed.get("cara_life") or [])[:5]:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not _supported_item(item, cara_sources):
             continue
         text = str(item.get("text") or "").strip()
         kind = str(item.get("kind") or "moment").strip().lower()
@@ -147,7 +189,7 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
 
     boss_added = 0
     for item in (parsed.get("boss_facts") or [])[:5]:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not _supported_item(item, boss_sources):
             continue
         text = str(item.get("text") or "").strip()
         kind = str(item.get("kind") or "personal_fact").strip().lower()
@@ -160,7 +202,8 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
         benign = boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]
         if benign and not boss_model.conflicts_with_confirmed(conn, text):
             store.boss_add(conn, kind, text, status="inferred", confidence=0.7,
-                           sensitivity=sens, source_table="conversation")
+                           sensitivity=sens, source_table="conversation",
+                           evidence=str(item.get("evidence") or "").strip())
             boss_added += 1
         elif store.candidate_add(conn, kind, text, reason="from conversation",
                                  sensitivity=sens, confidence=0.7,
@@ -173,7 +216,7 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
     corrections_added = 0
     learned, unresolved = [], []
     for item in (parsed.get("corrections") or [])[:5]:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not _supported_item(item, boss_sources):
             continue
         text = str(item.get("text") or "").strip()
         kind = str(item.get("kind") or "workflow").strip().lower()
@@ -193,7 +236,8 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
         sens = boss_model.effective_sensitivity(kind, text)
         if boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]:
             store.boss_add(conn, kind, text, status="inferred", confidence=0.8,
-                           sensitivity=sens, source_table="correction")
+                           sensitivity=sens, source_table="correction",
+                           evidence=str(item.get("evidence") or "").strip())
         else:
             store.candidate_add(conn, kind, text, reason="correction",
                                 sensitivity=sens, confidence=0.8, source_table="correction")
