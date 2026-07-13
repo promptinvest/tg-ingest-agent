@@ -316,7 +316,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   boss fact or correction must carry an exact quote from a genuine, non-forwarded boss
   turn and share meaningful words with the normalized memory; Cara-life facts require
   a Cara quote. Missing, wrong-speaker, or unrelated evidence is rejected in code, so
-  Cara's own reply can never round-trip into a made-up boss preference. A candidate the
+  Cara's own reply can never round-trip into a made-up boss preference. Evidence now
+  survives the complete `conversation → candidate → confirmation → boss profile` path;
+  candidates also retain their source trace, first/last-seen times and recurrence count.
+  Near-identical pending candidates are folded deterministically (shared meaningful-token
+  containment), so a short fact and a longer restatement no longer produce two approval
+  prompts. A candidate the
   consolidation already folded (`merged`/
   `superseded`) is **never re‑proposed** (2026‑07‑02) — the curator's dedup no longer
   churns the same text through propose→fold every pass.
@@ -344,6 +349,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   the existing handler writes the report and uploads it through Telegram `sendDocument`.
   Free-form `converse` cannot create attachments: a bare `[Review.md]` or “here's the
   file” claim is blocked and logged instead of being delivered as a fake link.
+  **Truthful review semantics (2026‑07‑13):** saved knowledge items and conversation
+  turns are separate; extracted document facts are not described as personal facts;
+  reminder outcomes separate created/completed/cancelled/skipped/expired,
+  fired-awaiting-ack, and genuinely overdue-unfired states. Communication incidents are
+  immutable observations, while normalized issue patterns have open/resolved lifecycle
+  state and contextual turns; the backlog lists only open patterns and records resolutions.
+  Behavioral instructions are distinct from categorization feedback, carry evidence or an
+  explicit `legacy-unverified` label, and count as recurring only after two occurrences.
+  Proactive sends are broken down by check, `ok` is the single successful trace status,
+  and fallback output is structured/scrubbed rather than dumping provider response bodies.
   **Delivered‑or‑retried (2026‑07‑06):** the weekly review and the morning brief mark
   their slot done only **after a successful send** — a transient Telegram failure backs
   off 15 min and retries (up to 3 attempts, then a `sched_send_failed` issue), instead
@@ -363,6 +378,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   nudge delivered and lose it. **A persistent overdue reminder no
   longer starves the other nudges** — an already‑sent‑today hit is skipped, not treated
   as fatal, so a waiting candidate/uncategorized item still gets its turn.
+  A one-shot that already fired and is waiting for “готово” is not overdue and cannot
+  generate another urgent overdue nudge.
 - **Tune her proactivity** (`proactive_prefs`): "пиши только по выходным", "не беспокой
   до 10", "отключи напоминания", "можно почаще" → stored overrides (on/off, days,
   quiet window, frequency) the heartbeat honors.
@@ -527,16 +544,19 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
 Core inbox: `messages` (lifecycle `pending → suggested → confirmed`, `failed`/
 `duplicate`; forward origin, dates) · `urls` · `images` · `files` (any attachment by
 file_id) · `facts` · `chunks` (BGE‑M3 embeddings) · `categories` (Cyrillic‑safe;
-`kind` = `inbox`|`journal`) · `reminders` (incl. `prev_due_utc` for undo) · `feedback` ·
+`kind` = `inbox`|`journal`) · `reminders` (incl. `prev_due_utc`, `closed_at`,
+`close_reason`) + `reminder_events` lifecycle log · `feedback` ·
 `preferences` (identity/config + budget overrides) · `pending_actions` (TTL) ·
 `conversation` (recent turns) · `kv`.
 
 Spend & reliability: `llm_usage` · `model_cooldowns`.
 
-Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity) ·
-`memory_candidates` · `relationship_events` (title + trace) · `cara_life`.
+Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity + evidence) ·
+`memory_candidates` (evidence/source trace/recurrence/first+last seen) ·
+`relationship_events` (title + trace) · `cara_life`.
 
-Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
+Observability: `traces` · `trace_events` · `issues` (fingerprint + open/resolved lifecycle
+and context) · `events` · `jobs` ·
 `proactive_log`.
 
 Cascade deletes + purge scopes keep rows and media consistent. **`llm_usage` (spend
@@ -619,7 +639,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 460 offline unit tests (as of 2026‑07‑13; no network; temp SQLite), run on
+- **Tests:** 467 offline unit tests (as of 2026‑07‑13; no network; temp SQLite), run on
   the box as part of every deploy and in GitHub Actions — including a
   **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and

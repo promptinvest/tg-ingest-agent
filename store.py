@@ -9,6 +9,7 @@ messages.status lifecycle:
   duplicate -> re-forward of an already stored channel post
 """
 import json
+import re
 import sqlite3
 from array import array
 from datetime import datetime, timedelta, timezone
@@ -160,7 +161,12 @@ CREATE TABLE IF NOT EXISTS issues (
   chat_id INTEGER,
   kind TEXT NOT NULL,
   detail TEXT,
-  trace_id TEXT
+  trace_id TEXT,
+  fingerprint TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  resolved_at TEXT,
+  resolution TEXT,
+  context TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reminders (
@@ -172,7 +178,9 @@ CREATE TABLE IF NOT EXISTS reminders (
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL,
   last_fired_at TEXT,
-  prev_due_utc TEXT
+  prev_due_utc TEXT,
+  closed_at TEXT,
+  close_reason TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
@@ -185,6 +193,15 @@ CREATE INDEX IF NOT EXISTS idx_usage_month ON llm_usage(month);
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_utc);
 CREATE INDEX IF NOT EXISTS idx_issues_ts ON issues(ts);
 CREATE INDEX IF NOT EXISTS idx_conversation_chat ON conversation(chat_id, id);
+
+CREATE TABLE IF NOT EXISTS reminder_events (
+  id INTEGER PRIMARY KEY,
+  reminder_id INTEGER NOT NULL REFERENCES reminders(id) ON DELETE CASCADE,
+  event TEXT NOT NULL,
+  detail TEXT,
+  ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reminder_events_ts ON reminder_events(ts, event);
 
 CREATE TABLE IF NOT EXISTS traces (
   trace_id TEXT PRIMARY KEY,
@@ -301,6 +318,11 @@ CREATE TABLE IF NOT EXISTS memory_candidates (
   confidence REAL NOT NULL DEFAULT 0.5,
   source_table TEXT,
   source_id INTEGER,
+  source_trace_id TEXT,
+  evidence TEXT,
+  recurrence_count INTEGER NOT NULL DEFAULT 1,
+  first_seen_at TEXT,
+  last_seen_at TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL,
   decided_at TEXT
@@ -584,31 +606,67 @@ def boss_find(conn, query):
 
 # -- memory candidates (curator) ---------------------------------------------
 
-def candidate_exists(conn, text):
+_CANDIDATE_STOP = {
+    "а", "без", "бы", "в", "во", "для", "до", "его", "ему", "есть", "и", "к",
+    "как", "которому", "на", "не", "но", "о", "он", "она", "по", "с", "у", "что",
+    "the", "a", "an", "and", "has", "have", "he", "she", "to", "of", "is",
+}
+
+
+def _candidate_tokens(text):
+    words = re.findall(r"[\w]+", str(text or "").casefold(), flags=re.UNICODE)
+    return {w for w in words if len(w) > 1 and w not in _CANDIDATE_STOP}
+
+
+def _candidate_similar(a, b):
+    ta, tb = _candidate_tokens(a), _candidate_tokens(b)
+    if not ta or not tb:
+        return str(a or "").casefold().strip() == str(b or "").casefold().strip()
+    return len(ta & tb) / min(len(ta), len(tb)) >= 0.8
+
+
+def candidate_match(conn, text, kind=None):
+    wanted = str(text or "").casefold().strip()
+    for row in conn.execute(
+        "SELECT * FROM memory_candidates WHERE status IN"
+        " ('pending','confirmed','rejected','merged','superseded') ORDER BY id"
+    ):
+        existing = (row["proposed_text"] or "").casefold().strip()
+        if wanted == existing or (kind == row["kind"] and _candidate_similar(text, existing)):
+            return row
+    return None
+
+
+def candidate_exists(conn, text, kind=None):
     """True if a same-text candidate already exists in ANY resolved state
     (Cyrillic-safe), so the curator doesn't re-propose it. Includes 'merged'
     and 'superseded' — consolidation folds a candidate into those states, and
     excluding them made the curator re-propose the identical text on its next
     pass, paying another LLM call to fold it again, forever."""
-    t = str(text or "").casefold()
-    for row in conn.execute(
-        "SELECT proposed_text FROM memory_candidates WHERE status IN"
-        " ('pending','confirmed','rejected','merged','superseded')"
-    ):
-        if t == (row["proposed_text"] or "").casefold():
-            return True
-    return False
+    return candidate_match(conn, text, kind) is not None
 
 
 def candidate_add(conn, kind, text, *, reason=None, sensitivity="normal", confidence=0.6,
-                  target="boss_profile", source_table=None, source_id=None):
-    if candidate_exists(conn, text):
+                  target="boss_profile", source_table=None, source_id=None, evidence=None):
+    now = _now()
+    existing = candidate_match(conn, text, kind)
+    if existing is not None:
+        if existing["status"] == "pending":
+            conn.execute(
+                "UPDATE memory_candidates SET recurrence_count=recurrence_count+1,"
+                " last_seen_at=?, evidence=COALESCE(evidence, ?),"
+                " source_trace_id=COALESCE(source_trace_id, ?) WHERE id=?",
+                (now, str(evidence or "").strip() or None, _trace_id(), existing["id"]),
+            )
+            conn.commit()
         return None
     cur = conn.execute(
         "INSERT INTO memory_candidates (target, kind, proposed_text, reason, sensitivity,"
-        " confidence, source_table, source_id, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-        (target, kind, text, reason, sensitivity, confidence, source_table, source_id, _now()),
+        " confidence, source_table, source_id, source_trace_id, evidence, recurrence_count,"
+        " first_seen_at, last_seen_at, status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'pending', ?)",
+        (target, kind, text, reason, sensitivity, confidence, source_table, source_id,
+         _trace_id(), str(evidence or "").strip() or None, now, now, now),
     )
     conn.commit()
     return cur.lastrowid
@@ -813,6 +871,21 @@ def _migrate(conn):
     issue_columns = {row["name"] for row in conn.execute("PRAGMA table_info(issues)")}
     if "trace_id" not in issue_columns:
         conn.execute("ALTER TABLE issues ADD COLUMN trace_id TEXT")
+    if "fingerprint" not in issue_columns:
+        conn.execute("ALTER TABLE issues ADD COLUMN fingerprint TEXT")
+    if "status" not in issue_columns:
+        conn.execute("ALTER TABLE issues ADD COLUMN status TEXT NOT NULL DEFAULT 'open'")
+    if "resolved_at" not in issue_columns:
+        conn.execute("ALTER TABLE issues ADD COLUMN resolved_at TEXT")
+    if "resolution" not in issue_columns:
+        conn.execute("ALTER TABLE issues ADD COLUMN resolution TEXT")
+    if "context" not in issue_columns:
+        conn.execute("ALTER TABLE issues ADD COLUMN context TEXT")
+    for row in conn.execute("SELECT id, kind, detail FROM issues WHERE fingerprint IS NULL"):
+        conn.execute("UPDATE issues SET fingerprint=? WHERE id=?",
+                     (_issue_fingerprint(row["kind"], row["detail"]), row["id"]))
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_issues_status_kind"
+                 " ON issues(status, kind, fingerprint)")
     rel_columns = {row["name"] for row in conn.execute("PRAGMA table_info(relationship_events)")}
     if "title" not in rel_columns:
         conn.execute("ALTER TABLE relationship_events ADD COLUMN title TEXT")
@@ -821,6 +894,35 @@ def _migrate(conn):
     rem_columns = {row["name"] for row in conn.execute("PRAGMA table_info(reminders)")}
     if "prev_due_utc" not in rem_columns:
         conn.execute("ALTER TABLE reminders ADD COLUMN prev_due_utc TEXT")
+    if "closed_at" not in rem_columns:
+        conn.execute("ALTER TABLE reminders ADD COLUMN closed_at TEXT")
+    if "close_reason" not in rem_columns:
+        conn.execute("ALTER TABLE reminders ADD COLUMN close_reason TEXT")
+    conn.execute(
+        "UPDATE reminders SET closed_at=COALESCE(last_fired_at, created_at),"
+        " close_reason=COALESCE(close_reason, status)"
+        " WHERE status!='active' AND closed_at IS NULL"
+    )
+    candidate_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(memory_candidates)")
+    }
+    if "source_trace_id" not in candidate_columns:
+        conn.execute("ALTER TABLE memory_candidates ADD COLUMN source_trace_id TEXT")
+    if "evidence" not in candidate_columns:
+        conn.execute("ALTER TABLE memory_candidates ADD COLUMN evidence TEXT")
+    if "recurrence_count" not in candidate_columns:
+        conn.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN recurrence_count INTEGER NOT NULL DEFAULT 1"
+        )
+    if "first_seen_at" not in candidate_columns:
+        conn.execute("ALTER TABLE memory_candidates ADD COLUMN first_seen_at TEXT")
+    if "last_seen_at" not in candidate_columns:
+        conn.execute("ALTER TABLE memory_candidates ADD COLUMN last_seen_at TEXT")
+    conn.execute(
+        "UPDATE memory_candidates SET first_seen_at=COALESCE(first_seen_at, created_at),"
+        " last_seen_at=COALESCE(last_seen_at, created_at),"
+        " recurrence_count=COALESCE(recurrence_count, 1)"
+    )
     convo_columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversation)")}
     if convo_columns and "source" not in convo_columns:
         # Existing rows are the boss's own turns (forwarded content wasn't tracked
@@ -1812,13 +1914,39 @@ def dialog_search(conn, chat_id, terms, limit=40):
 
 # -- issues (communication problems, for weekly/on-demand summaries) ----------
 
-def issue_add(conn, chat_id, kind, detail=""):
+def _issue_fingerprint(kind, detail):
+    """Stable, privacy-preserving-enough grouping key for repeated issue patterns.
+    Numbers are placeholders so reminder ids/times do not split the same failure."""
+    text = str(detail or "").casefold()
+    text = re.sub(r"\b\d+(?:[.:]\d+)*\b", "<n>", text)
+    text = re.sub(r"[^\w<>]+", " ", text, flags=re.UNICODE).strip()
+    return f"{str(kind or '').casefold()}:{text[:160]}"
+
+
+def issue_add(conn, chat_id, kind, detail="", context=None):
     ts = _now()
-    conn.execute(
-        "INSERT INTO issues (ts, day, chat_id, kind, detail, trace_id) VALUES (?, ?, ?, ?, ?, ?)",
-        (ts, ts[:10], chat_id, kind, str(detail or "")[:300], _trace_id()),
+    clean_detail = str(detail or "")[:300]
+    cur = conn.execute(
+        "INSERT INTO issues (ts, day, chat_id, kind, detail, trace_id, fingerprint,"
+        " status, context) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+        (ts, ts[:10], chat_id, kind, clean_detail, _trace_id(),
+         _issue_fingerprint(kind, clean_detail),
+         json.dumps(context, ensure_ascii=False)[:2000] if context is not None else None),
     )
     conn.commit()
+    return cur.lastrowid
+
+
+def issue_resolve(conn, kind, detail, resolution):
+    """Resolve every open occurrence of one normalized issue pattern."""
+    now = _now()
+    cur = conn.execute(
+        "UPDATE issues SET status='resolved', resolved_at=?, resolution=?"
+        " WHERE status='open' AND fingerprint=?",
+        (now, str(resolution or "")[:300], _issue_fingerprint(kind, detail)),
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 def issue_counts(conn, since_iso):
@@ -1835,7 +1963,42 @@ def issues_recent(conn, since_iso, limit=5):
     ).fetchall()
 
 
+def issue_open_patterns(conn, kinds=None, limit=20):
+    params = []
+    where = "status='open'"
+    if kinds:
+        marks = ",".join("?" for _ in kinds)
+        where += f" AND kind IN ({marks})"
+        params.extend(kinds)
+    params.append(limit)
+    return conn.execute(
+        f"SELECT kind, fingerprint, COUNT(*) AS n, MIN(ts) AS first_seen_at,"
+        f" MAX(ts) AS last_seen_at, MAX(detail) AS detail FROM issues WHERE {where}"
+        " GROUP BY kind, fingerprint ORDER BY last_seen_at DESC LIMIT ?",
+        params,
+    ).fetchall()
+
+
+def issues_resolved(conn, since_iso, limit=20):
+    return conn.execute(
+        "SELECT kind, fingerprint, COUNT(*) AS n, MAX(resolved_at) AS resolved_at,"
+        " MAX(detail) AS detail, MAX(resolution) AS resolution FROM issues"
+        " WHERE status='resolved' AND resolved_at>=? GROUP BY kind, fingerprint"
+        " ORDER BY resolved_at DESC LIMIT ?",
+        (since_iso, limit),
+    ).fetchall()
+
+
 # -- reminders ----------------------------------------------------------------
+
+def reminder_event(conn, rid, event, detail=None, *, commit=True):
+    conn.execute(
+        "INSERT INTO reminder_events (reminder_id, event, detail, ts) VALUES (?, ?, ?, ?)",
+        (rid, event, str(detail or "")[:300] or None, _now()),
+    )
+    if commit:
+        conn.commit()
+
 
 def reminder_add(conn, chat_id, title, due_utc, recurrence="none"):
     cur = conn.execute(
@@ -1843,6 +2006,7 @@ def reminder_add(conn, chat_id, title, due_utc, recurrence="none"):
         " VALUES (?, ?, ?, ?, ?)",
         (chat_id, title, due_utc, recurrence, _now()),
     )
+    reminder_event(conn, cur.lastrowid, "created", recurrence, commit=False)
     conn.commit()
     return cur.lastrowid
 
@@ -1862,11 +2026,19 @@ def reminders_active(conn, chat_id):
 def reminders_expire_stale(conn, cutoff_iso):
     """Auto-close one-shot reminders that fired but were never acked and whose fire time is
     older than the cutoff — so the 'ждёт готово' list doesn't grow forever. Returns count."""
+    now = _now()
+    ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM reminders WHERE status='active' AND recurrence='none'"
+        " AND last_fired_at IS NOT NULL AND last_fired_at<?", (cutoff_iso,)
+    )]
     cur = conn.execute(
-        "UPDATE reminders SET status = 'expired' WHERE status = 'active'"
+        "UPDATE reminders SET status = 'expired', closed_at=?, close_reason='expired'"
+        " WHERE status = 'active'"
         " AND recurrence = 'none' AND last_fired_at IS NOT NULL AND last_fired_at < ?",
-        (cutoff_iso,),
+        (now, cutoff_iso),
     )
+    for rid in ids:
+        reminder_event(conn, rid, "closed", "expired", commit=False)
     conn.commit()
     return cur.rowcount
 
@@ -1896,10 +2068,11 @@ def reminder_touch_fired(conn, rid, when=None):
     """Stamp a reminder as fired NOW (stops a one-shot re-firing; never closes it)."""
     conn.execute("UPDATE reminders SET last_fired_at = ? WHERE id = ?",
                  (when or _now(), rid))
+    reminder_event(conn, rid, "fired", commit=False)
     conn.commit()
 
 
-def reminder_update_due(conn, rid, due_utc):
+def reminder_update_due(conn, rid, due_utc, reason="rescheduled"):
     """Move a reminder, remembering its current time in prev_due_utc so a reschedule can
     be undone ('верни предыдущее время'). Clears last_fired_at — a reschedule/snooze
     RE-ARMS the reminder, so it's a fresh future reminder, not one still 'сработало, ждёт
@@ -1909,6 +2082,7 @@ def reminder_update_due(conn, rid, due_utc):
         " WHERE id = ?",
         (due_utc, rid),
     )
+    reminder_event(conn, rid, reason, due_utc, commit=False)
     conn.commit()
 
 
@@ -1924,6 +2098,7 @@ def reminder_restore_due(conn, rid):
         "UPDATE reminders SET due_utc = ?, prev_due_utc = ? WHERE id = ?",
         (cur["prev_due_utc"], cur["due_utc"], rid),
     )
+    reminder_event(conn, rid, "reschedule_undone", cur["prev_due_utc"], commit=False)
     conn.commit()
     return cur["prev_due_utc"]
 
@@ -1931,12 +2106,20 @@ def reminder_restore_due(conn, rid):
 def reminder_rename(conn, rid, title):
     """Retitle an existing reminder in place (keeps id, time, recurrence, history)."""
     conn.execute("UPDATE reminders SET title = ? WHERE id = ?", (title, rid))
+    reminder_event(conn, rid, "renamed", title, commit=False)
     conn.commit()
 
 
-def reminder_close(conn, rid, status="done"):
+def reminder_close(conn, rid, status="done", reason=None):
+    """Close a reminder without rewriting when it actually fired.
+
+    last_fired_at is delivery history; closed_at/close_reason are lifecycle history.
+    Keeping them separate lets reviews distinguish fired-awaiting-ack from overdue and
+    completed/cancelled/expired outcomes accurately.
+    """
     conn.execute(
-        "UPDATE reminders SET status = ?, last_fired_at = ? WHERE id = ?",
-        (status, _now(), rid),
+        "UPDATE reminders SET status = ?, closed_at = ?, close_reason = ? WHERE id = ?",
+        (status, _now(), str(reason or status), rid),
     )
+    reminder_event(conn, rid, "closed", str(reason or status), commit=False)
     conn.commit()

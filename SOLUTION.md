@@ -235,15 +235,15 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Self & persona** | "что ты умеешь?" → capabilities generated from the manifest (dormant features named as dormant); "расскажи о себе / какая ты?" → in-character. | — |
 | **Boss profile & memory** | "запомни: …", "что ты обо мне знаешь?" (a warm, deduped summary), "забудь…", "как меня зовут?". Confirmed vs inferred kept separate; sensitive facts gated. | Consent-first; auditable & deletable. |
 | **Memory provenance** | "откуда ты это знаешь?" / "почему ты это помнишь?" → she cites *how* she learned a fact, in character ("ты сам мне это сказал", "заметила из наших разговоров", with the date). | — |
-| **Corrections that stick** | When the boss corrects her behavior she **says** she learned it, **applies** it (injected into her prompt), and **reports** it in the review; a *recurring* correction is flagged as **needing a code fix** rather than pretended-fixed. Every extracted correction requires a verbatim genuine-boss quote plus lexical support; wrong-speaker/unrelated evidence is rejected before storage. | — |
-| **Memory review** | Cara proposes durable-memory **candidates** from evidence; "обзор памяти" lists them with confirm/skip buttons. A learned fact that **contradicts a confirmed one** is proposed, not auto-stored. | Durable memory only after a yes. |
+| **Corrections that stick** | When the boss corrects her behavior she **says** she learned it, **applies** it (injected into her prompt), and **reports** it in the review; a correction is called recurring only after 2+ occurrences and is then flagged as **needing a code fix**. Every extracted correction requires a verbatim genuine-boss quote plus lexical support; wrong-speaker/unrelated evidence is rejected before storage and the evidence survives candidate confirmation. | — |
+| **Memory review** | Cara proposes durable-memory **candidates** from evidence; "обзор памяти" lists them with confirm/skip buttons. Candidates retain evidence/source trace/recurrence/first+last seen, and deterministic meaningful-token containment folds a short fact with its longer restatement. A learned fact that **contradicts a confirmed one** is proposed, not auto-stored. | Durable memory only after a yes. |
 | **Working history** | "как ты мне помогала?" → a grounded summary of real confirmed actions (saves, reminders, corrections, reviews, exports). | — |
-| **Review** | "как ты поработала за неделю?" → digest with a **scorecard** (first-guess category accuracy, unclear-request count, proactive nudges, memory counts) and a **📔 Дневники** journal-activity rollup; "когда следующий performance review?" → next scheduled date; weekly review runs on a fixed schedule. Markdown exports for VS Code. `Давай md` / `send the md` is a deterministic shortcut to the real review export and Telegram document upload, never free-form chat. | — |
+| **Review** | "как ты поработала за неделю?" → truthful digest separating saved knowledge items from conversation turns, extracted document facts from personal memory, and reminder created/closed/fired-awaiting-ack/overdue-unfired states. Incidents observed this period are separate from normalized open/resolved issue patterns; proactive sends are broken down by check; traces use one success status; provider bodies are scrubbed. Includes a **📔 Дневники** rollup; "когда следующий performance review?" → next scheduled date. `Давай md` / `send the md` deterministically uploads a real Markdown document and resolves that issue pattern after delivery. | — |
 | **Show media** | "покажи фото/файл из #2" → re-sends stored photos and documents by `file_id` (no re-upload). | — |
 | **Fetch** | "прочитай https://…" → fetches a public page (or public t.me web view), extracts text, ingests it. SSRF-guarded. | As ingest. |
 | **VPS stats** | "как сервер?" → CPU load, memory, disk, uptime, Cara's own footprint. | — |
 | **Discard / delete / purge** | Decline a fresh suggestion (`discard`); delete stored items by id/ids/count (`item_delete`); **bulk purge** by scope (all / category / stats / reminders / messages / issues) with a **typed confirmation phrase**. | Discard immediate; delete & purge confirmed (purge requires the exact phrase). |
-| **Proactive nudges** | Gentle, suggestion-only heads-up (overdue reminders, memory candidates waiting, items needing a category) — throttled and quiet-hours-aware (§6). Tunable in plain language ("пиши только по выходным", "не беспокой до 10", "отключи напоминания", "можно почаще"). | Suggestion-only; never acts. |
+| **Proactive nudges** | Gentle, suggestion-only heads-up (overdue reminders, memory candidates waiting, items needing a category) — throttled and quiet-hours-aware (§6). A fired one-shot awaiting “готово” is not overdue and cannot re-trigger an urgent overdue nudge. Tunable in plain language ("пиши только по выходным", "не беспокой до 10", "отключи напоминания", "можно почаще"). | Suggestion-only; never acts. |
 | **Trace / why** | "почему ты так решила?" → the last trace timeline. Issues are logged; weekly digest + trace-summary export. | — |
 | **Report a problem** | "запиши в проблемы" / "добавь в ошибки" logs a boss-reported issue (`boss_reported`, surfaces in the review) — distinct from the issues report, which only shows them. | — |
 | **One at a time** | A message bundling two+ distinct commands ("первое закрой, второе напомни…") is recognised (`multi_action`) and Cara asks to take them one at a time. Full multi-step execution is intentionally out of scope for the single-action router. | — |
@@ -252,6 +252,7 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Daily DB backup (`backup.py`, hardened 2026-07-10)** | Everything Cara is lives in one SQLite file. A daily durable job takes a consistent sqlite3 online snapshot, gzips it locally (newest `BACKUP_KEEP`, default 7), then encrypts every off-box copy with OpenSSL AES-256-CBC/PBKDF2 (200,000 iterations) using `BACKUP_ENCRYPTION_KEY_FILE`. Only `.db.gz.enc` can reach Spaces or the fleet notify chat; a missing key, encryption error, or failed transfer raises for retry. With no target the gzip remains local-only and a WARNING is logged. The recovery key is kept outside the VPS and repo. | — (background job) |
 | **Delivery and update durability (2026-07-10)** | Bot conversation history, reminders, budget/model-health notices, and deploy markers advance only after Telegram acknowledges delivery; alarms/notices prefer at-least-once retry over silent consumption. Every inbound update is persisted in `telegram_updates` before dispatch. Unexpected failures retry up to `UPDATE_MAX_ATTEMPTS` (3); a terminal poison update remains as a failed dead letter with its raw payload while the poll offset advances, so it is recoverable without wedging all later updates. | — |
 | **Scheduled sends mark done only after delivery (2026-07-06)** | The morning brief and the weekly review used to stamp their "done" marker *before* sending — one transient Telegram failure silently cost the day's brief / the week's review. Now `morning_brief_day` / `next_review_utc` advance **only after `_send_all` confirms at least one successful delivery**; a failure backs off 15 min (`*_retry_at`) and gives up after 3 attempts for that slot (logged as a `sched_send_failed` issue) so a dead Telegram day can't wedge the schedule. | — |
+| **Review truth and lifecycle integrity (2026-07-13)** | Additive SQLite migrations give issues normalized fingerprints/open-resolved state/resolution/context, reminders independent fire and closure history plus `reminder_events`, and memory candidates durable evidence/source trace/recurrence/first+last seen. Closing a reminder no longer overwrites its actual fire timestamp; `finished` legacy traces render as `ok`; new fallback traces store bounded structured failure metadata. | — |
 | **Suggestion never clobbers a pending (2026-07-06)** | The pending slot is single per chat. `present_suggestion` (notably from the background `retry_sweep`) used to overwrite whatever confirmation was mid-flight — a reminder draft's next "да" then confirmed a category the boss was never asked. It now takes the slot only when it's free or already `category`; the suggestion stays fully confirmable by its inline buttons either way. | — |
 | **Link-aware ingest (2026-07-06)** | A **link-centric** note (raw text < 400 chars + a URL) has its first URL fetched via the SSRF-guarded `fetch.py` (`_fetch_url_context`): the page text is folded into the ingest prompt (capped `INGEST_FETCH_CHARS`=3500, fenced as untrusted) so the summary describes the ACTUAL page, and up to 6000 chars are **embedded/indexed** so `ask` answers from the link's real content. Rich forwarded posts skip the fetch (they carry their own text; no added latency); a `FetchError` degrades to the old behavior. Toggle `INGEST_READ_LINKS`. A **meta-summary** — the model describing the save request («Пользователь просит записать…») instead of the content — is dropped by a code guard (`_is_meta_summary`, RU/EN shapes) on top of the prompt rule, falling back to the note's raw text (the C2 path). | As ingest. |
 | **Category near-dupe prevention (2026-07-06)** | `llm.match_category_fuzzy`: beyond exact casefold, a suggestion whose significant-token set is a subset of an existing category's (or vice versa) **snaps to the canonical existing name** ("AI tools" → "AI Tools & Resources") — applied to the main suggestion, alternatives, and the salvage path; never renames stored data. `review.similar_categories` surfaces remaining look-alike pairs in the weekly/on-demand review with a «объедини X в Y» hint (the merge itself stays boss-confirmed via `merge_categories`). | Merge is boss-initiated. |
@@ -322,6 +323,8 @@ tone variants; only conversation and grounded answers are free-form.
   Cara-life only from Cara turns, and the evidence must lexically support the
   normalized text. This prevents the model from mining Cara's own invented wording
   into the boss profile or attaching an unrelated real quote to a fabricated rule.
+  Evidence is preserved through candidate confirmation; pending near-duplicates merge
+  deterministically and increment recurrence instead of producing duplicate prompts.
 - **Consolidation (`memory_curator.consolidate`).** The curator accumulates near-duplicate
   facts over time (the same trait restated). A **weekly** pass (first run fires immediately;
   on-demand via the `memory_cleanup` action, "почисти память") asks the model to GROUP genuine
@@ -445,15 +448,16 @@ Core: `messages` (lifecycle `pending → suggested → confirmed`, plus `failed`
 `duplicate`; unique per chat+message id; forward origin, username, dates) ·
 `urls` · `images` (`local_path`, `object_key`) · `files` (forwarded documents by
 `file_id`) · `facts` · `chunks` (BGE-M3 embeddings) · `categories` (Cyrillic-safe
-dedup; `kind` = `inbox`|`journal`) · `reminders` (`prev_due_utc` enables reschedule
-undo) · `feedback` · `preferences` (identity/config) · `pending_actions` (per-chat,
+dedup; `kind` = `inbox`|`journal`) · `reminders` (`prev_due_utc`, `closed_at`,
+`close_reason`) + `reminder_events` · `feedback` · `preferences` (identity/config) · `pending_actions` (per-chat,
 TTL) · `conversation` (recent turns) · `kv`.
 
 Spend & reliability: `llm_usage` (ts/skill/kind/model/tokens/cost/trace) ·
 `model_cooldowns` (failover).
 
-Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity)
-· `memory_candidates` · `relationship_events` (title + trace) · `cara_life`.
+Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity + evidence)
+· `memory_candidates` (evidence/source trace/recurrence/first+last seen) ·
+`relationship_events` (title + trace) · `cara_life`.
 
 Embedding storage (retrieval): vectors in `chunks` are stored as
 **packed float32 BLOBs** (4 B/dim, ~5× smaller than the old JSON-text form and far
@@ -465,7 +469,8 @@ single-file, in-process design while deferring any need for a vector index well
 into the tens-of-thousands-of-chunks range. A `grounding.ranked` trace event logs
 chunk count + latency so that future decision stays data-driven.
 
-Observability: `traces` · `trace_events` · `issues` · `events` · `jobs` ·
+Observability: `traces` · `trace_events` · `issues` (fingerprint + open/resolved state,
+resolution and context) · `events` · `jobs` ·
 `proactive_log`.
 
 Cascade deletes and the `purge` scopes keep related rows and media consistent;
@@ -546,7 +551,7 @@ ids that attachments/embeddings/memory/calendar/fired-pending references rely on
   supported.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 460 offline unit tests (as of 2026‑07‑13; no network; temp SQLite), run
+- **Tests:** 467 offline unit tests (as of 2026‑07‑13; no network; temp SQLite), run
   on the VPS as part of every deploy and in GitHub Actions — including a
   **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram

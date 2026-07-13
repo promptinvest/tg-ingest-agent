@@ -129,6 +129,23 @@ def _redacted_http_error(exc, access_key):
     return f"inference request failed with HTTP {exc.code}{suffix}"
 
 
+def _fallback_summary(profile, model, exc):
+    """Bounded structured fallback text for durable traces/reviews.
+
+    Provider response bodies belong in neither: they are noisy, unstable and may contain
+    request details. Runtime logs still identify the profile/model and HTTP class.
+    """
+    text = str(exc or "")
+    match = re.search(r"\bHTTP\s+(\d{3})\b", text, flags=re.IGNORECASE)
+    reason = f"HTTP {match.group(1)}" if match else type(exc).__name__
+    return f"{profile}:{model} failed: {reason}", {
+        "profile": profile,
+        "model": model,
+        "error_type": type(exc).__name__,
+        "http_status": int(match.group(1)) if match else None,
+    }
+
+
 def _base_url(cfg):
     base = cfg.do_base_url.rstrip("/")
     return base if base.endswith("/v1") else base + "/v1"
@@ -384,10 +401,12 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
                 # Bench only briefly for a transient blip; a hard error gets the full cooldown.
                 cd = min(cfg.llm_fallback_cooldown, 20) if transient else cfg.llm_fallback_cooldown
                 store.cooldown_set(conn, profile, model, cd, str(exc)[:200])
+                fallback_message, fallback_data = _fallback_summary(profile, model, exc)
                 if current_trace():
                     store.trace_event(conn, current_trace(), "llm.fallback",
-                                      f"{profile}:{model} failed: {exc}", level="warn", skill=skill)
-                log(f"profile {profile} model {model} failed ({exc}); trying next")
+                                      fallback_message, level="warn", skill=skill,
+                                      data=fallback_data)
+                log(f"{fallback_message}; trying next")
                 break
         if content is None:
             continue  # move to the next fallback model

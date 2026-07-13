@@ -878,7 +878,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                    + " · ".join(skill_manifest.capability_titles(lang)))
 
     def do_clarify(self, chat_id, lang, text, msg_id):
-        store.issue_add(self.conn, chat_id, "unclear_request", text[:200])
+        recent = store.convo_recent(self.conn, chat_id, limit=4)
+        context = {
+            "turns": [
+                {"role": row["role"], "text": (row["text"] or "")[:240]}
+                for row in recent if store.convo_row_source(row) != "forward"
+            ]
+        }
+        store.issue_add(self.conn, chat_id, "unclear_request", text[:200], context=context)
         # Never snap into a formal templated menu mid-conversation (it broke an
         # intimate chat into cold «вы»). Stay in Cara's warm voice — she has the
         # recent dialogue, so she asks (or just answers) naturally, in "ты".
@@ -1064,7 +1071,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 if rem is not None and rem["recurrence"] != "none":
                     rid = store.reminder_add(self.conn, chat_id, rem["title"], due)
                 elif rem is not None:
-                    store.reminder_update_due(self.conn, rid, due)
+                    store.reminder_update_due(self.conn, rid, due, reason="snoozed")
                 else:
                     rid = store.reminder_add(self.conn, chat_id, payload["title"], due)
                 self.reply(chat_id, T(lang, "reminder_snoozed",
@@ -1074,8 +1081,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 # B5: 'готово' now actually closes a fired ONE-SHOT (it's no longer
                 # auto-closed at fire). A recurring reminder already advanced — just ack it.
                 rem = store.reminder_get(self.conn, rid) if rid is not None else None
+                close_reason = "skipped" if action == "amend" and params.get("done") else "done"
                 if rem is not None and rem["recurrence"] == "none" and rem["status"] == "active":
-                    store.reminder_close(self.conn, rid, "done")
+                    store.reminder_close(self.conn, rid, "done", reason=close_reason)
+                elif rem is not None:
+                    store.reminder_event(self.conn, rid, "acknowledged", close_reason)
                 self.reply(chat_id, T(lang, "reminder_done"))
         elif kind == "delete":
             if action != "confirm":  # deletion only on an explicit yes
@@ -2057,7 +2067,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if sent == "overdue":
                 store.kv_set(self.conn, "overdue_nudge_at",
                              datetime.now(timezone.utc).isoformat())
-            trace.finish(self.conn, tid, "finished", summary=f"nudge={sent or '-'}")
+            trace.finish(self.conn, tid, "ok", summary=f"nudge={sent or '-'}")
         except Exception as exc:  # a heartbeat hiccup must never crash the loop
             log(f"proactive check failed: {exc}")
             trace.finish(self.conn, tid, "failed", summary=str(exc)[:200])

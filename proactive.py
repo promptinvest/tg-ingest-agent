@@ -77,7 +77,8 @@ def _wrong_day(conn, cfg, now, days):
 
 def _overdue_reminders(conn, cfg, lang, now):
     n = conn.execute(
-        "SELECT COUNT(*) AS n FROM reminders WHERE status = 'active' AND due_utc < ?",
+        "SELECT COUNT(*) AS n FROM reminders WHERE status='active' AND due_utc<?"
+        " AND (last_fired_at IS NULL OR last_fired_at<due_utc)",
         (now.isoformat(),),
     ).fetchone()["n"]
     return ("overdue", T(lang, "nudge_overdue", n=n), True) if n else None

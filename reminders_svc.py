@@ -356,7 +356,8 @@ class ReminderMixin:
                 )
             following = reminders.next_due(row["due_utc"], row["recurrence"])
             if following:
-                store.reminder_update_due(self.conn, row["id"], following)  # recurring: re-arm
+                store.reminder_update_due(
+                    self.conn, row["id"], following, reason="recurrence_advanced")
             # B5: a fired ONE-SHOT is NOT auto-closed — it stays active/visible until the
             # boss explicitly acks ('готово') or cancels it; last_fired_at stops it
             # re-firing. (Old behavior closed it here, which read as 'why did you close it'.)

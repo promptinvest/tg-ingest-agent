@@ -221,6 +221,11 @@ class HermesMixin:
                              caption=T(lang, "review_file_caption"),
                              content_type="text/markdown")
             store.convo_add(self.conn, chat_id, "bot", f"[review file: {filename}]")
+            if params.get("resolved_issue_detail"):
+                store.issue_resolve(
+                    self.conn, "unclear_request", params["resolved_issue_detail"],
+                    "real review document delivered",
+                )
         except TelegramError as exc:
             log(f"review export send failed: {exc}")
             self.reply(chat_id, T(lang, "llm_error"))

@@ -207,7 +207,8 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
             boss_added += 1
         elif store.candidate_add(conn, kind, text, reason="from conversation",
                                  sensitivity=sens, confidence=0.7,
-                                 source_table="conversation"):
+                                 source_table="conversation",
+                                 evidence=str(item.get("evidence") or "").strip()):
             boss_added += 1  # sensitive or conflicting -> propose, never auto-store
 
     # Behavioral corrections: store as standing guidance Cara honors next turn,
@@ -240,7 +241,8 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
                            evidence=str(item.get("evidence") or "").strip())
         else:
             store.candidate_add(conn, kind, text, reason="correction",
-                                sensitivity=sens, confidence=0.8, source_table="correction")
+                                sensitivity=sens, confidence=0.8, source_table="correction",
+                                evidence=str(item.get("evidence") or "").strip())
         learned.append(text)
         corrections_added += 1
 
@@ -269,7 +271,8 @@ def confirm_candidate(conn, candidate_id, accept):
         sensitivity = boss_model.effective_sensitivity(cand["kind"], cand["proposed_text"])
         store.boss_add(conn, cand["kind"], cand["proposed_text"], status="confirmed",
                        confidence=1.0, sensitivity=sensitivity,
-                       source_table="memory_candidate", source_id=candidate_id)
+                       source_table="memory_candidate", source_id=candidate_id,
+                       evidence=cand["evidence"])
         store.candidate_set_status(conn, candidate_id, "confirmed")
         store.rel_add(conn, "memory_confirmed", f"confirmed: {cand['proposed_text']}",
                       importance=2, source_table="memory_candidates", source_id=candidate_id,

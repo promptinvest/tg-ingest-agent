@@ -306,7 +306,8 @@ class RouterTests(unittest.TestCase):
             chat_profile.assert_not_called()
             self.assertEqual(decision, {
                 "action": "review",
-                "params": {"period": "week", "export": True},
+                "params": {"period": "week", "export": True,
+                           "resolved_issue_detail": phrase},
                 "confidence": 1.0,
             })
         self.assertFalse(router.detect_review_export("давай обсудим markdown"))
@@ -670,21 +671,21 @@ class ReviewTests(unittest.TestCase):
 
     def test_chat_text_bilingual(self):
         ru = review.chat_text(self.conn, self.cfg, "ru", "week")
-        self.assertIn("Сообщений: 1", ru)
+        self.assertIn("Сохранено материалов: 1", ru)
         self.assertIn("крипта", ru)
         self.assertIn("$0.002", ru)
         en = review.chat_text(self.conn, self.cfg, "en", "week")
-        self.assertIn("Messages: 1", en)
+        self.assertIn("Saved knowledge items: 1", en)
         self.assertIn("Reminders set: 1", en)
 
     def test_markdown_sections_and_backlog(self):
         md = review.markdown(self.conn, self.cfg, "week")
-        for section in ("# Cara performance review", "## Activity", "## Learning",
-                        "## Communication issues", "## AI spend",
-                        "## Improvement backlog (for VS Code)"):
+        for section in ("# Cara performance review", "## Executive summary", "## Activity",
+                        "## Learning", "## Communication incidents observed this period",
+                        "## AI spend", "## Improvement backlog (open patterns)"):
             self.assertIn(section, md)
         self.assertIn('"news" → "крипта" ×1', md)
-        self.assertIn("out-of-scope request(s)", md)
+        self.assertIn("**out_of_scope** ×1", md)
         self.assertIn("напиши эссе", md)
 
     def test_router_accepts_review(self):
@@ -694,6 +695,7 @@ class ReviewTests(unittest.TestCase):
 
     def test_review_export_uploads_real_markdown_document(self):
         import hermes
+        store.issue_add(self.conn, 1, "unclear_request", "Давай md")
 
         class Handler:
             conn = self.conn
@@ -702,13 +704,19 @@ class ReviewTests(unittest.TestCase):
 
         with mock.patch.object(hermes, "tg_send_document") as send_document:
             hermes.HermesMixin.do_review(
-                Handler(), 1, "ru", {"period": "week", "export": True})
+                Handler(), 1, "ru", {"period": "week", "export": True,
+                                      "resolved_issue_detail": "Давай md"})
         send_document.assert_called_once()
         args = send_document.call_args.args
         self.assertTrue(args[2].startswith("cara-review-week-"))
         self.assertTrue(args[2].endswith(".md"))
         self.assertIn(b"# Cara performance review", args[3])
         self.assertEqual(send_document.call_args.kwargs["content_type"], "text/markdown")
+        issue = self.conn.execute(
+            "SELECT status, resolution FROM issues WHERE kind='unclear_request'"
+        ).fetchone()
+        self.assertEqual(issue["status"], "resolved")
+        self.assertIn("document delivered", issue["resolution"])
 
     def test_new_digest_sections_and_trace_export(self):
         import trace
@@ -720,7 +728,7 @@ class ReviewTests(unittest.TestCase):
                     "router_fast:anthropic-claude-haiku-4.5 failed", skill="router")
         trace.finish(self.conn, tid, "finished")
         md = review.markdown(self.conn, self.cfg, "week")
-        for section in ("saved items by category", "facts learned: 2",
+        for section in ("saved items by category", "facts extracted from saved items: 2",
                         "## Working history", "## Model fallback incidents",
                         "## Trace summary"):
             self.assertIn(section, md)
@@ -732,6 +740,61 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("CARA_TRACE_SUMMARY", body)
         self.assertIn("Model fallbacks: 1", body)
         self.assertIn("trace", review.EXPORT_KINDS)
+
+    def test_review_distinguishes_fired_from_overdue_and_preserves_close_time(self):
+        now = datetime.now(timezone.utc)
+        fired = store.reminder_add(
+            self.conn, 1, "fired", (now - timedelta(hours=2)).isoformat())
+        store.reminder_touch_fired(self.conn, fired, (now - timedelta(hours=1)).isoformat())
+        store.reminder_add(self.conn, 1, "truly overdue", (now - timedelta(hours=1)).isoformat())
+        data = review.collect(self.conn, "week")
+        self.assertEqual(data["reminders_fired_unacked"], 1)
+        self.assertEqual(data["reminders_overdue"], 1)
+        fired_at = store.reminder_get(self.conn, fired)["last_fired_at"]
+        store.reminder_close(self.conn, fired, "done")
+        row = store.reminder_get(self.conn, fired)
+        self.assertEqual(row["last_fired_at"], fired_at)
+        self.assertIsNotNone(row["closed_at"])
+        self.assertEqual(row["close_reason"], "done")
+        events = [r["event"] for r in self.conn.execute(
+            "SELECT event FROM reminder_events WHERE reminder_id=? ORDER BY id", (fired,))]
+        self.assertEqual(events, ["created", "fired", "closed"])
+
+    def test_issue_backlog_separates_observed_open_and_resolved(self):
+        store.issue_add(self.conn, 1, "unclear_request", "Давай md",
+                        context={"turns": [{"role": "user", "text": "Давай md"}]})
+        self.assertEqual(len(store.issue_open_patterns(
+            self.conn, ("unclear_request",))), 1)
+        self.assertEqual(store.issue_resolve(
+            self.conn, "unclear_request", "давай MD", "document delivered"), 1)
+        self.assertEqual(store.issue_open_patterns(self.conn, ("unclear_request",)), [])
+        data = review.collect(self.conn, "week")
+        self.assertEqual(len(data["resolved_issue_patterns"]), 1)
+        md = review.markdown(self.conn, self.cfg, "week")
+        self.assertIn("Resolved this period", md)
+        self.assertIn("document delivered", md)
+
+    def test_report_sanitizes_legacy_provider_body_and_normalizes_trace_success(self):
+        import trace
+        tid = trace.start(self.conn, "proactive_tick", 1)
+        trace.event(
+            self.conn, tid, trace.LLM_FALLBACK,
+            'router:model failed: inference request failed with HTTP 429: {"error":"payload"}',
+            skill="router",
+        )
+        trace.finish(self.conn, tid, "finished")
+        md = review.markdown(self.conn, self.cfg, "week")
+        self.assertIn("router:model failed: inference request failed with HTTP 429", md)
+        self.assertNotIn('"error":"payload"', md)
+        self.assertIn("proactive_tick · ok: 1", md)
+        self.assertNotIn("proactive_tick · finished", md)
+
+    def test_unresolved_correction_requires_two_occurrences(self):
+        store.issue_add(self.conn, 1, "correction_unresolved", "Do not guess")
+        self.assertEqual(review.collect(self.conn, "week")["corrections_unresolved"], [])
+        store.issue_add(self.conn, 1, "correction_unresolved", "Do not guess")
+        rows = review.collect(self.conn, "week")["corrections_unresolved"]
+        self.assertEqual(rows[0]["n"], 2)
 
 
 class AgentViewTests(unittest.TestCase):
@@ -2633,6 +2696,7 @@ class ConversationLearningTests(unittest.TestCase):
         store.boss_add(self.conn, "workflow", "Отвечай на его языке.", status="inferred",
                        source_table="correction")
         store.issue_add(self.conn, 1, "correction_unresolved", "Не переключай язык.")
+        store.issue_add(self.conn, 1, "correction_unresolved", "Не переключай язык.")
         report = review.corrections_report(self.conn, "ru")
         self.assertIn("Отвечай на его языке.", report)        # auto-applied
         self.assertIn("Не переключай язык.", report)          # needs a code fix
@@ -2740,6 +2804,15 @@ class ProactiveTests(unittest.TestCase):
                                  now=self._now_local(12))
         self.assertEqual(key, "overdue")        # urgent fires despite the cap
         self.assertEqual(len(sent), 1)
+
+    def test_fired_unacknowledged_reminder_is_not_an_overdue_nudge(self):
+        from datetime import timedelta
+        now = self._now_local(12)
+        rid = store.reminder_add(self.conn, 1, "already delivered",
+                                 (now - timedelta(hours=1)).isoformat())
+        store.reminder_touch_fired(self.conn, rid, now.isoformat())
+        self.assertIsNone(self.proactive._overdue_reminders(
+            self.conn, self.cfg, "en", now))
 
 
 class MaintenanceJobTests(unittest.TestCase):
@@ -4553,10 +4626,14 @@ class MemoryCuratorTests(unittest.TestCase):
         self.assertTrue(any("Flight Deals" in t for t in texts_))
 
     def test_confirm_candidate_promotes_to_boss_item(self):
-        cid = store.candidate_add(self.conn, "tone", "prefers short answers", confidence=0.9)
+        cid = store.candidate_add(
+            self.conn, "tone", "prefers short answers", confidence=0.9,
+            evidence="Please keep your answers short.")
         value, accepted = memory_curator.confirm_candidate(self.conn, cid, True)
         self.assertEqual((value, accepted), ("prefers short answers", True))
-        self.assertEqual(store.boss_items(self.conn, "confirmed")[0]["value"], "prefers short answers")
+        promoted = store.boss_items(self.conn, "confirmed")[0]
+        self.assertEqual(promoted["value"], "prefers short answers")
+        self.assertEqual(promoted["evidence"], "Please keep your answers short.")
         self.assertEqual(store.candidate_get(self.conn, cid)["status"], "confirmed")
         # a relationship event was logged
         self.assertTrue(store.rel_recent(self.conn, "2000-01-01"))
@@ -5006,6 +5083,56 @@ class StoreMigrationTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_review_lifecycle_columns_migrate_additively(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "old-review.db"
+            raw = sqlite3.connect(str(path))
+            raw.execute(
+                "CREATE TABLE issues (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, day TEXT NOT NULL,"
+                " chat_id INTEGER, kind TEXT NOT NULL, detail TEXT, trace_id TEXT)"
+            )
+            raw.execute(
+                "CREATE TABLE reminders (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL,"
+                " title TEXT NOT NULL, due_utc TEXT NOT NULL, recurrence TEXT NOT NULL DEFAULT"
+                " 'none', status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL,"
+                " last_fired_at TEXT, prev_due_utc TEXT)"
+            )
+            raw.execute(
+                "CREATE TABLE memory_candidates (id INTEGER PRIMARY KEY, target TEXT NOT NULL,"
+                " kind TEXT NOT NULL, proposed_text TEXT NOT NULL, reason TEXT, sensitivity TEXT,"
+                " confidence REAL, source_table TEXT, source_id INTEGER, status TEXT NOT NULL,"
+                " created_at TEXT NOT NULL, decided_at TEXT)"
+            )
+            raw.execute(
+                "INSERT INTO issues (ts, day, kind, detail) VALUES"
+                " ('2026-01-01T00:00:00+00:00', '2026-01-01', 'unclear_request', 'Open #17')"
+            )
+            raw.execute(
+                "INSERT INTO reminders (chat_id,title,due_utc,status,created_at,last_fired_at)"
+                " VALUES (1,'done','2026-01-01','done','2026-01-01','2026-01-02')"
+            )
+            raw.execute(
+                "INSERT INTO memory_candidates (target,kind,proposed_text,sensitivity,confidence,"
+                " status,created_at) VALUES ('boss_profile','fact','x','normal',0.5,'pending',"
+                " '2026-01-01')"
+            )
+            raw.commit()
+            raw.close()
+            conn = store.open_db(path)
+            try:
+                issue = conn.execute("SELECT * FROM issues").fetchone()
+                self.assertEqual(issue["status"], "open")
+                self.assertEqual(issue["fingerprint"], "unclear_request:open <n>")
+                reminder = conn.execute("SELECT * FROM reminders").fetchone()
+                self.assertEqual(reminder["closed_at"], "2026-01-02")
+                self.assertEqual(reminder["close_reason"], "done")
+                candidate = conn.execute("SELECT * FROM memory_candidates").fetchone()
+                self.assertEqual(candidate["recurrence_count"], 1)
+                self.assertEqual(candidate["first_seen_at"], "2026-01-01")
+            finally:
+                conn.close()
+
 
 class StoreRetentionTests(unittest.TestCase):
     def setUp(self):
@@ -5087,6 +5214,17 @@ class StoreRetentionTests(unittest.TestCase):
         self.assertTrue(store.candidate_exists(self.conn, "Иван Доронин — его знакомый"))
         self.assertIsNone(store.candidate_add(
             self.conn, "fact", "Иван Доронин — его знакомый"))  # not re-proposed
+
+    def test_near_duplicate_pending_candidates_merge_deterministically(self):
+        cid = store.candidate_add(
+            self.conn, "personal_fact", "У него есть брат.", evidence="У меня есть брат.")
+        duplicate = store.candidate_add(
+            self.conn, "personal_fact", "У него есть брат, которому он должен позвонить.",
+            evidence="Мне нужно позвонить брату.")
+        self.assertIsNone(duplicate)
+        row = store.candidate_get(self.conn, cid)
+        self.assertEqual(row["recurrence_count"], 2)
+        self.assertEqual(row["evidence"], "У меня есть брат.")
 
 
 class TelegramTransportTests(unittest.TestCase):

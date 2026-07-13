@@ -357,7 +357,8 @@ def validate_route(parsed, has_pending):
 def route(cfg, conn, chat_id, text, pending):
     """Classify one user message; always returns a valid route dict."""
     if pending is None and detect_review_export(text):
-        return {"action": "review", "params": {"period": "week", "export": True},
+        return {"action": "review", "params": {"period": "week", "export": True,
+                                                     "resolved_issue_detail": text},
                 "confidence": 1.0}
     system = build_system_prompt(cfg, pending)
     history = store.convo_recent(conn, chat_id, limit=14)
