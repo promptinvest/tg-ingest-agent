@@ -169,6 +169,26 @@ CREATE TABLE IF NOT EXISTS issues (
   context TEXT
 );
 
+-- Immutable issue rows above are observations. This table is the actionable
+-- lifecycle: one normalized pattern can be opened, resolved, or retained as a
+-- legacy pre-migration pattern without pretending every historic observation
+-- is a current bug.
+CREATE TABLE IF NOT EXISTS issue_patterns (
+  fingerprint TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  detail TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  occurrences INTEGER NOT NULL DEFAULT 1,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  last_issue_id INTEGER REFERENCES issues(id) ON DELETE SET NULL,
+  resolved_at TEXT,
+  resolution TEXT,
+  context TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_issue_patterns_status_kind
+  ON issue_patterns(status, kind, last_seen_at);
+
 CREATE TABLE IF NOT EXISTS reminders (
   id INTEGER PRIMARY KEY,
   chat_id INTEGER NOT NULL,
@@ -886,6 +906,31 @@ def _migrate(conn):
                      (_issue_fingerprint(row["kind"], row["detail"]), row["id"]))
     conn.execute("CREATE INDEX IF NOT EXISTS idx_issues_status_kind"
                  " ON issues(status, kind, fingerprint)")
+    # Split immutable observations from the actionable pattern lifecycle. On
+    # first upgrade, existing unresolved rows are classified as legacy rather
+    # than flooding the new backlog with every historic incident. A fresh
+    # post-upgrade occurrence reopens its pattern through issue_add().
+    pattern_count = conn.execute("SELECT COUNT(*) FROM issue_patterns").fetchone()[0]
+    if pattern_count == 0:
+        for row in conn.execute(
+                "SELECT fingerprint, kind, COUNT(*) AS n, MIN(ts) AS first_seen_at,"
+                " MAX(ts) AS last_seen_at, MAX(id) AS last_issue_id, MAX(detail) AS detail,"
+                " SUM(CASE WHEN status='resolved' THEN 1 ELSE 0 END) AS resolved_n,"
+                " MAX(resolved_at) AS resolved_at, MAX(resolution) AS resolution,"
+                " MAX(context) AS context FROM issues WHERE fingerprint IS NOT NULL"
+                " GROUP BY fingerprint, kind"):
+            status = "resolved" if row["resolved_n"] == row["n"] else "legacy"
+            conn.execute(
+                "INSERT INTO issue_patterns"
+                " (fingerprint, kind, detail, status, occurrences, first_seen_at,"
+                " last_seen_at, last_issue_id, resolved_at, resolution, context)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (row["fingerprint"], row["kind"], row["detail"], status, row["n"],
+                 row["first_seen_at"], row["last_seen_at"], row["last_issue_id"],
+                 row["resolved_at"] if status == "resolved" else None,
+                 row["resolution"] if status == "resolved" else None, row["context"]),
+            )
+        conn.execute("UPDATE issues SET status='observed' WHERE status='open'")
     rel_columns = {row["name"] for row in conn.execute("PRAGMA table_info(relationship_events)")}
     if "title" not in rel_columns:
         conn.execute("ALTER TABLE relationship_events ADD COLUMN title TEXT")
@@ -1041,13 +1086,45 @@ def telegram_update_fail(conn, update_id, error, terminal=False):
 # -- categories (norm_key uses Python casefold: SQLite NOCASE is ASCII-only
 #    and would treat 'Крипта' and 'крипта' as different categories) ----------
 
+def _category_stem(name):
+    """Small RU singular/plural fold used only to protect journal identity."""
+    return re.sub(r"[ьйаяуюоёеиыэ]+$", "", str(name or "").strip().casefold())
+
+
+def canonical_category(conn, name):
+    """Return an existing category, preferring a matching journal.
+
+    A journal owns its common singular/plural stem at every write boundary. This
+    prevents a manual correction such as «Благодарности» from creating a new
+    inbox category beside the existing journal «Благодарность».
+    """
+    value = str(name or "").strip()
+    if not value:
+        return None
+    norm = value.casefold()
+    stem = _category_stem(value)
+    journals = conn.execute(
+        "SELECT name, norm_key FROM categories WHERE kind='journal' ORDER BY id"
+    ).fetchall()
+    for row in journals:
+        if row["norm_key"] == norm:
+            return row["name"]
+    if len(stem) >= 4:
+        for row in journals:
+            if _category_stem(row["name"]) == stem:
+                return row["name"]
+    row = conn.execute("SELECT name FROM categories WHERE norm_key = ?", (norm,)).fetchone()
+    return row["name"] if row else None
+
+
 def ensure_category(conn, name):
     """Insert the category if new (case-insensitive incl. Cyrillic); return
     the canonical stored name."""
+    name = str(name or "").strip()
+    canonical = canonical_category(conn, name)
+    if canonical:
+        return canonical
     norm = name.casefold()
-    row = conn.execute("SELECT name FROM categories WHERE norm_key = ?", (norm,)).fetchone()
-    if row:
-        return row["name"]
     conn.execute(
         "INSERT INTO categories (name, norm_key, created_at) VALUES (?, ?, ?)",
         (name, norm, _now()),
@@ -1143,6 +1220,24 @@ def journal_entries(conn, category, since_iso=None, limit=200):
         if len(entries) >= limit:
             break
     return entries
+
+
+def journal_entries_page(conn, category, since_iso=None, offset=0, limit=5):
+    """Return one stable oldest-first journal page and its filtered total."""
+    target = str(category or "").casefold()
+    matched = []
+    for row in conn.execute(
+        "SELECT id, received_at, tg_date, forward_date, raw_text, summary, category"
+        " FROM messages WHERE status='confirmed' AND category IS NOT NULL ORDER BY id ASC"
+    ):
+        if row["category"].casefold() != target:
+            continue
+        if since_iso and (row["received_at"] or "") < since_iso:
+            continue
+        matched.append(row)
+    start = max(0, int(offset or 0))
+    size = max(1, int(limit or 5))
+    return matched[start:start + size], len(matched)
 
 
 def journal_count(conn, category):
@@ -1635,8 +1730,8 @@ def purge_execute(conn, scope, category=None):
     if scope == "all":
         paths = [r["local_path"] for r in
                  conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
-        for table in ("facts", "chunks", "urls", "images", "messages", "categories", "issues",
-                      "feedback", "conversation"):
+        for table in ("facts", "chunks", "urls", "images", "messages", "categories",
+                      "issue_patterns", "issues", "feedback", "conversation"):
             conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM reminders WHERE status='active'")
         conn.execute("DELETE FROM pending_actions")
@@ -1647,7 +1742,7 @@ def purge_execute(conn, scope, category=None):
         if category:
             conn.execute("DELETE FROM categories WHERE norm_key = ?", (str(category).casefold(),))
     elif scope == "stats":
-        for table in ("categories", "issues", "feedback", "conversation"):
+        for table in ("categories", "issue_patterns", "issues", "feedback", "conversation"):
             conn.execute(f"DELETE FROM {table}")
     elif scope == "reminders":
         conn.execute("DELETE FROM reminders WHERE status='active'")
@@ -1662,6 +1757,7 @@ def purge_execute(conn, scope, category=None):
             for mid in protected:
                 paths.extend(delete_message(conn, mid))
     elif scope == "issues":  # only the issue/failure log; nothing else
+        conn.execute("DELETE FROM issue_patterns")
         conn.execute("DELETE FROM issues")
     conn.commit()
     return info, [p for p in paths if p]
@@ -1926,23 +2022,36 @@ def _issue_fingerprint(kind, detail):
 def issue_add(conn, chat_id, kind, detail="", context=None):
     ts = _now()
     clean_detail = str(detail or "")[:300]
+    context_json = (json.dumps(context, ensure_ascii=False)[:2000]
+                    if context is not None else None)
+    fingerprint = _issue_fingerprint(kind, clean_detail)
     cur = conn.execute(
         "INSERT INTO issues (ts, day, chat_id, kind, detail, trace_id, fingerprint,"
-        " status, context) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+        " status, context) VALUES (?, ?, ?, ?, ?, ?, ?, 'observed', ?)",
         (ts, ts[:10], chat_id, kind, clean_detail, _trace_id(),
-         _issue_fingerprint(kind, clean_detail),
-         json.dumps(context, ensure_ascii=False)[:2000] if context is not None else None),
+         fingerprint, context_json),
+    )
+    conn.execute(
+        "INSERT INTO issue_patterns"
+        " (fingerprint, kind, detail, status, occurrences, first_seen_at, last_seen_at,"
+        " last_issue_id, context) VALUES (?, ?, ?, 'open', 1, ?, ?, ?, ?)"
+        " ON CONFLICT(fingerprint) DO UPDATE SET"
+        " kind=excluded.kind, detail=excluded.detail, status='open',"
+        " occurrences=issue_patterns.occurrences+1, last_seen_at=excluded.last_seen_at,"
+        " last_issue_id=excluded.last_issue_id, resolved_at=NULL, resolution=NULL,"
+        " context=COALESCE(excluded.context, issue_patterns.context)",
+        (fingerprint, kind, clean_detail, ts, ts, cur.lastrowid, context_json),
     )
     conn.commit()
     return cur.lastrowid
 
 
 def issue_resolve(conn, kind, detail, resolution):
-    """Resolve every open occurrence of one normalized issue pattern."""
+    """Resolve the actionable pattern; immutable observations stay unchanged."""
     now = _now()
     cur = conn.execute(
-        "UPDATE issues SET status='resolved', resolved_at=?, resolution=?"
-        " WHERE status='open' AND fingerprint=?",
+        "UPDATE issue_patterns SET status='resolved', resolved_at=?, resolution=?"
+        " WHERE status!='resolved' AND fingerprint=?",
         (now, str(resolution or "")[:300], _issue_fingerprint(kind, detail)),
     )
     conn.commit()
@@ -1972,18 +2081,17 @@ def issue_open_patterns(conn, kinds=None, limit=20):
         params.extend(kinds)
     params.append(limit)
     return conn.execute(
-        f"SELECT kind, fingerprint, COUNT(*) AS n, MIN(ts) AS first_seen_at,"
-        f" MAX(ts) AS last_seen_at, MAX(detail) AS detail FROM issues WHERE {where}"
-        " GROUP BY kind, fingerprint ORDER BY last_seen_at DESC LIMIT ?",
+        f"SELECT kind, fingerprint, occurrences AS n, first_seen_at, last_seen_at,"
+        f" detail, status, context FROM issue_patterns WHERE {where}"
+        " ORDER BY last_seen_at DESC LIMIT ?",
         params,
     ).fetchall()
 
 
 def issues_resolved(conn, since_iso, limit=20):
     return conn.execute(
-        "SELECT kind, fingerprint, COUNT(*) AS n, MAX(resolved_at) AS resolved_at,"
-        " MAX(detail) AS detail, MAX(resolution) AS resolution FROM issues"
-        " WHERE status='resolved' AND resolved_at>=? GROUP BY kind, fingerprint"
+        "SELECT kind, fingerprint, occurrences AS n, resolved_at, detail, resolution"
+        " FROM issue_patterns WHERE status='resolved' AND resolved_at>=?"
         " ORDER BY resolved_at DESC LIMIT ?",
         (since_iso, limit),
     ).fetchall()

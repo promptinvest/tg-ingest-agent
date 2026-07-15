@@ -117,7 +117,7 @@ def collect(conn, period):
     data["issue_counts"] = store.issue_counts(conn, since)
     data["issue_examples"] = store.issues_recent(conn, since, limit=10)
     actionable = ("unclear_request", "out_of_scope", "stt_failed", "ingest_failed",
-                  "converse_artifact_claim", "correction_unresolved")
+                  "converse_artifact_claim", "converse_action_claim", "correction_unresolved")
     data["open_issue_patterns"] = store.issue_open_patterns(conn, actionable, limit=20)
     data["resolved_issue_patterns"] = store.issues_resolved(conn, since, limit=20)
     data["spend_by_skill"] = conn.execute(
@@ -188,9 +188,9 @@ def collect(conn, period):
         for r in store.boss_items(conn, status, limit=50)
         if r["source_table"] == "correction"]
     data["corrections_unresolved"] = conn.execute(
-        "SELECT detail, COUNT(*) AS n, MIN(ts) AS first_seen_at, MAX(ts) AS last_seen_at"
-        " FROM issues WHERE kind='correction_unresolved' AND status='open'"
-        " GROUP BY detail HAVING COUNT(*)>=2 ORDER BY n DESC LIMIT 10",
+        "SELECT detail, occurrences AS n, first_seen_at, last_seen_at"
+        " FROM issue_patterns WHERE kind='correction_unresolved' AND status='open'"
+        " AND occurrences>=2 ORDER BY occurrences DESC LIMIT 10",
     ).fetchall()
     # scorecard: how well she did, not just how much
     status_counts = {r["status"]: r["n"] for r in data["messages"]}
@@ -261,8 +261,9 @@ def corrections_report(conn, lang):
         for r in store.boss_items(conn, status, limit=50)
         if r["source_table"] == "correction"]
     unresolved = conn.execute(
-        "SELECT detail, COUNT(*) AS n FROM issues WHERE kind='correction_unresolved'"
-        " AND status='open' GROUP BY detail HAVING COUNT(*)>=2 ORDER BY n DESC LIMIT 10",
+        "SELECT detail, occurrences AS n FROM issue_patterns"
+        " WHERE kind='correction_unresolved' AND status='open' AND occurrences>=2"
+        " ORDER BY occurrences DESC LIMIT 10",
     ).fetchall()
     lines = ["📝 " + ("Корректировки по твоим замечаниям:" if ru
                       else "Corrections I've learned from you:")]

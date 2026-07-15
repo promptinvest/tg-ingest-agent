@@ -919,6 +919,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 return
             store.pending_clear(self.conn, chat_id)  # not a pick -> abandon, route normally
             pending = None
+        # Common fired-reminder replies are state transitions, not conversation.
+        # Resolve them deterministically before the LLM router — including an
+        # explicit close/skip/snooze after the short pending window expired.
+        if self.resolve_fired_followup(chat_id, lang, text, pending):
+            return
         # A fired reminder leaves a 30-min 'reminder_fired' pending so 'готово' / 'через
         # 30 минут' resolve it. But the boss often answers by DOING the task — a gratitude
         # reminder -> he dictates the gratitude. That content must be SAVED, not eaten as
@@ -928,6 +933,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 and not self._is_reminder_ack(text)):
             store.pending_clear(self.conn, chat_id)
             pending = None
+        # A short reply to a proactive nudge belongs to the exact queue that was
+        # offered. Do this before small-talk/router handling so «Давай» cannot
+        # become an unrelated free-form promise.
+        if pending is None and self._resolve_proactive_followup(chat_id, lang, text):
+            return
         # Obvious greetings / "how are you" / identity pings go straight to warm
         # free-form Cara, skipping the router (one chat call, no template). A bare
         # "ок"/"👍" needs no reply, like a human. With a pending action, short acks
@@ -1086,7 +1096,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     store.reminder_close(self.conn, rid, "done", reason=close_reason)
                 elif rem is not None:
                     store.reminder_event(self.conn, rid, "acknowledged", close_reason)
-                self.reply(chat_id, T(lang, "reminder_done"))
+                self.reply(chat_id, T(lang, "reminder_skipped" if close_reason == "skipped"
+                                      else "reminder_done"))
         elif kind == "delete":
             if action != "confirm":  # deletion only on an explicit yes
                 store.pending_clear(self.conn, chat_id)
@@ -1492,6 +1503,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             store.issue_add(self.conn, chat_id, "converse_artifact_claim", reply[:300])
             log("blocked fabricated artifact claim from converse")
             self.reply(chat_id, T(lang, "artifact_not_sent"))
+            return
+        if reply and action_truth.freeform_claims_action(reply):
+            # Converse has no mutation authority. A natural-sounding «закрыла» or
+            # «всё чисто» without a deterministic handler is worse than a clear
+            # admission, because the database remains unchanged.
+            store.issue_add(self.conn, chat_id, "converse_action_claim", reply[:300])
+            log("blocked fabricated state-change claim from converse")
+            self.reply(chat_id, T(lang, "action_not_done"))
             return
         if reaction:
             self.react(chat_id, message_id, reaction)
@@ -2062,8 +2081,27 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         try:
             sent = proactive.run(self.conn, self.cfg, lang,
                                  lambda text: self.reply(chat_id, text))
-            # Remember an overdue nudge so a bare follow-up "покажи их" routes to the real
-            # reminder list (deterministic, exact titles) instead of free-text converse.
+            # Snapshot the exact queue behind the delivered nudge. A later
+            # «Давай»/"show them" can then continue deterministically.
+            if sent:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                ids = []
+                if sent == "candidates":
+                    ids = [row["id"] for row in store.candidates_pending(self.conn, limit=50)]
+                elif sent == "unsorted":
+                    ids = [row["id"] for row in self.conn.execute(
+                        "SELECT id FROM messages WHERE status='suggested' ORDER BY id"
+                    ).fetchall()]
+                elif sent == "overdue":
+                    ids = [row["id"] for row in self.conn.execute(
+                        "SELECT id FROM reminders WHERE chat_id=? AND status='active'"
+                        " AND due_utc<=? AND (last_fired_at IS NULL OR last_fired_at<due_utc)"
+                        " ORDER BY due_utc, id", (chat_id, now_iso)
+                    ).fetchall()]
+                store.kv_set(self.conn, "proactive_context", json.dumps(
+                    {"kind": sent, "sent_at": now_iso, "ids": ids},
+                    ensure_ascii=False,
+                ))
             if sent == "overdue":
                 store.kv_set(self.conn, "overdue_nudge_at",
                              datetime.now(timezone.utc).isoformat())
@@ -2071,6 +2109,61 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         except Exception as exc:  # a heartbeat hiccup must never crash the loop
             log(f"proactive check failed: {exc}")
             trace.finish(self.conn, tid, "failed", summary=str(exc)[:200])
+
+    def _resolve_proactive_followup(self, chat_id, lang, text):
+        """Open the queue behind a recent proactive nudge without consulting an LLM."""
+        t = str(text or "").strip().casefold()
+        if not re.fullmatch(
+                r"(?:давай|да|ага|покажи(?:\s+(?:их|это))?|show(?:\s+(?:them|it))?|"
+                r"go ahead|let'?s do it)[.! ]*", t):
+            return False
+        raw = store.kv_get(self.conn, "proactive_context")
+        try:
+            context = json.loads(raw or "")
+            sent_at = datetime.fromisoformat(context["sent_at"])
+            if sent_at.tzinfo is None:
+                sent_at = sent_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - sent_at > timedelta(minutes=15):
+                return False
+            ids = [int(value) for value in context.get("ids") or []]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+        store.kv_set(self.conn, "proactive_context", "")
+        kind = context.get("kind")
+        if kind == "candidates":
+            rows = [store.candidate_get(self.conn, cid) for cid in ids]
+            rows = [row for row in rows if row is not None and row["status"] == "pending"]
+            if not rows:
+                self.reply(chat_id, T(lang, "memory_review_empty"))
+                return True
+            self.reply(chat_id, T(lang, "memory_review_header"))
+            for row in rows:
+                keyboard = {"inline_keyboard": [[
+                    {"text": T(lang, "mc_remember"), "callback_data": f"mc|{row['id']}|y"},
+                    {"text": T(lang, "mc_skip"), "callback_data": f"mc|{row['id']}|n"},
+                ]]}
+                self.reply(chat_id, f"#{row['id']} {row['proposed_text']}",
+                           reply_markup=keyboard)
+            return True
+        if kind == "unsorted":
+            row = next((candidate for candidate in
+                        (store.get_message(self.conn, row_id) for row_id in ids)
+                        if candidate is not None and candidate["status"] == "suggested"), None)
+            if row is None:
+                self.reply(chat_id, T(lang, "items_empty"))
+                return True
+            category = row["suggested_category"] or self.cfg.fallback_category
+            summary = (row["summary"] or row["raw_text"] or "—").strip()
+            counts = T(lang, "counts", row_id=self.note_no(row["id"]),
+                       images=len(store.message_images(self.conn, row["id"])),
+                       files=len(store.message_files(self.conn, row["id"])),
+                       urls=len(store.message_urls(self.conn, row["id"])))
+            self.present_suggestion(row["id"], chat_id, None, category, [], summary, counts)
+            return True
+        if kind == "overdue":
+            self.reply(chat_id, self._reminder_list_body(chat_id, lang))
+            return True
+        return False
 
     def check_model_health(self):
         """Periodically verify Cara's models are reachable and tell the boss the
@@ -2124,9 +2217,13 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             except (TypeError, ValueError):
                 fails = 1
             store.kv_set(self.conn, f"mh_fail:{model}", str(fails))
-            if prev == "down" or fails < self.cfg.model_health_confirm:
+            transient = llm.model_health_reason_is_transient(reason)
+            threshold = (self.cfg.model_health_transient_confirm if transient
+                         else self.cfg.model_health_confirm)
+            if prev == "down" or fails < threshold:
                 continue  # already announced, or not yet confirmed (likely transient)
-            if self._send_all(T(lang, "model_down", model=model, reason=reason)):
+            key = "model_down_transient" if transient else "model_down"
+            if self._send_all(T(lang, key, model=model, reason=reason)):
                 store.kv_set(self.conn, f"mh:{model}", "down")
                 log(f"model health: {model} ok -> down ({reason}) after {fails} checks")
 
@@ -2296,8 +2393,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         )
 
     def handle_page_callback(self, callback_id, chat_id, msg, data):
-        """A ◀/▶ tap on a paginated notes list: recompute the page from the stored filter
-        token and edit the message in place. 'noop' is the page-indicator button."""
+        """A ◀/▶ tap on a notes or journal list; edit the same message in place."""
         parts = data.split("|")
         if len(parts) != 3:
             self.answer_callback(callback_id, "?")
@@ -2316,13 +2412,23 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         except (TypeError, ValueError):
             self.answer_callback(callback_id, "?")
             return
-        offset = page * self.NOTES_PAGE_SIZE
-        text, keyboard, total = self._notes_page(lang, filt.get("category"), filt.get("query"),
-                                                  offset, token)
+        is_journal = filt.get("view") == "journal"
+        page_size = self.JOURNAL_PAGE_SIZE if is_journal else self.NOTES_PAGE_SIZE
+        offset = page * page_size
+        if is_journal:
+            text, keyboard, total = self._journal_page(
+                lang, filt.get("category"), filt.get("period") or "month", offset, token)
+        else:
+            text, keyboard, total = self._notes_page(
+                lang, filt.get("category"), filt.get("query"), offset, token)
         if total and offset >= total:   # clamp a now-out-of-range page (notes removed since)
-            offset = ((total - 1) // self.NOTES_PAGE_SIZE) * self.NOTES_PAGE_SIZE
-            text, keyboard, total = self._notes_page(lang, filt.get("category"),
-                                                     filt.get("query"), offset, token)
+            offset = ((total - 1) // page_size) * page_size
+            if is_journal:
+                text, keyboard, total = self._journal_page(
+                    lang, filt.get("category"), filt.get("period") or "month", offset, token)
+            else:
+                text, keyboard, total = self._notes_page(
+                    lang, filt.get("category"), filt.get("query"), offset, token)
         self.edit_message(chat_id, msg.get("message_id"), text, reply_markup=keyboard)
         self.answer_callback(callback_id, "")
 

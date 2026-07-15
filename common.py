@@ -307,6 +307,13 @@ def load_config(env=None):
     # check; requiring >=2 suppresses the down/back flap noise (only a sustained outage
     # is announced, and "back" only fires if we actually announced "down").
     cfg.model_health_confirm = max(1, int(env.get("MODEL_HEALTH_CONFIRM_CHECKS") or "2"))
+    # Transient overloads are common and already fail over automatically. Require
+    # a longer sustained sequence before bothering the boss; hard access failures
+    # continue to use MODEL_HEALTH_CONFIRM_CHECKS.
+    cfg.model_health_transient_confirm = max(
+        cfg.model_health_confirm,
+        int(env.get("MODEL_HEALTH_TRANSIENT_CONFIRM_CHECKS") or "4"),
+    )
     # Housekeeping: how many review .md exports to keep on disk
     cfg.review_keep = int(env.get("REVIEW_KEEP") or "10")
     # A due reminder waits for a ~5-min lull after the boss's last message so it never lands

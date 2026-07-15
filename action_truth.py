@@ -30,6 +30,26 @@ _ARTIFACT_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A free-form `converse` turn cannot mutate state. These phrases are therefore
+# unsafe when the model presents them as the outcome of the current exchange:
+# only deterministic skill handlers may close/move/save/schedule something or
+# claim that a queue is now clean. This is deliberately narrower than
+# FINAL_VERBS (which validates deterministic templates) so ordinary discussion
+# of a past action is less likely to be blocked.
+_ACTION_CLAIM_RE = re.compile(
+    r"(?:^|[.!?]\s*)(?:готово[,!:.\s-]*)?(?:я\s+)?"
+    r"(?:#\d+\s+|(?:напоминание|заметк[ау]|запись|задач[ау]|файл)\s+)?"
+    r"(?:закрыла|закрыто|перенесла|передвинула|поставила|сохранила|записала|"
+    r"удалила|очистила|подтвердила|переименовала|отменила)\b|"
+    r"\b(?:всё|очередь|список)\s+(?:чисто|разобран[аоы]?|пуст[ао])\b|"
+    r"\b(?:возьму|беру)\s+(?:это\s+)?в\s+работу\b|"
+    r"(?:^|[.!?]\s*)(?:done[,!:.\s-]*)?(?:i\s+)?"
+    r"(?:closed|moved|scheduled|saved|filed|deleted|cleared|confirmed|renamed)\b|"
+    r"\b(?:queue|list|everything)\s+is\s+(?:clear|empty|sorted)\b|"
+    r"\bi(?:'ll|\s+will)\s+(?:take|put)\s+(?:this\s+)?(?:into|on)\s+(?:the\s+)?work\b",
+    re.IGNORECASE,
+)
+
 # Which final verbs are legitimate in each lifecycle state.
 STATE_ALLOWED_FINAL_VERBS = {
     "received": set(),
@@ -111,3 +131,8 @@ def freeform_claims_artifact(text):
     """True when ordinary chat text falsely presents a file as attached/created."""
     value = str(text or "")
     return bool(_BARE_ARTIFACT_LINK_RE.search(value) or _ARTIFACT_CLAIM_RE.search(value))
+
+
+def freeform_claims_action(text):
+    """True when ordinary chat claims a state change it cannot have performed."""
+    return bool(_ACTION_CLAIM_RE.search(str(text or "")))

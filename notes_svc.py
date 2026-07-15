@@ -101,8 +101,7 @@ class NotesMixin:
         return ""
 
     def do_journal_show(self, chat_id, lang, params):
-        """Recall a journal as a dated series (entries grouped by day)."""
-        ru = lang == "ru"
+        """Recall one journal page; callbacks keep the same period/category filter."""
         name = str(params.get("category") or "").strip()
         journals = store.journal_categories(self.conn)
         if not name and len(journals) == 1:
@@ -118,14 +117,29 @@ class NotesMixin:
         period = str(params.get("period") or "").strip().lower() or "month"
         if period not in ("day", "week", "month", "all"):
             period = "month"
-        entries = store.journal_entries(self.conn, canonical, self._journal_since(period))
-        if not entries:
+        _entries, total = store.journal_entries_page(
+            self.conn, canonical, self._journal_since(period), 0, self.JOURNAL_PAGE_SIZE)
+        if not total:
             self.reply(chat_id, T(lang, "journal_empty", category=canonical))
             return
+        store.list_views_prune(self.conn,
+                               (datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
+        token = store.list_view_add(
+            self.conn, chat_id,
+            {"view": "journal", "category": canonical, "period": period},
+        )
+        text, keyboard, _ = self._journal_page(lang, canonical, period, 0, token)
+        self.reply(chat_id, text, reply_markup=keyboard)
+
+    def _journal_page(self, lang, canonical, period, offset, token):
+        """Render one oldest-first journal page with a stable period filter."""
+        ru = lang == "ru"
+        entries, total = store.journal_entries_page(
+            self.conn, canonical, self._journal_since(period), offset, self.JOURNAL_PAGE_SIZE)
         plabel = {"day": ("за сегодня", "today"), "week": ("за неделю", "this week"),
                   "month": ("за месяц", "this month"),
                   "all": ("за всё время", "all time")}[period][0 if ru else 1]
-        lines = [T(lang, "journal_header", category=canonical, n=len(entries),
+        lines = [T(lang, "journal_header", category=canonical, n=total,
                    period=plabel, total=store.journal_count(self.conn, canonical))]
         last_day = None
         for e in entries:
@@ -137,7 +151,9 @@ class NotesMixin:
             snippet = self._ellipsize(body.splitlines()[0], 120) if body else "—"
             lines.append(f"  #{self.note_no(e['id'])} • {snippet}")
         lines.append(T(lang, "journal_open_hint"))
-        self.reply_chunks(chat_id, "\n".join(lines))
+        return ("\n".join(lines),
+                self._notes_page_keyboard(lang, token, offset, total,
+                                          page_size=self.JOURNAL_PAGE_SIZE), total)
 
     # -- notes / inbox (stage 2) ----------------------------------------------
 
@@ -171,6 +187,7 @@ class NotesMixin:
         return "\n".join(lines)
 
     NOTES_PAGE_SIZE = 8
+    JOURNAL_PAGE_SIZE = 5
 
     @staticmethod
     def _ellipsize(text, limit):
@@ -241,12 +258,13 @@ class NotesMixin:
             blocks.append(self._note_line(lang, row))
         return "\n\n".join(blocks), self._notes_page_keyboard(lang, token, offset, total), total
 
-    def _notes_page_keyboard(self, lang, token, offset, total):
+    def _notes_page_keyboard(self, lang, token, offset, total, page_size=None):
         """A ◀ Back · X/Y · Next ▶ row — or None when it all fits on one page."""
-        pages = max(1, (total + self.NOTES_PAGE_SIZE - 1) // self.NOTES_PAGE_SIZE)
+        page_size = page_size or self.NOTES_PAGE_SIZE
+        pages = max(1, (total + page_size - 1) // page_size)
         if pages <= 1:
             return None
-        cur = offset // self.NOTES_PAGE_SIZE
+        cur = offset // page_size
         buttons = []
         if cur > 0:
             buttons.append({"text": T(lang, "page_prev"), "callback_data": f"pg|{token}|{cur - 1}"})

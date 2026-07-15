@@ -344,10 +344,12 @@ class RouterTests(unittest.TestCase):
             "do_reschedule", "do_rename_reminder", "_resolve_reminder_target",
             "_resolve_reminder_op", "_parse_reminder_selector", "do_reminder_undo",
             "continue_partial_reminder", "start_partial_reminder", "_note_reminder_title",
-            "_remember_reminder", "_reminder_list_body",
+            "_remember_reminder", "_reminder_list_body", "_parse_fired_followup",
+            "resolve_fired_followup",
             "fire_due_reminders", "check_reminder_expiry", "reminder_no")
         notes_methods = (
             "do_report_problem", "do_set_journal", "_journal_since", "do_journal_show",
+            "_journal_page",
             "stats_text", "overview_text", "_note_line", "_notes_page",
             "_notes_page_keyboard", "do_list_items", "do_show_media", "do_discard",
             "_purge_impact_text", "do_purge", "resolve_purge", "resolve_items", "resolve_item",
@@ -715,8 +717,12 @@ class ReviewTests(unittest.TestCase):
         issue = self.conn.execute(
             "SELECT status, resolution FROM issues WHERE kind='unclear_request'"
         ).fetchone()
-        self.assertEqual(issue["status"], "resolved")
-        self.assertIn("document delivered", issue["resolution"])
+        self.assertEqual(issue["status"], "observed")  # immutable incident evidence
+        pattern = self.conn.execute(
+            "SELECT status, resolution FROM issue_patterns WHERE kind='unclear_request'"
+        ).fetchone()
+        self.assertEqual(pattern["status"], "resolved")
+        self.assertIn("document delivered", pattern["resolution"])
 
     def test_new_digest_sections_and_trace_export(self):
         import trace
@@ -768,6 +774,10 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(store.issue_resolve(
             self.conn, "unclear_request", "давай MD", "document delivered"), 1)
         self.assertEqual(store.issue_open_patterns(self.conn, ("unclear_request",)), [])
+        incident = self.conn.execute(
+            "SELECT status, resolved_at FROM issues WHERE kind='unclear_request'"
+        ).fetchone()
+        self.assertEqual((incident["status"], incident["resolved_at"]), ("observed", None))
         data = review.collect(self.conn, "week")
         self.assertEqual(len(data["resolved_issue_patterns"]), 1)
         md = review.markdown(self.conn, self.cfg, "week")
@@ -5122,8 +5132,11 @@ class StoreMigrationTests(unittest.TestCase):
             conn = store.open_db(path)
             try:
                 issue = conn.execute("SELECT * FROM issues").fetchone()
-                self.assertEqual(issue["status"], "open")
+                self.assertEqual(issue["status"], "observed")
                 self.assertEqual(issue["fingerprint"], "unclear_request:open <n>")
+                pattern = conn.execute("SELECT * FROM issue_patterns").fetchone()
+                self.assertEqual(pattern["status"], "legacy")
+                self.assertEqual(pattern["occurrences"], 1)
                 reminder = conn.execute("SELECT * FROM reminders").fetchone()
                 self.assertEqual(reminder["closed_at"], "2026-01-02")
                 self.assertEqual(reminder["close_reason"], "done")
@@ -5980,6 +5993,177 @@ class ReviewFixes2026_07_10Tests(unittest.TestCase):
             "TELEGRAM_BOT_TOKEN=x\nALLOWED_CHAT_IDS=REPLACE_ME\n", 10)
         self.assertIn("ALLOWED_CHAT_IDS=10", out)
         self.assertNotIn("11", out)
+
+
+class CorrectionPlan20260715Tests(unittest.TestCase):
+    """Regressions from the July 14 production-conversation audit."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "cara.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _fired(self, title="ФНС", recurrence="none"):
+        rid = store.reminder_add(
+            self.conn, 1, title,
+            (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(), recurrence)
+        store.reminder_touch_fired(self.conn, rid, datetime.now(timezone.utc).isoformat())
+        store.kv_set(self.conn, "last_reminder_id", str(rid))
+        return rid
+
+    def _suggested(self, tg_id, text, category):
+        mid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id, "received_at": store._now(),
+            "raw_text": text,
+        })
+        store.set_suggestion(self.conn, mid, category, text, "test")
+        return mid
+
+    def test_explicit_close_after_fired_pending_expiry_updates_the_reminder(self):
+        rid = self._fired()
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.dispatch(1, {}, "Закрой")
+        route.assert_not_called()
+        row = store.reminder_get(self.conn, rid)
+        self.assertEqual((row["status"], row["close_reason"]), ("done", "done"))
+        self.assertEqual(reply.call_args[0][1], texts.T("ru", "reminder_done"))
+
+    def test_skip_today_on_fired_recurring_reminder_is_recorded(self):
+        rid = self._fired("Благодарность", "daily")
+        store.pending_set(self.conn, 1, "reminder_fired",
+                          {"reminder_id": rid, "title": "Благодарность"})
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.dispatch(1, {}, "Сегодня пропускаем")
+        route.assert_not_called()
+        event = self.conn.execute(
+            "SELECT event, detail FROM reminder_events WHERE reminder_id=? ORDER BY id DESC",
+            (rid,),
+        ).fetchone()
+        self.assertEqual((event["event"], event["detail"]), ("acknowledged", "skipped"))
+        self.assertEqual(reply.call_args[0][1], texts.T("ru", "reminder_skipped"))
+
+    def test_converse_cannot_claim_that_it_closed_state(self):
+        self.assertTrue(action_truth.freeform_claims_action("Готово, #1 закрыто"))
+        with mock.patch.object(llm, "chat_profile", return_value="Готово, #1 закрыто"), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_converse(1, "ru", "Закрой")
+        self.assertEqual(reply.call_args[0][1], texts.T("ru", "action_not_done"))
+        pattern = self.conn.execute(
+            "SELECT status FROM issue_patterns WHERE kind='converse_action_claim'"
+        ).fetchone()
+        self.assertEqual(pattern["status"], "open")
+
+    def test_proactive_davai_opens_oldest_snapshotted_unsorted_item(self):
+        first = self._suggested(11, "старая несортированная", "Работа")
+        second = self._suggested(12, "новая несортированная", "Футбол")
+        self.agent.last_proactive = 0
+        with mock.patch.object(self.mod.proactive, "run", return_value="unsorted"), \
+                mock.patch.object(self.agent, "reply", return_value={"message_id": 50}):
+            self.agent.check_proactive()
+        context = json.loads(store.kv_get(self.conn, "proactive_context"))
+        self.assertEqual(context["ids"], [first, second])
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(llm, "chat_profile") as chat, \
+                mock.patch.object(self.agent, "reply", return_value={"message_id": 51}):
+            self.agent.dispatch(1, {}, "Давай")
+        route.assert_not_called()
+        chat.assert_not_called()
+        self.assertEqual(store.pending_get(self.conn, 1)["payload"]["row_id"], first)
+        with mock.patch.object(router, "route", return_value={
+                "action": "confirm", "params": {}, "confidence": 1.0}), \
+                mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "edit_suggestion_message"):
+            self.agent.dispatch(1, {}, "Да")
+        self.assertEqual(store.get_message(self.conn, first)["status"], "confirmed")
+        self.assertEqual(store.get_message(self.conn, second)["status"], "suggested")
+
+    def test_plural_correction_reuses_existing_singular_journal(self):
+        store.set_category_kind(self.conn, "Благодарность", "journal")
+        mid = self._suggested(21, "Спасибо за вечер", "Разное")
+        row = store.get_message(self.conn, mid)
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "edit_suggestion_message"):
+            self.agent.apply_category_confirm(1, row, "Благодарности", None)
+        self.assertEqual(store.get_message(self.conn, mid)["category"], "Благодарность")
+        categories = [row["name"] for row in self.conn.execute(
+            "SELECT name FROM categories ORDER BY id")]
+        self.assertIn("Благодарность", categories)
+        self.assertNotIn("Благодарности", categories)
+
+    def test_journal_pages_five_entries_without_repeats(self):
+        store.set_category_kind(self.conn, "Благодарность", "journal")
+        for i in range(12):
+            mid = store.insert_message(self.conn, {
+                "chat_id": 1, "tg_message_id": 100 + i,
+                "received_at": f"2026-07-{i + 1:02d}T10:00:00+00:00",
+                "raw_text": f"journal-entry-{i}",
+            })
+            store.confirm_category(self.conn, mid, "Благодарность")
+        with mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_journal_show(
+                1, "ru", {"category": "Благодарность", "period": "all"})
+        first_text = reply.call_args[0][1]
+        keyboard = reply.call_args.kwargs["reply_markup"]
+        self.assertIn("journal-entry-0", first_text)
+        self.assertIn("journal-entry-4", first_text)
+        self.assertNotIn("journal-entry-5", first_text)
+        next_data = next(
+            button["callback_data"] for row in keyboard["inline_keyboard"] for button in row
+            if button["callback_data"].endswith("|1"))
+        with mock.patch.object(self.agent, "edit_message") as edit, \
+                mock.patch.object(self.agent, "answer_callback"):
+            self.agent.handle_page_callback("cb", 1, {"message_id": 90}, next_data)
+        second_text = edit.call_args[0][2]
+        self.assertNotIn("journal-entry-0", second_text)
+        self.assertIn("journal-entry-5", second_text)
+        self.assertIn("journal-entry-9", second_text)
+        self.assertNotIn("journal-entry-10", second_text)
+
+    def test_transient_health_body_is_redacted_and_requires_four_failures(self):
+        raw = 'inference failed with HTTP 429: {"error":"secret provider payload"}'
+        reason = llm.model_health_reason(raw)
+        self.assertEqual(reason, "temporary provider overload (HTTP 429)")
+        self.assertNotIn("payload", reason)
+        self.agent.cfg.model_health_interval = 1
+        self.agent.cfg.model_health_confirm = 2
+        self.agent.cfg.model_health_transient_confirm = 4
+        self.agent.cfg.do_model = "deepseek-4-flash"
+        self.agent.cfg.vision_model = ""
+        calls = []
+        for _ in range(4):
+            self.agent.last_model_health = 0
+            with mock.patch.object(llm, "model_ok", return_value=(False, reason)), \
+                    mock.patch.object(self.agent, "reply") as reply:
+                self.agent.check_model_health()
+            calls.append(reply.call_args[0][1] if reply.called else "")
+        self.assertEqual(calls[:3], ["", "", ""])
+        self.assertIn("временная перегрузка", calls[3])
+        self.assertNotIn("secret provider payload", calls[3])
+
+    def test_resolved_pattern_reopens_without_mutating_observations(self):
+        store.issue_add(self.conn, 1, "unclear_request", "Закрой")
+        store.issue_resolve(self.conn, "unclear_request", "Закрой", "fixed")
+        store.issue_add(self.conn, 1, "unclear_request", "Закрой")
+        incidents = self.conn.execute(
+            "SELECT status, resolved_at FROM issues ORDER BY id").fetchall()
+        self.assertEqual([(row["status"], row["resolved_at"]) for row in incidents],
+                         [("observed", None), ("observed", None)])
+        pattern = self.conn.execute(
+            "SELECT status, occurrences, resolution FROM issue_patterns"
+        ).fetchone()
+        self.assertEqual((pattern["status"], pattern["occurrences"], pattern["resolution"]),
+                         ("open", 2, None))
 
 
 if __name__ == "__main__":

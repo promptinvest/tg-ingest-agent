@@ -228,7 +228,30 @@ def model_ok(cfg, conn, model):
              max_tokens=5, model=model, temperature=0)
         return True, ""
     except LLMError as exc:
-        return False, str(exc)[:140]
+        return False, model_health_reason(str(exc))
+
+
+def model_health_reason(error):
+    """Bounded, user-safe health reason; provider response bodies never escape."""
+    text = str(error or "")
+    low = text.casefold()
+    match = re.search(r"http\s+(\d{3})", low)
+    code = match.group(1) if match else None
+    if _is_transient_llm_error(low):
+        if code == "429" or "rate_limit" in low or "overload" in low:
+            return "temporary provider overload (HTTP 429)"
+        if code:
+            return f"temporary provider error (HTTP {code})"
+        return "temporary provider timeout"
+    if code in ("401", "403"):
+        return f"model access denied (HTTP {code})"
+    if code == "404":
+        return "model unavailable (HTTP 404)"
+    return f"model health check failed{f' (HTTP {code})' if code else ''}"
+
+
+def model_health_reason_is_transient(reason):
+    return str(reason or "").startswith("temporary provider ")
 
 
 def _sniff_image_mime(data):

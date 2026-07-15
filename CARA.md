@@ -103,7 +103,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   перенесла / закрыла». Real saves/reminders/renames/reschedules are done by the skills and
   report the **actual** outcome; if a request lands in chat she says she's on it (so it routes
   to a real action) or, if it's something she genuinely can't do, says so plainly — never a
-  fabricated confirmation. (Absolute rule in the persona prompt.)
+  fabricated confirmation. This is enforced in code as well as the prompt: a free-form reply
+  that claims a current close/move/save/delete or says a queue is clean is blocked, logged as
+  `converse_action_claim`, and replaced with an honest no-state-changed response.
 
 ---
 
@@ -157,6 +159,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   lists remaining look‑alike pairs with a merge hint. **List cosmetics:** previews cut on
   a word boundary with «…», and URLs show as host+path (no tracking params) in lists —
   the full URL stays in the detail card.
+  A journal also owns its common Russian singular/plural stem at the **write boundary**:
+  a manual correction to «Благодарности» reuses an existing «Благодарность» journal instead
+  of creating a parallel inbox category.
 - **Forwarded‑message rules:** **text is parsed first**; only **images** (vision) and
   **PDFs** (text extraction — pdfminer.six, with a stdlib regex fallback) are analyzed;
   **every other file** (voice, audio, video, documents…) is **stored**, fetchable later
@@ -199,7 +204,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   series** (deterministic `#N • snippet`, never free‑texted by the model). The show handler
   **resolves a loosely‑typed name** (`_match_journal_category`) so an inflection ("благодарности"
   vs the stored "Благодарность") hits the real journal instead of spawning a phantom empty
-  one. A "📔 Дневники" digest appears in the weekly review and morning brief, and a "clear
+  one. Recall is a real **5-entry inline pager** (◀ · X/Y · ▶) that edits the same Telegram
+  message; the category + period live in the `list_views` token, so pages do not repeat or
+  silently truncate. A "📔 Дневники" digest appears in the weekly review and morning brief, and a "clear
   all notes" purge **spares it**. Turn it back off with "X больше не дневник". One‑time notes
   behave exactly as before.
 - **Overview & stats:** "что у тебя есть?" → a digest (counts, reminders, memory,
@@ -227,7 +234,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Reminders:** natural‑language times (RU/EN), one‑shot / daily / weekly, fired from
   the poll loop (~1 min precision), survive restarts/reboots.
   - **A fired reminder stays open** (visible, still pending) until you explicitly say
-    "готово" — she never auto‑closes it on a misread. «Сегодня пропустим» / "skip today"
+    "готово" — she never auto‑closes it on a misread. Common follow-ups ("закрой",
+    "готово", "сегодня пропускаем", "через 30 минут", "до завтра") resolve before the
+    probabilistic router. An explicit close/skip/snooze still binds to the last fired active
+    reminder after the short pending window expires; a bare «да» requires live pending context.
+    «Сегодня пропустим» / "skip today"
     counts as that ack (deterministic — today's instance closes; a recurring one still
     fires tomorrow on schedule). **Snooze** by minutes, hours, or an
     absolute time ("через полчаса", "отложи на час", "до завтра в 9") **re‑arms the same
@@ -378,6 +389,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   nudge delivered and lose it. **A persistent overdue reminder no
   longer starves the other nudges** — an already‑sent‑today hit is skipped, not treated
   as fatal, so a waiting candidate/uncategorized item still gets its turn.
+  A delivered nudge snapshots its type + row ids for 15 minutes; a short «Давай»/«Да»/
+  “show them” opens that exact memory/unsorted/reminder queue deterministically. For
+  unsorted notes this presents the oldest still-waiting suggestion, so chat cannot answer
+  about an unrelated already-confirmed item or falsely say the queue is clean.
   A one-shot that already fired and is waiting for “готово” is not overdue and cannot
   generate another urgent overdue nudge.
 - **Tune her proactivity** (`proactive_prefs`): "пиши только по выходным", "не беспокой
@@ -404,10 +419,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Model‑health monitor:** every `MODEL_HEALTH_INTERVAL_SECONDS` (default 30 min) she
   checks her models (chat, conversation, vision) are reachable and **messages the boss the
   moment one becomes inaccessible** (e.g. a provider/tier 403) — and again when it
-  recovers. **Debounced:** a model must fail `MODEL_HEALTH_CONFIRM_CHECKS` checks in a row
-  (default 2) before she says "down", so a transient 429/overload blip that clears by the
-  next probe stays silent — and "back" only fires if she actually announced "down". No more
-  down/back flapping.
+  recovers. **Debounced:** hard access failures use `MODEL_HEALTH_CONFIRM_CHECKS` (default 2),
+  while transient 429/overload/timeout failures require
+  `MODEL_HEALTH_TRANSIENT_CONFIRM_CHECKS` (default 4). Provider response bodies never reach
+  Telegram; reasons are reduced to bounded labels such as `temporary provider overload
+  (HTTP 429)`, and transient copy explicitly says no operator action is needed. "Back" only
+  fires if she actually announced "down".
 
 ---
 
@@ -555,8 +572,9 @@ Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity
 `memory_candidates` (evidence/source trace/recurrence/first+last seen) ·
 `relationship_events` (title + trace) · `cara_life`.
 
-Observability: `traces` · `trace_events` · `issues` (fingerprint + open/resolved lifecycle
-and context) · `events` · `jobs` ·
+Observability: `traces` · `trace_events` · `issues` (immutable incident observations) ·
+`issue_patterns` (normalized open/resolved/legacy lifecycle, counts, resolution + context) ·
+`events` · `jobs` ·
 `proactive_log`.
 
 Cascade deletes + purge scopes keep rows and media consistent. **`llm_usage` (spend

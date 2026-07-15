@@ -103,6 +103,10 @@ TEXTS = {
         "en": "⏰ {name}, reminder: {title}\nReply \"done\" — or \"in 30 minutes\" to snooze.",
     },
     "reminder_done": {"ru": "Отлично, закрыла ✅", "en": "Great, closed ✅"},
+    "reminder_skipped": {
+        "ru": "Хорошо, на сегодня пропускаем 👌",
+        "en": "Okay, skipping it for today 👌",
+    },
     "reminder_snoozed": {
         "ru": "Хорошо, напомню снова в {when_local} 😉",
         "en": "Okay, I'll nudge you again at {when_local} 😉",
@@ -452,6 +456,12 @@ TEXTS = {
         "en": ("I won't pretend a file is attached when it isn't. "
                "Say “export the review as md” and I'll send the real .md."),
     },
+    "action_not_done": {
+        "ru": ("Я не выполнила это действие: тот ответ был только текстом, состояние "
+               "не изменено. Повтори команду конкретно — обработаю её через нужный раздел."),
+        "en": ("I didn't perform that action: the previous reply was only text, and no "
+               "state changed. Repeat the specific command and I'll route it correctly."),
+    },
     "review_schedule": {
         "ru": "Наш performance review — еженедельно, в {weekday}. Следующий: {date} в {time}. Хочешь, проведу прямо сейчас?",
         "en": "Our performance review is weekly, on {weekday}. Next one: {date} at {time}. Want me to run it now?",
@@ -521,6 +531,10 @@ TEXTS = {
     "model_down": {
         "ru": "⚠️ Босс, модель «{model}» сейчас недоступна ({reason}). Держусь на запасной, но загляни в доступ к моделям, когда сможешь.",
         "en": "⚠️ Boss, the «{model}» model just became unavailable ({reason}). I'm holding on a backup, but check the model access when you can.",
+    },
+    "model_down_transient": {
+        "ru": "⚠️ Босс, у провайдера модели «{model}» затянулась временная перегрузка ({reason}). Пока держусь на запасной; ничего проверять не нужно.",
+        "en": "⚠️ Boss, the provider for «{model}» has a sustained temporary overload ({reason}). I'm using a backup; you don't need to check anything yet.",
     },
     "model_back": {
         "ru": "✓ Модель «{model}» снова на связи, босс.",

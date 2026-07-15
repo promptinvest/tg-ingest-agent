@@ -203,6 +203,71 @@ class ReminderMixin:
         'это напоминание' (reschedule/rename) binds to it instead of guessing (B3)."""
         store.kv_set(self.conn, "last_reminder_id", str(rid))
 
+    def _parse_fired_followup(self, text, *, allow_bare_ack=False):
+        """Deterministic common acknowledgements/snoozes for a fired reminder.
+
+        Returns (action, params), or None when the message is substantive or
+        ambiguous and should continue through normal routing.
+        """
+        t = str(text or "").strip().casefold()
+        if not t or len(t) > 90:
+            return None
+        if any(w in t for w in ("запиш", "сохран", "добав", "заметк", "note", "save")):
+            return None
+        if "пропуст" in t or "пропуск" in t or "skip today" in t:
+            return "amend", {"done": True}
+        if re.fullmatch(r"(?:закрой|закрыть|готово|сделано|выполнено|done|close|closed)[.! ]*", t):
+            return "confirm", {}
+        if allow_bare_ack and re.fullmatch(r"(?:да|yes|yep|ага|ок|okay|ok|\+|✅|👍)[.! ]*", t):
+            return "confirm", {}
+        if "полчас" in t or "half an hour" in t:
+            return "amend", {"snooze_minutes": 30}
+        m = re.search(r"(\d{1,4})\s*(минут|минуты|минуту|мин|minutes?|mins?)\b", t)
+        if m:
+            return "amend", {"snooze_minutes": max(1, int(m.group(1)))}
+        m = re.search(r"(\d{1,3})\s*(часа|часов|час|ч|hours?|hrs?)\b", t)
+        if m:
+            return "amend", {"snooze_minutes": max(1, int(m.group(1))) * 60}
+        if re.search(r"(?:на|ещ[ёе])\s+час(?:ок)?\b|\ban hour\b", t):
+            return "amend", {"snooze_minutes": 60}
+        if "завтра" in t or "tomorrow" in t:
+            tm = re.search(r"(?:в|на|at)?\s*(\d{1,2})(?::(\d{2}))?\b", t)
+            hour = max(0, min(23, int(tm.group(1)))) if tm else 9
+            minute = max(0, min(59, int(tm.group(2) or 0))) if tm else 0
+            local_now = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
+            local_due = datetime.combine(local_now.date() + timedelta(days=1),
+                                         datetime.min.time(), tzinfo=timezone.utc)
+            local_due = local_due.replace(hour=hour, minute=minute)
+            due = local_due - timedelta(hours=self.tz_offset())
+            return "amend", {"due_utc": due.isoformat()}
+        return None
+
+    def resolve_fired_followup(self, chat_id, lang, text, pending):
+        """Handle a fired-reminder reply before the probabilistic router.
+
+        The pending confirmation may expire after 30 minutes, but the real
+        reminder remains fired-and-open. An explicit close/skip/snooze can still
+        bind to last_reminder_id; bare yes/ok requires the live pending context.
+        """
+        live_pending = pending if pending and pending.get("kind") == "reminder_fired" else None
+        parsed = self._parse_fired_followup(text, allow_bare_ack=live_pending is not None)
+        if parsed is None:
+            return False
+        context = live_pending
+        if context is None:
+            last_id = store.kv_get(self.conn, "last_reminder_id")
+            try:
+                row = store.reminder_get(self.conn, int(last_id)) if last_id is not None else None
+            except (TypeError, ValueError):
+                row = None
+            if (row is None or row["status"] != "active" or row["last_fired_at"] is None):
+                return False
+            context = {"kind": "reminder_fired",
+                       "payload": {"reminder_id": row["id"], "title": row["title"]}}
+        action, params = parsed
+        self.resolve_pending(chat_id, action, params, context, lang)
+        return True
+
     _ORDINALS = {"перв": 1, "втор": 2, "трет": 3, "четвёрт": 4, "четверт": 4, "пят": 5,
                  "шест": 6, "седьм": 7, "first": 1, "second": 2, "third": 3,
                  "fourth": 4, "fifth": 5}
