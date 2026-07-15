@@ -456,6 +456,27 @@ class RemindersTests(unittest.TestCase):
         self.assertIsNone(reminders.validate_draft(
             {"title": "x", "due_utc": "2026-06-12T07:00:00Z", "recurrence": "none"}, now))
 
+    def test_time_only_request_is_deterministic_and_rolls_forward(self):
+        now = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)  # 15:00 at UTC+3
+        parsed = reminders.parse_time_only_request("Напомни в 21:15", 3, now)
+        self.assertEqual(reminders.parse_iso_utc(parsed["due_utc"]),
+                         datetime(2026, 7, 15, 18, 15, tzinfo=timezone.utc))
+        later = datetime(2026, 7, 15, 19, 0, tzinfo=timezone.utc)  # 22:00 local
+        rolled = reminders.parse_time_only_request("remind me at 21:15", 3, later)
+        self.assertEqual(reminders.parse_iso_utc(rolled["due_utc"]),
+                         datetime(2026, 7, 16, 18, 15, tzinfo=timezone.utc))
+        # A request that already contains the subject belongs to the full router.
+        self.assertIsNone(reminders.parse_time_only_request(
+            "Напомни в 21:15 зарядить тройку", 3, now))
+
+    def test_forwarded_reminder_wording_becomes_title_data(self):
+        self.assertEqual(reminders.title_from_forward(
+            "Напомни пожалуйста вечером у тебя зарядить тройку"), "зарядить тройку")
+        self.assertEqual(reminders.title_from_forward(
+            "Remind me please tonight to charge the card"), "charge the card")
+        self.assertEqual(reminders.title_from_forward("Встреча с Наталией"),
+                         "Встреча с Наталией")
+
     def test_next_due(self):
         now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
         self.assertIsNone(reminders.next_due("2026-06-12T07:00:00Z", "none", now))
@@ -1652,6 +1673,23 @@ class ConversationDispatchTests(unittest.TestCase):
             self.assertEqual(self.agent.explicit_category(text), "Документы")
         self.assertIsNone(self.agent.explicit_category("какая категория?"))
         self.assertIsNone(self.agent.explicit_category("покажи заметки"))
+
+    def test_negative_category_feedback_never_becomes_a_category(self):
+        conn = self.agent.conn
+        mid = store.insert_message(conn, {"chat_id": 1, "tg_message_id": 2,
+                                          "received_at": store._now(),
+                                          "raw_text": "зарядить тройку"})
+        store.set_suggestion(conn, mid, "uncategorized", "зарядить тройку", "m")
+        store.pending_set(conn, 1, "category", {"row_id": mid})
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.dispatch(1, {}, "Неправильно!")
+        route.assert_not_called()
+        self.assertEqual(reply.call_args[0][1], texts.T("ru", "category_correction_needed"))
+        row = store.get_message(conn, mid)
+        self.assertEqual(row["status"], "suggested")
+        self.assertIsNone(row["category"])
+        self.assertEqual(store.pending_get(conn, 1)["kind"], "category")
 
     def test_greeting_short_circuits_to_free_form(self):
         # "расскажи о себе"/"кто ты" are smalltalk -> straight to converse (LLM),
@@ -3217,6 +3255,32 @@ class GoldenTranscriptTests(unittest.TestCase):
             "ingest": '{"category":"Разное","alternatives":[],"summary":"про вино","facts":[]}'})
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) c FROM messages WHERE tg_message_id=52").fetchone()["c"], 1)
+
+    def test_time_only_reminder_consumes_next_forward_as_confirmed_title(self):
+        sent = self.drive({"message": self._msg(53, "Напомни в 21:15")})
+        self.assertEqual(sent[-1], texts.T("ru", "reminder_need_title"))
+        partial = store.pending_get(self.conn, 1)
+        self.assertEqual(partial["kind"], "reminder_partial")
+        self.assertEqual(partial["payload"]["need"], "title")
+
+        forwarded = self._msg(
+            54, "Напомни пожалуйста вечером у тебя зарядить тройку",
+            forward_origin={"type": "user", "sender_user": {"first_name": "Наталия"}},
+        )
+        sent = self.drive({"message": forwarded})
+        draft = store.pending_get(self.conn, 1)
+        self.assertEqual(draft["kind"], "reminder")
+        self.assertEqual(draft["payload"]["title"], "зарядить тройку")
+        self.assertTrue(any("зарядить тройку" in text for text in sent))
+        self.assertTrue(reminders.fmt_local(draft["payload"]["due_utc"], 3).endswith("21:15"))
+        # The forward was consumed only as untrusted title data, not also filed as a note.
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"], 0)
+
+        self.drive({"message": self._msg(55, "да")}, {
+            "router": '{"action":"confirm","params":{},"confidence":0.95}'})
+        active = store.reminders_active(self.conn, 1)
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["title"], "зарядить тройку")
 
     def test_strip_roleplay_actions(self):
         import tg_ingest_agent

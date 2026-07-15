@@ -159,6 +159,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   lists remaining look‑alike pairs with a merge hint. **List cosmetics:** previews cut on
   a word boundary with «…», and URLs show as host+path (no tracking params) in lists —
   the full URL stays in the detail card.
+- **Forward-to-reminder handoff (2026-07-15):** a standalone forward remains
+  untrusted inbox content and can never execute its wording. The narrow exception is
+  when the boss has just opened a half-specified reminder that already has a time and
+  is explicitly waiting for its title: the next single forwarded text supplies that
+  title as **data**, Cara shows the normal reminder draft, and nothing is scheduled
+  until the boss confirms. Common “напомни пожалуйста вечером…” framing is stripped
+  cosmetically from the title; media albums keep the ordinary ingest path.
   A journal also owns its common Russian singular/plural stem at the **write boundary**:
   a manual correction to «Благодарности» reuses an existing «Благодарность» journal instead
   of creating a parallel inbox category.
@@ -215,6 +222,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Re‑categorize** (`recategorize`): "поменяй категорию #2 на Документы", "переложи
   это в Чеки" (most recent), "переложи всё из crypto в news" (bulk — moves the WHOLE
   set, reporting the real count). Logged as a correction so it feeds learning.
+  Generic rejection while a category suggestion is pending (for example
+  «Неправильно!» / “wrong category”) never becomes an LLM-invented category: the
+  suggestion stays unconfirmed and Cara asks for an explicit «Категория — …».
 - **Edit a note's summary** (`note_edit`): "исправь заметку #11 на …", "поменяй краткое
   #3 на …" — fixes the LLM‑written summary shown in lists/detail **in place**; the
   original message text (`raw_text`, the KB‑search source) is preserved. Distinct from
@@ -304,8 +314,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   - **"Это напоминание"** binds to the one you were just dealing with; if it's genuinely
     ambiguous she asks which and **remembers what you wanted** — your "второе" / "#2" /
     "про банк" then completes the move/rename on the right one (never a stray close).
-  - **Complete a half‑specified reminder:** "напомни в 17:00" → she asks the subject,
-    stitches your answer in, then confirms — the partial isn't lost.
+  - **Complete a half‑specified reminder:** an unmistakable time-only command such as
+    "напомни в 17:00" is recognized deterministically (no router-confidence gamble) →
+    she asks the subject, stitches your typed answer or the next single forwarded text
+    in as untrusted title data, then confirms — the partial isn't lost and the forward
+    alone never acts.
   - **From a note:** "поставь напоминание по заметке N" uses note N's real subject as
     the title (not a literal "Заметка N").
 - **Calendar:** "добавь в календарь" → `.ics` file (no setup) or Google Calendar via a

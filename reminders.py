@@ -1,11 +1,89 @@
 #!/usr/bin/env python3
 """Reminders skill: draft validation, recurrence, local-time rendering."""
+import re
 from datetime import datetime, timedelta, timezone
 
 from texts import T
 
 RECURRENCES = ("none", "daily", "weekly")
 MAX_TITLE_CHARS = 200
+
+
+_TIME_ONLY_REQUESTS = (
+    re.compile(
+        r"^(?:напомни(?:\s+мне)?(?:\s+пожалуйста)?|"
+        r"поставь(?:\s+мне)?(?:\s+пожалуйста)?\s+напоминание|"
+        r"создай(?:\s+мне)?(?:\s+пожалуйста)?\s+напоминание)"
+        r"\s+(?:на|в)\s*(?P<hour>[01]?\d|2[0-3])[:.](?P<minute>[0-5]\d)\s*[.!?]?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:remind\s+me(?:\s+please)?|set(?:\s+me)?(?:\s+please)?\s+(?:a\s+)?reminder)"
+        r"\s+(?:at|for)\s*(?P<hour>[01]?\d|2[0-3])[:.](?P<minute>[0-5]\d)\s*[.!?]?$",
+        re.IGNORECASE,
+    ),
+)
+
+
+def parse_time_only_request(text, offset_hours, now=None):
+    """Recognize an unmistakable reminder request that supplies only HH:MM.
+
+    This deterministic narrow path keeps ``напомни в 21:15`` from depending on
+    model confidence.  Requests that contain a subject deliberately do not match
+    and continue through the normal router.  A time already passed locally rolls
+    to tomorrow, which is the only future interpretation of a time-only request.
+    """
+    value = re.sub(r"\s+", " ", str(text or "")).strip()
+    match = None
+    for pattern in _TIME_ONLY_REQUESTS:
+        match = pattern.fullmatch(value)
+        if match is not None:
+            break
+    if match is None:
+        return None
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    offset = timedelta(hours=float(offset_hours))
+    local_now = now + offset
+    local_due = local_now.replace(hour=int(match.group("hour")),
+                                  minute=int(match.group("minute")),
+                                  second=0, microsecond=0)
+    due = local_due - offset
+    if due <= now:
+        due += timedelta(days=1)
+    return {"due_utc": due.isoformat(), "recurrence": "none"}
+
+
+def title_from_forward(text):
+    """Turn forwarded text into a reminder title without executing its wording.
+
+    Only cosmetic request framing is removed.  The result remains untrusted data
+    and is shown back in the normal reminder confirmation before any reminder is
+    created.
+    """
+    original = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not original:
+        return ""
+    title = re.sub(
+        r"^напомни(?:\s+мне)?(?:\s+пожалуйста)?\s+", "", original,
+        count=1, flags=re.IGNORECASE,
+    )
+    if title != original:
+        title = re.sub(
+            r"^(?:(?:сегодня|завтра|послезавтра)\s+)?"
+            r"(?:утром|дн[её]м|вечером|ночью)\s+(?:у\s+тебя\s+)?",
+            "", title, count=1, flags=re.IGNORECASE,
+        )
+    else:
+        title = re.sub(
+            r"^remind\s+me(?:\s+please)?\s+", "", original,
+            count=1, flags=re.IGNORECASE,
+        )
+        if title != original:
+            title = re.sub(
+                r"^(?:(?:today|tomorrow|tonight|this\s+evening)\s+)?(?:to\s+)?",
+                "", title, count=1, flags=re.IGNORECASE,
+            )
+    return (title.strip(" .,!?:;—-") or original)[:MAX_TITLE_CHARS]
 
 
 def parse_iso_utc(value):

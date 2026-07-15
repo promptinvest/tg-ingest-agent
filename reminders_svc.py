@@ -147,6 +147,24 @@ class ReminderMixin:
             self.reply(chat_id, T(lang, "reminder_need_" + need))
         return True
 
+    def continue_partial_reminder_from_forward(self, chat_id, lang, pending, text):
+        """Use a forward as DATA for a title only after the boss opened the draft.
+
+        A standalone forward is still inbox content.  This bridge is deliberately
+        limited to a partial that already has a time and explicitly needs a title;
+        the resulting full draft still requires the normal owner confirmation.
+        """
+        if not pending or pending.get("kind") != "reminder_partial":
+            return False
+        payload = pending.get("payload") or {}
+        if payload.get("need") != "title" or not payload.get("due_utc"):
+            return False
+        title = reminders.title_from_forward(text)
+        if not title:
+            return False
+        return self.continue_partial_reminder(
+            chat_id, lang, pending, "amend", {"title": title})
+
     def _note_reminder_title(self, params):
         """'поставь напоминание по заметке N' arrives with note_id and no real
         subject (the router otherwise titles it literally 'Заметка N'); use the

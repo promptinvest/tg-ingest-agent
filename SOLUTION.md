@@ -101,7 +101,8 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
  ┌─ agent.py ─ poll loop · album buffering · pending actions · scheduler · jobs ──┐
  │                                                                                │
  │  voice ─► STT (local whisper-server) ─► text ─┐                                │
- │  forwarded / photo / document ────────────────┼─► ingest skill (no router)     │
+ │  forwarded text + pending reminder title ─────┼─► reminder draft (data only)   │
+ │  other forwarded / photo / document ──────────┼─► ingest skill (no router)     │
  │  free text / transcribed voice ─► router.py (closed-world LLM intent)          │
  │                     │  (recent-turn context; per-message language)             │
  │   ┌──────────┬──────┴───┬─────────┬─────────┬─────────┬─────────┬─────────┐    │
@@ -184,12 +185,25 @@ JSON, validated against the closed action set, confidence-gated → dispatcher c
 reply sent; conversation, trace and issue tables updated.
 
 **What's a note vs a conversation:** only **forwards** (channel/people content) and bare
-typed notes auto-ingest. The boss's **own** photos/files are conversation — `handle_own_media()`
+typed notes auto-ingest. One explicit-context exception exists: if a `reminder_partial`
+already has a time and needs only its title, the next single forwarded text becomes
+untrusted title data for the confirmation draft instead of a note; a standalone forward
+still always ingests and never executes. The boss's **own** photos/files are conversation — `handle_own_media()`
 vision-describes them and routes his caption (context) so "одобряешь?" + a photo gets an
 opinion in her voice, a bare photo a warm reaction, and an explicit "сохрани это" still
 files it; nothing of his own is silently stored. He's also given what he's **replying to /
 quoting** (`turn_extra`) so "this" resolves. A **specific question** about a journal goes to
 grounded `ask` (answers it), not `journal_show` (which lists the diary).
+
+**Reminder partials and category rejection (2026-07-15):** unmistakable time-only
+creates such as «Напомни в 21:15» are recognized deterministically before the LLM
+router and open a title-needed `reminder_partial`. `continue_partial_reminder_from_forward`
+may consume the next single forwarded text only under that explicit pending context,
+cosmetically trim reminder-request framing, and promote the ordinary confirmation draft;
+it never schedules directly. While a category suggestion is pending, generic rejection
+such as «Неправильно!» is also deterministic: the item stays suggested, the pending slot
+stays on that item, and Cara requests an explicit category instead of allowing the router
+to invent one from the protest.
 
 **Ingest lifecycle:** forwards / photos / documents / albums bypass the router to
 `finalize()` → albums buffered by `media_group_id` (a `store` flag separates his own-media

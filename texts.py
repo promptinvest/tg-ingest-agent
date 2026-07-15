@@ -59,6 +59,10 @@ TEXTS = {
         "ru": "#{row_id} я уже записала как «{category}» 😊",
         "en": "#{row_id} is already filed as \"{category}\" 😊",
     },
+    "category_correction_needed": {
+        "ru": "Поняла — эту категорию не подтверждаю. Напиши «Категория — …», и я исправлю.",
+        "en": "Got it — I won't confirm that category. Send “Category — …” and I'll correct it.",
+    },
     "duplicate": {
         "ru": "Это у нас уже есть — #{original_id} ({detail}).",
         "en": "We already have this one — #{original_id} ({detail}).",

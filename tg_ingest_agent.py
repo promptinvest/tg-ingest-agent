@@ -660,6 +660,17 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             store.convo_add(self.conn, chat_id, "user", text,
                             source="forward" if auto_store else "boss")
 
+        # A forward is normally untrusted inbox content and never reaches the
+        # router.  The one safe exception is an owner-created partial reminder
+        # that already has a time and explicitly awaits a title: use the next
+        # single forwarded text as DATA for that title, then show the ordinary
+        # reminder confirmation.  A forward alone remains inert.
+        if auto_store and text and not msg.get("media_group_id"):
+            pending = store.pending_get(self.conn, chat_id)
+            if self.continue_partial_reminder_from_forward(
+                    chat_id, self.lang(), pending, text):
+                return
+
         # What he's replying to / quoting is context for understanding "this".
         reply_to_msg = msg.get("reply_to_message")
         if reply_to_msg:
@@ -911,6 +922,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             explicit = self.explicit_category(text)
             if explicit:
                 self.resolve_pending(chat_id, "amend", {"category": explicit}, pending, lang)
+                return
+            if self.rejects_category_suggestion(text):
+                # Keep the suggestion pending, but never let generic negative
+                # feedback become an invented category through the LLM router.
+                self.reply(chat_id, T(lang, "category_correction_needed"))
                 return
         # A pending reminder disambiguation ('which reminder?'): his next pick
         # ('второе'/'#2'/'про банк') completes the remembered reschedule/rename (B2).
@@ -1658,6 +1674,18 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if m:
                 return llm.normalize_category(m.group(1).strip(" .!?\"'«»"))
         return None
+
+    _CATEGORY_REJECTIONS = {
+        "неправильно", "это неправильно", "неверно", "это неверно",
+        "ошибка", "не та категория", "категория неправильная",
+        "wrong", "that's wrong", "that is wrong", "incorrect",
+        "wrong category", "not the right category",
+    }
+
+    def rejects_category_suggestion(self, text):
+        value = re.sub(r"\s+", " ", str(text or "")).strip().casefold()
+        value = value.strip(" .,!?:;—-")
+        return value in self._CATEGORY_REJECTIONS
 
     def maybe_curate_conversation(self, chat_id, lang=None, force=False):
         """Extract durable memory from recent chat: grows Cara's life, learns

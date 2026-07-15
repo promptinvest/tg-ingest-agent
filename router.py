@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timezone
 
 import llm
+import reminders
 import store
 
 ACTIONS = {
@@ -356,6 +357,10 @@ def validate_route(parsed, has_pending):
 
 def route(cfg, conn, chat_id, text, pending):
     """Classify one user message; always returns a valid route dict."""
+    if pending is None:
+        partial = reminders.parse_time_only_request(text, cfg.timezone_offset)
+        if partial:
+            return {"action": "reminder_create", "params": partial, "confidence": 1.0}
     if pending is None and detect_review_export(text):
         return {"action": "review", "params": {"period": "week", "export": True,
                                                      "resolved_issue_detail": text},
