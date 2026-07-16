@@ -131,9 +131,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **What gets filed vs talked about:** only **forwards** (content from other channels/
   people) and bare typed notes are auto‑saved as inbox items. Your **own** photos/files
   are **conversation**, not notes — a caption is *context* (she reads + reacts to the
-  photo via vision, e.g. "одобряешь мой выбор?" → an opinion in her voice), and an
-  explicit "сохрани это" still files it. She also understands what you're **replying to
-  or quoting** (TG reply/quote) as context for "this".
+  photo via vision, e.g. "одобряешь мой выбор?" → an opinion in her voice). Your own
+  **photos are never stored** (retired 2026‑07‑16): even an explicit «сохрани эти фото»
+  gets an honest decline with a hint (send it as text/a file or forward the post). Your
+  own **text/PDF documents** with a save caption still file normally (the .md/.txt→KB
+  flow). She also understands what you're **replying to or quoting** (TG reply/quote)
+  as context for "this".
 - **Ingest forwards/notes:** forwarded posts and typed notes (text, URLs, photos;
   an album = one item) are saved with forward origin, t.me source link, post date.
   A vision LLM suggests a **category** (from your taxonomy), a **summary**, and up to
@@ -231,7 +234,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   re‑categorize (category) and reminder rename (a reminder's title).
 - **Delete / discard / purge:** delete by id/ids/count/query; decline a fresh
   suggestion; bulk purge by scope (all / category / stats / reminders / messages /
-  issues) behind a typed phrase.
+  issues) behind a typed phrase. The preview lists **exactly** what the execute
+  deletes: `stats` never touches our conversation history, and `all` — the only
+  scope that does — discloses the conversation‑turn count before you type the
+  phrase (2026‑07‑16).
 
 ### Knowledge & answers
 - **Ask (KB Q&A)** (`ask`): "когда мой рейс?", "что по плану на сегодня?" → semantic
@@ -310,7 +316,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   - **Rename** a reminder's title in place ("переименуй #2 в «Иван Доронин»").
   - **Reschedule / undo:** "перенеси напоминание про банк на пятницу" moves it; an
     explicit title that matches nothing active is reported (never silently moves a
-    different one); "верни предыдущее время" / "отмени перенос" undoes the last move.
+    different one); "верни предыдущее время" / "отмени перенос" undoes the last move
+    **you** made — a recurring reminder's automatic advance to its next occurrence is
+    not a "move" and can't be undone into the past (2026‑07‑16: that used to silently
+    kill the series).
+  - **Fired‑reminder replies parse absolutely:** «давай завтра в 10 часов» after an
+    alarm re‑arms it for **tomorrow 10:00**, not a "10‑hour snooze" (2026‑07‑16).
   - **"Это напоминание"** binds to the one you were just dealing with; if it's genuinely
     ambiguous she asks which and **remembers what you wanted** — your "второе" / "#2" /
     "про банк" then completes the move/rename on the right one (never a stray close).
@@ -318,7 +329,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     "напомни в 17:00" is recognized deterministically (no router-confidence gamble) →
     she asks the subject, stitches your typed answer or the next single forwarded text
     in as untrusted title data, then confirms — the partial isn't lost and the forward
-    alone never acts.
+    alone never acts. A time that resolves to the **past** never enters the draft, and
+    a fresh valid time **replaces** a stored one (2026‑07‑16: a past‑parsed «в 9» used
+    to wedge the draft into an endless "а во сколько?" loop).
   - **From a note:** "поставь напоминание по заметке N" uses note N's real subject as
     the title (not a literal "Заметка N").
 - **Calendar:** "добавь в календарь" → `.ics` file (no setup) or Google Calendar via a
@@ -331,7 +344,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 ### Memory & self‑improvement
 - **Boss profile:** "что ты знаешь обо мне?" → a warm, deduped summary (confirmed vs
   sensed); "запомни про меня …", "забудь …", "как меня зовут?". Sensitive facts are
-  gated.
+  gated. "Забудь/подтверди …" targets an item by **explicit** `#N` (or a bare number)
+  or by text match — a digit inside the phrase («забудь, что я встаю в 6 утра») is
+  part of the fact, never item #6 (2026‑07‑16).
 - **Memory candidates:** she proposes durable memories from evidence; "обзор памяти"
   lists them with confirm/skip buttons. Durable memory only after a yes; benign facts
   learned from chat are stored as correctable "inferred" items — **but a fact that
@@ -492,6 +507,12 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    │
    ├─ router.py        closed-world LLM intent (JSON, confidence gate, context, recent-item hint)
    ├─ converse.py      free-form warm Cara (persona, life, boss facts, time, reactions)
+   ├─ hermes.py        her business register: ACTIONS domain + Hermes PERSONA + HermesMixin
+   │                   (KB ask/fetch, budget_set, review, export)
+   ├─ notes_svc.py     NotesMixin: notes/inbox handlers — lists, detail, show media,
+   │                   discard/recategorize/merge, purge (typed phrase), journals, problems
+   ├─ reminders_svc.py ReminderMixin: create/list/cancel/reschedule/rename/undo, partial
+   │                   drafts, fired follow-ups, the fire/expiry sweeps
    ├─ ingest.py        parsing, UTF-16-safe URL extraction, category+facts+summary
    ├─ pdftext.py       best-effort PDF text-layer extraction (stdlib only)
    ├─ knowledge.py     chunking + cosine retrieval + grounded-answer prompt (ask)
@@ -670,7 +691,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 467 offline unit tests (as of 2026‑07‑13; no network; temp SQLite), run on
+- **Tests:** 494 offline unit tests (as of 2026‑07‑16; no network; temp SQLite), run on
   the box as part of every deploy and in GitHub Actions — including a
   **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and

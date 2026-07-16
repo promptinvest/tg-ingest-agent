@@ -72,7 +72,7 @@ def _dispatch_default(s, c):
 
 
 _DISPATCH = {
-    "ingest":              lambda s, c: s.finalize([c.msg]),
+    "ingest":              lambda s, c: s.do_ingest(c.chat_id, c.lang, c.msg),
     "reminder_create":     lambda s, c: s.do_reminder_create(c.chat_id, c.lang, c.params),
     "reminder_list":       lambda s, c: s.reply(c.chat_id, s._reminder_list_body(c.chat_id, c.lang)),
     "reminder_cancel":     lambda s, c: s.do_reminder_cancel(c.chat_id, c.lang, c.params),
@@ -183,7 +183,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # or the message he's replying to/quoting) — folded into the converse prompt
         # so she understands what he sent. Reset at the start of each inbound turn.
         self.turn_extra = []
-        self._turn_media_parts = None  # the own-media parts of the current turn (for save)
+        # True while dispatching a turn whose payload is the boss's own picture(s):
+        # own photos are conversation, never notes — `ingest` declines honestly
+        # instead of filing them (own-photo storage retired 2026-07-16).
+        self._own_photo_turn = False
 
     def request_stop(self, signum, _frame):
         log(f"received signal {signum}, shutting down")
@@ -648,8 +651,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         )
         # Storage rule: only FORWARDS (content from channels/people) are filed as
         # notes. The boss's OWN media is conversation — his caption is context, and
-        # even a bare photo is something he's SHOWING her, not a note. An explicit
-        # "сохрани это" on his own photo still routes to ingest (it's stored then).
+        # even a bare photo is something he's SHOWING her, not a note. Own PHOTOS
+        # are never stored, even on an explicit «сохрани» (retired 2026-07-16);
+        # his own text/PDF documents still save via the caption route.
         auto_store = (not own_voice) and is_forward
         own_media = (not own_voice) and (not is_forward) and has_attachment
 
@@ -2586,12 +2590,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     def handle_own_media(self, parts, chat_id, text):
         """The boss's own photo/file as conversation. His caption (if any) is the
-        instruction (routed normally — an explicit 'save this' still files it); a
-        bare photo gets a warm, in-context reaction. Never silently stored."""
+        instruction (routed normally); a bare photo gets a warm, in-context
+        reaction. His own PHOTOS are never stored — even an explicit «сохрани»
+        gets an honest decline (own-photo filing retired 2026-07-16; his own
+        text/PDF documents still reach the notes/KB via the same caption route)."""
         first = parts[0]
         self.turn_extra.append(self.describe_own_media(parts))
         self.turn_extra = [x for x in self.turn_extra if x]
-        self._turn_media_parts = parts  # so an explicit "save these photos" sees the album
+        self._own_photo_turn = self._pictures_only(parts)
         try:
             if text:
                 self.dispatch(chat_id, first, text)
@@ -2600,7 +2606,25 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                  "(he showed you a photo, no caption)", first.get("message_id"))
         finally:
             self.turn_extra = []
-            self._turn_media_parts = None
+            self._own_photo_turn = False
+
+    def _pictures_only(self, parts):
+        """True when the boss's own media is picture-only (photos / images sent as
+        documents) — the shape whose storage was retired. Any real document (text,
+        PDF, archive…) or voice/video attachment keeps the turn storable."""
+        has_picture = False
+        for p in parts:
+            doc = p.get("document") or {}
+            if doc.get("file_id"):
+                if str(doc.get("mime_type") or "").startswith("image/"):
+                    has_picture = True
+                else:
+                    return False
+            elif self.other_attachment(p):
+                return False
+            if p.get("photo"):
+                has_picture = True
+        return has_picture
 
     def handle_sticker(self, chat_id, msg, sticker):
         """The boss sent a sticker — react warmly in her own voice."""
@@ -2719,6 +2743,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return
         self.reply_chunks(chat_id, T(lang, "read_media_result", name=name,
                                      content=content[:1500]))
+
+    def do_ingest(self, chat_id, lang, msg):
+        """Router `ingest` → store the message as a note — EXCEPT the boss's own
+        pictures: those are conversation, not notes (own-photo storage retired
+        2026-07-16), so an explicit «сохрани это фото» gets an honest decline
+        instead of a silent partial save. Forwards and his own text stay as before."""
+        if self._own_photo_turn:
+            self.reply(chat_id, T(lang, "own_photo_not_stored"))
+            return
+        self.finalize([msg])
 
     def finalize(self, parts):
         lang = self.lang()

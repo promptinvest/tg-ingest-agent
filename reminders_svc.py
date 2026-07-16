@@ -128,8 +128,12 @@ class ReminderMixin:
         title = str(params.get("title") or "").strip()
         if title and not draft.get("title"):
             draft["title"] = title[:reminders.MAX_TITLE_CHARS]
+        # Same past-time filter as start_partial_reminder — and a fresh valid time
+        # always WINS over a stored one: without both, one past-parsed «в 9» wedged a
+        # dead due_utc into the draft that no later correction could replace (the
+        # draft then failed validation forever, re-asking for the time in a loop).
         due = reminders.parse_iso_utc(params.get("due_utc"))
-        if due is not None and not draft.get("due_utc"):
+        if due is not None and due >= datetime.now(timezone.utc) - timedelta(minutes=1):
             draft["due_utc"] = due.isoformat()
         rec = str(params.get("recurrence") or "").strip().lower()
         if rec in reminders.RECURRENCES:
@@ -238,16 +242,10 @@ class ReminderMixin:
             return "confirm", {}
         if allow_bare_ack and re.fullmatch(r"(?:да|yes|yep|ага|ок|okay|ok|\+|✅|👍)[.! ]*", t):
             return "confirm", {}
-        if "полчас" in t or "half an hour" in t:
-            return "amend", {"snooze_minutes": 30}
-        m = re.search(r"(\d{1,4})\s*(минут|минуты|минуту|мин|minutes?|mins?)\b", t)
-        if m:
-            return "amend", {"snooze_minutes": max(1, int(m.group(1)))}
-        m = re.search(r"(\d{1,3})\s*(часа|часов|час|ч|hours?|hrs?)\b", t)
-        if m:
-            return "amend", {"snooze_minutes": max(1, int(m.group(1))) * 60}
-        if re.search(r"(?:на|ещ[ёе])\s+час(?:ок)?\b|\ban hour\b", t):
-            return "amend", {"snooze_minutes": 60}
+        # «завтра…» MUST be checked before the relative-duration regexes: in
+        # «давай завтра в 10 часов» the hours pattern would otherwise eat «10
+        # часов» first and silently re-arm the alarm 10 hours from now (~06:00)
+        # instead of tomorrow 10:00.
         if "завтра" in t or "tomorrow" in t:
             tm = re.search(r"(?:в|на|at)?\s*(\d{1,2})(?::(\d{2}))?\b", t)
             hour = max(0, min(23, int(tm.group(1)))) if tm else 9
@@ -258,6 +256,16 @@ class ReminderMixin:
             local_due = local_due.replace(hour=hour, minute=minute)
             due = local_due - timedelta(hours=self.tz_offset())
             return "amend", {"due_utc": due.isoformat()}
+        if "полчас" in t or "half an hour" in t:
+            return "amend", {"snooze_minutes": 30}
+        m = re.search(r"(\d{1,4})\s*(минут|минуты|минуту|мин|minutes?|mins?)\b", t)
+        if m:
+            return "amend", {"snooze_minutes": max(1, int(m.group(1)))}
+        m = re.search(r"(\d{1,3})\s*(часа|часов|час|ч|hours?|hrs?)\b", t)
+        if m:
+            return "amend", {"snooze_minutes": max(1, int(m.group(1))) * 60}
+        if re.search(r"(?:на|ещ[ёе])\s+час(?:ок)?\b|\ban hour\b", t):
+            return "amend", {"snooze_minutes": 60}
         return None
 
     def resolve_fired_followup(self, chat_id, lang, text, pending):

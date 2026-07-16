@@ -1692,7 +1692,9 @@ def _non_journal_message_ids(conn):
 
 def purge_preview(conn, scope, category=None):
     """Count what a purge would remove, without deleting. llm_usage (spend
-    history) and preferences (identity/config) are NEVER purged."""
+    history) and preferences (identity/config) are NEVER purged; conversation
+    history is deleted ONLY by scope 'all' — and the preview must disclose it,
+    the execute deletes exactly what was previewed."""
     def count(sql, args=()):
         return conn.execute(sql, args).fetchone()[0]
     info = {"scope": scope}
@@ -1701,6 +1703,7 @@ def purge_preview(conn, scope, category=None):
         info["reminders"] = count("SELECT COUNT(*) FROM reminders WHERE status='active'")
         info["categories"] = count("SELECT COUNT(*) FROM categories")
         info["issues"] = count("SELECT COUNT(*) FROM issues")
+        info["conversation"] = count("SELECT COUNT(*) FROM conversation")
     elif scope == "category":
         info["messages"] = len(_messages_in_category(conn, category))
         info["category"] = category
@@ -1742,7 +1745,10 @@ def purge_execute(conn, scope, category=None):
         if category:
             conn.execute("DELETE FROM categories WHERE norm_key = ?", (str(category).casefold(),))
     elif scope == "stats":
-        for table in ("categories", "issue_patterns", "issues", "feedback", "conversation"):
+        # NOT conversation: dialog history is not "stats" — the boss confirming
+        # «сбросить всю статистику» was never shown (and never meant) a wipe of
+        # everything the two of them ever said. Only 'all' deletes it.
+        for table in ("categories", "issue_patterns", "issues", "feedback"):
             conn.execute(f"DELETE FROM {table}")
     elif scope == "reminders":
         conn.execute("DELETE FROM reminders WHERE status='active'")
@@ -2184,9 +2190,15 @@ def reminder_update_due(conn, rid, due_utc, reason="rescheduled"):
     """Move a reminder, remembering its current time in prev_due_utc so a reschedule can
     be undone ('верни предыдущее время'). Clears last_fired_at — a reschedule/snooze
     RE-ARMS the reminder, so it's a fresh future reminder, not one still 'сработало, ждёт
-    готово' (the marker must not linger after it's moved to a new time)."""
+    готово' (the marker must not linger after it's moved to a new time).
+
+    A recurrence advance is NOT an undoable boss move: it clears prev_due_utc instead
+    of remembering the fired occurrence — otherwise a bare «отмени перенос» could swap
+    a recurring series back behind last_fired_at, where reminders_due never selects it
+    again and the series silently dies."""
+    prev_sql = "NULL" if reason == "recurrence_advanced" else "due_utc"
     conn.execute(
-        "UPDATE reminders SET prev_due_utc = due_utc, due_utc = ?, last_fired_at = NULL"
+        f"UPDATE reminders SET prev_due_utc = {prev_sql}, due_utc = ?, last_fired_at = NULL"
         " WHERE id = ?",
         (due_utc, rid),
     )

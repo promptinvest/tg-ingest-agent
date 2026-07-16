@@ -6230,5 +6230,231 @@ class CorrectionPlan20260715Tests(unittest.TestCase):
                          ("open", 2, None))
 
 
+class ReviewFixes20260716Tests(unittest.TestCase):
+    """2026-07-16 full-review batch: own-photo storage retired; purge preview =
+    execute; note-detail id/note_no mixup; LLM transport taxonomy; reminder
+    follow-up seams; boss-memory digit grab."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "rf.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    # -- own-photo storage retired (2026-07-16) --------------------------------
+
+    def test_own_photo_save_caption_declined_not_stored(self):
+        # An explicit «сохрани» on the boss's OWN photos must NOT file a note (the
+        # legacy path silently saved only the first album part and confirmed
+        # success) — she declines honestly instead.
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 501,
+               "photo": [{"file_id": "f", "file_unique_id": "u"}],
+               "caption": "сохрани эти фото"}
+        with mock.patch.object(router, "route",
+                               return_value={"action": "ingest", "params": {},
+                                             "confidence": 0.95}), \
+                mock.patch.object(self.agent, "describe_own_media", return_value=""), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.handle_own_media([msg], 1, "сохрани эти фото")
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "own_photo_not_stored"))
+        self.assertIsNone(self.conn.execute("SELECT 1 FROM messages").fetchone())
+        self.assertFalse(self.agent._own_photo_turn)  # flag reset after the turn
+
+    def test_pictures_only_shapes(self):
+        photo = {"photo": [{"file_id": "f"}]}
+        imgdoc = {"document": {"file_id": "d", "mime_type": "image/png",
+                               "file_name": "x.png"}}
+        mddoc = {"document": {"file_id": "d2", "mime_type": "text/markdown",
+                              "file_name": "n.md"}}
+        video = {"video": {"file_id": "v"}}
+        self.assertTrue(self.agent._pictures_only([photo]))
+        self.assertTrue(self.agent._pictures_only([photo, imgdoc]))
+        # a real document / non-photo attachment keeps the turn storable (KB docs!)
+        self.assertFalse(self.agent._pictures_only([photo, mddoc]))
+        self.assertFalse(self.agent._pictures_only([mddoc]))
+        self.assertFalse(self.agent._pictures_only([video]))
+        self.assertFalse(self.agent._pictures_only([{"text": "hi"}]))
+
+    def test_do_ingest_still_finalizes_normal_turns(self):
+        msg = {"chat": {"id": 1}, "message_id": 502, "text": "сохрани: купить хлеб"}
+        with mock.patch.object(self.agent, "finalize") as fin:
+            self.agent.do_ingest(1, "ru", msg)
+        fin.assert_called_once_with([msg])
+
+    # -- purge preview must equal purge execute --------------------------------
+
+    def test_purge_stats_keeps_conversation(self):
+        store.convo_add(self.conn, 1, "user", "привет")
+        store.convo_add(self.conn, 1, "bot", "привет-привет")
+        store.issue_add(self.conn, 1, "out_of_scope", "x")
+        store.purge_execute(self.conn, "stats")
+        n = self.conn.execute("SELECT COUNT(*) FROM conversation").fetchone()[0]
+        self.assertEqual(n, 2)  # dialog history is NOT "stats"
+        self.assertIsNone(self.conn.execute("SELECT 1 FROM issues").fetchone())
+
+    def test_purge_all_preview_discloses_conversation(self):
+        store.convo_add(self.conn, 1, "user", "привет")
+        info = store.purge_preview(self.conn, "all")
+        self.assertEqual(info["conversation"], 1)
+        # …and the impact card renders it, so the typed phrase confirms reality
+        self.assertIn("реплик", self.agent._purge_impact_text("ru", info))
+        store.purge_execute(self.conn, "all")
+        n = self.conn.execute("SELECT COUNT(*) FROM conversation").fetchone()[0]
+        self.assertEqual(n, 0)
+
+    # -- note detail: #N must show note #N -------------------------------------
+
+    def test_item_detail_shows_the_note_number_requested(self):
+        # ids and note numbers diverge on a long-lived DB (numbers are assigned on
+        # first display, newest-first): #2 must show note #2, not the note whose
+        # raw DB id happens to be 2.
+        a = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 601,
+                                             "received_at": "ts",
+                                             "raw_text": "старая заметка про рейс"})
+        b = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 602,
+                                             "received_at": "ts",
+                                             "raw_text": "новая заметка про хлеб"})
+        store.ensure_note_no(self.conn, b)  # displayed first (newest) -> becomes #1
+        store.ensure_note_no(self.conn, a)  # -> #2, while its DB id is 1
+        self.assertNotEqual(store.ensure_note_no(self.conn, a), a)  # ids != numbers now
+        with mock.patch.object(self.agent, "reply") as r, \
+                mock.patch.object(self.agent, "send_attachments"):
+            self.agent.do_item_detail(1, "ru", {"id": 2})
+        self.assertIn("#2", r.call_args[0][1])
+
+    # -- LLM transport taxonomy -------------------------------------------------
+
+    def test_chat_wraps_incomplete_read_as_llmerror(self):
+        import http.client
+        cfg = make_config()
+        with mock.patch.object(llm, "urlopen",
+                               side_effect=http.client.IncompleteRead(b"part")):
+            with self.assertRaises(llm.LLMError):
+                llm.chat(cfg, self.conn, "ingest", [{"role": "user", "content": "hi"}])
+
+    def test_chat_wraps_mid_multibyte_cut_as_llmerror(self):
+        # A body cut inside a multibyte char (Cyrillic replies!) raises
+        # UnicodeDecodeError — unwrapped it bypassed failover AND the callers'
+        # except llm.LLMError, re-running the whole update's side effects.
+        cfg = make_config()
+
+        class Cut:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b'{"choices": [{"message": {"content": "\xd0'
+        with mock.patch.object(llm, "urlopen", return_value=Cut()):
+            with self.assertRaises(llm.LLMError):
+                llm.chat(cfg, self.conn, "ingest", [{"role": "user", "content": "hi"}])
+
+    def test_embed_wraps_incomplete_read_as_llmerror(self):
+        import http.client
+        cfg = make_config()
+        with mock.patch.object(llm, "urlopen",
+                               side_effect=http.client.IncompleteRead(b"part")):
+            with self.assertRaises(llm.LLMError):
+                llm.embed(cfg, self.conn, "ask", ["a"])
+
+    # -- reminder follow-up seams -----------------------------------------------
+
+    def test_partial_reminder_past_time_never_wedges_the_draft(self):
+        # A past-parsed «в 9» must not enter the draft (the old continue path had
+        # no past filter, and its stored value then blocked every correction — an
+        # infinite "what time?" loop until cancel).
+        self.agent.start_partial_reminder(1, "ru", {"title": "позвонить"})
+        past = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
+        pending = store.pending_get(self.conn, 1)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.continue_partial_reminder(1, "ru", pending, "amend",
+                                                 {"due_utc": past})
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_need_time"))
+        self.assertNotIn("due_utc", store.pending_get(self.conn, 1)["payload"])
+        future = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        pending = store.pending_get(self.conn, 1)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.continue_partial_reminder(1, "ru", pending, "amend",
+                                                 {"due_utc": future})
+        promoted = store.pending_get(self.conn, 1)
+        self.assertEqual(promoted["kind"], "reminder")  # the correction landed
+
+    def test_partial_reminder_fresh_time_wins_over_stored(self):
+        # An amend carrying a NEW valid time is the boss correcting himself — it
+        # must replace the draft's stored time, not be discarded.
+        t1 = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        t2 = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
+        self.agent.start_partial_reminder(1, "ru", {"due_utc": t1})
+        pending = store.pending_get(self.conn, 1)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.continue_partial_reminder(
+                1, "ru", pending, "amend", {"title": "созвон", "due_utc": t2})
+        promoted = store.pending_get(self.conn, 1)
+        self.assertEqual(promoted["payload"]["due_utc"],
+                         reminders.parse_iso_utc(t2).isoformat())
+
+    def test_fired_followup_tomorrow_at_hour_is_absolute_not_snooze(self):
+        # «давай завтра в 10 часов» used to hit the hours regex first -> a silent
+        # 600-minute snooze (~06:00 tonight) instead of tomorrow 10:00.
+        action, params = self.agent._parse_fired_followup("давай завтра в 10 часов")
+        self.assertEqual(action, "amend")
+        self.assertNotIn("snooze_minutes", params)
+        due = reminders.parse_iso_utc(params["due_utc"])
+        local = due + timedelta(hours=self.agent.tz_offset())
+        self.assertEqual((local.hour, local.minute), (10, 0))
+        local_today = (datetime.now(timezone.utc)
+                       + timedelta(hours=self.agent.tz_offset())).date()
+        self.assertEqual(local.date(), local_today + timedelta(days=1))
+        # plain relative durations still snooze
+        self.assertEqual(self.agent._parse_fired_followup("через 2 часа"),
+                         ("amend", {"snooze_minutes": 120}))
+
+    def test_recurrence_advance_is_not_undoable(self):
+        # The daily fire's auto-advance is not a boss move: a bare «отмени перенос»
+        # after it used to swap due behind last_fired_at, where reminders_due never
+        # selects the row again — the series silently died.
+        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        rid = store.reminder_add(self.conn, 1, "зарядка", past, recurrence="daily")
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.fire_due_reminders()
+        row = store.reminder_get(self.conn, rid)
+        self.assertIsNotNone(row["last_fired_at"])
+        self.assertIsNone(row["prev_due_utc"])  # nothing recorded to "undo"
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_reminder_undo(1, "ru", {})
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_no_prev"))
+        fresh = store.reminder_get(self.conn, rid)
+        self.assertGreater(fresh["due_utc"], fresh["last_fired_at"])  # series alive
+        # a real boss reschedule stays undoable
+        new_due = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        store.reminder_update_due(self.conn, rid, new_due)
+        self.assertIsNotNone(store.reminder_get(self.conn, rid)["prev_due_utc"])
+
+    # -- boss memory: a digit inside a phrase is not an item id -----------------
+
+    def test_forget_ignores_digits_inside_phrase(self):
+        boss_model.remember_explicit(self.conn, "любит короткие ответы", "tone")
+        item = store.boss_items(self.conn, "confirmed")[0]
+        # «…в 1 утра» must NOT deprecate item #1 (an unrelated stored fact)
+        self.assertIsNone(boss_model.forget(self.conn, f"что я встаю в {item['id']} утра"))
+        self.assertEqual(store.boss_items(self.conn, "confirmed")[0]["id"], item["id"])
+        # explicit references still work: '#N' and a bare number
+        self.assertEqual(boss_model.forget(self.conn, f"#{item['id']}"),
+                         "любит короткие ответы")
+
+    def test_confirm_ignores_digits_inside_phrase(self):
+        boss_model.remember_explicit(self.conn, "пьёт кофе без сахара", "habit")
+        item = store.boss_items(self.conn, "confirmed")[0]
+        store.boss_set_status(self.conn, item["id"], "pending")
+        self.assertIsNone(boss_model.confirm(self.conn, f"встреча в {item['id']} часов"))
+        self.assertEqual(store.boss_items(self.conn, "pending")[0]["id"], item["id"])
+        self.assertEqual(boss_model.confirm(self.conn, str(item["id"])),
+                         "пьёт кофе без сахара")
+
+
 if __name__ == "__main__":
     unittest.main()

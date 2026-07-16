@@ -64,12 +64,21 @@ def remember_explicit(conn, value, kind="workflow"):
                           sensitivity=effective_sensitivity(kind, value), source_table="explicit")
 
 
+def _explicit_item_id(query):
+    """An item id only when the boss actually POINTED at one: '#12' anywhere, or the
+    whole query being a bare number. A digit inside an ordinary phrase («забудь, что
+    я встаю в 6 утра») is part of the fact, not an id — grabbing it deprecated an
+    unrelated item #6."""
+    q = str(query or "")
+    m = re.search(r"#(\d+)", q) or re.fullmatch(r"\s*(\d+)\s*", q)
+    return int(m.group(1)) if m else None
+
+
 def forget(conn, query):
-    """Deprecate a profile item by #id or substring; returns the value or None."""
-    item = None
-    m = re.search(r"#?(\d+)", str(query or ""))
-    if m:
-        item = store.boss_get(conn, int(m.group(1)))
+    """Deprecate a profile item by explicit #id/bare number or substring; returns
+    the value or None."""
+    iid = _explicit_item_id(query)
+    item = store.boss_get(conn, iid) if iid is not None else None
     if item is None:
         item = store.boss_find(conn, query)
     if item is None:
@@ -79,8 +88,8 @@ def forget(conn, query):
 
 
 def confirm(conn, query):
-    m = re.search(r"#?(\d+)", str(query or ""))
-    item = store.boss_get(conn, int(m.group(1))) if m else store.boss_find(conn, query)
+    iid = _explicit_item_id(query)
+    item = store.boss_get(conn, iid) if iid is not None else store.boss_find(conn, query)
     if item is None:
         return None
     store.boss_set_status(conn, item["id"], "confirmed")

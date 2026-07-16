@@ -134,7 +134,10 @@ rm -rf "$APP_DIR/__pycache__"
 systemctl daemon-reload
 systemctl enable "$SERVICE.service"
 
-if grep -q '=REPLACE_ME' "$ENV_FILE"; then
+# Anchored to line start: only an ACTIVE `KEY=REPLACE_ME` counts. A commented
+# example line (`# SPACES_KEY=REPLACE_ME`, present in env.example) must not stop
+# a healthy service on reinstall. The `=` must stay in the pattern.
+if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=REPLACE_ME' "$ENV_FILE"; then
   systemctl stop "$SERVICE.service" 2>/dev/null || true
   echo "WARNING: $ENV_FILE still contains REPLACE_ME placeholders."
   echo "Fill in the secrets, then: systemctl start $SERVICE"

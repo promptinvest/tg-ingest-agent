@@ -28,6 +28,16 @@ TEXTS = {
         "ru": "Хм, не совсем уловила 🤔 Скажи чуть конкретнее — и я подхвачу.",
         "en": "Hmm, I didn't quite catch that 🤔 Tell me a touch more and I've got it.",
     },
+    # NB: no final verbs here (action_truth catalogue guard) — it's a decline,
+    # nothing was stored.
+    "own_photo_not_stored": {
+        "ru": ("Твои собственные фото я в заметки не складываю — это наш разговор 🙂 "
+               "Если нужно сохранить суть, пришли её текстом или файлом, "
+               "либо перешли пост — тогда запишу."),
+        "en": ("I don't file your own photos as notes — that's just us talking 🙂 "
+               "If you want to keep the gist, send it as text or a file, "
+               "or forward the post — I'll write it down."),
+    },
     # Variant family (pre-confirmation, state=suggested → no final verbs).
     "suggestion": {
         "ru": [

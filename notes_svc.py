@@ -316,6 +316,7 @@ class NotesMixin:
             "categories": ("категорий" if ru else "categories"),
             "issues": ("записей о проблемах" if ru else "issue records"),
             "feedback": ("поправок" if ru else "corrections"),
+            "conversation": ("реплик нашей переписки" if ru else "conversation turns"),
         }
         parts = []
         for key, label in labels.items():
@@ -335,7 +336,8 @@ class NotesMixin:
             return
         category = params.get("category")
         info = store.purge_preview(self.conn, scope, category)
-        if not any(info.get(k) for k in ("messages", "reminders", "categories", "issues", "feedback")):
+        if not any(info.get(k) for k in ("messages", "reminders", "categories",
+                                         "issues", "feedback", "conversation")):
             self.reply(chat_id, T(lang, "purge_nothing"))
             return
         if scope == "category":
@@ -472,7 +474,10 @@ class NotesMixin:
         if row is None:
             self.reply(chat_id, T(lang, "items_empty"))
             return
-        self.reply(chat_id, self.item_detail_text(lang, {"id": row["id"]}))
+        # resolve_item speaks NOTE NUMBERS, row["id"] is the DB message id — the two
+        # diverge on a long-lived DB (numbers are assigned lazily, newest-first), so
+        # re-resolving by the raw id showed a DIFFERENT note's card.
+        self.reply(chat_id, self.item_detail_text(lang, {"id": self.note_no(row["id"])}))
         # Hand back the actual photos/files attached to the item, too.
         self.send_attachments(chat_id, row)
 

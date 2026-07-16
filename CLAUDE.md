@@ -61,9 +61,17 @@ KB for SSH/deploy/model details.
   `fetch.py` (read a URL on request — SSRF-guarded), `sysinfo.py` (read-only
   VPS stats from /proc), `knowledge.py` (ask: semantic KB Q&A over BGE-M3
   embeddings — the ONE action that returns grounded free-form answers, KB-only,
-  refuses if absent; send .md/.txt docs to add to the KB). Plus router actions
-  for show_media, discard, purge (typed-confirmation bulk delete, never touches
-  llm_usage).
+  refuses if absent; send .md/.txt docs to add to the KB), `pdftext.py` (PDF
+  text layer). Handler mixins on the Agent: `hermes.py` (business register:
+  ACTIONS domain + Hermes PERSONA + KB/fetch/budget/review/export handlers),
+  `notes_svc.py` (notes/inbox: lists, detail, show_media, discard,
+  recategorize/merge, purge — typed-confirmation bulk delete, never touches
+  llm_usage/preferences; conversation history only on scope `all`, disclosed in
+  the preview — journals, problem log), `reminders_svc.py` (reminder handlers,
+  partial drafts, fired follow-ups, fire/expiry sweeps). `converse.py` holds
+  free-form warm Cara; `action_truth.py` guards "done/saved" wording;
+  `backup.py` runs the daily encrypted off-box DB backup. Own PHOTOS are never
+  stored (retired 2026-07-16) — own text/PDF docs still save via caption.
 - `llm.py` — DO Gradient gateway (chat + local/remote Whisper STT), pricing,
   budgets, JSON parsing helpers.
 - `storage.py` — binary backend: local default, optional DO Spaces (S3 SigV4
