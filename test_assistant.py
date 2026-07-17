@@ -6602,5 +6602,198 @@ class Phase0Fixes20260717Tests(unittest.TestCase):
         self.assertEqual(row["status"], "done")
 
 
+class Batch1NoteLifecycleTests(unittest.TestCase):
+    """NTE-001/002 (notes/journals plan v1.1): lifecycle schema + deterministic
+    backfill, reversible triage CRUD, real-use accounting."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "b1.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _note(self, tg_id, text="x", cat="News", confirm=True):
+        mid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        store.set_suggestion(self.conn, mid, cat, "s", "m")
+        if confirm:
+            store.confirm_category(self.conn, mid, store.ensure_category(self.conn, cat))
+        return mid
+
+    # -- NTE-001: states appear at the right lifecycle moments ------------------
+
+    def test_new_notes_get_lifecycle_states(self):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 810,
+                                               "received_at": store._now(),
+                                               "raw_text": "x"})
+        store.set_suggestion(self.conn, mid, "News", "s", "m")
+        self.assertEqual(store.get_message(self.conn, mid)["knowledge_state"], "inbox")
+        store.confirm_category(self.conn, mid, store.ensure_category(self.conn, "News"))
+        row = store.get_message(self.conn, mid)
+        self.assertEqual((row["knowledge_state"], row["note_purpose"]),
+                         ("active", "reference"))
+
+    def test_journal_confirm_stays_outside_lifecycle(self):
+        store.set_category_kind(self.conn, "Благодарность", "journal")
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 811,
+                                               "received_at": store._now(),
+                                               "raw_text": "спасибо Вере"})
+        store.set_suggestion(self.conn, mid, "Благодарность", "s", "m")
+        store.confirm_category(self.conn, mid, "Благодарность")
+        self.assertIsNone(store.get_message(self.conn, mid)["knowledge_state"])
+        self.assertFalse(store.note_archive(self.conn, mid))  # not triagable
+
+    def test_backfill_on_old_db_is_deterministic(self):
+        import sqlite3
+        path = Path(self.tmp.name) / "old.db"
+        raw = sqlite3.connect(str(path))
+        raw.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL,"
+            " tg_message_id INTEGER NOT NULL, received_at TEXT, raw_text TEXT,"
+            " suggested_category TEXT, category TEXT, status TEXT,"
+            " forward_origin_chat_id INTEGER, forward_origin_message_id INTEGER,"
+            " suggestion_message_id INTEGER, note_no INTEGER,"
+            " UNIQUE(chat_id, tg_message_id))")
+        raw.execute("CREATE TABLE categories (name TEXT PRIMARY KEY, norm_key TEXT,"
+                    " created_at TEXT, kind TEXT NOT NULL DEFAULT 'inbox')")
+        raw.execute("INSERT INTO categories VALUES ('News', 'news', 't', 'inbox')")
+        raw.execute("INSERT INTO categories VALUES"
+                    " ('Благодарность', 'благодарность', 't', 'journal')")
+        rows = [(1, 1, "confirmed", "News", None),      # -> active/reference
+                (2, 2, "suggested", None, "News"),      # -> inbox
+                (3, 3, "confirmed", "Благодарность", None),  # journal -> NULL
+                (4, 4, "failed", None, None)]           # -> NULL
+        for mid, tg, status, cat, sug in rows:
+            raw.execute("INSERT INTO messages (id, chat_id, tg_message_id, received_at,"
+                        " raw_text, category, suggested_category, status)"
+                        " VALUES (?, 1, ?, 't', 'x', ?, ?, ?)",
+                        (mid, tg, cat, sug, status))
+        raw.commit()
+        raw.close()
+        conn = store.open_db(path)
+        try:
+            got = {r["id"]: (r["knowledge_state"], r["note_purpose"]) for r in
+                   conn.execute("SELECT id, knowledge_state, note_purpose FROM messages")}
+            self.assertEqual(got[1], ("active", "reference"))
+            self.assertEqual(got[2], ("inbox", None))
+            self.assertEqual(got[3], (None, None))
+            self.assertEqual(got[4], (None, None))
+            self.assertIsNone(conn.execute(  # no review flood on existing notes
+                "SELECT review_at FROM messages WHERE id=1").fetchone()["review_at"])
+        finally:
+            conn.close()
+
+    # -- NTE-002: archive is reversible and honest ------------------------------
+
+    def test_archive_hides_from_default_list_but_stays_searchable(self):
+        a = self._note(801, "заметка про рейс Turkish")
+        self._note(802, "хлеб")
+        store.note_archive(self.conn, a, reason="old")
+        self.assertNotIn(a, [r["id"] for r in store.list_messages(self.conn, limit=10)])
+        self.assertIn(a, [r["id"] for r in
+                          store.list_messages(self.conn, query="turkish", limit=10)])
+        store.note_restore(self.conn, a)
+        row = store.get_message(self.conn, a)
+        self.assertEqual(row["knowledge_state"], "active")
+        self.assertIsNone(row["archived_at"])
+        self.assertIn(a, [r["id"] for r in store.list_messages(self.conn, limit=10)])
+
+    def test_do_note_lifecycle_archive_restore_by_number(self):
+        a = self._note(803, "старая заметка")
+        no = store.ensure_note_no(self.conn, a)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive", "id": no})
+        self.assertIn("в архив", r.call_args[0][1])
+        self.assertEqual(store.get_message(self.conn, a)["knowledge_state"], "archived")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "restore", "id": no})
+        self.assertEqual(store.get_message(self.conn, a)["knowledge_state"], "active")
+        kinds = [row["kind"] for row in
+                 self.conn.execute("SELECT kind FROM events ORDER BY id")]
+        self.assertIn("note_archived", kinds)
+        self.assertIn("note_restored", kinds)
+
+    def test_bulk_archive_requires_confirmation(self):
+        a = self._note(804, "one")
+        b = self._note(805, "two")
+        nos = [store.ensure_note_no(self.conn, a), store.ensure_note_no(self.conn, b)]
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive", "ids": nos})
+        self.assertIn("обратимо", r.call_args[0][1])  # asked, not done
+        self.assertEqual(store.get_message(self.conn, a)["knowledge_state"], "active")
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "note_archive")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
+        for mid in (a, b):
+            self.assertEqual(store.get_message(self.conn, mid)["knowledge_state"],
+                             "archived")
+        self.assertIn("2", r.call_args[0][1])
+
+    def test_purpose_review_temporary_ops(self):
+        a = self._note(806, "идея продукта")
+        no = store.ensure_note_no(self.conn, a)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "make_temporary",
+                                                   "id": no})  # default +30d
+        row = store.get_message(self.conn, a)
+        self.assertEqual(row["note_purpose"], "temporary")
+        self.assertIsNotNone(row["expires_at"])
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "set_purpose",
+                                                   "id": no, "purpose": "idea"})
+        row = store.get_message(self.conn, a)
+        self.assertEqual(row["note_purpose"], "idea")
+        self.assertIsNone(row["expires_at"])  # only temporary notes expire
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        store.note_set_review(self.conn, a, past)
+        self.assertEqual(store.notes_lifecycle_counts(self.conn)["review_due"], 1)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "keep", "id": no})
+        self.assertEqual(store.notes_lifecycle_counts(self.conn)["review_due"], 0)
+
+    # -- NTE-002: only REAL uses count ------------------------------------------
+
+    def test_detail_open_counts_use(self):
+        a = self._note(807, "про визу")
+        no = store.ensure_note_no(self.conn, a)
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "send_attachments"):
+            self.agent.do_item_detail(1, "ru", {"id": no})
+        row = store.get_message(self.conn, a)
+        self.assertEqual(row["use_count"], 1)
+        self.assertIsNotNone(row["last_used_at"])
+        self.assertIsNotNone(self.conn.execute(
+            "SELECT 1 FROM events WHERE kind='note_opened'").fetchone())
+
+    def test_ask_citation_counts_only_when_delivered(self):
+        a = self._note(808, "рейс завтра в 10")
+        context = [{"message_id": a, "note_no": 1, "text": "рейс завтра в 10",
+                    "category": "News", "title": None}]
+        with mock.patch.object(llm, "embed", return_value=[[0.0, 0.1]]), \
+                mock.patch.object(llm, "chat_profile", return_value="Рейс в 10 (#1)"), \
+                mock.patch.object(self.agent, "_keyword_context",
+                                  return_value=context), \
+                mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_ask(1, "ru", {"question": "когда рейс?"}, "когда рейс?")
+        self.assertEqual(store.get_message(self.conn, a)["use_count"], 1)
+        # an UNDELIVERED answer counts nothing (ranking alone is not a use)
+        with mock.patch.object(llm, "embed", return_value=[[0.0, 0.1]]), \
+                mock.patch.object(llm, "chat_profile", return_value="Рейс в 10 (#1)"), \
+                mock.patch.object(self.agent, "_keyword_context",
+                                  return_value=context), \
+                mock.patch.object(self.agent, "reply", return_value=None):
+            self.agent.do_ask(1, "ru", {"question": "когда рейс?"}, "когда рейс?")
+        self.assertEqual(store.get_message(self.conn, a)["use_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import events
 import fetch
 import ingest
 import llm
@@ -41,7 +42,8 @@ ACTIONS = frozenset({
     "ingest", "reminder_create", "reminder_list", "reminder_cancel",
     "reminder_reschedule", "reminder_rename", "reminder_undo", "list_files",
     "calendar_add", "spend", "budget_set", "stats", "categories", "overview",
-    "list_items", "item_detail", "item_delete", "note_edit", "recategorize", "merge_categories",
+    "list_items", "item_detail", "item_delete", "note_edit", "note_lifecycle",
+    "recategorize", "merge_categories",
     "show_media", "vps_stats", "purge", "fetch", "ask", "issues_report",
     "report_problem", "multi_action", "set_journal", "journal_show", "export",
     "working_history", "review",
@@ -155,7 +157,14 @@ class HermesMixin:
             return
         if not context:
             store.issue_add(self.conn, chat_id, "ask_no_context", question[:200])
-        self.reply(chat_id, answer.strip()[:4000])
+        delivered = self.reply(chat_id, answer.strip()[:4000])
+        if delivered:
+            # Citation in a DELIVERED grounded answer is a real use of the note
+            # (ranking alone never counts).
+            for item in context:
+                if store.note_mark_used(self.conn, item.get("message_id")):
+                    events.record_done(self.conn, "note_cited", chat_id=chat_id,
+                                       payload={"message_id": item.get("message_id")})
 
     def _keyword_context(self, question):
         import knowledge

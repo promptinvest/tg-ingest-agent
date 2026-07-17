@@ -67,6 +67,18 @@ CREATE TABLE IF NOT EXISTS messages (
   suggestion_message_id INTEGER,
   duplicate_of INTEGER REFERENCES messages(id),
   note_no INTEGER,                  -- stable, monotonic per-chat note number (never reused)
+  -- Knowledge LIFECYCLE (separate from the ingest `status`): why the note was
+  -- saved and whether it's useful now. NULL = not part of note lifecycle
+  -- (journal entries, failed/duplicate rows).
+  knowledge_state TEXT,             -- 'inbox' | 'active' | 'archived'
+  note_purpose TEXT,                -- reference|source|idea|decision|temporary|actionable
+  saved_reason TEXT,                -- short source-grounded likely-use note
+  review_at TEXT,                   -- optional next review time (UTC ISO)
+  expires_at TEXT,                  -- advisory expiry for 'temporary' (never auto-delete)
+  last_used_at TEXT,                -- last REAL use (open/citation/delivery)
+  use_count INTEGER NOT NULL DEFAULT 0,
+  archived_at TEXT,
+  archive_reason TEXT,
   UNIQUE (chat_id, tg_message_id)
 );
 
@@ -882,6 +894,34 @@ def _migrate(conn):
     # one just got it above). Created here, not in SCHEMA, so executescript can't reference
     # note_no before _migrate adds it to a pre-existing messages table.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_note_no ON messages(chat_id, note_no)")
+    if "knowledge_state" not in columns:
+        # Notes lifecycle (2026-07-17, notes/journals plan NTE-001): a knowledge
+        # dimension beside the ingest `status`. Deterministic backfill, no LLM:
+        # confirmed non-journal notes are active reference material; suggested
+        # ones are untriaged inbox; journal/failed/duplicate rows stay NULL
+        # (outside note lifecycle). No review_at is backfilled — existing notes
+        # must not flood the boss with review nudges.
+        for ddl in ("knowledge_state TEXT", "note_purpose TEXT", "saved_reason TEXT",
+                    "review_at TEXT", "expires_at TEXT", "last_used_at TEXT",
+                    "use_count INTEGER NOT NULL DEFAULT 0",
+                    "archived_at TEXT", "archive_reason TEXT"):
+            conn.execute(f"ALTER TABLE messages ADD COLUMN {ddl}")
+        if {"category", "status"} <= columns:
+            journal_names = journal_categories(conn)
+            marks = ",".join("?" for _ in journal_names) or "''"
+            conn.execute(
+                f"UPDATE messages SET knowledge_state = 'active', note_purpose = 'reference'"
+                f" WHERE status = 'confirmed' AND COALESCE(category, '') NOT IN ({marks})",
+                journal_names)
+            conn.execute(
+                f"UPDATE messages SET knowledge_state = 'inbox'"
+                f" WHERE status = 'suggested'"
+                f" AND COALESCE(category, COALESCE(suggested_category, '')) NOT IN ({marks})",
+                journal_names)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_knowledge_review"
+                 " ON messages(knowledge_state, review_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_knowledge_expires"
+                 " ON messages(knowledge_state, expires_at)")
     image_columns = {row["name"] for row in conn.execute("PRAGMA table_info(images)")}
     if "object_key" not in image_columns:
         conn.execute("ALTER TABLE images ADD COLUMN object_key TEXT")
@@ -1217,6 +1257,91 @@ def journal_categories(conn):
         "SELECT name FROM categories WHERE kind = 'journal' ORDER BY name")]
 
 
+# -- note lifecycle (knowledge_state/purpose — separate from ingest status) --
+
+NOTE_STATES = ("inbox", "active", "archived")
+NOTE_PURPOSES = ("reference", "source", "idea", "decision", "temporary", "actionable")
+
+
+def _note_update(conn, message_id, sql_set, args):
+    """Apply a lifecycle update to a NOTE row (knowledge_state NOT NULL — journal
+    entries and failed rows are outside note lifecycle). Returns True if a row
+    changed."""
+    cur = conn.execute(
+        f"UPDATE messages SET {sql_set} WHERE id = ? AND knowledge_state IS NOT NULL",
+        (*args, message_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def note_archive(conn, message_id, reason=None):
+    """Reversible: the note leaves default lists but stays searchable/restorable.
+    Chunks, facts and attachments are kept."""
+    return _note_update(conn, message_id,
+                        "knowledge_state = 'archived', archived_at = ?,"
+                        " archive_reason = ?, review_at = NULL",
+                        (_now(), (str(reason)[:200] if reason else None)))
+
+
+def note_restore(conn, message_id):
+    return _note_update(conn, message_id,
+                        "knowledge_state = 'active', archived_at = NULL,"
+                        " archive_reason = NULL", ())
+
+
+def note_keep(conn, message_id):
+    """Boss decided the note stays useful: active, and any due review is cleared."""
+    return _note_update(conn, message_id,
+                        "knowledge_state = 'active', review_at = NULL", ())
+
+
+def note_set_purpose(conn, message_id, purpose):
+    purpose = str(purpose or "").strip().lower()
+    if purpose not in NOTE_PURPOSES:
+        return False
+    extra = "" if purpose == "temporary" else ", expires_at = NULL"
+    return _note_update(conn, message_id,
+                        f"note_purpose = ?{extra}", (purpose,))
+
+
+def note_set_review(conn, message_id, review_at_iso):
+    return _note_update(conn, message_id, "review_at = ?", (review_at_iso,))
+
+
+def note_make_temporary(conn, message_id, expires_at_iso):
+    """Advisory expiry only — expiry recommends a review, it NEVER deletes."""
+    return _note_update(conn, message_id,
+                        "note_purpose = 'temporary', expires_at = ?",
+                        (expires_at_iso,))
+
+
+def note_mark_used(conn, message_id):
+    """Count a REAL use only: detail opened, cited in a delivered answer,
+    included in a delivered export, or an accepted resurfacing — never mere
+    ranking/retrieval."""
+    return _note_update(conn, message_id,
+                        "use_count = use_count + 1, last_used_at = ?", (_now(),))
+
+
+def notes_by_state(conn, state, limit=50):
+    return conn.execute(
+        "SELECT * FROM messages WHERE knowledge_state = ?"
+        " ORDER BY id DESC LIMIT ?", (state, int(limit)),
+    ).fetchall()
+
+
+def notes_lifecycle_counts(conn):
+    """{state: n} plus 'review_due' for the notes overview."""
+    counts = {r["knowledge_state"]: r["n"] for r in conn.execute(
+        "SELECT knowledge_state, COUNT(*) AS n FROM messages"
+        " WHERE knowledge_state IS NOT NULL GROUP BY knowledge_state")}
+    counts["review_due"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE knowledge_state = 'active'"
+        " AND review_at IS NOT NULL AND review_at <= ?", (_now(),)).fetchone()["n"]
+    return counts
+
+
 def journal_entries(conn, category, since_iso=None, limit=200):
     """Confirmed entries in a journal category, oldest→newest (a diary reads
     forward), optionally only those received since since_iso. Filtered in
@@ -1439,7 +1564,9 @@ def mark_duplicate(conn, message_id, original):
 def set_suggestion(conn, message_id, suggested_category, summary, model):
     conn.execute(
         "UPDATE messages SET suggested_category = ?, summary = ?, llm_model = ?,"
-        " status = 'suggested' WHERE id = ?",
+        " status = 'suggested',"
+        " knowledge_state = COALESCE(knowledge_state, 'inbox')"  # untriaged until confirmed
+        " WHERE id = ?",
         (suggested_category, summary, model, message_id),
     )
     conn.commit()
@@ -1455,15 +1582,24 @@ def set_suggestion_message(conn, message_id, tg_suggestion_message_id):
 
 
 def confirm_category(conn, message_id, category):
+    if is_journal(conn, category):
+        # Journal entries live in the dated journal, outside note lifecycle:
+        # no #N, no knowledge_state (they never enter inbox/active/archive views).
+        conn.execute(
+            "UPDATE messages SET category = ?, status = 'confirmed',"
+            " knowledge_state = NULL WHERE id = ?",
+            (category, message_id),
+        )
+        conn.commit()
+        return
     conn.execute(
-        "UPDATE messages SET category = ?, status = 'confirmed' WHERE id = ?",
+        "UPDATE messages SET category = ?, status = 'confirmed',"
+        " knowledge_state = 'active',"
+        " note_purpose = COALESCE(note_purpose, 'reference') WHERE id = ?",
         (category, message_id),
     )
     conn.commit()
-    # A confirmed note gets its stable #N now (journal entries live in the dated journal, not
-    # the #N list, so they don't consume a number).
-    if not is_journal(conn, category):
-        ensure_note_no(conn, message_id)
+    ensure_note_no(conn, message_id)  # a confirmed note gets its stable #N now
 
 
 def find_by_suggestion_message(conn, chat_id, suggestion_message_id):
@@ -1548,6 +1684,11 @@ def list_messages_filtered(conn, category=None, query=None, limit=None):
         if cat and row_category.casefold() != cat:
             continue
         if journals and (row["category"] or "").casefold() in journals:
+            continue
+        # Archived notes leave the DEFAULT/browse lists but stay reachable by an
+        # explicit text search (and by #N via message_by_note_no) — reversible,
+        # never hidden from a real lookup.
+        if row["knowledge_state"] == "archived" and not q:
             continue
         if q:
             haystack = " ".join(filter(None, [

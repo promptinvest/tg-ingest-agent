@@ -243,6 +243,20 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   deletes: `stats` never touches our conversation history, and `all` — the only
   scope that does — discloses the conversation‑turn count before you type the
   phrase (2026‑07‑16).
+- **Note lifecycle (`note_lifecycle`, 2026‑07‑17 — reversible triage, never
+  deletes):** beside its category (what it's about) every note carries a
+  **knowledge state** (inbox → active → archived) and a **purpose** (справка /
+  источник / идея / решение / временная / требует действия). «Убери #5 в архив»
+  — the note leaves the default lists but stays searchable and comes back with
+  «восстанови #5»; «оставь #3 в активных»; «пометь #3 как идею»; «поставь #4 на
+  пересмотр через месяц» (no alarm fires — it will surface in the notes review);
+  «сделай #4 временной на 30 дней» (advisory expiry — nothing is EVER deleted
+  automatically). A **bulk** archive asks for confirmation first. New notes enter
+  as `inbox` on suggestion and become `active`/`reference` on confirm; journal
+  entries stay outside note lifecycle. **Real‑use accounting:** opening a note's
+  detail card or having it cited in a *delivered* KB answer bumps its use count
+  (retrieval/ranking alone never counts) — the basis for the upcoming
+  review/resurfacing features.
 
 ### Knowledge & answers
 - **Ask (KB Q&A)** (`ask`): "когда мой рейс?", "что по плану на сегодня?" → semantic
@@ -597,8 +611,11 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
 
 ## 6. Data model (SQLite, WAL)
 
-Core inbox: `messages` (lifecycle `pending → suggested → confirmed`, `failed`/
-`duplicate`; forward origin, dates) · `urls` · `images` · `files` (any attachment by
+Core inbox: `messages` (ingest lifecycle `pending → suggested → confirmed`,
+`failed`/`duplicate`; forward origin, dates; plus the separate **knowledge
+lifecycle** 2026‑07‑17: `knowledge_state` inbox/active/archived, `note_purpose`,
+`saved_reason`, `review_at`, `expires_at` advisory, `use_count`/`last_used_at`
+real-use counters, `archived_at`/`archive_reason`) · `urls` · `images` · `files` (any attachment by
 file_id) · `facts` · `chunks` (BGE‑M3 embeddings) · `categories` (Cyrillic‑safe;
 `kind` = `inbox`|`journal`) · `reminders` (incl. `prev_due_utc`, `closed_at`,
 `close_reason`) + `reminder_events` lifecycle log · `feedback` ·
@@ -696,7 +713,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 503 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run on
+- **Tests:** 512 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run on
   the box as part of every deploy and in GitHub Actions — including a
   **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and

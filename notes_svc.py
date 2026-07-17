@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import events
 import ingest
 import llm
 import reminders
@@ -478,6 +479,10 @@ class NotesMixin:
         # diverge on a long-lived DB (numbers are assigned lazily, newest-first), so
         # re-resolving by the raw id showed a DIFFERENT note's card.
         self.reply(chat_id, self.item_detail_text(lang, {"id": self.note_no(row["id"])}))
+        # Opening the detail is a REAL use (unlike mere retrieval/ranking).
+        if store.note_mark_used(self.conn, row["id"]):
+            events.record_done(self.conn, "note_opened", chat_id=chat_id,
+                               payload={"message_id": row["id"]})
         # Hand back the actual photos/files attached to the item, too.
         self.send_attachments(chat_id, row)
 
@@ -587,6 +592,80 @@ class NotesMixin:
         store.message_update_summary(self.conn, row["id"], new_summary[:600])
         self.reply(chat_id, T(lang, "note_edited", row_id=self.note_no(row["id"]),
                               summary=new_summary[:200]))
+
+    _LIFECYCLE_OPS = ("archive", "restore", "keep", "set_purpose", "review_later",
+                      "make_temporary")
+    _LIFECYCLE_EVENT = {"archive": "note_archived", "restore": "note_restored",
+                        "keep": "note_kept", "set_purpose": "note_triaged",
+                        "review_later": "note_review_deferred",
+                        "make_temporary": "note_triaged"}
+    _PURPOSE_LABELS = {
+        "reference": ("справка", "reference"), "source": ("источник", "source"),
+        "idea": ("идея", "idea"), "decision": ("решение", "decision"),
+        "temporary": ("временная", "temporary"),
+        "actionable": ("требует действия", "actionable"),
+    }
+
+    def do_note_lifecycle(self, chat_id, lang, params):
+        """Reversible note triage: archive/restore/keep/purpose/review/temporary.
+        Single ops run directly (the reply carries the undo); a BULK archive is
+        staged behind a pending confirm, like item_delete. Never deletes."""
+        op = str(params.get("operation") or "").strip().lower()
+        if op not in self._LIFECYCLE_OPS:
+            self.reply(chat_id, T(lang, "clarify"))
+            return
+        rows = self.resolve_items(params)
+        if not rows:
+            self.reply(chat_id, T(lang, "items_empty"))
+            return
+        if op == "archive" and len(rows) > 1:
+            ids = [r["id"] for r in rows]
+            store.pending_set(self.conn, chat_id, "note_archive", {"row_ids": ids})
+            listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
+            self.reply(chat_id, T(lang, "note_archive_confirm_multi",
+                                  n=len(ids), ids=listing))
+            return
+        purpose = str(params.get("purpose") or "").strip().lower()
+        when = reminders.parse_iso_utc(params.get("when"))
+        for row in rows:
+            no = self.note_no(row["id"])
+            if op == "archive":
+                ok = store.note_archive(self.conn, row["id"], reason="archived by boss")
+                key, kw = "note_archived", {"row_id": no}
+            elif op == "restore":
+                ok = store.note_restore(self.conn, row["id"])
+                key, kw = "note_restored", {"row_id": no}
+            elif op == "keep":
+                ok = store.note_keep(self.conn, row["id"])
+                key, kw = "note_kept", {"row_id": no}
+            elif op == "set_purpose":
+                ok = store.note_set_purpose(self.conn, row["id"], purpose)
+                if not ok and purpose not in store.NOTE_PURPOSES:
+                    self.reply(chat_id, T(lang, "clarify"))  # unknown purpose word
+                    return
+                label = self._PURPOSE_LABELS.get(purpose, (purpose, purpose))
+                key, kw = "note_purpose_set", {"row_id": no,
+                                               "purpose": label[0 if lang == "ru" else 1]}
+            elif op == "review_later":
+                due = when or (datetime.now(timezone.utc) + timedelta(days=7))
+                ok = store.note_set_review(self.conn, row["id"], due.isoformat())
+                key, kw = "note_review_set", {
+                    "row_id": no,
+                    "when_local": reminders.fmt_local(due.isoformat(), self.tz_offset())}
+            else:  # make_temporary — advisory expiry, never an auto-delete
+                due = when or (datetime.now(timezone.utc) + timedelta(days=30))
+                ok = store.note_make_temporary(self.conn, row["id"], due.isoformat())
+                key, kw = "note_temporary_set", {
+                    "row_id": no,
+                    "when_local": reminders.fmt_local(due.isoformat(), self.tz_offset())}
+            if ok:
+                events.record_done(self.conn, self._LIFECYCLE_EVENT[op],
+                                   chat_id=chat_id, payload={"message_id": row["id"]})
+                self.reply(chat_id, T(lang, key, **kw))
+                log(f"note_lifecycle {op} #{no} (id={row['id']})")
+            else:
+                # journal entries / failed rows live outside note lifecycle
+                self.reply(chat_id, T(lang, "note_lifecycle_na", row_id=no))
 
     def do_item_delete(self, chat_id, lang, params):
         rows = self.resolve_items(params)

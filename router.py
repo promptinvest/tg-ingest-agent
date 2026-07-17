@@ -35,6 +35,7 @@ ACTIONS = {
     "item_delete",       # params: id OR query — delete a stored item (asks confirmation)
     "note_edit",         # params: id/query + new_summary — fix a saved note's summary text in place
     "recategorize",      # params: id/ids/query/count + category — change a saved item's category
+    "note_lifecycle",    # params: operation in archive|restore|keep|set_purpose|review_later|make_temporary + id/ids/query, purpose, when (UTC ISO)
     "merge_categories",  # params: from + into — fold a duplicate category into another, delete the empty one
     "show_media",        # params: id OR query — re-send the stored photo(s)
     "read_media",        # params: id? — transcribe a forwarded voice / read a file's CONTENT
@@ -146,6 +147,13 @@ NOTE: note_edit fixes a saved NOTE's SUMMARY text — put the corrected text in 
 "удали #2" / "удали пост про рейсы" / "сотри #2" -> {"action": "item_delete", "params": {"id": 2}, "confidence": 0.9}
 "удали #2, 4 и 10" / "delete #2, #4, #10" -> {"action": "item_delete", "params": {"ids": [2, 4, 10]}, "confidence": 0.92}
 "поменяй категорию #2 на Документы" / "переложи #2 в Документы" / "смени категорию на Документы" / "recategorize #2 as Documents" / "change category to Documents" -> {"action": "recategorize", "params": {"id": 2, "category": "Документы"}, "confidence": 0.92}
+"убери #5 в архив" / "archive note #5" / "заархивируй пост про рейсы" -> {"action": "note_lifecycle", "params": {"operation": "archive", "id": 5}, "confidence": 0.92}
+"верни #5 из архива" / "восстанови #5" / "restore #5" -> {"action": "note_lifecycle", "params": {"operation": "restore", "id": 5}, "confidence": 0.92}
+"оставь #3 в активных" / "keep #3" -> {"action": "note_lifecycle", "params": {"operation": "keep", "id": 3}, "confidence": 0.9}
+"пометь #3 как идею" / "mark #3 as a decision" -> {"action": "note_lifecycle", "params": {"operation": "set_purpose", "id": 3, "purpose": "idea"}, "confidence": 0.9}
+"поставь #4 на пересмотр через месяц" / "review #4 next month" -> {"action": "note_lifecycle", "params": {"operation": "review_later", "id": 4, "when": "<UTC ISO a month ahead>"}, "confidence": 0.9}
+"сделай #4 временной на 30 дней" / "make #4 temporary for 30 days" -> {"action": "note_lifecycle", "params": {"operation": "make_temporary", "id": 4, "when": "<UTC ISO 30 days ahead>"}, "confidence": 0.9}
+NOTE: note_lifecycle ARCHIVES/restores/flags a saved NOTE — it does NOT delete (that's item_delete), does NOT change the category (recategorize), and "поставь на пересмотр" is NOT a reminder (no alarm fires; the note surfaces in the notes review). purpose is one of: reference, source, idea, decision, temporary, actionable.
 "поменяй категорию последнего на Чеки" / "переложи это в Чеки" (no id -> most recent) -> {"action": "recategorize", "params": {"category": "Чеки"}, "confidence": 0.9}
 "переложи всё из crypto в news" / "move category crypto to news" -> {"action": "recategorize", "params": {"query": "crypto", "category": "news"}, "confidence": 0.85}
 "объедини «AI tools» и «AI Tools & Resources»" / "это одна и та же категория, слей их в AI Tools & Resources" / "merge AI tools into AI Tools & Resources" / "удали дубликат категории X, перенеси в Y" -> {"action": "merge_categories", "params": {"from": "AI tools", "into": "AI Tools & Resources"}, "confidence": 0.9}

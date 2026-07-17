@@ -28,6 +28,47 @@ TEXTS = {
         "ru": "Хм, не совсем уловила 🤔 Скажи чуть конкретнее — и я подхвачу.",
         "en": "Hmm, I didn't quite catch that 🤔 Tell me a touch more and I've got it.",
     },
+    # -- note lifecycle (reversible triage; never deletes) --------------------
+    "note_archived": {
+        "ru": "Убрала #{row_id} в архив 🗂 Из поиска она не пропадёт; вернуть — «восстанови #{row_id}».",
+        "en": "Note #{row_id} is in the archive now 🗂 Still searchable; say \"restore #{row_id}\" to bring it back.",
+    },
+    "note_archived_multi": {
+        "ru": "Убрала в архив {n} заметок 🗂 Вернуть любую — «восстанови #N».",
+        "en": "Moved {n} notes to the archive 🗂 Say \"restore #N\" to bring any back.",
+    },
+    "note_archive_confirm_multi": {
+        "ru": "Убрать в архив {n} заметок ({ids})? Это обратимо — скажи «да» или «нет».",
+        "en": "Archive {n} notes ({ids})? It's reversible — say \"yes\" or \"no\".",
+    },
+    "note_restored": {
+        "ru": "Вернула #{row_id} из архива — снова в активных ✨",
+        "en": "Note #{row_id} is back from the archive — active again ✨",
+    },
+    "note_kept": {
+        "ru": "Хорошо, #{row_id} остаётся в активных 👌",
+        "en": "Okay, #{row_id} stays active 👌",
+    },
+    "note_purpose_set": {
+        "ru": "Пометила #{row_id} как «{purpose}».",
+        "en": "Marked #{row_id} as \"{purpose}\".",
+    },
+    "note_review_set": {
+        "ru": "Пометила #{row_id} на пересмотр — {when_local}. Будильника не будет: "
+              "она просто всплывёт в обзоре заметок.",
+        "en": "Flagged #{row_id} for review around {when_local}. No alarm — "
+              "it'll surface in the notes review.",
+    },
+    "note_temporary_set": {
+        "ru": "#{row_id} теперь временная — примерно до {when_local}. Сама ничего "
+              "не удалю, просто предложу решить её судьбу.",
+        "en": "#{row_id} is temporary now — until about {when_local}. I won't "
+              "delete anything myself, just nudge you to decide.",
+    },
+    "note_lifecycle_na": {
+        "ru": "#{row_id} — это запись журнала, у неё нет статусов заметок.",
+        "en": "#{row_id} is a journal entry — note lifecycle doesn't apply to it.",
+    },
     # NB: no final verbs (action_truth catalogue guard) — a failure, nothing stored.
     "album_failed": {
         "ru": "Не получилось сохранить этот альбом 😔 Перешли его ещё раз, пожалуйста.",

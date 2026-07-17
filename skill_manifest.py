@@ -41,6 +41,10 @@ SKILLS = {
                   "title": {"en": "Edit a note", "ru": "Исправить заметку"}},
     "recategorize": {"risk": "state_write", "writes_state": True, "persona_context": True,
                      "title": {"en": "Re-categorize item", "ru": "Сменить категорию"}},
+    # Reversible single ops run directly (undo = the inverse op); a BULK archive
+    # is confirmation-gated in the handler via a pending, like item_delete.
+    "note_lifecycle": {"risk": "state_write", "writes_state": True, "persona_context": True,
+                       "title": {"en": "Note lifecycle", "ru": "Статус заметки"}},
     "merge_categories": {"risk": "state_write", "writes_state": True,
                          "title": {"en": "Merge categories", "ru": "Объединить категории"}},
     "purge": {"risk": "destructive", "writes_state": True, "destructive": True,

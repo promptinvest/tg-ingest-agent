@@ -92,6 +92,7 @@ _DISPATCH = {
     "merge_categories":    lambda s, c: s.do_merge_categories(c.chat_id, c.lang, c.params),
     "recategorize":        lambda s, c: s.do_recategorize(c.chat_id, c.lang, c.params),
     "item_delete":         lambda s, c: s.do_item_delete(c.chat_id, c.lang, c.params),
+    "note_lifecycle":      lambda s, c: s.do_note_lifecycle(c.chat_id, c.lang, c.params),
     "note_edit":           lambda s, c: s.do_note_edit(c.chat_id, c.lang, c.params, c.text),
     "show_media":          lambda s, c: s.do_show_media(c.chat_id, c.lang, c.params),
     "read_media":          lambda s, c: s.do_read_media(c.chat_id, c.lang, c.params),
@@ -1153,6 +1154,18 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     store.reminder_event(self.conn, rid, "acknowledged", close_reason)
                 self.reply(chat_id, T(lang, "reminder_skipped" if close_reason == "skipped"
                                       else "reminder_done"))
+        elif kind == "note_archive":
+            store.pending_clear(self.conn, chat_id)
+            if action != "confirm":  # bulk archive only on an explicit yes
+                self.reply(chat_id, T(lang, "cancelled"))
+                return
+            ids = payload.get("row_ids") or []
+            archived = [rid for rid in ids if store.note_archive(
+                self.conn, rid, reason="bulk archive by boss")]
+            for rid in archived:
+                events.record_done(self.conn, "note_archived", chat_id=chat_id,
+                                   payload={"message_id": rid})
+            self.reply(chat_id, T(lang, "note_archived_multi", n=len(archived)))
         elif kind == "delete":
             if action != "confirm":  # deletion only on an explicit yes
                 store.pending_clear(self.conn, chat_id)
