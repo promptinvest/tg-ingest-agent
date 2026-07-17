@@ -28,6 +28,14 @@ TEXTS = {
         "ru": "Хм, не совсем уловила 🤔 Скажи чуть конкретнее — и я подхвачу.",
         "en": "Hmm, I didn't quite catch that 🤔 Tell me a touch more and I've got it.",
     },
+    # Sent AFTER the note commit when the reminder draft can't take the single
+    # pending slot (another confirmation is mid-flight) — never stacks pendings.
+    "capture_reminder_slot_busy": {
+        "ru": ("Заметку сохранила ✔️ А напоминание предложу, как закончим с текущим "
+               "вопросом — сначала ответь на него, пожалуйста 🙂"),
+        "en": ("The note is saved ✔️ I'll offer the reminder once we finish the "
+               "question that's already open — answer that one first, please 🙂"),
+    },
     # -- note lifecycle (reversible triage; never deletes) --------------------
     "note_archived": {
         "ru": "Убрала #{row_id} в архив 🗂 Из поиска она не пропадёт; вернуть — «восстанови #{row_id}».",

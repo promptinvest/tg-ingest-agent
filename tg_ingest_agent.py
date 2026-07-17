@@ -2461,9 +2461,28 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if row["status"] == "confirmed":
             self.answer_callback(callback_id, f"OK: {row['category']}")
             return
-        category = name if kind == "named" else (row["suggested_category"] or self.cfg.fallback_category)
+        lang = self.lang()
         pending = store.pending_get(self.conn, chat_id)
-        if pending and pending["kind"] == "category" and pending["payload"].get("row_id") == row_id:
+        ours = (pending and pending["kind"] == "category"
+                and pending["payload"].get("row_id") == row_id)
+        if kind == "discard":
+            if ours:
+                store.pending_clear(self.conn, chat_id)
+            for path in store.delete_message(self.conn, row_id):
+                Path(path).unlink(missing_ok=True)
+            store.kv_set(self.conn, f"capture_action:{row_id}", "")
+            log(f"message #{row_id} discarded via card button")
+            self.answer_callback(callback_id, "🗑 Ок" if lang == "ru" else "🗑 OK")
+            try:  # strip the now-dead keyboard from the card
+                tg_call(self.cfg.token, "editMessageReplyMarkup",
+                        {"chat_id": chat_id,
+                         "message_id": msg.get("message_id")
+                         or row["suggestion_message_id"]})
+            except TelegramError:
+                pass
+            return
+        category = name if kind == "named" else (row["suggested_category"] or self.cfg.fallback_category)
+        if ours:
             store.pending_clear(self.conn, chat_id)
         self.answer_callback(callback_id, category)
         self.apply_category_confirm(
@@ -2471,6 +2490,36 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             edit_message_id=msg.get("message_id") or row["suggestion_message_id"],
             quiet=True,
         )
+        if kind == "temporary":
+            # Save-as-temporary: the same atomic confirm, plus an ADVISORY 30-day
+            # expiry (never an auto-delete — it just resurfaces for a decision).
+            due = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+            store.note_make_temporary(self.conn, row_id, due)
+            events.record_done(self.conn, "note_triaged", chat_id=chat_id,
+                               payload={"message_id": row_id, "op": "temporary"})
+        elif kind == "remind":
+            # Save + reminder: the note is committed; the reminder is only a
+            # DRAFT in the (now free) single pending slot — his normal «да»
+            # confirms it through the existing reminder flow. If some other
+            # confirmation is mid-flight, never clobber it.
+            candidate = self._capture_action(row_id)
+            store.kv_set(self.conn, f"capture_action:{row_id}", "")
+            draft = reminders.validate_draft({
+                "title": (candidate or {}).get("title"),
+                "due_utc": (candidate or {}).get("due_utc"),
+                "recurrence": "none",
+            }) if candidate else None
+            slot = store.pending_get(self.conn, chat_id)
+            if draft is None:
+                pass  # candidate expired/invalid — the note is saved, nothing else
+            elif slot is None:
+                store.pending_set(self.conn, chat_id, "reminder", draft)
+                self.reply(chat_id, T(lang, "reminder_draft", title=draft["title"],
+                                      when_local=reminders.fmt_local(
+                                          draft["due_utc"], self.tz_offset()),
+                                      recurrence=T(lang, "recurrence_none")))
+            else:
+                self.reply(chat_id, T(lang, "capture_reminder_slot_busy"))
 
     def handle_page_callback(self, callback_id, chat_id, msg, data):
         """A ◀/▶ tap on a notes or journal list; edit the same message in place."""
@@ -2983,6 +3032,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         known = store.known_categories(self.conn)
         referential = False
         page_text = ""
+        capture_meta = {}
         if not (row["raw_text"] or urls or image_paths):
             category, alternatives, summary, facts = (
                 self.cfg.fallback_category, [], "(no analyzable content)", []
@@ -3024,7 +3074,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 image_paths = []
             try:
                 category, alternatives, summary, facts = ingest.suggest(
-                    self.cfg, self.conn, known, text_block, image_paths, self.lang()
+                    self.cfg, self.conn, known, text_block, image_paths, self.lang(),
+                    meta_out=capture_meta
                 )
             except llm.LLMError as exc:
                 # The model may not accept image input (open-weight models aren't
@@ -3035,7 +3086,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                         category, alternatives, summary, facts = ingest.suggest(
                             self.cfg, self.conn, known,
                             text_block + "\n(An attached image could not be analyzed by the current model.)",
-                            [], self.lang()
+                            [], self.lang(), meta_out=capture_meta
                         )
                         log(f"message #{row_id}: model lacks vision; categorized text-only")
                     except llm.LLMError as exc:
@@ -3052,6 +3103,17 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             referential = False
         store.set_suggestion(self.conn, row_id, category, summary, self.cfg.do_model)
         store.set_facts(self.conn, row_id, facts)
+        if capture_meta:
+            # Same meta-copy guard as summaries: a reason describing the SAVE
+            # REQUEST (not the content) is dropped, never shown.
+            if capture_meta.get("saved_reason") and \
+                    self._is_meta_summary(capture_meta["saved_reason"]):
+                capture_meta["saved_reason"] = None
+            store.set_capture_meta(self.conn, row_id, capture_meta)
+            if capture_meta.get("action_candidate"):
+                store.kv_set(self.conn, f"capture_action:{row_id}",
+                             json.dumps(capture_meta["action_candidate"],
+                                        ensure_ascii=False))
         # Index for semantic recall: full text for documents, else summary+facts.
         # For a referential save the thin command isn't worth indexing — the
         # resolved summary is the real content for `ask`. Fetched page content is
@@ -3105,12 +3167,49 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 "and summarize the ACTUAL subject — the specific film/topic/person/thing "
                 "— not the literal save command.)")
 
+    def _capture_action(self, row_id):
+        """The validated action candidate stashed at suggestion time, or None."""
+        raw = store.kv_get(self.conn, f"capture_action:{row_id}")
+        if not raw:
+            return None
+        try:
+            candidate = json.loads(raw)
+        except ValueError:
+            return None
+        if isinstance(candidate, dict) and candidate.get("title") \
+                and candidate.get("due_utc"):
+            return candidate
+        return None
+
     def present_suggestion(self, row_id, chat_id, reply_to, category, alternatives, summary, counts):
         lang = self.lang()
-        keyboard = ingest.build_suggestion_keyboard(row_id, category, alternatives)
+        ru = lang == "ru"
+        row = store.get_message(self.conn, row_id)
+        candidate = self._capture_action(row_id)
+        keyboard = ingest.build_suggestion_keyboard(
+            row_id, category, alternatives, has_action=bool(candidate), lang=lang)
+        text = T(lang, "suggestion", category=category, summary=summary[:500],
+                 counts=counts)
+        # One compact card (v1.1 §8.2): the WHY line and, when the content itself
+        # carries a validated date, the possible follow-up — data only, nothing
+        # is scheduled until the boss confirms a normal reminder draft.
+        if row is not None and row["saved_reason"]:
+            purpose = row["note_purpose"] or "reference"
+            plabel = dict(reference=("справка", "reference"), source=("источник", "source"),
+                          idea=("идея", "idea"), decision=("решение", "decision"),
+                          temporary=("временная", "temporary"),
+                          actionable=("требует действия", "actionable"),
+                          ).get(purpose, (purpose, purpose))[0 if ru else 1]
+            text += (f"\n📌 Зачем: {row['saved_reason']} · {plabel}" if ru
+                     else f"\n📌 Why: {row['saved_reason']} · {plabel}")
+        if candidate:
+            when_local = reminders.fmt_local(candidate["due_utc"], self.tz_offset())
+            text += (f"\n⏰ Вижу возможное действие: {candidate['title']} — {when_local}."
+                     if ru else
+                     f"\n⏰ Possible follow-up: {candidate['title']} — {when_local}.")
         result = self.reply(
             chat_id,
-            T(lang, "suggestion", category=category, summary=summary[:500], counts=counts),
+            text,
             reply_to,
             reply_markup={"inline_keyboard": keyboard},
         )

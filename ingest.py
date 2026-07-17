@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Ingest skill: message parsing, URL extraction, category suggestion."""
 import re
+from datetime import datetime, timedelta, timezone
 
 import llm
 import store
@@ -168,12 +169,23 @@ def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, la
         "Do NOT speculate about a link you cannot read (no 'вероятно содержит' / 'probably"
         " contains'): give the link's visible title/subject if present, otherwise just note"
         " it's a link to <source> without guessing its contents.\n"
+        "Also assess WHY this content is worth keeping (about the CONTENT, never the"
+        " request): note_purpose is one of reference|source|idea|decision|temporary|"
+        "actionable; saved_reason is ONE short sentence in the source language about"
+        " what it will likely be useful for; review_policy is none unless the content"
+        " clearly expires (temporary_30d / temporary_90d) or deserves a revisit"
+        " (review_7d / review_30d); action_candidate is null unless the content ITSELF"
+        " states a concrete dated deadline/action.\n"
         "Reply with ONLY a JSON object: "
         '{"category": "<best category>", '
         '"alternatives": ["<up to 2 other plausible categories>"], '
         '"summary": "<2-3 sentences with the concrete specifics>", '
         '"facts": ["<up to 5 short key facts worth remembering, one line each;'
-        ' include amounts, dates, names; empty list if none>"]}'
+        ' include amounts, dates, names; empty list if none>"], '
+        '"note_purpose": "<reference|source|idea|decision|temporary|actionable>", '
+        '"saved_reason": "<one short sentence>", '
+        '"review_policy": "<none|review_7d|review_30d|temporary_30d|temporary_90d>", '
+        '"action_candidate": null | {"title": "<short imperative>", "due_utc": "<UTC ISO>"}}'
     )
     content = [{"type": "text", "text": f"<message>\n{text_block}\n</message>"}]
     used = 0
@@ -199,6 +211,40 @@ def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, la
 
 MAX_FACTS = 5
 MAX_FACT_CHARS = 200
+
+CAPTURE_REVIEW_POLICIES = ("none", "review_7d", "review_30d",
+                           "temporary_30d", "temporary_90d")
+
+
+def parse_capture_meta(parsed, now=None):
+    """Validate the OPTIONAL capture-metadata fields of the ingest JSON (plan
+    v1.1 §8.1). Closed enums with safe fallbacks; the action candidate's date
+    must re-parse as a real FUTURE UTC time — deterministic code, never the
+    model, is the authority on dates — and nothing here executes anything."""
+    parsed = parsed or {}
+    now = now or datetime.now(timezone.utc)
+    purpose = str(parsed.get("note_purpose") or "").strip().lower()
+    if purpose not in store.NOTE_PURPOSES:
+        purpose = "reference"
+    policy = str(parsed.get("review_policy") or "").strip().lower()
+    if policy not in CAPTURE_REVIEW_POLICIES:
+        policy = "none"
+    reason = str(parsed.get("saved_reason") or "").strip()[:200] or None
+    candidate = None
+    raw = parsed.get("action_candidate")
+    if isinstance(raw, dict):
+        title = str(raw.get("title") or "").strip()[:80]
+        try:
+            due = datetime.fromisoformat(
+                str(raw.get("due_utc") or "").replace("Z", "+00:00"))
+        except ValueError:
+            due = None
+        if due is not None and due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        if title and due is not None and due > now + timedelta(minutes=5):
+            candidate = {"title": title, "due_utc": due.isoformat()}
+    return {"note_purpose": purpose, "saved_reason": reason,
+            "review_policy": policy, "action_candidate": candidate}
 
 
 def parse_facts(parsed):
@@ -267,12 +313,14 @@ def _snap_to_journal(category, journals):
     return category
 
 
-def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
+def suggest(cfg, conn, known, text_block, image_paths, lang="ru", meta_out=None):
     """Ask the LLM for a category suggestion.
 
     Returns (category, alternatives, summary, facts); never raises on bad
     model output (falls back to cfg.fallback_category), only on transport
-    errors.
+    errors. When `meta_out` is a dict it is filled with the validated capture
+    metadata (parse_capture_meta) — the return shape stays a 4-tuple so
+    existing callers/tests are untouched.
     """
     corrections = store.feedback_recent(conn, "ingest", limit=5)
     journals = store.journal_categories(conn)
@@ -293,6 +341,8 @@ def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
         reply = llm.chat_profile(cfg, conn, "ingest", messages, profile="ingest_balanced")
         parsed = llm.parse_llm_json(reply)
         category = llm.normalize_category((parsed or {}).get("category"))
+    if isinstance(meta_out, dict):
+        meta_out.update(parse_capture_meta(parsed))
     if parsed is None or category is None:
         # A JSON-shaped reply that wouldn't parse must NOT be stored verbatim — that
         # showed raw JSON as a note's summary. Salvage the category/summary fields by
@@ -324,8 +374,19 @@ def suggest(cfg, conn, known, text_block, image_paths, lang="ru"):
 CALLBACK_BYTE_LIMIT = 64
 
 
-def build_suggestion_keyboard(row_id, category, alternatives):
-    keyboard = [[{"text": f"✅ {category}", "callback_data": f"s|{row_id}"}]]
+def build_suggestion_keyboard(row_id, category, alternatives, has_action=False,
+                              lang="ru"):
+    """One capture card, conditional buttons (plan v1.1 §8.2): the confirm row
+    (+ alternatives) as before, plus Temporary/Discard; a validated action
+    candidate adds a Save-with-reminder row (the reminder still goes through
+    the normal draft confirmation — nothing fires from the button alone)."""
+    ru = lang == "ru"
+    keyboard = []
+    if has_action:
+        keyboard.append([{"text": ("✅⏰ Сохранить + напоминание" if ru
+                                   else "✅⏰ Save + reminder"),
+                          "callback_data": f"r|{row_id}"}])
+    keyboard.append([{"text": f"✅ {category}", "callback_data": f"s|{row_id}"}])
     alt_row = []
     for alt in alternatives:
         if alt.casefold() == category.casefold():
@@ -336,11 +397,20 @@ def build_suggestion_keyboard(row_id, category, alternatives):
         alt_row.append({"text": alt, "callback_data": data})
     if alt_row:
         keyboard.append(alt_row[:3])
+    keyboard.append([
+        {"text": ("🕒 Временно (30 дней)" if ru else "🕒 Temporary (30 days)"),
+         "callback_data": f"t|{row_id}"},
+        {"text": ("🗑 Не сохранять" if ru else "🗑 Don't save"),
+         "callback_data": f"d|{row_id}"},
+    ])
     return keyboard
 
 
 def parse_callback_data(data):
-    """Parse 's|<row_id>' or 'a|<row_id>|<category>'; None when malformed."""
+    """Parse the capture-card callbacks: 's|<row_id>' (save as suggested),
+    'a|<row_id>|<category>' (named alternative), 'r|<row_id>' (save + reminder
+    draft), 't|<row_id>' (save as temporary), 'd|<row_id>' (discard).
+    None when malformed."""
     parts = str(data or "").split("|", 2)
     if len(parts) < 2:
         return None
@@ -352,4 +422,7 @@ def parse_callback_data(data):
         return ("suggested", row_id, None)
     if parts[0] == "a" and len(parts) == 3 and parts[2].strip():
         return ("named", row_id, parts[2].strip())
+    if parts[0] in ("r", "t", "d") and len(parts) == 2:
+        return ({"r": "remind", "t": "temporary", "d": "discard"}[parts[0]],
+                row_id, None)
     return None

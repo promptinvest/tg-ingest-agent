@@ -1316,6 +1316,39 @@ def note_make_temporary(conn, message_id, expires_at_iso):
                         (expires_at_iso,))
 
 
+CAPTURE_REVIEW_POLICY_DAYS = {"review_7d": ("review_at", 7),
+                              "review_30d": ("review_at", 30),
+                              "temporary_30d": ("expires_at", 30),
+                              "temporary_90d": ("expires_at", 90)}
+
+
+def set_capture_meta(conn, message_id, meta, now=None):
+    """Persist the PROPOSED capture metadata at suggestion time (plan v1.1
+    §8.2). The one-card confirm then commits it atomically with the category:
+    confirm_category keeps these fields, and review selection reads only
+    ACTIVE notes, so a review_at/expires_at on a still-inbox row is inert."""
+    purpose = str(meta.get("note_purpose") or "").strip().lower()
+    if purpose not in NOTE_PURPOSES:
+        purpose = "reference"
+    now = now or datetime.now(timezone.utc)
+    review_at = expires_at = None
+    target = CAPTURE_REVIEW_POLICY_DAYS.get(meta.get("review_policy") or "none")
+    if target:
+        stamp = (now + timedelta(days=target[1])).isoformat()
+        if target[0] == "review_at":
+            review_at = stamp
+        else:
+            expires_at, purpose = stamp, "temporary"
+    reason = (str(meta.get("saved_reason"))[:200]
+              if meta.get("saved_reason") else None)
+    conn.execute(
+        "UPDATE messages SET note_purpose = ?, saved_reason = ?,"
+        " review_at = ?, expires_at = ? WHERE id = ?",
+        (purpose, reason, review_at, expires_at, message_id),
+    )
+    conn.commit()
+
+
 def note_mark_used(conn, message_id):
     """Count a REAL use only: detail opened, cited in a delivered answer,
     included in a delivered export, or an accepted resurfacing — never mere

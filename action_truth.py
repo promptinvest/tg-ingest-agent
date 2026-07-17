@@ -88,6 +88,8 @@ TEMPLATE_STATES = {
     "problem_logged": "done",
     "reminder_no_prev": "done",
     "files_empty": "done",
+    # Rendered only AFTER apply_category_confirm committed the note.
+    "capture_reminder_slot_busy": "confirmed",
 }
 
 

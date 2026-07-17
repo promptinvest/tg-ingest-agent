@@ -225,7 +225,12 @@ class KeyboardTests(unittest.TestCase):
     def test_keyboard_callback_byte_limit(self):
         long_cyrillic = "очень длинная категория на кириллице ww"  # > 64 bytes in UTF-8
         keyboard = ingest.build_suggestion_keyboard(7, "news", [long_cyrillic])
-        self.assertEqual(len(keyboard), 1)  # alternative dropped, no alt row
+        # alternative dropped (no alt row): confirm row + the temp/discard row only
+        self.assertEqual(len(keyboard), 2)
+        all_data = [b["callback_data"] for row in keyboard for b in row]
+        self.assertNotIn("a|", " ".join(all_data))
+        self.assertIn("t|7", all_data)
+        self.assertIn("d|7", all_data)
 
     def test_parse_callback_data(self):
         self.assertEqual(ingest.parse_callback_data("s|12"), ("suggested", 12, None))

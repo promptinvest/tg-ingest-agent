@@ -243,6 +243,19 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   deletes: `stats` never touches our conversation history, and `all` — the only
   scope that does — discloses the conversation‑turn count before you type the
   phrase (2026‑07‑16).
+- **One-card capture (2026‑07‑17, NTE‑003):** the suggestion card now carries the
+  **why** — a source‑grounded `saved_reason` + proposed purpose (📌 line; the
+  meta‑copy guard drops a reason that describes the request instead of the
+  content) — and conditional buttons: every card gets «🕒 Временно (30 дней)»
+  (advisory expiry) and «🗑 Не сохранять» beside the category confirm; when the
+  content itself carries a concrete FUTURE date the model may propose an
+  `action_candidate` (⏰ line, validated by deterministic date code — the model
+  is never the authority on dates) and the card adds «✅⏰ Сохранить +
+  напоминание». That button commits the note **first**, then stages a normal
+  reminder **draft** in the now‑free single pending slot (your «да» confirms it
+  through the ordinary reminder flow — nothing is ever scheduled by the button
+  alone, and a mid‑flight confirmation is never clobbered: the note saves and
+  Cara says she'll offer the reminder after the open question).
 - **Note lifecycle (`note_lifecycle`, 2026‑07‑17 — reversible triage, never
   deletes):** beside its category (what it's about) every note carries a
   **knowledge state** (inbox → active → archived) and a **purpose** (справка /
@@ -713,7 +726,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 512 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run on
+- **Tests:** 520 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run on
   the box as part of every deploy and in GitHub Actions — including a
   **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and

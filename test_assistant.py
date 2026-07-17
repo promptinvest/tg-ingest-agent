@@ -17,6 +17,7 @@ import common
 import converse
 import events
 import fetch
+import ingest
 import gcal
 import jobs
 import knowledge
@@ -1880,7 +1881,7 @@ class ConversationDispatchTests(unittest.TestCase):
         row = store.get_message(conn, mid)
         captured = {}
 
-        def fake_suggest(cfg, c, known, text_block, image_paths, lang="ru"):
+        def fake_suggest(cfg, c, known, text_block, image_paths, lang="ru", meta_out=None):
             captured["tb"] = text_block
             return ("Фильмы", [], "Фильм «Не смотрите наверх» с Ди Каприо — посмотреть", [])
 
@@ -1912,7 +1913,7 @@ class ConversationDispatchTests(unittest.TestCase):
         row = store.get_message(conn, mid)
         calls = []
 
-        def fake_suggest(cfg, c, known, text_block, image_paths, lang="ru"):
+        def fake_suggest(cfg, c, known, text_block, image_paths, lang="ru", meta_out=None):
             calls.append(list(image_paths))
             if image_paths:
                 raise llm.LLMError("HTTP 400: model does not support image input")
@@ -1941,7 +1942,7 @@ class ConversationDispatchTests(unittest.TestCase):
             cap["model"] = model
             return "скриншот про бюджетные путешествия"
 
-        def fake_suggest(cfg, c, known, text_block, image_paths, lang="ru"):
+        def fake_suggest(cfg, c, known, text_block, image_paths, lang="ru", meta_out=None):
             cap["tb"] = text_block
             cap["imgs"] = list(image_paths)
             return ("Путешествия", [], "s", [])
@@ -5825,7 +5826,7 @@ class NotesHandlingTests(unittest.TestCase):
         store.insert_url(self.conn, mid, "https://example.com/a")
         seen, indexed = {}, {}
 
-        def fake_suggest(cfg, c, known, text_block, images, lang="ru"):
+        def fake_suggest(cfg, c, known, text_block, images, lang="ru", meta_out=None):
             seen["block"] = text_block
             return "Интересное", [], "Статья о X.", []
 
@@ -6793,6 +6794,175 @@ class Batch1NoteLifecycleTests(unittest.TestCase):
                 mock.patch.object(self.agent, "reply", return_value=None):
             self.agent.do_ask(1, "ru", {"question": "когда рейс?"}, "когда рейс?")
         self.assertEqual(store.get_message(self.conn, a)["use_count"], 1)
+
+
+class Nte003CaptureCardTests(unittest.TestCase):
+    """NTE-003 (notes/journals plan v1.1 §8): capture metadata proposal +
+    validation, the one-card confirm, and Save+reminder pending sequencing."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "n3.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _suggested_row(self, tg_id=901, text="Дедлайн подачи заявки 1 сентября",
+                       candidate=None, saved_reason=None, purpose="reference"):
+        mid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        store.set_suggestion(self.conn, mid, "Кипр", "s", "m")
+        store.set_capture_meta(self.conn, mid, {
+            "note_purpose": purpose, "saved_reason": saved_reason,
+            "review_policy": "none", "action_candidate": candidate})
+        if candidate:
+            store.kv_set(self.conn, f"capture_action:{mid}",
+                         json.dumps(candidate, ensure_ascii=False))
+        return mid
+
+    # -- §8.1 validation ---------------------------------------------------------
+
+    def test_parse_capture_meta_enums_and_dates(self):
+        now = datetime.now(timezone.utc)
+        future = (now + timedelta(days=3)).isoformat()
+        past = (now - timedelta(days=3)).isoformat()
+        meta = ingest.parse_capture_meta({
+            "note_purpose": "IDEA", "review_policy": "review_7d",
+            "saved_reason": "  пригодится для проекта  ",
+            "action_candidate": {"title": "проверить дедлайн", "due_utc": future}})
+        self.assertEqual(meta["note_purpose"], "idea")
+        self.assertEqual(meta["review_policy"], "review_7d")
+        self.assertEqual(meta["saved_reason"], "пригодится для проекта")
+        self.assertEqual(meta["action_candidate"]["title"], "проверить дедлайн")
+        # unknown enums fall back safely; a PAST or unparsable date is rejected
+        meta = ingest.parse_capture_meta({
+            "note_purpose": "world domination", "review_policy": "whenever",
+            "action_candidate": {"title": "x", "due_utc": past}})
+        self.assertEqual(meta["note_purpose"], "reference")
+        self.assertEqual(meta["review_policy"], "none")
+        self.assertIsNone(meta["action_candidate"])
+        meta = ingest.parse_capture_meta({
+            "action_candidate": {"title": "", "due_utc": future}})
+        self.assertIsNone(meta["action_candidate"])  # no invented empty titles
+
+    def test_set_capture_meta_translates_policy(self):
+        mid = self._suggested_row(902)
+        store.set_capture_meta(self.conn, mid, {
+            "note_purpose": "reference", "saved_reason": "r",
+            "review_policy": "temporary_30d", "action_candidate": None})
+        row = store.get_message(self.conn, mid)
+        self.assertEqual(row["note_purpose"], "temporary")  # policy implies purpose
+        self.assertIsNotNone(row["expires_at"])
+        self.assertIsNone(row["review_at"])
+        # confirm keeps the proposed metadata atomically (one-card commit)
+        store.confirm_category(self.conn, mid, store.ensure_category(self.conn, "Кипр"))
+        row = store.get_message(self.conn, mid)
+        self.assertEqual((row["knowledge_state"], row["note_purpose"]),
+                         ("active", "temporary"))
+        self.assertIsNotNone(row["expires_at"])
+
+    # -- §8.2 the card -----------------------------------------------------------
+
+    def test_card_shows_reason_and_action_and_buttons(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        mid = self._suggested_row(
+            903, candidate={"title": "проверить дедлайн", "due_utc": future},
+            saved_reason="пригодится к подаче документов", purpose="actionable")
+        with mock.patch.object(self.agent, "reply", return_value=None) as r:
+            self.agent.present_suggestion(mid, 1, None, "Кипр", [], "суть", "")
+        text = r.call_args[0][1]
+        self.assertIn("📌", text)
+        self.assertIn("пригодится к подаче документов", text)
+        self.assertIn("⏰", text)
+        self.assertIn("проверить дедлайн", text)
+        keyboard = r.call_args.kwargs["reply_markup"]["inline_keyboard"]
+        all_data = [b["callback_data"] for rowk in keyboard for b in rowk]
+        self.assertIn(f"r|{mid}", all_data)   # Save + reminder offered
+        self.assertIn(f"t|{mid}", all_data)
+        self.assertIn(f"d|{mid}", all_data)
+
+    def test_card_without_candidate_has_no_reminder_button(self):
+        mid = self._suggested_row(904, saved_reason="просто справка")
+        with mock.patch.object(self.agent, "reply", return_value=None) as r:
+            self.agent.present_suggestion(mid, 1, None, "Кипр", [], "суть", "")
+        keyboard = r.call_args.kwargs["reply_markup"]["inline_keyboard"]
+        all_data = [b["callback_data"] for rowk in keyboard for b in rowk]
+        self.assertNotIn(f"r|{mid}", all_data)
+
+    # -- callbacks ---------------------------------------------------------------
+
+    def _cb(self, data):
+        return {"id": "cb1", "from": {"id": 1},
+                "message": {"chat": {"id": 1}, "message_id": 55}, "data": data}
+
+    def test_remind_callback_commits_note_then_stages_draft(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        mid = self._suggested_row(
+            905, candidate={"title": "проверить дедлайн", "due_utc": future})
+        store.pending_set(self.conn, 1, "category", {"row_id": mid})
+        with mock.patch.object(self.agent, "reply", return_value=True) as r, \
+                mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "edit_suggestion_message"):
+            self.agent.handle_callback(self._cb(f"r|{mid}"))
+        row = store.get_message(self.conn, mid)
+        self.assertEqual(row["status"], "confirmed")          # note committed first
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "reminder")         # then the draft
+        self.assertEqual(pending["payload"]["title"], "проверить дедлайн")
+        self.assertIn("проверить дедлайн", r.call_args[0][1])  # draft echoed
+        self.assertFalse(store.kv_get(self.conn, f"capture_action:{mid}"))
+        # его «да» goes through the NORMAL reminder confirm — nothing fired yet
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), 0)
+
+    def test_remind_callback_never_clobbers_foreign_pending(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        mid = self._suggested_row(
+            906, candidate={"title": "проверить дедлайн", "due_utc": future})
+        store.pending_set(self.conn, 1, "reminder_partial",
+                          {"need": "time", "title": "позвонить"})
+        with mock.patch.object(self.agent, "reply", return_value=True) as r, \
+                mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "edit_suggestion_message"):
+            self.agent.handle_callback(self._cb(f"r|{mid}"))
+        self.assertEqual(store.get_message(self.conn, mid)["status"], "confirmed")
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "reminder_partial")  # untouched
+        self.assertEqual(r.call_args[0][1],
+                         texts.T(self.agent.lang(), "capture_reminder_slot_busy"))
+
+    def test_temporary_callback_confirms_and_sets_expiry(self):
+        mid = self._suggested_row(907)
+        with mock.patch.object(self.agent, "reply", return_value=True), \
+                mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "edit_suggestion_message"):
+            self.agent.handle_callback(self._cb(f"t|{mid}"))
+        row = store.get_message(self.conn, mid)
+        self.assertEqual(row["status"], "confirmed")
+        self.assertEqual(row["note_purpose"], "temporary")
+        self.assertIsNotNone(row["expires_at"])
+
+    def test_discard_callback_deletes_suggestion(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        mid = self._suggested_row(908, candidate={"title": "x", "due_utc": future})
+        store.pending_set(self.conn, 1, "category", {"row_id": mid})
+        with mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(tg_ingest_agent_module(), "tg_call"):
+            self.agent.handle_callback(self._cb(f"d|{mid}"))
+        self.assertIsNone(store.get_message(self.conn, mid))
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertFalse(store.kv_get(self.conn, f"capture_action:{mid}"))
+
+
+def tg_ingest_agent_module():
+    import tg_ingest_agent
+    return tg_ingest_agent
 
 
 if __name__ == "__main__":
