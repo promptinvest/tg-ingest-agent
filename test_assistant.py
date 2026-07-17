@@ -6129,29 +6129,30 @@ class CorrectionPlan20260715Tests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(pattern["status"], "open")
 
-    def test_proactive_davai_opens_oldest_snapshotted_unsorted_item(self):
+    def test_proactive_davai_opens_snapshotted_note_review(self):
+        # 2026-07-17: the generic "unsorted" nudge became the note-review
+        # invitation; «Давай» opens the EXACT snapshotted batch deterministically.
         first = self._suggested(11, "старая несортированная", "Работа")
         second = self._suggested(12, "новая несортированная", "Футбол")
         self.agent.last_proactive = 0
-        with mock.patch.object(self.mod.proactive, "run", return_value="unsorted"), \
+        with mock.patch.object(self.mod.proactive, "run", return_value="note_review"), \
                 mock.patch.object(self.agent, "reply", return_value={"message_id": 50}):
             self.agent.check_proactive()
         context = json.loads(store.kv_get(self.conn, "proactive_context"))
+        self.assertEqual(context["kind"], "note_review")
         self.assertEqual(context["ids"], [first, second])
         with mock.patch.object(router, "route") as route, \
                 mock.patch.object(llm, "chat_profile") as chat, \
-                mock.patch.object(self.agent, "reply", return_value={"message_id": 51}):
+                mock.patch.object(self.agent, "reply",
+                                  return_value={"message_id": 51}) as r:
             self.agent.dispatch(1, {}, "Давай")
         route.assert_not_called()
         chat.assert_not_called()
-        self.assertEqual(store.pending_get(self.conn, 1)["payload"]["row_id"], first)
-        with mock.patch.object(router, "route", return_value={
-                "action": "confirm", "params": {}, "confidence": 1.0}), \
-                mock.patch.object(self.agent, "reply"), \
-                mock.patch.object(self.agent, "edit_suggestion_message"):
-            self.agent.dispatch(1, {}, "Да")
-        self.assertEqual(store.get_message(self.conn, first)["status"], "confirmed")
-        self.assertEqual(store.get_message(self.conn, second)["status"], "suggested")
+        text = r.call_args[0][1]
+        self.assertIn("несортированная", text)          # real items, not free-text
+        snap = json.loads(store.kv_get(self.conn, "note_review_snapshot"))
+        self.assertEqual(snap["ids"], [first, second])
+        self.assertEqual(snap["ttl"], 900)              # proactive follow-up window
 
     def test_plural_correction_reuses_existing_singular_journal(self):
         store.set_category_kind(self.conn, "Благодарность", "journal")
@@ -6963,6 +6964,184 @@ class Nte003CaptureCardTests(unittest.TestCase):
 def tg_ingest_agent_module():
     import tg_ingest_agent
     return tg_ingest_agent
+
+
+class Batch2ReviewResurfacingTests(unittest.TestCase):
+    """NTE-004/005/006 (plan v1.1 §9/§10): deterministic review + snapshot
+    follow-ups, state views/overview, contextual resurfacing."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "b2.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _note(self, tg_id, text="x", cat="News", confirm=True):
+        mid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        store.set_suggestion(self.conn, mid, cat, "s", "m")
+        if confirm:
+            store.confirm_category(self.conn, mid, store.ensure_category(self.conn, cat))
+        return mid
+
+    # -- NTE-004: deterministic selection ---------------------------------------
+
+    def test_review_priority_order_and_limit(self):
+        now = datetime.now(timezone.utc)
+        overdue = self._note(1, "review-due note")
+        store.note_set_review(self.conn, overdue,
+                              (now - timedelta(hours=2)).isoformat())
+        temp = self._note(2, "temp note")
+        store.note_make_temporary(self.conn, temp,
+                                  (now + timedelta(days=2)).isoformat())
+        act = self._note(3, "actionable note")
+        store.note_set_purpose(self.conn, act, "actionable")
+        inbox = self._note(4, "untriaged", confirm=False)
+        self._note(5, "plain recent note")  # not a candidate
+        batch = store.notes_review_candidates(self.conn)
+        self.assertEqual([reason for _r, reason in batch],
+                         ["review_due", "temp_expiring", "actionable_unused"])
+        self.assertEqual([r["id"] for r, _ in batch], [overdue, temp, act])
+        # exclusion (already shown) frees a slot for the next priority
+        batch = store.notes_review_candidates(self.conn, exclude_ids=[overdue])
+        self.assertEqual([reason for _r, reason in batch],
+                         ["temp_expiring", "actionable_unused", "inbox"])
+        self.assertEqual(batch[2][0]["id"], inbox)
+
+    def test_do_note_review_replies_and_snapshots(self):
+        a = self._note(11, "первая заметка")
+        store.note_set_review(self.conn, a, (datetime.now(timezone.utc)
+                                             - timedelta(hours=1)).isoformat())
+        with mock.patch.object(self.agent, "reply",
+                               return_value={"message_id": 9}) as r:
+            self.agent.do_note_review(1, "ru")
+        text = r.call_args[0][1]
+        self.assertIn("#1 · News", text)
+        self.assertIn("пора пересмотреть", text)
+        snap = json.loads(store.kv_get(self.conn, "note_review_snapshot"))
+        self.assertEqual(snap["ids"], [a])
+        # same day, same item: not re-shown (suppressed as already shown)
+        with mock.patch.object(self.agent, "reply",
+                               return_value={"message_id": 10}) as r:
+            self.agent.do_note_review(1, "ru")
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "note_review_empty"))
+
+    def test_undelivered_review_snapshots_nothing(self):
+        a = self._note(12, "x")
+        store.note_set_review(self.conn, a, (datetime.now(timezone.utc)
+                                             - timedelta(hours=1)).isoformat())
+        with mock.patch.object(self.agent, "reply", return_value=None):
+            self.agent.do_note_review(1, "ru")
+        self.assertFalse(store.kv_get(self.conn, "note_review_snapshot"))
+
+    def test_ordinal_followup_resolves_against_snapshot(self):
+        a = self._note(13, "первая")
+        b = self._note(14, "вторая")
+        for mid in (a, b):
+            store.note_set_review(self.conn, mid, (datetime.now(timezone.utc)
+                                                   - timedelta(hours=1)).isoformat())
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 9}):
+            self.agent.do_note_review(1, "ru")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive"},
+                                         "второе в архив")
+        self.assertEqual(store.get_message(self.conn, b)["knowledge_state"],
+                         "archived")
+        self.assertEqual(store.get_message(self.conn, a)["knowledge_state"],
+                         "active")
+        self.assertIn("в архив", r.call_args[0][1])
+
+    # -- NTE-005: state views + overview -----------------------------------------
+
+    def test_state_views_filter_exactly(self):
+        a = self._note(21, "активная")
+        arch = self._note(22, "архивная")
+        store.note_archive(self.conn, arch)
+        inbox = self._note(23, "входящая", confirm=False)
+        ids = lambda state: [r["id"] for r in
+                             store.list_messages(self.conn, state=state, limit=20)]
+        self.assertEqual(ids("archived"), [arch])
+        self.assertEqual(ids("inbox"), [inbox])
+        self.assertIn(a, ids("active"))
+        self.assertNotIn(arch, ids("active"))
+
+    def test_overview_shows_lifecycle_counts(self):
+        self._note(24, "активная")
+        arch = self._note(25, "архивная")
+        store.note_archive(self.conn, arch)
+        with mock.patch.object(self.agent, "reply"):
+            text = self.agent.overview_text("ru")
+        self.assertIn("1 активных", text)
+        self.assertIn("1 в архиве", text)
+
+    # -- NTE-006: resurfacing ----------------------------------------------------
+
+    def test_ask_offers_one_related_note_and_accepts_open(self):
+        a = self._note(31, "рейс завтра в 10")
+        b = self._note(32, "рейс — регистрация онлайн")
+        no_a = store.ensure_note_no(self.conn, a)
+        no_b = store.ensure_note_no(self.conn, b)
+        context = [
+            {"message_id": a, "note_no": no_a, "text": "рейс завтра в 10",
+             "category": "News", "title": None},
+            {"message_id": b, "note_no": no_b, "text": "регистрация онлайн",
+             "category": "News", "title": None},
+        ]
+        with mock.patch.object(llm, "embed", return_value=[[0.0, 0.1]]), \
+                mock.patch.object(llm, "chat_profile",
+                                  return_value=f"Рейс в 10 (#{no_a})"), \
+                mock.patch.object(self.agent, "_keyword_context",
+                                  return_value=context), \
+                mock.patch.object(self.agent, "reply", return_value=True) as r:
+            self.agent.do_ask(1, "ru", {"question": "когда рейс?"}, "когда рейс?")
+        hints = [c[0][1] for c in r.call_args_list if f"#{no_b}" in c[0][1]]
+        self.assertEqual(len(hints), 1)                      # exactly ONE suggestion
+        self.assertIn("открыть", hints[0])
+        self.assertIsNotNone(self.conn.execute(
+            "SELECT 1 FROM events WHERE kind='note_resurfaced'").fetchone())
+        # opening the suggested note within the window = accepted
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "send_attachments"):
+            self.agent.do_item_detail(1, "ru", {"id": no_b})
+        self.assertIsNotNone(self.conn.execute(
+            "SELECT 1 FROM events WHERE kind='note_resurface_accepted'").fetchone())
+        self.assertFalse(store.kv_get(self.conn, "last_resurfaced"))
+
+    def test_ask_single_context_note_gets_no_suggestion(self):
+        a = self._note(33, "рейс завтра в 10")
+        no_a = store.ensure_note_no(self.conn, a)
+        context = [{"message_id": a, "note_no": no_a, "text": "рейс завтра в 10",
+                    "category": "News", "title": None}]
+        with mock.patch.object(llm, "embed", return_value=[[0.0, 0.1]]), \
+                mock.patch.object(llm, "chat_profile",
+                                  return_value=f"Рейс в 10 (#{no_a})"), \
+                mock.patch.object(self.agent, "_keyword_context",
+                                  return_value=context), \
+                mock.patch.object(self.agent, "reply", return_value=True) as r:
+            self.agent.do_ask(1, "ru", {"question": "когда рейс?"}, "когда рейс?")
+        self.assertEqual(len(r.call_args_list), 1)           # answer only, no hint
+
+    # -- NTE-006: proactive invitation -------------------------------------------
+
+    def test_proactive_review_invitation_fires_and_respects_dedup(self):
+        import proactive
+        inbox = self._note(41, "неразобранная", confirm=False)
+        sent = []
+        key = proactive.run(self.conn, self.cfg, "ru",
+                            lambda t: sent.append(t) or {"message_id": 1},
+                            now=datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(key, "note_review")
+        self.assertIn("показать", sent[0])
+        self.assertEqual(store.get_message(self.conn, inbox)["knowledge_state"],
+                         "inbox")  # suggestion-only: nothing changed
 
 
 if __name__ == "__main__":

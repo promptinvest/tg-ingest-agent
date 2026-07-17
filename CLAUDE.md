@@ -91,7 +91,7 @@ KB for SSH/deploy/model details.
   pulled via memory_review), `relationship.py` (evidence-based working history),
   `proactive.py` (heartbeat — suggestion-only, throttled, quiet-hours/weekday gated).
   Proactive is ENABLED: heartbeat nudges (overdue reminders / memory candidates /
-  unsorted items), an opt-in morning brief, and a model-health monitor that alerts
+  note-review invitation), an opt-in morning brief, and a model-health monitor that alerts
   the boss when a model goes down/recovers (skipped while budget-stopped).
   Persona: time-of-day & weekend-aware voice in a FRIENDLY register only — no
   flirtation or intimate conversation (owner decision 2026-07-06; that register

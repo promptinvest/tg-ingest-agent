@@ -89,18 +89,20 @@ def _memory_candidates(conn, cfg, lang, now):
     return ("candidates", T(lang, "nudge_candidates", n=n), False) if n else None
 
 
-def _items_need_category(conn, cfg, lang, now):
-    n = conn.execute(
-        "SELECT COUNT(*) AS n FROM messages WHERE status = 'suggested'"
-    ).fetchone()["n"]
-    return ("unsorted", T(lang, "nudge_unsorted", n=n), False) if n else None
+def _notes_review_due(conn, cfg, lang, now):
+    """The review INVITATION (plan v1.1 §9.3): replaces the old generic
+    "unsorted pile" nudge — untriaged items still surface here, as one of the
+    deterministic review reasons, framed as a decision worth a minute."""
+    batch = store.notes_review_candidates(conn, now=now, limit=3)
+    return (("note_review", T(lang, "nudge_note_review", n=len(batch)), False)
+            if batch else None)
 
 
 # urgent first, then by usefulness
-CHECKS = (_overdue_reminders, _memory_candidates, _items_need_category)
+CHECKS = (_overdue_reminders, _memory_candidates, _notes_review_due)
 # The "≤ max_per_day non-urgent" cap counts only the NON-URGENT heartbeat nudges.
 # Urgent ones (overdue) bypass the cap, so they must not consume it either.
-NONURGENT_KEYS = ("candidates", "unsorted")
+NONURGENT_KEYS = ("candidates", "note_review")
 
 
 def run(conn, cfg, lang, reply_fn, now=None):

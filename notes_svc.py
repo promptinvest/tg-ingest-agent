@@ -8,6 +8,7 @@ the Agent/Hermes into one labelled module.
 is the Agent: `self.reply`/`self.conn`/`self.finalize`/`self.tz_offset()`/`self.reply_chunks`
 all resolve on it exactly as before. Pure relocation, no behaviour change.
 """
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -172,6 +173,11 @@ class NotesMixin:
 
     def overview_text(self, lang):
         lines = [T(lang, "overview_header"), self.stats_text(lang)]
+        counts = store.notes_lifecycle_counts(self.conn)
+        lines.append(T(lang, "overview_notes",
+                       active=counts.get("active", 0), inbox=counts.get("inbox", 0),
+                       due=counts.get("review_due", 0),
+                       archived=counts.get("archived", 0)))
         active = store.reminders_active(self.conn, next(iter(self.cfg.allowed_chat_ids)))
         next_part = ""
         if active:
@@ -243,15 +249,20 @@ class NotesMixin:
             item.append("   " + " · ".join(marks))
         return "\n".join(item)
 
-    def _notes_page(self, lang, category, query, offset, token):
+    def _notes_page(self, lang, category, query, offset, token, state=None):
         """Render one page of notes + its ◀/▶ keyboard. Returns (text, keyboard, total)."""
         rows, total = store.list_messages_page(self.conn, category, query, offset,
-                                               self.NOTES_PAGE_SIZE)
+                                               self.NOTES_PAGE_SIZE, state=state)
         filter_part = ""
         if category:
             filter_part = T(lang, "items_filter_category", category=category)
         elif query:
             filter_part = T(lang, "items_filter_query", query=query)
+        elif state:
+            labels = {"inbox": ("входящие", "inbox"), "active": ("активные", "active"),
+                      "archived": ("архив", "archive")}
+            filter_part = T(lang, "items_filter_query",
+                            query=labels[state][0 if lang == "ru" else 1])
         start = offset + 1 if rows else 0
         blocks = [T(lang, "notes_page_header", filter=filter_part,
                     start=start, end=offset + len(rows), total=total)]
@@ -276,16 +287,23 @@ class NotesMixin:
 
     def do_list_items(self, chat_id, lang, params):
         """Browse saved notes with inline ◀/▶ pagination (edits one message in place instead
-        of flooding the chat or capping the list at 10)."""
+        of flooding the chat or capping the list at 10). An explicit `state`
+        (inbox/active/archived) opens that lifecycle view."""
         category, query = params.get("category"), params.get("query")
-        _, total = store.list_messages_page(self.conn, category, query, 0, self.NOTES_PAGE_SIZE)
+        state = str(params.get("state") or "").strip().lower() or None
+        if state not in (None,) + store.NOTE_STATES:
+            state = None
+        _, total = store.list_messages_page(self.conn, category, query, 0,
+                                            self.NOTES_PAGE_SIZE, state=state)
         if total == 0:
-            self.reply(chat_id, T(lang, "items_empty"))
+            self.reply(chat_id, T(lang, "archive_empty" if state == "archived"
+                                  else "items_empty"))
             return
         store.list_views_prune(self.conn,
                                (datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
-        token = store.list_view_add(self.conn, chat_id, {"category": category, "query": query})
-        text, keyboard, _ = self._notes_page(lang, category, query, 0, token)
+        token = store.list_view_add(self.conn, chat_id,
+                                    {"category": category, "query": query, "state": state})
+        text, keyboard, _ = self._notes_page(lang, category, query, 0, token, state=state)
         self.reply(chat_id, text, reply_markup=keyboard)
 
     def do_show_media(self, chat_id, lang, params):
@@ -483,6 +501,20 @@ class NotesMixin:
         if store.note_mark_used(self.conn, row["id"]):
             events.record_done(self.conn, "note_opened", chat_id=chat_id,
                                payload={"message_id": row["id"]})
+            # Opening a just-resurfaced note = the suggestion was ACCEPTED.
+            try:
+                res = json.loads(store.kv_get(self.conn, "last_resurfaced") or "")
+                ts = datetime.fromisoformat(res["ts"])
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if (int(res["id"]) == row["id"]
+                        and datetime.now(timezone.utc) - ts <= timedelta(minutes=15)):
+                    events.record_done(self.conn, "note_resurface_accepted",
+                                       chat_id=chat_id,
+                                       payload={"message_id": row["id"]})
+                    store.kv_set(self.conn, "last_resurfaced", "")
+            except (KeyError, TypeError, ValueError):
+                pass
         # Hand back the actual photos/files attached to the item, too.
         self.send_attachments(chat_id, row)
 
@@ -593,6 +625,95 @@ class NotesMixin:
         self.reply(chat_id, T(lang, "note_edited", row_id=self.note_no(row["id"]),
                               summary=new_summary[:200]))
 
+    # -- note review (deterministic ≤3-item batch + stable snapshot, §9) -------
+
+    _REVIEW_REASONS = {
+        "review_due": ("пора пересмотреть — ты сам просил вернуться",
+                       "due for the review you asked for"),
+        "temp_expiring": ("временная — срок подходит",
+                          "temporary — its window is closing"),
+        "actionable_unused": ("требовала действия, движения не видно",
+                              "was actionable, no follow-up recorded"),
+        "inbox": ("не разобрана", "still untriaged"),
+        "old_unused": ("давно лежит без дела", "old and never used"),
+    }
+
+    def _review_snapshot_set(self, ids, ttl_seconds):
+        store.kv_set(self.conn, "note_review_snapshot", json.dumps(
+            {"ids": ids, "ts": datetime.now(timezone.utc).isoformat(),
+             "ttl": int(ttl_seconds)}, ensure_ascii=False))
+
+    def _review_snapshot_rows(self):
+        """Live snapshot rows (ordinal follow-ups resolve against WHAT WAS SHOWN,
+        never a recomputed list). Empty when absent/expired."""
+        raw = store.kv_get(self.conn, "note_review_snapshot")
+        try:
+            snap = json.loads(raw or "")
+            ts = datetime.fromisoformat(snap["ts"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - ts > timedelta(
+                    seconds=int(snap.get("ttl") or 0)):
+                return []
+            ids = [int(i) for i in snap.get("ids") or []]
+        except (KeyError, TypeError, ValueError):
+            return []
+        rows = [store.get_message(self.conn, i) for i in ids]
+        return [r for r in rows if r is not None]
+
+    def _rows_from_review_snapshot(self, text):
+        """Resolve «второе / первую / все» against the live review snapshot.
+        None = no snapshot claim (fall through to normal resolution)."""
+        snap = self._review_snapshot_rows()
+        if not snap:
+            return None
+        t = str(text or "").casefold()
+        if re.search(r"\bвсе\b|\ball\b|\bобе\b|\bоба\b", t):
+            return snap
+        for stem, pos in self._ORDINALS.items():
+            if stem in t and pos <= len(snap):
+                return [snap[pos - 1]]
+        return None
+
+    def do_note_review(self, chat_id, lang, params=None, preset_ids=None):
+        """«Покажи, что стоит пересмотреть»: at most three snapshotted items,
+        each with a deterministic reason. Suggestion-only — every action goes
+        through the normal note_lifecycle/delete flows."""
+        ru = lang == "ru"
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        shown_key = f"note_review_shown:{day}"
+        try:
+            shown = [int(i) for i in json.loads(
+                store.kv_get(self.conn, shown_key) or "[]")]
+        except (TypeError, ValueError):
+            shown = []
+        if preset_ids:
+            batch = []
+            for mid in preset_ids[:3]:
+                row = store.get_message(self.conn, mid)
+                if row is not None and row["knowledge_state"] is not None:
+                    batch.append((row, "review_due" if row["review_at"] else "inbox"))
+        else:
+            batch = store.notes_review_candidates(self.conn, exclude_ids=shown)
+        if not batch:
+            self.reply(chat_id, T(lang, "note_review_empty"))
+            return
+        lines = [T(lang, "note_review_header", n=len(batch))]
+        for i, (row, reason) in enumerate(batch, 1):
+            no = self.note_no(row["id"])
+            cat = row["category"] or row["suggested_category"] or "?"
+            preview = self._ellipsize(row["summary"] or row["raw_text"] or "", 90)
+            label = self._REVIEW_REASONS.get(reason, (reason, reason))[0 if ru else 1]
+            lines.append(f"{i}. #{no} · {cat} — {preview}\n   ↳ {label}")
+        lines.append(T(lang, "note_review_footer"))
+        if not self.reply(chat_id, "\n\n".join(lines)):
+            return  # not delivered -> no snapshot, no shown-marking
+        ids = [row["id"] for row, _ in batch]
+        self._review_snapshot_set(ids, ttl_seconds=24 * 3600)
+        store.kv_set(self.conn, shown_key, json.dumps(sorted(set(shown + ids))))
+        events.record_done(self.conn, "note_review_shown", chat_id=chat_id,
+                           payload={"ids": ids})
+
     _LIFECYCLE_OPS = ("archive", "restore", "keep", "set_purpose", "review_later",
                       "make_temporary")
     _LIFECYCLE_EVENT = {"archive": "note_archived", "restore": "note_restored",
@@ -606,15 +727,21 @@ class NotesMixin:
         "actionable": ("требует действия", "actionable"),
     }
 
-    def do_note_lifecycle(self, chat_id, lang, params):
+    def do_note_lifecycle(self, chat_id, lang, params, text=""):
         """Reversible note triage: archive/restore/keep/purpose/review/temporary.
         Single ops run directly (the reply carries the undo); a BULK archive is
-        staged behind a pending confirm, like item_delete. Never deletes."""
+        staged behind a pending confirm, like item_delete. Never deletes.
+        A bare ordinal («второе в архив») right after a note review resolves
+        against the SNAPSHOT of what was shown, never a recomputed list."""
         op = str(params.get("operation") or "").strip().lower()
         if op not in self._LIFECYCLE_OPS:
             self.reply(chat_id, T(lang, "clarify"))
             return
-        rows = self.resolve_items(params)
+        rows = None
+        if not any(params.get(k) for k in ("id", "ids", "query", "count")):
+            rows = self._rows_from_review_snapshot(text)
+        if rows is None:
+            rows = self.resolve_items(params)
         if not rows:
             self.reply(chat_id, T(lang, "items_empty"))
             return

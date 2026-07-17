@@ -256,6 +256,23 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   through the ordinary reminder flow — nothing is ever scheduled by the button
   alone, and a mid‑flight confirmation is never clobbered: the note saves and
   Cara says she'll offer the reminder after the open question).
+- **Notes review (`note_review`, 2026‑07‑17 — suggestion‑only):** «покажи, что
+  стоит пересмотреть» → at most **three** items, each with a deterministic
+  reason (пора пересмотреть — ты просил · временная, срок подходит · требовала
+  действия, движения нет · не разобрана · давно лежит без дела), selected by a
+  fixed priority order, never re‑shown the same day. The shown batch is
+  **snapshotted**, so a follow‑up «второе в архив» / «оставь первое» / «все в
+  архив» acts on exactly what you saw (24 h window; 15 min after a proactive
+  invitation) — never a recomputed list. State views: «покажи архив» /
+  «покажи входящие» open the exact lifecycle view with pagination, and «что у
+  тебя есть?» now leads with the notes overview (активные · входящие · на
+  пересмотр · архив).
+- **Related‑note resurfacing (2026‑07‑17 — one, or nothing):** after a
+  delivered KB answer Cara may add at most ONE compact hint («К слову, у тебя
+  есть ещё #N по этой теме — открыть?») drawn from the real retrieval ranking —
+  never during personal conversation (business path only), never free‑texted.
+  Opening the hinted note within 15 minutes counts as an accepted suggestion;
+  ranking alone still counts nothing.
 - **Note lifecycle (`note_lifecycle`, 2026‑07‑17 — reversible triage, never
   deletes):** beside its category (what it's about) every note carries a
   **knowledge state** (inbox → active → archived) and a **purpose** (справка /
@@ -450,9 +467,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   longer starves the other nudges** — an already‑sent‑today hit is skipped, not treated
   as fatal, so a waiting candidate/uncategorized item still gets its turn.
   A delivered nudge snapshots its type + row ids for 15 minutes; a short «Давай»/«Да»/
-  “show them” opens that exact memory/unsorted/reminder queue deterministically. For
-  unsorted notes this presents the oldest still-waiting suggestion, so chat cannot answer
-  about an unrelated already-confirmed item or falsely say the queue is clean.
+  “show them” opens that exact memory/review/reminder queue deterministically.
+  **The generic "unsorted pile" nudge was replaced (2026‑07‑17)** by the **note‑review
+  invitation** — «Нашла N сохранёнок, по которым стоит принять решение — показать?» —
+  which opens the exact snapshotted ≤3‑item review batch (untriaged items surface there
+  as one of the deterministic review reasons); chat can never answer about an unrelated
+  item or falsely say the queue is clean.
   A one-shot that already fired and is waiting for “готово” is not overdue and cannot
   generate another urgent overdue nudge.
 - **Tune her proactivity** (`proactive_prefs`): "пиши только по выходным", "не беспокой
@@ -726,7 +746,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 520 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run on
+- **Tests:** 529 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run on
   the box as part of every deploy and in GitHub Actions — including a
   **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and

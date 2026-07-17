@@ -36,6 +36,40 @@ TEXTS = {
         "en": ("The note is saved ✔️ I'll offer the reminder once we finish the "
                "question that's already open — answer that one first, please 🙂"),
     },
+    "overview_notes": {
+        "ru": ("🗂 Заметки: {active} активных · {inbox} во входящих · "
+               "{due} на пересмотр · {archived} в архиве"),
+        "en": ("🗂 Notes: {active} active · {inbox} in the inbox · "
+               "{due} due for review · {archived} archived"),
+    },
+    # -- note review + resurfacing (suggestion-only) --------------------------
+    "note_review_header": {
+        "ru": "🔎 Нашла {n} — стоит принять решение:",
+        "en": "🔎 Found {n} worth a quick decision:",
+    },
+    "note_review_footer": {
+        "ru": ("Можно так: «второе в архив», «оставь первое», «пересмотрю #N через "
+               "месяц» — или просто открой #N."),
+        "en": ("You can say: \"archive the second\", \"keep the first\", "
+               "\"review #N next month\" — or just open #N."),
+    },
+    "note_review_empty": {
+        "ru": "Сейчас пересматривать нечего — всё разобрано 🌿",
+        "en": "Nothing needs a review right now — all sorted 🌿",
+    },
+    # NB: no final verbs (action_truth catalogue guard) — an invitation, no state change.
+    "nudge_note_review": {
+        "ru": "Нашла {n} сохранёнки(ок), по которым стоит принять решение — показать?",
+        "en": "I've got {n} note(s) worth a quick decision — want to see them?",
+    },
+    "related_note_hint": {
+        "ru": "К слову, у тебя есть ещё #{row_id} ({category}) по этой теме — открыть?",
+        "en": "By the way, you also have #{row_id} ({category}) on this — open it?",
+    },
+    "archive_empty": {
+        "ru": "Архив пуст — ничего не убирала.",
+        "en": "The archive is empty — nothing has been put away.",
+    },
     # -- note lifecycle (reversible triage; never deletes) --------------------
     "note_archived": {
         "ru": "Убрала #{row_id} в архив 🗂 Из поиска она не пропадёт; вернуть — «восстанови #{row_id}».",
@@ -539,10 +573,9 @@ TEXTS = {
         "ru": "Босс, у меня накопилось {n} предложений в память. Скажешь «обзор памяти» — покажу, и решишь.",
         "en": "Boss, I've got {n} memory suggestions waiting. Say \"memory review\" and you decide.",
     },
-    "nudge_unsorted": {
-        "ru": "У меня {n} сохранённых ждут категорию. Разберём, когда будет минутка?",
-        "en": "{n} saved items are still waiting for a category. Sort them when you have a minute?",
-    },
+    # NB: nudge_unsorted was REMOVED 2026-07-17 — the generic unsorted-pile nudge
+    # became the note-review invitation (nudge_note_review); untriaged items
+    # surface there as one of the deterministic review reasons.
     "nudge_overdue": {
         "ru": "Просрочено напоминаний: {n}. Перенести их или отметить выполненными?",
         "en": "{n} reminder(s) are overdue. Reschedule them, or mark them done?",

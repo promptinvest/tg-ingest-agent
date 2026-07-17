@@ -45,6 +45,8 @@ SKILLS = {
     # is confirmation-gated in the handler via a pending, like item_delete.
     "note_lifecycle": {"risk": "state_write", "writes_state": True, "persona_context": True,
                        "title": {"en": "Note lifecycle", "ru": "Статус заметки"}},
+    "note_review": {"risk": "read_only", "persona_context": True,
+                    "title": {"en": "Notes review", "ru": "Обзор заметок"}},
     "merge_categories": {"risk": "state_write", "writes_state": True,
                          "title": {"en": "Merge categories", "ru": "Объединить категории"}},
     "purge": {"risk": "destructive", "writes_state": True, "destructive": True,

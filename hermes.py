@@ -15,6 +15,7 @@ business code into its own labelled module with ZERO behaviour change — pure
 relocation; the router is still the single delegation hop (business -> these
 handlers, personal -> the companion).
 """
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -43,7 +44,7 @@ ACTIONS = frozenset({
     "reminder_reschedule", "reminder_rename", "reminder_undo", "list_files",
     "calendar_add", "spend", "budget_set", "stats", "categories", "overview",
     "list_items", "item_detail", "item_delete", "note_edit", "note_lifecycle",
-    "recategorize", "merge_categories",
+    "note_review", "recategorize", "merge_categories",
     "show_media", "vps_stats", "purge", "fetch", "ask", "issues_report",
     "report_problem", "multi_action", "set_journal", "journal_show", "export",
     "working_history", "review",
@@ -165,6 +166,32 @@ class HermesMixin:
                 if store.note_mark_used(self.conn, item.get("message_id")):
                     events.record_done(self.conn, "note_cited", chat_id=chat_id,
                                        payload={"message_id": item.get("message_id")})
+            self._suggest_related_note(chat_id, lang, context, answer)
+
+    def _suggest_related_note(self, chat_id, lang, context, answer):
+        """At most ONE compact related-note suggestion after a delivered grounded
+        answer (plan v1.1 §10.3): from the REAL retrieval metadata, a ranked
+        context note the answer didn't cite. Business path only — converse never
+        resurfaces. No strong candidate → nothing."""
+        if len(context) < 2:
+            return
+        related = None
+        for item in context[1:]:  # context[0] anchored the answer
+            no = item.get("note_no") or item.get("message_id")
+            if no and f"#{no}" not in answer:
+                related = item
+                break
+        if related is None:
+            return
+        no = self.note_no(related["message_id"])
+        hint = T(lang, "related_note_hint", row_id=no,
+                 category=related.get("category") or "?")
+        if self.reply(chat_id, hint, record=False):
+            events.record_done(self.conn, "note_resurfaced", chat_id=chat_id,
+                               payload={"message_id": related["message_id"]})
+            store.kv_set(self.conn, "last_resurfaced", json.dumps(
+                {"id": related["message_id"],
+                 "ts": datetime.now(timezone.utc).isoformat()}))
 
     def _keyword_context(self, question):
         import knowledge

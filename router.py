@@ -36,6 +36,7 @@ ACTIONS = {
     "note_edit",         # params: id/query + new_summary — fix a saved note's summary text in place
     "recategorize",      # params: id/ids/query/count + category — change a saved item's category
     "note_lifecycle",    # params: operation in archive|restore|keep|set_purpose|review_later|make_temporary + id/ids/query, purpose, when (UTC ISO)
+    "note_review",       # show up to 3 saved notes worth a decision (review due / expiring / untriaged / unused)
     "merge_categories",  # params: from + into — fold a duplicate category into another, delete the empty one
     "show_media",        # params: id OR query — re-send the stored photo(s)
     "read_media",        # params: id? — transcribe a forwarded voice / read a file's CONTENT
@@ -154,6 +155,9 @@ NOTE: note_edit fixes a saved NOTE's SUMMARY text — put the corrected text in 
 "поставь #4 на пересмотр через месяц" / "review #4 next month" -> {"action": "note_lifecycle", "params": {"operation": "review_later", "id": 4, "when": "<UTC ISO a month ahead>"}, "confidence": 0.9}
 "сделай #4 временной на 30 дней" / "make #4 temporary for 30 days" -> {"action": "note_lifecycle", "params": {"operation": "make_temporary", "id": 4, "when": "<UTC ISO 30 days ahead>"}, "confidence": 0.9}
 NOTE: note_lifecycle ARCHIVES/restores/flags a saved NOTE — it does NOT delete (that's item_delete), does NOT change the category (recategorize), and "поставь на пересмотр" is NOT a reminder (no alarm fires; the note surfaces in the notes review). purpose is one of: reference, source, idea, decision, temporary, actionable.
+"покажи, что стоит пересмотреть" / "что там на пересмотр?" / "review my notes" / "разберём сохранёнки" -> {"action": "note_review", "params": {}, "confidence": 0.9}
+"покажи архив" / "show archived notes" -> {"action": "list_items", "params": {"state": "archived"}, "confidence": 0.9}
+"покажи входящие" / "неразобранные заметки" / "show untriaged" -> {"action": "list_items", "params": {"state": "inbox"}, "confidence": 0.9}
 "поменяй категорию последнего на Чеки" / "переложи это в Чеки" (no id -> most recent) -> {"action": "recategorize", "params": {"category": "Чеки"}, "confidence": 0.9}
 "переложи всё из crypto в news" / "move category crypto to news" -> {"action": "recategorize", "params": {"query": "crypto", "category": "news"}, "confidence": 0.85}
 "объедини «AI tools» и «AI Tools & Resources»" / "это одна и та же категория, слей их в AI Tools & Resources" / "merge AI tools into AI Tools & Resources" / "удали дубликат категории X, перенеси в Y" -> {"action": "merge_categories", "params": {"from": "AI tools", "into": "AI Tools & Resources"}, "confidence": 0.9}

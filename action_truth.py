@@ -81,7 +81,6 @@ TEMPLATE_STATES = {
     "calendar_added": "done",
     "deleted": "done",
     "deleted_multi": "done",
-    "nudge_unsorted": "done",
     "correction_learned": "done",
     "correction_needs_code": "done",
     "journal_saved": "done",

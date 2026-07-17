@@ -1364,6 +1364,46 @@ def notes_by_state(conn, state, limit=50):
     ).fetchall()
 
 
+def notes_review_candidates(conn, now=None, limit=3, exclude_ids=()):
+    """Deterministic review batch (plan v1.1 §9.1), priority order:
+    review-due → temporary expiring (due or within 7 days) → actionable with
+    no recorded use → untriaged inbox (oldest first) → old active never-used.
+    Journal/failed rows never appear (knowledge_state IS NULL); duplicates are
+    covered by the existing similar-categories surface. Returns a list of
+    (row, reason_key), at most `limit` items, deterministic given the data."""
+    now = now or datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    picked, seen = [], {int(i) for i in exclude_ids}
+
+    def take(sql, args, reason):
+        if len(picked) >= limit:
+            return
+        for r in conn.execute(sql, args):
+            if r["id"] in seen:
+                continue
+            picked.append((r, reason))
+            seen.add(r["id"])
+            if len(picked) >= limit:
+                return
+
+    take("SELECT * FROM messages WHERE knowledge_state = 'active'"
+         " AND review_at IS NOT NULL AND review_at <= ? ORDER BY review_at",
+         (now_iso,), "review_due")
+    take("SELECT * FROM messages WHERE knowledge_state != 'archived'"
+         " AND knowledge_state IS NOT NULL AND note_purpose = 'temporary'"
+         " AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at",
+         ((now + timedelta(days=7)).isoformat(),), "temp_expiring")
+    take("SELECT * FROM messages WHERE knowledge_state = 'active'"
+         " AND note_purpose = 'actionable' AND use_count = 0 ORDER BY id",
+         (), "actionable_unused")
+    take("SELECT * FROM messages WHERE knowledge_state = 'inbox'"
+         " AND status = 'suggested' ORDER BY id", (), "inbox")
+    take("SELECT * FROM messages WHERE knowledge_state = 'active'"
+         " AND use_count = 0 AND received_at < ? ORDER BY received_at",
+         ((now - timedelta(days=30)).isoformat(),), "old_unused")
+    return picked
+
+
 def notes_lifecycle_counts(conn):
     """{state: n} plus 'review_due' for the notes overview."""
     counts = {r["knowledge_state"]: r["n"] for r in conn.execute(
@@ -1673,7 +1713,7 @@ def pending_messages(conn, max_attempts, limit=5):
     ).fetchall()
 
 
-def list_messages(conn, category=None, query=None, limit=10):
+def list_messages(conn, category=None, query=None, limit=10, state=None):
     """Recent stored messages, optionally filtered by category (exact,
     case-insensitive incl. Cyrillic) or a substring query over text, summary,
     key facts, category, and source. Delegates to list_messages_filtered —
@@ -1681,10 +1721,11 @@ def list_messages(conn, category=None, query=None, limit=10):
     (The old body pre-capped the scan at the newest 200 rows BEFORE filtering,
     which silently blinded bulk recategorize / resolve_item / the router's
     recent-item hint to anything older once the inbox outgrew 200.)"""
-    return list_messages_filtered(conn, category=category, query=query, limit=limit)
+    return list_messages_filtered(conn, category=category, query=query, limit=limit,
+                                  state=state)
 
 
-def list_messages_filtered(conn, category=None, query=None, limit=None):
+def list_messages_filtered(conn, category=None, query=None, limit=None, state=None):
     """Visible notes matching the filter, newest-first (Python-filtered for Cyrillic
     casefold). limit=None returns the full list (pagination callers slice); a limit
     stops the scan EARLY. The messages cursor is iterated LAZILY (ORDER BY id DESC is a
@@ -1718,10 +1759,14 @@ def list_messages_filtered(conn, category=None, query=None, limit=None):
             continue
         if journals and (row["category"] or "").casefold() in journals:
             continue
-        # Archived notes leave the DEFAULT/browse lists but stay reachable by an
-        # explicit text search (and by #N via message_by_note_no) — reversible,
-        # never hidden from a real lookup.
-        if row["knowledge_state"] == "archived" and not q:
+        # An explicit state view ("покажи архив/входящие") filters exactly;
+        # otherwise archived notes leave the DEFAULT/browse lists but stay
+        # reachable by an explicit text search (and by #N) — reversible, never
+        # hidden from a real lookup.
+        if state is not None:
+            if row["knowledge_state"] != state:
+                continue
+        elif row["knowledge_state"] == "archived" and not q:
             continue
         if q:
             haystack = " ".join(filter(None, [
@@ -1736,9 +1781,9 @@ def list_messages_filtered(conn, category=None, query=None, limit=None):
     return out
 
 
-def list_messages_page(conn, category=None, query=None, offset=0, limit=8):
+def list_messages_page(conn, category=None, query=None, offset=0, limit=8, state=None):
     """A page of filtered notes plus the TOTAL match count: (rows, total)."""
-    allrows = list_messages_filtered(conn, category, query)
+    allrows = list_messages_filtered(conn, category, query, state=state)
     offset = max(0, offset)
     return allrows[offset:offset + limit], len(allrows)
 

@@ -92,7 +92,8 @@ _DISPATCH = {
     "merge_categories":    lambda s, c: s.do_merge_categories(c.chat_id, c.lang, c.params),
     "recategorize":        lambda s, c: s.do_recategorize(c.chat_id, c.lang, c.params),
     "item_delete":         lambda s, c: s.do_item_delete(c.chat_id, c.lang, c.params),
-    "note_lifecycle":      lambda s, c: s.do_note_lifecycle(c.chat_id, c.lang, c.params),
+    "note_lifecycle":      lambda s, c: s.do_note_lifecycle(c.chat_id, c.lang, c.params, c.text),
+    "note_review":         lambda s, c: s.do_note_review(c.chat_id, c.lang, c.params),
     "note_edit":           lambda s, c: s.do_note_edit(c.chat_id, c.lang, c.params, c.text),
     "show_media":          lambda s, c: s.do_show_media(c.chat_id, c.lang, c.params),
     "read_media":          lambda s, c: s.do_read_media(c.chat_id, c.lang, c.params),
@@ -2168,10 +2169,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 ids = []
                 if sent == "candidates":
                     ids = [row["id"] for row in store.candidates_pending(self.conn, limit=50)]
-                elif sent == "unsorted":
-                    ids = [row["id"] for row in self.conn.execute(
-                        "SELECT id FROM messages WHERE status='suggested' ORDER BY id"
-                    ).fetchall()]
+                elif sent == "note_review":
+                    ids = [row["id"] for row, _reason in
+                           store.notes_review_candidates(self.conn, limit=3)]
                 elif sent == "overdue":
                     ids = [row["id"] for row in self.conn.execute(
                         "SELECT id FROM reminders WHERE chat_id=? AND status='active'"
@@ -2225,20 +2225,13 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 self.reply(chat_id, f"#{row['id']} {row['proposed_text']}",
                            reply_markup=keyboard)
             return True
-        if kind == "unsorted":
-            row = next((candidate for candidate in
-                        (store.get_message(self.conn, row_id) for row_id in ids)
-                        if candidate is not None and candidate["status"] == "suggested"), None)
-            if row is None:
-                self.reply(chat_id, T(lang, "items_empty"))
-                return True
-            category = row["suggested_category"] or self.cfg.fallback_category
-            summary = (row["summary"] or row["raw_text"] or "—").strip()
-            counts = T(lang, "counts", row_id=self.note_no(row["id"]),
-                       images=len(store.message_images(self.conn, row["id"])),
-                       files=len(store.message_files(self.conn, row["id"])),
-                       urls=len(store.message_urls(self.conn, row["id"])))
-            self.present_suggestion(row["id"], chat_id, None, category, [], summary, counts)
+        if kind == "note_review":
+            # Open the EXACT snapshotted review batch (never a recomputed list);
+            # the snapshot the review sets keeps the 15-min proactive window.
+            self.do_note_review(chat_id, lang, preset_ids=ids)
+            self._review_snapshot_set([i for i in ids
+                                       if store.get_message(self.conn, i)],
+                                      ttl_seconds=15 * 60)
             return True
         if kind == "overdue":
             self.reply(chat_id, self._reminder_list_body(chat_id, lang))
@@ -2549,7 +2542,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 lang, filt.get("category"), filt.get("period") or "month", offset, token)
         else:
             text, keyboard, total = self._notes_page(
-                lang, filt.get("category"), filt.get("query"), offset, token)
+                lang, filt.get("category"), filt.get("query"), offset, token,
+                state=filt.get("state"))
         if total and offset >= total:   # clamp a now-out-of-range page (notes removed since)
             offset = ((total - 1) // page_size) * page_size
             if is_journal:
@@ -2557,7 +2551,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     lang, filt.get("category"), filt.get("period") or "month", offset, token)
             else:
                 text, keyboard, total = self._notes_page(
-                    lang, filt.get("category"), filt.get("query"), offset, token)
+                    lang, filt.get("category"), filt.get("query"), offset, token,
+                    state=filt.get("state"))
         self.edit_message(chat_id, msg.get("message_id"), text, reply_markup=keyboard)
         self.answer_callback(callback_id, "")
 
