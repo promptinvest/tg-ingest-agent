@@ -672,8 +672,8 @@ class ReviewTests(unittest.TestCase):
         self.cfg = make_config(DB_PATH=str(db_path))
         row = self.conn.execute(
             "INSERT INTO messages (chat_id, tg_message_id, received_at, raw_text,"
-            " suggested_category, category, status) VALUES (1, 1, ?, 'x', 'news', 'крипта',"
-            " 'confirmed')",
+            " suggested_category, category, status, knowledge_state)"
+            " VALUES (1, 1, ?, 'x', 'news', 'крипта', 'confirmed', 'active')",
             (datetime.now(timezone.utc).isoformat(),),
         )
         self.conn.commit()
@@ -696,11 +696,13 @@ class ReviewTests(unittest.TestCase):
 
     def test_chat_text_bilingual(self):
         ru = review.chat_text(self.conn, self.cfg, "ru", "week")
-        self.assertIn("Сохранено материалов: 1", ru)
+        self.assertIn("Сохранено: 1", ru)          # outcome line (MET-001)
+        self.assertIn("пригодилось", ru)
         self.assertIn("крипта", ru)
         self.assertIn("$0.002", ru)
         en = review.chat_text(self.conn, self.cfg, "en", "week")
-        self.assertIn("Saved knowledge items: 1", en)
+        self.assertIn("Saved: 1", en)
+        self.assertIn("actually used", en)
         self.assertIn("Reminders set: 1", en)
 
     def test_markdown_sections_and_backlog(self):
@@ -7709,6 +7711,139 @@ class JournalPromptTests(unittest.TestCase):
             handled = self.agent._resolve_proactive_followup(1, "ru", "давай")
         self.assertTrue(handled)
         self.assertIn("Благодарности", r.call_args[0][1])
+
+
+class NoteOutcomeMetricsTests(unittest.TestCase):
+    """MET-001: the review reports saved-to-used OUTCOMES (used / reminders /
+    triage / upcoming), the KPI capture_to_use_rate, and keeps operational
+    metrics in the Cara-health tail."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "m.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _note(self, tg_id, text, confirm=True):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": tg_id,
+                                               "received_at": store._now(),
+                                               "raw_text": text})
+        if confirm:
+            store.confirm_category(self.conn, mid, "Разное")
+        else:
+            store.set_suggestion(self.conn, mid, "Разное", "s", "m")
+        return mid
+
+    def test_collect_note_outcomes_kpi_and_counts(self):
+        used = self._note(1, "полезная заметка")
+        self._note(2, "лежит без дела")
+        inbox = self._note(3, "неразобранная", confirm=False)
+        store.note_mark_used(self.conn, used)
+        events.record_done(self.conn, "note_opened", chat_id=1,
+                           payload={"message_id": used})
+        archived = self._note(4, "старое")
+        store.note_archive(self.conn, archived, reason="test")
+        events.record_done(self.conn, "note_archived", chat_id=1,
+                           payload={"message_id": archived})
+        since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        data = review.collect_note_outcomes(self.conn, since,
+                                            datetime.now(timezone.utc))
+        self.assertEqual(data["notes_saved"], 3)               # confirmed lifecycle notes
+        self.assertEqual(data["notes_used_period"], 1)
+        self.assertEqual(data["capture_confirmed_total"], 3)
+        self.assertEqual(data["capture_used_total"], 1)
+        self.assertEqual(data["archived_unused"], 1)
+        self.assertEqual(data["note_events"].get("note_archived"), 1)
+        self.assertEqual(data["lifecycle_counts"].get("inbox"), 1)
+        self.assertIsNotNone(data["median_first_use_hours"])   # events-based approx
+        self.assertGreaterEqual(data["inbox_oldest_days"], 0)
+        self.assertIsNotNone(store.get_message(self.conn, inbox))
+
+    def test_journal_entries_do_not_inflate_saved_notes(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 9,
+                                               "received_at": store._now(),
+                                               "raw_text": "спасибо"})
+        store.confirm_category(self.conn, mid, "Благодарности")
+        since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        data = review.collect_note_outcomes(self.conn, since,
+                                            datetime.now(timezone.utc))
+        self.assertEqual(data["notes_saved"], 0)               # entries are not notes
+        self.assertEqual(data["journal_entries_period"],
+                         [("Благодарности", 1)])               # reported per journal
+
+    def test_chat_review_leads_with_outcomes_and_health_tail(self):
+        used = self._note(1, "полезная")
+        store.note_mark_used(self.conn, used)
+        text = review.chat_text(self.conn, self.cfg, "ru", "week")
+        self.assertIn("Сохранено: ", text)
+        self.assertIn("пригодилось", text)
+        self.assertIn("ждут разбора", text)
+        self.assertIn("Как я работала:", text)                 # ops metrics in the tail
+        self.assertNotIn("Сохранено материалов", text)         # pile-size line replaced
+        health_at = text.index("Как я работала:")
+        self.assertLess(text.index("пригодилось"), health_at)  # outcomes first
+        self.assertGreater(text.index("Расходы AI"), health_at)
+        self.assertGreater(text.index("первого раза"), health_at)
+
+    def test_markdown_reports_capture_to_use_kpi(self):
+        used = self._note(1, "полезная")
+        store.note_mark_used(self.conn, used)
+        self._note(2, "не использована")
+        md = review.markdown(self.conn, self.cfg, "week")
+        self.assertIn("capture_to_use_rate: 1/2 (50%)", md)
+        self.assertIn("Notes outcomes (saved-to-used, MET-001)", md)
+
+    def test_note_reminder_link_records_outcome_events(self):
+        mid = self._note(1, "проверить дедлайн подачи")
+        no = self.agent.note_no(mid)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reminder_create(1, "ru", {
+                "note_id": no,
+                "due_utc": (datetime.now(timezone.utc)
+                            + timedelta(days=1)).isoformat(),
+                "recurrence": "none"})
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "reminder")
+        self.assertEqual(pending["payload"]["note_msg_id"], mid)
+        proposed = self.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE kind='note_reminder_proposed'"
+        ).fetchone()[0]
+        self.assertEqual(proposed, 1)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
+        created = self.conn.execute(
+            "SELECT payload FROM events WHERE kind='note_reminder_created'"
+        ).fetchall()
+        self.assertEqual(len(created), 1)
+        self.assertEqual(json.loads(created[0]["payload"])["message_id"], mid)
+        since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        data = review.collect_note_outcomes(self.conn, since,
+                                            datetime.now(timezone.utc))
+        self.assertEqual(data["note_events"].get("note_reminder_created"), 1)
+
+    def test_amend_keeps_note_reminder_link(self):
+        mid = self._note(1, "проверить дедлайн")
+        no = self.agent.note_no(mid)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reminder_create(1, "ru", {
+                "note_id": no,
+                "due_utc": (datetime.now(timezone.utc)
+                            + timedelta(days=1)).isoformat(),
+                "recurrence": "none"})
+            pending = store.pending_get(self.conn, 1)
+            self.agent.resolve_pending(1, "amend", {
+                "due_utc": (datetime.now(timezone.utc)
+                            + timedelta(days=2)).isoformat()}, pending, "ru")
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["payload"]["note_msg_id"], mid)  # link survives amend
 
 
 if __name__ == "__main__":

@@ -1,11 +1,14 @@
 # Cara (tg-ingest-agent) — PRD & Technical Specification snapshot
 
 > **Purpose of this document.** A self-contained product + technical spec of the
-> Cara project, generated 2026-07-17 at commit `f408e52`, for analysis by an
-> external LLM (improvement planning). It condenses the two maintained specs —
-> `CARA.md` (capabilities/architecture) and `SOLUTION.md` (design rationale) —
-> plus the 2026-07-16 five-dimension project review. This file is a **snapshot,
-> not a maintained spec**: the source of truth remains `CARA.md` + `SOLUTION.md`.
+> Cara project, for analysis by an external LLM (improvement planning). First
+> generated 2026-07-17 at commit `f408e52`; **regenerated 2026-07-17 after the
+> notes-lifecycle + structured-journals plan v1.1 shipped in full** (Phase 0 +
+> Batches 1–4: NTE-001…006, JRN-001…006, MET-001). It condenses the two
+> maintained specs — `CARA.md` (capabilities/architecture) and `SOLUTION.md`
+> (design rationale) — plus the 2026-07-16 five-dimension project review. This
+> file is a **snapshot, not a maintained spec**: the source of truth remains
+> `CARA.md` + `SOLUTION.md`.
 
 ---
 
@@ -55,12 +58,35 @@ Python process on one small VPS**, with no inbound ports.
 
 - **Inbox/notes:** forwarded posts and typed notes auto-filed with LLM-suggested
   category (confirm-before-store), summary, up to 5 key facts; duplicates
-  detected; stable note numbers (#N); journals (protected diary categories with
-  dated recall); link-aware ingest (fetches a link-centric note's URL, SSRF
-  guarded); list/detail/show-media/edit/recategorize/merge/delete/discard;
-  bulk purge by scope behind a typed confirmation phrase.
+  detected; stable note numbers (#N); link-aware ingest (fetches a link-centric
+  note's URL, SSRF guarded); list/detail/show-media/edit/recategorize/merge/
+  delete/discard; bulk purge by scope behind a typed confirmation phrase.
   **Own photos are never stored** (retired 2026-07-16) — they are conversation
   (vision-described reaction); own text/PDF docs still file via caption.
+- **Note lifecycle & one-card capture (2026-07-17, NTE-001…003):** beside its
+  category every note carries a knowledge state (inbox → active → archived,
+  reversible, never auto-deleted) and purpose (reference/source/idea/decision/
+  temporary/actionable); the capture card shows the source-grounded WHY +
+  conditional buttons (Temporary-30d, Don't-save, and — when the content itself
+  carries a validated future date — Save+reminder, which commits the note then
+  stages a normal reminder draft in the single pending slot). Real-use
+  accounting: only a detail open / citation in a delivered answer / delivered
+  export / accepted resurfacing counts.
+- **Review & resurfacing (2026-07-17, NTE-004…006):** «покажи, что стоит
+  пересмотреть» → ≤3 items with deterministic reasons, snapshot-bound ordinal
+  follow-ups («второе в архив»); lifecycle state views + notes overview; at
+  most ONE related-note hint after a delivered KB answer; the proactive
+  "unsorted" nudge became the note-review invitation.
+- **Structured journals + Gratitude (2026-07-17, JRN-001…006):** journals are
+  semantic entities (`journal_definitions`/`journal_entries`); a CLOSED
+  in-code entry-type registry (only gratitude active); gratitude capture with
+  extracted core fields on the card (lexical-support enforced, invented names
+  rejected, draft-only until confirm, raw text immutable); legacy history
+  migrated deterministically (`legacy_unstructured`); entries display as
+  **J#N** (the message's stable number); person/tag filters + deterministic
+  person stats with citations; per-journal Markdown export; journal-specific
+  typed purge phrase (diary survives); opt-in per-journal evening prompts
+  (confirm-gated enable, off by default).
 - **Knowledge Q&A (`ask`):** semantic retrieval (BGE-M3 embeddings, cosine,
   keyword fallback) over the boss's own notes/documents; grounded answers
   citing note ids; refuses when the KB has nothing.
@@ -71,18 +97,24 @@ Python process on one small VPS**, with no inbound ports.
   follow-ups; recurring snooze = one-time echo (anchor never drifts).
 - **Calendar:** `.ics` export or Google Calendar via service account.
 - **Spend & budget:** per-skill/model reports; runtime budget override by chat.
-- **Reviews & exports:** weekly performance review (truthful digest of saved
-  items, reminder lifecycle, incidents vs patterns, proactive sends, spend);
-  on-demand review; real Markdown file exports via sendDocument.
+- **Reviews & exports:** weekly performance review — **saved-to-used outcomes
+  lead (2026-07-17, MET-001)**: saved · actually used · turned into reminders ·
+  archived/restored · awaiting triage/review-due · upcoming reviews/expiring
+  temporaries · journal entries per journal, with operational metrics (issues,
+  spend, fallbacks, first-guess accuracy, memory) in a Cara-health tail; the
+  engineering Markdown adds the KPI `capture_to_use_rate` + secondary outcome
+  metrics (never optimized toward more saves); on-demand review; real Markdown
+  file exports via sendDocument.
 - **Memory & learning:** structured boss profile (confirmed vs inferred,
   sensitivity gates); memory candidates proposed from evidence with verbatim
   non-forward quotes required, confirm-before-store; corrections that stick
   (injected into prompts, reported in reviews); working history from real
   logged events; memory provenance answers ("откуда ты это знаешь?").
 - **Proactive (suggestion-only):** overdue-reminder nudges, memory-candidate
-  and unsorted-item nudges (throttled, quiet-hours 22–08, weekday prefs,
-  ≤N non-urgent/day); opt-in morning brief; model-health monitor with
-  transition-only alerts.
+  nudges, the note-review invitation, and opt-in per-journal prompts
+  (throttled, quiet-hours 22–08, weekday prefs, ≤N non-urgent/day, per-key
+  daily dedupe, delivery-gated); opt-in morning brief; model-health monitor
+  with transition-only alerts.
 - **Voice & media:** own voice notes transcribed (Whisper local/local-server/
   remote modes); forwarded voice/files stored unparsed but readable on request
   ("что в этом голосовом?"); photo vision via `VISION_MODEL`
@@ -133,7 +165,8 @@ mark done only after Telegram acknowledges (at-least-once).
 | `tg_ingest_agent.py` | poll loop, owner gate, dispatch table, pending-action resolution, scheduler ticks, finalize/ingest, albums, voice, housekeeping |
 | `router.py` | closed-world LLM intent router: JSON-only, fixed `ACTIONS`, confidence gate (default 0.6 → falls to converse), untrusted-content fencing, smalltalk shortcut, recent-item/context hints |
 | `hermes.py` | business register: `ACTIONS` domain set + Hermes persona prompt + `HermesMixin` (KB ask/fetch, budget_set, review, export) |
-| `notes_svc.py` | `NotesMixin`: notes/inbox handlers — lists, detail, show media, discard/recategorize/merge, purge staging + typed-phrase resolve, journals, problem log |
+| `notes_svc.py` | `NotesMixin`: notes/inbox handlers — lists, detail, show media, discard/recategorize/merge, purge staging + typed-phrase resolve, note lifecycle/review, journals (recall/filters/stats/prompts), problem log |
+| `journals.py` | structured journals: closed entry-type registry (gratitude active), payload validation with lexical support, extraction, person stats, per-journal md export, prompt-config validation |
 | `reminders_svc.py` | `ReminderMixin`: reminder CRUD + partial drafts + deterministic fired follow-ups + fire/expiry sweeps |
 | `converse.py` | free-form warm Cara (persona `CHARACTER` prompt, grounding, reaction tags) |
 | `ingest.py` | parsing, UTF-16-safe URL extraction, category/facts/summary suggestion |
@@ -159,9 +192,10 @@ Agent everywhere).
 `ingest, reminder_create, reminder_list, reminder_cancel, reminder_reschedule,
 reminder_rename, reminder_undo, list_files, calendar_add, spend, budget_set,
 stats, categories, help, overview, list_items, item_detail, item_delete,
-note_edit, recategorize, merge_categories, show_media, read_media, discard,
-vps_stats, purge, fetch, ask, issues_report, report_problem, multi_action,
-set_journal, journal_show, review, export, working_history, converse, persona,
+note_edit, recategorize, note_lifecycle, note_review, merge_categories,
+show_media, read_media, discard, vps_stats, purge, fetch, ask, issues_report,
+report_problem, multi_action, set_journal, journal_show, journal_prompt,
+review, export, working_history, converse, persona,
 smalltalk, out_of_scope, self_query, boss_query, memory_why, proactive_prefs,
 boss_memory_update, style_update, trace_query, memory_review, memory_cleanup,
 memory, remember, forget, confirm, amend, cancel, recall_conversation` —
@@ -192,8 +226,12 @@ resolved **deterministically before the router** (typed purge phrase, explicit
 ### 2.6 Data model (SQLite, WAL, additive migrations)
 
 Tables: `messages` (notes; forward origin, category, summary, status,
-stable note numbers) · `facts` · `urls` · `images` · `files` · `chunks`
-(embeddings for retrieval) · `categories` · `reminders` + `reminder_events` ·
+stable note numbers; separate knowledge lifecycle 2026-07-17 —
+`knowledge_state`/`note_purpose`/`saved_reason`/`review_at`/`expires_at`/
+`use_count`/`last_used_at`/`archived_at`) · `facts` · `urls` · `images` ·
+`files` · `chunks` (embeddings for retrieval) · `categories` ·
+`journal_definitions` + `journal_entries` (structured journals 2026-07-17;
+manual cascades) · `reminders` + `reminder_events` ·
 `conversation` (verbatim dialog, source-tagged boss/forward; never pruned) ·
 `pending_actions` (single confirmation slot per chat, TTL) · `preferences` ·
 `kv` · `llm_usage` (never purged) · `model_cooldowns` · `boss_profile_items` ·
@@ -237,7 +275,7 @@ lifecycle) · `traces` + `trace_events` · `events` · `jobs` · `proactive_log`
   gate, module allowlist `MODULES` guarded by an AST test) → restart → verify
   `is-active`. `--test` (no install), `--pull` (git, provable deployed==commit),
   `--rollback <ref>`.
-- **Testing:** 494 offline unit tests (no network — all seams mocked;
+- **Testing:** 575 offline unit tests (no network — all seams mocked;
   deterministic injected clocks; golden transcripts that fail on unscripted LLM
   calls). Windows workstation has no Python; tests always run on the VPS stage.
 - **Observability:** per-update traces; immutable incidents + actionable issue
@@ -260,20 +298,27 @@ REPLACE_ME anchor, spec-consistency sweep.
 
 ### 3.1 Known gaps — open, candidate improvement backlog
 
-**Correctness / durability (from the review, not yet fixed):**
+> **2026-07-17 update:** the notes/journals plan v1.1 shipped in full the same
+> day (Phase 0 + Batches 1–4). Items **2, 3, 5** below were its Phase-0 fixes
+> and are now CLOSED (kept struck-through for context); the plan also delivered
+> note lifecycle/review/resurfacing, structured journals + Gratitude, and the
+> saved-to-used review metrics described in §1.4.
+
+**Correctness / durability (from the review):**
 1. Forwarded voice/audio STT (`do_read_media`) bills remote transcription at
    `duration=0` → metered as 1 second regardless of length (budget undercount).
-2. Weekly-review scorecard can print a negative "first-guess categories" score
-   when old notes are bulk-recategorized in the period (metric mixes
-   period-received messages with all-period feedback).
-3. A forwarded album is acked before it's persisted: a crash inside the ~3 s
-   settle window (or any finalize error during flush) loses it silently — no
-   retry, no reply, no issue row (every other ingest path is durable).
+2. ~~Weekly-review scorecard can print a negative "first-guess categories"
+   score~~ — **fixed 2026-07-17 (P0-2)**: the metric derives from the period's
+   own messages, always 0 ≤ K ≤ M.
+3. ~~A forwarded album is acked before it's persisted~~ — **fixed 2026-07-17
+   (P0-3)**: parts stay `pending` in the durable inbox until the album files;
+   startup replay + honest flush-failure reply + dead-letter.
 4. Durable-job retries have zero backoff: both attempts burn within one drain
    pass, so transient failures (e.g. a network blip during backup upload)
    become terminal in under a second.
-5. `merge_categories` into a new name silently strips `kind='journal'` —
-   the diary loses dated recall and its purge exemption.
+5. ~~`merge_categories` into a new name silently strips `kind='journal'`~~ —
+   **fixed 2026-07-17 (P0-1)**: journal kind is contagious on merge; a
+   structured-journal definition follows its category too.
 6. Embedding-cache fingerprint `(COUNT, MAX(id), SUM(id))` is defeated by
    SQLite rowid reuse on re-index — `ask` can serve pre-edit chunks.
 7. Two same-second `fetch` calls collide on the synthetic message id; the

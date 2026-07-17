@@ -886,6 +886,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if not draft:
             self.start_partial_reminder(chat_id, lang, params)
             return
+        if params.get("note_msg_id"):
+            # note→reminder outcome link (MET-001): proposal now, created at confirm
+            draft["note_msg_id"] = params["note_msg_id"]
+            events.record_done(self.conn, "note_reminder_proposed", chat_id=chat_id,
+                               payload={"message_id": params["note_msg_id"]})
         store.pending_set(self.conn, chat_id, "reminder", draft)
         self.reply(chat_id, T(
             lang, "reminder_draft", title=draft["title"],
@@ -1093,6 +1098,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 if not draft:
                     self.reply(chat_id, T(lang, "clarify"))
                     return
+                if payload.get("note_msg_id"):  # keep the note→reminder link through amends
+                    draft["note_msg_id"] = payload["note_msg_id"]
                 store.pending_set(self.conn, chat_id, "reminder", draft)
                 self.reply(chat_id, T(
                     lang, "reminder_draft", title=draft["title"],
@@ -1107,6 +1114,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                    f"set a reminder: {payload['title']}", importance=1,
                                    source_table="reminders", source_id=rid,
                                    title=payload["title"])
+            if payload.get("note_msg_id"):
+                # A saved note led to a real action (MET-001 outcome).
+                events.record_done(self.conn, "note_reminder_created", chat_id=chat_id,
+                                   payload={"message_id": payload["note_msg_id"],
+                                            "reminder_id": rid})
             store.pending_clear(self.conn, chat_id)
             self._remember_reminder(rid)  # so a follow-up "это напоминание" binds to it
             self.reply(chat_id, T(
@@ -2546,6 +2558,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if draft is None:
                 pass  # candidate expired/invalid — the note is saved, nothing else
             elif slot is None:
+                draft["note_msg_id"] = row_id  # note→reminder outcome link (MET-001)
+                events.record_done(self.conn, "note_reminder_proposed", chat_id=chat_id,
+                                   payload={"message_id": row_id})
                 store.pending_set(self.conn, chat_id, "reminder", draft)
                 self.reply(chat_id, T(lang, "reminder_draft", title=draft["title"],
                                       when_local=reminders.fmt_local(

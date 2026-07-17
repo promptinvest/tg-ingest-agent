@@ -9,6 +9,7 @@ the solution. Deterministic (no LLM tokens): everything comes straight
 from the database.
 """
 from datetime import datetime, timedelta, timezone
+import json
 import re
 
 import llm
@@ -213,7 +214,111 @@ def collect(conn, period):
     data["mem_confirmed"] = len(store.boss_items(conn, "confirmed", limit=200))
     data["mem_inferred"] = len(store.boss_items(conn, "inferred", limit=200))
     data["mem_candidates"] = len(data["pending_candidates"])
+    data.update(collect_note_outcomes(conn, since, now))
     return data
+
+
+NOTE_EVENT_KINDS = ("note_opened", "note_cited", "note_resurfaced",
+                    "note_resurface_accepted", "note_archived", "note_restored",
+                    "note_kept", "note_review_deferred", "note_triaged",
+                    "note_review_shown", "note_reminder_proposed",
+                    "note_reminder_created")
+
+
+def _parse_iso(value):
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def collect_note_outcomes(conn, since, now):
+    """Saved-to-used OUTCOME metrics (plan v1.1 §16, MET-001) — deterministic,
+    from real recorded events and lifecycle fields; never a pile-size pressure
+    number, never something to maximize (more saves/nudges/entries is not the
+    goal — notes that get USED is)."""
+    out = {}
+    now_iso = now.isoformat()
+    out["notes_saved"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE received_at >= ?"
+        " AND status = 'confirmed' AND knowledge_state IS NOT NULL",
+        (since,)).fetchone()["n"]
+    # distinct notes with a REAL use this period (open/citation/delivered
+    # export/accepted resurfacing bump last_used_at; ranking never does)
+    out["notes_used_period"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE last_used_at >= ?",
+        (since,)).fetchone()["n"]
+    marks = ",".join("?" for _ in NOTE_EVENT_KINDS)
+    out["note_events"] = {r["kind"]: r["n"] for r in conn.execute(
+        f"SELECT kind, COUNT(*) AS n FROM events WHERE created_at >= ?"
+        f" AND kind IN ({marks}) GROUP BY kind", (since, *NOTE_EVENT_KINDS))}
+    out["lifecycle_counts"] = store.notes_lifecycle_counts(conn)
+    week_ahead = (now + timedelta(days=7)).isoformat()
+    out["reviews_upcoming"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE knowledge_state = 'active'"
+        " AND review_at > ? AND review_at <= ?", (now_iso, week_ahead)).fetchone()["n"]
+    out["temp_expiring"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE knowledge_state IS NOT NULL"
+        " AND knowledge_state != 'archived' AND note_purpose = 'temporary'"
+        " AND expires_at IS NOT NULL AND expires_at <= ?", (week_ahead,)).fetchone()["n"]
+    oldest = conn.execute(
+        "SELECT MIN(received_at) AS t FROM messages WHERE knowledge_state = 'inbox'"
+    ).fetchone()["t"]
+    oldest_dt = _parse_iso(oldest)
+    out["inbox_oldest_days"] = max(0, (now - oldest_dt).days) if oldest_dt else 0
+    # KPI: capture_to_use_rate = distinct notes used after saving / distinct
+    # notes confirmed (lifecycle notes, all-time — journals are outside).
+    out["capture_confirmed_total"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE status = 'confirmed'"
+        " AND knowledge_state IS NOT NULL").fetchone()["n"]
+    out["capture_used_total"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE status = 'confirmed'"
+        " AND knowledge_state IS NOT NULL AND use_count > 0").fetchone()["n"]
+    out["archived_unused"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE knowledge_state = 'archived'"
+        " AND use_count = 0").fetchone()["n"]
+    # median capture→first-use, from the events log (bounded by the telemetry
+    # retention window — an approximation, labeled as such in the report)
+    first_use = {}
+    for r in conn.execute(
+            "SELECT payload, created_at FROM events WHERE kind IN"
+            " ('note_opened','note_cited','note_resurface_accepted')"
+            " ORDER BY created_at"):
+        try:
+            mid = (json.loads(r["payload"] or "{}") or {}).get("message_id")
+        except ValueError:
+            continue
+        if mid and mid not in first_use:
+            first_use[mid] = r["created_at"]
+    deltas = []
+    for mid, ts in first_use.items():
+        row = conn.execute("SELECT received_at FROM messages WHERE id = ?",
+                           (mid,)).fetchone()
+        used_at = _parse_iso(ts)
+        saved_at = _parse_iso(row["received_at"]) if row else None
+        if used_at and saved_at and used_at >= saved_at:
+            deltas.append((used_at - saved_at).total_seconds() / 3600)
+    out["median_first_use_hours"] = (sorted(deltas)[len(deltas) // 2]
+                                     if deltas else None)
+    # journal entries per journal this period (structured journals by entries,
+    # remaining journal categories by dated messages)
+    per_journal = []
+    seen = set()
+    for d in store.journal_defs(conn):
+        n = len(store.journal_entries_for(conn, d["id"], since_iso=since))
+        name = d["category"] or d["display_name"]
+        seen.add(name.casefold())
+        if n:
+            per_journal.append((name, n))
+    for name in store.journal_categories(conn):
+        if name.casefold() in seen:
+            continue
+        n = len(store.journal_entries(conn, name, since))
+        if n:
+            per_journal.append((name, n))
+    out["journal_entries_period"] = per_journal
+    return out
 
 
 def morning_brief(conn, cfg, lang, tz_offset, owner):
@@ -300,12 +405,34 @@ def chat_text(conn, cfg, lang, period="week"):
     period_label = {"day": ("за сегодня", "today"), "week": ("за неделю", "this week"),
                     "month": ("за месяц", "this month")}[data["period"]][0 if ru else 1]
     lines = [("Мой отчёт " if ru else "My review ") + period_label + ":"]
-    total = sum(r["n"] for r in data["messages"])
-    by_status = ", ".join(f"{r['status']}: {r['n']}" for r in data["messages"]) or "—"
-    turns = sum(r["n"] for r in data["conversation_turns"])
-    lines.append((f"📥 Сохранено материалов: {total} ({by_status}); реплик в диалоге: {turns}"
+    # Outcomes first (MET-001): what the saved material actually DID — used,
+    # turned into reminders, triaged — never a bare pile-size number.
+    ev = data["note_events"]
+    saved_line = (f"📥 Сохранено: {data['notes_saved']}"
+                  f" · пригодилось (открыты/процитированы): {data['notes_used_period']}"
                   if ru else
-                  f"📥 Saved knowledge items: {total} ({by_status}); conversation turns: {turns}"))
+                  f"📥 Saved: {data['notes_saved']}"
+                  f" · actually used (opened/cited): {data['notes_used_period']}")
+    if ev.get("note_reminder_created"):
+        saved_line += (f" · в напоминания: {ev['note_reminder_created']}" if ru
+                       else f" · turned into reminders: {ev['note_reminder_created']}")
+    lines.append(saved_line)
+    counts = data["lifecycle_counts"]
+    triage = (f"🗂 В архив: {ev.get('note_archived', 0)}"
+              f" · восстановлено: {ev.get('note_restored', 0)}"
+              f" · ждут разбора: {counts.get('inbox', 0)}"
+              f" · на пересмотр: {counts.get('review_due', 0)}"
+              if ru else
+              f"🗂 Archived: {ev.get('note_archived', 0)}"
+              f" · restored: {ev.get('note_restored', 0)}"
+              f" · awaiting triage: {counts.get('inbox', 0)}"
+              f" · review due: {counts.get('review_due', 0)}")
+    lines.append(triage)
+    if data["reviews_upcoming"] or data["temp_expiring"]:
+        lines.append((f"🔜 Пересмотр на неделе: {data['reviews_upcoming']}"
+                      f" · временных истекает: {data['temp_expiring']}" if ru else
+                      f"🔜 Reviews this week: {data['reviews_upcoming']}"
+                      f" · temporary expiring: {data['temp_expiring']}"))
     rem = (f"⏰ Напоминаний поставлено: {data['reminders_set']}" if ru
            else f"⏰ Reminders set: {data['reminders_set']}")
     if data["reminders_done"]:
@@ -336,11 +463,9 @@ def chat_text(conn, cfg, lang, period="week"):
                         else f"new memory entries: {len(data['new_prefs'])}"))
     lines.append("🧠 " + (("Чему я научилась: " if ru else "What I learned: ")
                           + ("; ".join(learned) if learned else ("пока ничему новому" if ru else "nothing new yet"))))
-    if data["issue_counts"]:
-        issues = ", ".join(f"{_issue_label(r['kind'], lang)}: {r['n']}" for r in data["issue_counts"])
-        lines.append(("⚠️ Проблемы: " if ru else "⚠️ Issues: ") + issues)
-    else:
-        lines.append("✅ " + ("Проблем не было" if ru else "No issues"))
+    digest = journal_digest(conn, lang, days=PERIOD_DAYS.get(data["period"], 7))
+    if digest:
+        lines.append(digest)
     dupes = similar_categories(conn)
     if dupes:
         pretty = "; ".join(f"«{a}» ↔ «{b}»" for a, b in dupes[:3])
@@ -348,28 +473,36 @@ def chat_text(conn, cfg, lang, period="week"):
                       + " — скажи «объедини X в Y», и я их сложу." if ru else
                       "🗂 Similar categories: " + pretty
                       + " — say \"merge X into Y\" and I'll fold them."))
-    digest = journal_digest(conn, lang, days=PERIOD_DAYS.get(data["period"], 7))
-    if digest:
-        lines.append(digest)
+    # Operational metrics live in the Cara-health tail (plan v1.1 §16) — the
+    # outcome block above is about HIS knowledge, this part is about HER.
+    lines.append("⚙️ " + ("Как я работала:" if ru else "Cara health:"))
+    turns = sum(r["n"] for r in data["conversation_turns"])
+    lines.append((f"  Реплик в диалоге: {turns}" if ru
+                  else f"  Conversation turns: {turns}"))
+    if data["issue_counts"]:
+        issues = ", ".join(f"{_issue_label(r['kind'], lang)}: {r['n']}" for r in data["issue_counts"])
+        lines.append(("  ⚠️ Проблемы: " if ru else "  ⚠️ Issues: ") + issues)
+    else:
+        lines.append("  ✅ " + ("Проблем не было" if ru else "No issues"))
     spend = sum(r["cost"] for r in data["spend_by_skill"])
     calls = sum(r["calls"] for r in data["spend_by_skill"])
-    lines.append((f"💸 Расходы AI: ${spend:.3f} ({calls} вызовов)" if ru
-                  else f"💸 AI spend: ${spend:.3f} ({calls} calls)"))
+    lines.append((f"  💸 Расходы AI: ${spend:.3f} ({calls} вызовов)" if ru
+                  else f"  💸 AI spend: ${spend:.3f} ({calls} calls)"))
     if data["fallback_count"]:
-        lines.append((f"🔁 Запасная модель выручала: {data['fallback_count']}" if ru
-                      else f"🔁 Backup model used: {data['fallback_count']}×"))
+        lines.append((f"  🔁 Запасная модель выручала: {data['fallback_count']}" if ru
+                      else f"  🔁 Backup model used: {data['fallback_count']}×"))
     if data["corrections_learned"] or data["corrections_unresolved"]:
-        c = (f"📝 Корректировки: применяю {len(data['corrections_learned'])}" if ru
-             else f"📝 Corrections: applying {len(data['corrections_learned'])}")
+        c = (f"  📝 Корректировки: применяю {len(data['corrections_learned'])}" if ru
+             else f"  📝 Corrections: applying {len(data['corrections_learned'])}")
         if data["corrections_unresolved"]:
             c += (f", нужен код-фикс {len(data['corrections_unresolved'])}" if ru
                   else f", need a code fix {len(data['corrections_unresolved'])}")
         lines.append(c)
-    lines.append((f"📊 Память: {data['mem_confirmed']} подтверждено, "
+    lines.append((f"  📊 Память: {data['mem_confirmed']} подтверждено, "
                   f"{data['mem_inferred']} наблюдений; категорий с первого раза: "
                   f"{data['first_guess_kept']}/{data['confirmed_count']}"
                   if ru else
-                  f"📊 Memory: {data['mem_confirmed']} confirmed, {data['mem_inferred']} sensed; "
+                  f"  📊 Memory: {data['mem_confirmed']} confirmed, {data['mem_inferred']} sensed; "
                   f"first-guess categories: "
                   f"{data['first_guess_kept']}/{data['confirmed_count']}"))
     if data["pending_candidates"]:
@@ -550,6 +683,41 @@ def markdown(conn, cfg, period="week"):
         lines.append("- no traces this period")
     lines.append(f"- model fallbacks: {data['fallback_count']} · "
                  f"issues logged: {sum(r['n'] for r in data['issue_counts'])}")
+    lines.append("")
+    lines.append("## Notes outcomes (saved-to-used, MET-001)")
+    ev = data["note_events"]
+    used_n, conf_n = data["capture_used_total"], data["capture_confirmed_total"]
+    rate = (100 * used_n / conf_n) if conf_n else 0.0
+    lines.append(f"- **KPI capture_to_use_rate: {used_n}/{conf_n} ({rate:.0f}%)** — "
+                 "distinct notes with a real use / distinct notes confirmed (all-time; "
+                 "never optimize for more saves)")
+    lines.append(f"- this period: saved {data['notes_saved']} · used {data['notes_used_period']} · "
+                 f"reminders from notes {ev.get('note_reminder_created', 0)} "
+                 f"(proposed {ev.get('note_reminder_proposed', 0)}) · "
+                 f"archived {ev.get('note_archived', 0)} · restored {ev.get('note_restored', 0)}")
+    if data["median_first_use_hours"] is not None:
+        lines.append(f"- median capture→first-use: {data['median_first_use_hours']:.1f} h "
+                     "(events-window approximation)")
+    counts = data["lifecycle_counts"]
+    lines.append(f"- inbox: {counts.get('inbox', 0)} awaiting triage "
+                 f"(oldest {data['inbox_oldest_days']} d) · review due: {counts.get('review_due', 0)} · "
+                 f"upcoming 7d: {data['reviews_upcoming']} reviews, {data['temp_expiring']} temporary expiring")
+    arch_total = counts.get("archived", 0)
+    if arch_total:
+        lines.append(f"- archived unused: {data['archived_unused']}/{arch_total} "
+                     f"({100 * data['archived_unused'] / arch_total:.0f}%)")
+    shown = ev.get("note_review_shown", 0)
+    acted = sum(ev.get(k, 0) for k in ("note_archived", "note_restored", "note_kept",
+                                       "note_review_deferred", "note_triaged"))
+    if shown:
+        lines.append(f"- review batches shown: {shown} · triage actions taken: {acted}")
+    resurfaced = ev.get("note_resurfaced", 0)
+    if resurfaced:
+        lines.append(f"- resurfacing: {resurfaced} offered · "
+                     f"{ev.get('note_resurface_accepted', 0)} accepted")
+    if data["journal_entries_period"]:
+        lines.append("- journal entries this period: "
+                     + "; ".join(f"{name} — {n}" for name, n in data["journal_entries_period"]))
     lines.append("")
     lines.append("## Scorecard")
     kept = data["first_guess_kept"]

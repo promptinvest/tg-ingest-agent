@@ -464,9 +464,20 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 ### Reporting & ops
 - **Weekly performance review:** runs on a fixed schedule (default **Monday 10:00
   local**); "когда следующий review?" tells you the date; "как ты поработала?" runs it
-  on demand. Includes a **scorecard** — first‑guess category accuracy, unclear‑request
-  count, proactive nudges sent, and memory counts — plus a **📔 Дневники** journal‑
-  activity rollup. Markdown exports for VS Code:
+  on demand. **Saved‑to‑used outcomes lead (2026‑07‑17, MET‑001):** the user‑facing
+  review opens with what the saved material actually DID — saved · actually used
+  (opened/cited) · turned into reminders · archived/restored · awaiting triage ·
+  review‑due · upcoming reviews/temporary expiring — plus the **📔 Дневники**
+  journal‑activity rollup; operational metrics (issues, spend, model fallbacks,
+  first‑guess accuracy, memory counts) move to the **«⚙️ Как я работала» Cara‑health
+  tail**. The engineering Markdown adds a **"Notes outcomes"** section with the KPI
+  `capture_to_use_rate` (distinct notes used / distinct notes confirmed — never
+  optimized toward more saves/nudges/entries), median capture→first‑use
+  (events‑window approximation), % archived unused, inbox age, review‑batch and
+  resurfacing acceptance counts, and journal entries per journal. A reminder
+  created from a note (capture card «Сохранить + напоминание» or «напомни по
+  заметке N») records `note_reminder_proposed`/`note_reminder_created` outcome
+  events — the link survives draft amends. Markdown exports for VS Code:
   review, self, boss profile, working history, memory candidates, trace summary.
   **Real-file boundary (2026‑07‑13):** the short follow-up `Давай md` / `send the md`
   is resolved deterministically to `review(export=true)` without an LLM router call;
@@ -602,6 +613,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ reminders_svc.py ReminderMixin: create/list/cancel/reschedule/rename/undo, partial
    │                   drafts, fired follow-ups, the fire/expiry sweeps
    ├─ ingest.py        parsing, UTF-16-safe URL extraction, category+facts+summary
+   ├─ journals.py      structured journals: closed entry-type registry (gratitude active),
+   │                   payload validation (lexical support), extraction, stats, md export
    ├─ pdftext.py       best-effort PDF text-layer extraction (stdlib only)
    ├─ knowledge.py     chunking + cosine retrieval + grounded-answer prompt (ask)
    ├─ reminders.py     NL time parsing, recurrence, local rendering

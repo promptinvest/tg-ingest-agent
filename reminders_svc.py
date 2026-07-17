@@ -176,18 +176,21 @@ class ReminderMixin:
         note_id = params.get("note_id")
         if note_id is None:
             return params
+        note = self.resolve_item({"id": note_id})
+        if note is None:
+            return params
+        params = dict(params)
+        # Keep the note→reminder link (DB id) for the saved-to-used outcome
+        # metrics (MET-001): the commit point records note_reminder_created.
+        params["note_msg_id"] = note["id"]
         title = str(params.get("title") or "").strip()
         if title and not re.fullmatch(r"(?:заметк\w*|запис\w*|note|item|#)?\s*#?\d{1,7}",
                                       title, re.IGNORECASE):
             return params  # a meaningful subject was given — keep it
-        note = self.resolve_item({"id": note_id})
-        if note is None:
-            return params
         subject = (note["summary"] or note["raw_text"] or note["category"]
                    or note["suggested_category"] or "").strip()
         subject = subject.splitlines()[0][:80].strip() if subject else ""
         if subject:
-            params = dict(params)
             params["title"] = subject
         return params
 

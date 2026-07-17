@@ -58,6 +58,9 @@ KB for SSH/deploy/model details.
   named manifest-gated action; low confidence falls to converse), JSON-only
   output, untrusted-content delimiters, confidence gate, smalltalk shortcut.
 - Skills: `ingest.py`, `reminders.py`, `spend.py`, `review.py`, `gcal.py`,
+  `journals.py` (structured journals: closed entry-type registry — gratitude
+  active — payload validation with lexical support, extraction, person stats,
+  per-journal md export; added 2026-07-17),
   `fetch.py` (read a URL on request — SSRF-guarded), `sysinfo.py` (read-only
   VPS stats from /proc), `knowledge.py` (ask: semantic KB Q&A over BGE-M3
   embeddings — the ONE action that returns grounded free-form answers, KB-only,
