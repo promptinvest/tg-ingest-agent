@@ -416,6 +416,41 @@ CREATE TABLE IF NOT EXISTS list_views (
   created_at TEXT NOT NULL
 );
 
+-- Structured journals (plan v1.1 §5.4/§5.5). A definition is the semantic
+-- journal entity (slug stable; entry_type from the CLOSED code registry in
+-- journals.py; `category` links it to the existing category-based journal so
+-- «покажи благодарности» keeps working). Prompt schedule is validated DATA,
+-- never executable text. Proactive prompts are OFF by default (opt-in).
+CREATE TABLE IF NOT EXISTS journal_definitions (
+  id INTEGER PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  entry_type TEXT NOT NULL,
+  category TEXT,
+  sensitivity TEXT NOT NULL DEFAULT 'personal',
+  active INTEGER NOT NULL DEFAULT 1,
+  proactive_enabled INTEGER NOT NULL DEFAULT 0,
+  prompt_config_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- One source message per entry; the message keeps raw text/attachments/
+-- provenance (payload is derived metadata, §D-07). Deletion cascades through
+-- the MANUAL cascade paths (delete_message/purge) — never FK pragmas.
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id INTEGER PRIMARY KEY,
+  journal_id INTEGER NOT NULL REFERENCES journal_definitions(id),
+  message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id),
+  occurred_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  extraction_status TEXT NOT NULL DEFAULT 'complete',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_journal_entries_journal
+  ON journal_entries(journal_id, occurred_at);
+
 """
 
 
@@ -1061,6 +1096,85 @@ def _migrate(conn):
                 continue
             conn.execute(f"UPDATE {tbl} SET embedding = ? WHERE id = ?",
                          (pack_embedding(vec), r["id"]))
+    _migrate_gratitude_builtin(conn)
+
+
+def _category_confirmed_count(conn, name):
+    target = str(name or "").casefold()
+    n = 0
+    for m in conn.execute("SELECT category FROM messages"
+                          " WHERE status = 'confirmed' AND category IS NOT NULL"):
+        if m["category"].casefold() == target:
+            n += 1
+    return n
+
+
+def _migrate_gratitude_builtin(conn):
+    """Built-in Gratitude structured journal (plan v1.1 §7, JRN-004).
+
+    Deterministic, additive, idempotent; NO LLM/network in migration.
+      1. One-time: discover the canonical existing gratitude category (RU stem
+         «благодар» / EN aliases; journal-kind preferred, then most confirmed
+         entries, then oldest id) and create the `gratitude` definition on it.
+         A fresh DB gets the built-in «Благодарность» journal from day one.
+         Other alias categories are left untouched — the canonical-journal
+         alias machinery (canonical_category/_snap_to_journal) already folds
+         variants at every write boundary; nothing is renumbered.
+      2. Every start (self-heal, active definition only): the category row
+         exists and is kind='journal' (repairs a full purge / rollback window).
+      3. Every start: confirmed messages in the canonical category without an
+         entry row get one — payload {}, extraction_status='legacy_unstructured'
+         (readable/exportable from raw text; enrichment only on demand).
+    «X больше не дневник» sets active=0 (set_category_kind), which disables the
+    self-heal and the live entry creation — the boss's decision wins."""
+    import journals  # lazy: journals -> llm -> store would cycle at module import
+
+    gdef = conn.execute("SELECT * FROM journal_definitions WHERE slug = ?",
+                        (journals.GRATITUDE_SLUG,)).fetchone()
+    if gdef is None:
+        candidates = []
+        # rowid, not id: a legacy pre-migration categories table (name PK only)
+        # has no `id` column, but every rowid table orders by creation just fine.
+        for row in conn.execute("SELECT rowid AS rid, name, kind FROM categories"
+                                " ORDER BY rowid"):
+            if journals.is_gratitude_name(row["name"]):
+                candidates.append((0 if row["kind"] == "journal" else 1,
+                                   -_category_confirmed_count(conn, row["name"]),
+                                   row["rid"], row["name"]))
+        if not candidates:
+            # No gratitude category yet (a genuinely fresh DB): the built-in
+            # binds the moment one appears (set_category_kind creates it then).
+            # Seeding a phantom «Благодарность» here would collide with the
+            # boss's own naming through the singular/plural fold.
+            return
+        canonical = sorted(candidates)[0][3]
+        now = _now()
+        conn.execute("INSERT INTO journal_definitions (slug, display_name, entry_type,"
+                     " category, sensitivity, active, proactive_enabled, created_at,"
+                     " updated_at) VALUES (?, ?, 'gratitude', ?, 'personal', 1, 0, ?, ?)",
+                     (journals.GRATITUDE_SLUG, canonical, canonical, now, now))
+        gdef = conn.execute("SELECT * FROM journal_definitions WHERE slug = ?",
+                            (journals.GRATITUDE_SLUG,)).fetchone()
+    if not gdef["active"]:
+        return
+    cat = gdef["category"] or gdef["display_name"]
+    now = _now()
+    conn.execute("INSERT OR IGNORE INTO categories (name, norm_key, created_at)"
+                 " VALUES (?, ?, ?)", (cat, cat.casefold(), now))
+    conn.execute("UPDATE categories SET kind = 'journal' WHERE norm_key = ?",
+                 (cat.casefold(),))
+    have = {r["message_id"] for r in conn.execute(
+        "SELECT message_id FROM journal_entries WHERE journal_id = ?", (gdef["id"],))}
+    target = cat.casefold()
+    for m in conn.execute("SELECT id, category, received_at FROM messages"
+                          " WHERE status = 'confirmed' AND category IS NOT NULL"):
+        if m["id"] in have or m["category"].casefold() != target:
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO journal_entries (journal_id, message_id, occurred_at,"
+            " payload_json, extraction_status, created_at, updated_at)"
+            " VALUES (?, ?, ?, '{}', 'legacy_unstructured', ?, ?)",
+            (gdef["id"], m["id"], m["received_at"], now, now))
 
 
 # -- kv ----------------------------------------------------------------------
@@ -1216,6 +1330,11 @@ def merge_categories(conn, src, dst):
         # purge exemption. Undo stays available via «X больше не дневник».
         conn.execute("UPDATE categories SET kind = 'journal' WHERE norm_key = ?",
                      (dst_name.casefold(),))
+    # A structured-journal definition follows its category through a merge/rename
+    # (Cyrillic-casefold match; SQL = would miss case variants).
+    for d in journal_defs(conn):
+        if (d["category"] or "").casefold() == src_name.casefold():
+            journal_def_update(conn, d["slug"], category=dst_name)
     conn.commit()
     return moved, dst_name
 
@@ -1232,10 +1351,24 @@ def category_counts(conn):
 
 def set_category_kind(conn, name, kind):
     """Mark a category 'journal' (long-term, append-only) or 'inbox' (one-time).
-    Creates the category if new; returns the canonical name."""
+    Creates the category if new; returns the canonical name. A structured-journal
+    definition on that category follows the boss's decision: «X больше не
+    дневник» deactivates it (no new entries/prompts; existing entries stay),
+    re-marking as a journal reactivates it."""
     canonical = ensure_category(conn, name)
     conn.execute("UPDATE categories SET kind = ? WHERE norm_key = ?",
                  (kind, canonical.casefold()))
+    for d in journal_defs(conn):
+        if (d["category"] or "").casefold() == canonical.casefold():
+            journal_def_update(conn, d["slug"], active=1 if kind == "journal" else 0)
+    if kind == "journal":
+        # The gratitude BUILT-IN binds to its category the moment one exists
+        # (a fresh DB has none at migration time — see _migrate_gratitude_builtin).
+        import journals  # lazy: journals -> llm -> store at module import
+        if journals.is_gratitude_name(canonical) and \
+                journal_def_get(conn, journals.GRATITUDE_SLUG) is None:
+            journal_def_ensure(conn, journals.GRATITUDE_SLUG, canonical,
+                               "gratitude", canonical)
     conn.commit()
     return canonical
 
@@ -1463,6 +1596,129 @@ def journal_count(conn, category):
     return n
 
 
+# -- structured journal definitions/entries (plan v1.1 §5.4/§5.5) -------------
+
+def journal_def_get(conn, slug):
+    return conn.execute("SELECT * FROM journal_definitions WHERE slug = ?",
+                        (slug,)).fetchone()
+
+
+def journal_defs(conn, active_only=False):
+    rows = conn.execute("SELECT * FROM journal_definitions ORDER BY id").fetchall()
+    if active_only:
+        rows = [r for r in rows if r["active"]]
+    return rows
+
+
+def journal_def_by_category(conn, category, active_only=True):
+    """The definition owning a category name (Cyrillic-casefold match), or None."""
+    target = str(category or "").casefold()
+    if not target:
+        return None
+    for row in journal_defs(conn, active_only=active_only):
+        if (row["category"] or "").casefold() == target:
+            return row
+    return None
+
+
+def journal_def_ensure(conn, slug, display_name, entry_type, category,
+                       sensitivity="personal"):
+    """Create a definition once (slug stable); returns the row."""
+    now = _now()
+    conn.execute(
+        "INSERT OR IGNORE INTO journal_definitions"
+        " (slug, display_name, entry_type, category, sensitivity, active,"
+        " proactive_enabled, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)",
+        (slug, display_name, entry_type, category, sensitivity, now, now),
+    )
+    conn.commit()
+    return journal_def_get(conn, slug)
+
+
+_JOURNAL_DEF_FIELDS = ("display_name", "category", "sensitivity", "active",
+                       "proactive_enabled", "prompt_config_json")
+
+
+def journal_def_update(conn, slug, **fields):
+    sets, args = [], []
+    for key, value in fields.items():
+        if key not in _JOURNAL_DEF_FIELDS:
+            raise ValueError(f"unknown journal_definitions field: {key}")
+        sets.append(f"{key} = ?")
+        args.append(value)
+    if not sets:
+        return False
+    sets.append("updated_at = ?")
+    args.append(_now())
+    cur = conn.execute(
+        f"UPDATE journal_definitions SET {', '.join(sets)} WHERE slug = ?",
+        (*args, slug))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def journal_entry_add(conn, journal_id, message_id, occurred_at, payload=None,
+                      extraction_status="complete"):
+    """One entry per source message (unique message_id; re-adds are ignored so
+    replays/backfills stay idempotent). Returns True when a row was inserted."""
+    now = _now()
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO journal_entries"
+        " (journal_id, message_id, occurred_at, payload_json, extraction_status,"
+        " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (journal_id, message_id, occurred_at,
+         json.dumps(payload or {}, ensure_ascii=False), extraction_status, now, now),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def journal_entry_get(conn, message_id):
+    return conn.execute("SELECT * FROM journal_entries WHERE message_id = ?",
+                        (message_id,)).fetchone()
+
+
+def journal_entry_payload(row):
+    """Parsed payload dict of an entry row; {} on anything undecodable."""
+    try:
+        data = json.loads(row["payload_json"] or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def journal_entry_update_payload(conn, message_id, payload, extraction_status):
+    cur = conn.execute(
+        "UPDATE journal_entries SET payload_json = ?, extraction_status = ?,"
+        " updated_at = ? WHERE message_id = ?",
+        (json.dumps(payload or {}, ensure_ascii=False), extraction_status,
+         _now(), message_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def journal_entries_for(conn, journal_id, since_iso=None, until_iso=None):
+    """Entries of one journal joined with their source messages, oldest-first
+    (occurred_at). The message keeps raw text/summary/note_no authority."""
+    rows = conn.execute(
+        "SELECT je.id AS entry_id, je.journal_id, je.message_id, je.occurred_at,"
+        " je.payload_json, je.extraction_status,"
+        " m.raw_text, m.summary, m.note_no, m.received_at, m.chat_id"
+        " FROM journal_entries je JOIN messages m ON m.id = je.message_id"
+        " WHERE je.journal_id = ? ORDER BY je.occurred_at, je.id",
+        (journal_id,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        if since_iso and (r["occurred_at"] or "") < since_iso:
+            continue
+        if until_iso and (r["occurred_at"] or "") >= until_iso:
+            continue
+        out.append(r)
+    return out
+
+
 # -- messages ----------------------------------------------------------------
 
 def insert_message(conn, fields):
@@ -1654,7 +1910,8 @@ def set_suggestion_message(conn, message_id, tg_suggestion_message_id):
     conn.commit()
 
 
-def confirm_category(conn, message_id, category):
+def confirm_category(conn, message_id, category, journal_payload=None,
+                     journal_status=None):
     if is_journal(conn, category):
         # Journal entries live in the dated journal, outside note lifecycle:
         # no #N, no knowledge_state (they never enter inbox/active/archive views).
@@ -1664,6 +1921,20 @@ def confirm_category(conn, message_id, category):
             (category, message_id),
         )
         conn.commit()
+        # Structured journal (plan v1.1 §5.5): the CONFIRM is the write boundary —
+        # one entry per source message, created only here (never at suggestion
+        # time). The payload is validated derived metadata; raw text stays
+        # authoritative. Confirms without an extraction (recategorize into a
+        # journal, auto-confirm) still get their entry row, unstructured.
+        gdef = journal_def_by_category(conn, category)
+        if gdef is not None:
+            row = get_message(conn, message_id)
+            journal_entry_add(
+                conn, gdef["id"], message_id,
+                occurred_at=(row["received_at"] if row else _now()),
+                payload=journal_payload or {},
+                extraction_status=(journal_status or
+                                   ("complete" if journal_payload else "unstructured")))
         return
     conn.execute(
         "UPDATE messages SET category = ?, status = 'confirmed',"
@@ -1890,12 +2161,14 @@ def delete_message(conn, message_id):
     paths = [r["local_path"] for r in message_images(conn, message_id) if r["local_path"]]
     paths += [r["local_path"] for r in message_files(conn, message_id) if r["local_path"]]
     conn.execute("UPDATE messages SET duplicate_of = NULL WHERE duplicate_of = ?", (message_id,))
+    # MANUAL cascade (plan v1.1 §5.5): journal_entries has no ON DELETE CASCADE.
+    conn.execute("DELETE FROM journal_entries WHERE message_id = ?", (message_id,))
     conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
     conn.commit()
     return paths
 
 
-PURGE_SCOPES = ("all", "category", "stats", "reminders", "messages", "issues")
+PURGE_SCOPES = ("all", "category", "stats", "reminders", "messages", "issues", "journal")
 
 
 def _messages_in_category(conn, category):
@@ -1956,6 +2229,11 @@ def purge_preview(conn, scope, category=None):
             info["kept_journal"] = kept
     elif scope == "issues":  # only the failure/issue log
         info["issues"] = count("SELECT COUNT(*) FROM issues")
+    elif scope == "journal":
+        # A journal has its OWN typed phrase (plan v1.1 §11): entries + their
+        # source messages go; the journal itself (category + definition) stays.
+        info["messages"] = len(_messages_in_category(conn, category))
+        info["category"] = category
     return info
 
 
@@ -1967,8 +2245,11 @@ def purge_execute(conn, scope, category=None):
     if scope == "all":
         paths = [r["local_path"] for r in
                  conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
-        for table in ("facts", "chunks", "urls", "images", "messages", "categories",
-                      "issue_patterns", "issues", "feedback", "conversation"):
+        # journal_entries before messages (manual cascade; FK would fail closed).
+        # journal_definitions stay, like preferences — config, not content; the
+        # gratitude built-in self-heals its category on the next start.
+        for table in ("facts", "chunks", "urls", "images", "journal_entries", "messages",
+                      "categories", "issue_patterns", "issues", "feedback", "conversation"):
             conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM reminders WHERE status='active'")
         conn.execute("DELETE FROM pending_actions")
@@ -1991,7 +2272,7 @@ def purge_execute(conn, scope, category=None):
         if protected is None:  # no journals -> fast whole-table clear
             paths = [r["local_path"] for r in
                      conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
-            for table in ("facts", "chunks", "urls", "images", "messages"):
+            for table in ("facts", "chunks", "urls", "images", "journal_entries", "messages"):
                 conn.execute(f"DELETE FROM {table}")
         else:
             for mid in protected:
@@ -1999,6 +2280,11 @@ def purge_execute(conn, scope, category=None):
     elif scope == "issues":  # only the issue/failure log; nothing else
         conn.execute("DELETE FROM issue_patterns")
         conn.execute("DELETE FROM issues")
+    elif scope == "journal":
+        # Entries + source messages go (delete_message cascades journal_entries);
+        # the category row and the definition survive — the diary stays, empty.
+        for mid in _messages_in_category(conn, category):
+            paths.extend(delete_message(conn, mid))
     conn.commit()
     return info, [p for p in paths if p]
 

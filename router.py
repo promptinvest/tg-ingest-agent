@@ -42,14 +42,15 @@ ACTIONS = {
     "read_media",        # params: id? — transcribe a forwarded voice / read a file's CONTENT
     "discard",           # decline adding the just-suggested item (deletes it)
     "vps_stats",         # read-only host resource usage report
-    "purge",             # params: scope in all|category|stats|reminders, category — BULK delete (typed confirm)
+    "purge",             # params: scope in all|category|stats|reminders|journal, category — BULK delete (typed confirm)
     "fetch",             # params: url — read & ingest a remote page (the operator asked to read a link)
     "ask",               # params: question — answer from the operator's stored notes/documents (KB Q&A)
     "issues_report",     # params: period in day|week|month — communication problems summary
     "report_problem",    # params: detail — log a boss-reported problem to the issues journal
     "multi_action",      # the message bundles 2+ distinct commands; ask to do them one at a time
     "set_journal",       # params: category, on(bool) — mark a category long-term journal / one-time
-    "journal_show",      # params: category, period(day|week|month|all) — recall a journal as a dated series
+    "journal_show",      # params: category, period(day|week|month|all), person, tag, stats(bool) — recall a journal as a dated series
+    "journal_prompt",    # params: category, on(bool), time — enable/disable the opt-in daily journal invitation
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
     "forget",            # params: value (entry text or key to forget)
@@ -64,7 +65,7 @@ ACTIONS = {
     "memory_review",     # show pending memory candidates for confirmation
     "memory_cleanup",    # de-duplicate remembered facts ("почисти память")
     "working_history",   # how have you helped me / what have you learned about helping me
-    "export",            # params: what in review|self|profile|history|candidates — md export
+    "export",            # params: what in review|self|profile|history|candidates|journal — md export (journal: + category)
     "confirm",           # pending action: yes
     "amend",             # pending action: change params (category, due_utc, snooze_minutes, done)
     "cancel",            # pending action: no
@@ -131,6 +132,13 @@ NOTE: reminder_rename changes a REMINDER's TITLE — put the NEW name in new_tit
 "покажи благодарности" / "покажи мои благодарности" / "зачитай благодарности" / "мои благодарности" / "show my gratitudes" / "read out my gratitude" -> {"action": "journal_show", "params": {"category": "Благодарности"}, "confidence": 0.9}
 NOTE: a bare "покажи / зачитай / мои <journal-category>" (e.g. "покажи благодарности") is journal_show for that category — NEVER converse and NEVER clarify. Listing the boss's saved journal/notes is ALWAYS a deterministic action (journal_show / list_items); the model must never free-text such a list itself.
 "за что я был благодарен 17 июня?" / "what was I grateful for on June 17?" / "что я записал в благодарности вчера?" -> {"action": "ask", "params": {"question": "за что я был благодарен 17 июня?"}, "confidence": 0.85}
+"запиши в благодарности: Вера помогла с презентацией" / "я благодарен Вере за помощь с презентацией" / "add to gratitude: Vera helped with the deck" (an explicit ENTRY — content to save) -> {"action": "ingest", "params": {}, "confidence": 0.9}
+NOTE: a gratitude STATEMENT with content («я благодарен X за Y», «запиши в благодарности …») is ingest — the entry flow shows a confirm card. But a casual «спасибо»/"thank you" addressed to CARA (no journal intent) is smalltalk/converse and must NEVER be saved as an entry.
+"покажи благодарности про Веру" / "записи с тегом работа за месяц" -> {"action": "journal_show", "params": {"category": "Благодарности", "person": "Вера", "period": "month"}, "confidence": 0.88}
+"кому я чаще всего был благодарен в этом месяце?" / "who shows up most in my gratitude journal?" -> {"action": "journal_show", "params": {"category": "Благодарности", "stats": true, "period": "month"}, "confidence": 0.88}
+"предлагай мне вечером записывать благодарность" / "включи приглашение к дневнику благодарности в 21" / "prompt me to journal in the evening" -> {"action": "journal_prompt", "params": {"category": "Благодарности", "on": true, "time": "21:00"}, "confidence": 0.88}
+"не предлагай больше записи в благодарности" / "выключи приглашения дневника" / "stop prompting me to journal" -> {"action": "journal_prompt", "params": {"category": "Благодарности", "on": false}, "confidence": 0.88}
+"выгрузи дневник благодарности в md" / "экспортируй благодарности файлом" / "export my gratitude journal" -> {"action": "export", "params": {"what": "journal", "category": "Благодарности"}, "confidence": 0.9}
 "ты используешь это?" / "будешь пользоваться стикерами?" / "тебе нравится?" / "do you use it?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
 "поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
@@ -174,6 +182,7 @@ NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and
 "сбрось статистику и категории" / "reset all stats and categories" -> {"action": "purge", "params": {"scope": "stats"}, "confidence": 0.9}
 "очисти все напоминания" / "clear all reminders" -> {"action": "purge", "params": {"scope": "reminders"}, "confidence": 0.9}
 "очисти журнал проблем" / "clear the issues log" / "удали статистику проблем" -> {"action": "purge", "params": {"scope": "issues"}, "confidence": 0.9}
+"очисти дневник благодарности" / "удали все записи из дневника X" / "purge my gratitude journal" (a DIARY purge — its own typed phrase) -> {"action": "purge", "params": {"scope": "journal", "category": "Благодарности"}, "confidence": 0.9}
 "какие были проблемы на этой неделе?" / "what went wrong this week?" -> {"action": "issues_report", "params": {"period": "week"}, "confidence": 0.9}
 "запиши в проблемы" / "добавь в ошибки" / "это была ошибка, запиши" / "проблема с заметкой 11" / "log this as a problem" -> {"action": "report_problem", "params": {"detail": "проблема с заметкой 11"}, "confidence": 0.9}
 "первое закрой, второе - напомни в 14:00" / "сделай X, потом Y" / "close the first and remind me about the second" (TWO+ distinct commands in one message) -> {"action": "multi_action", "params": {}, "confidence": 0.85}

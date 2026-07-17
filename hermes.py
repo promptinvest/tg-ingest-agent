@@ -46,8 +46,8 @@ ACTIONS = frozenset({
     "list_items", "item_detail", "item_delete", "note_edit", "note_lifecycle",
     "note_review", "recategorize", "merge_categories",
     "show_media", "vps_stats", "purge", "fetch", "ask", "issues_report",
-    "report_problem", "multi_action", "set_journal", "journal_show", "export",
-    "working_history", "review",
+    "report_problem", "multi_action", "set_journal", "journal_show",
+    "journal_prompt", "export", "working_history", "review",
 })
 
 # The Hermes register — the system-prompt persona for any LLM-generated BUSINESS
@@ -269,7 +269,11 @@ class HermesMixin:
 
     def do_export(self, chat_id, lang, params):
         what = str(params.get("what") or "review").strip().lower()
-        if what in ("last_trace", "trace_timeline", "trace_steps"):
+        if what == "journal":
+            filename, md = self._journal_export_markdown(chat_id, lang, params)
+            if not md:
+                return  # _journal_export_markdown already replied (which journal?)
+        elif what in ("last_trace", "trace_timeline", "trace_steps"):
             filename, md = self._last_trace_markdown(chat_id)
             if not md:
                 self.reply(chat_id, T(lang, "trace_none"))
@@ -292,3 +296,40 @@ class HermesMixin:
         except TelegramError as exc:
             log(f"export send failed: {exc}")
             self.reply(chat_id, T(lang, "llm_error"))
+
+    def _journal_export_markdown(self, chat_id, lang, params):
+        """Per-journal Markdown export (plan v1.1 §7): dated entries with their
+        raw text and VALIDATED structured fields, cited as J#N. Returns
+        (filename, md), or (None, None) after asking which journal when the
+        target can't be resolved."""
+        import journals as journals_mod
+        name = str(params.get("category") or "").strip()
+        defs = store.journal_defs(self.conn)
+        gdef = None
+        if name:
+            gdef = store.journal_def_by_category(self.conn, name, active_only=False)
+            if gdef is None:
+                match = self._match_journal_category(
+                    name, [d["category"] or d["display_name"] for d in defs])
+                if match:
+                    gdef = store.journal_def_by_category(self.conn, match,
+                                                         active_only=False)
+        elif len(defs) == 1:
+            gdef = defs[0]
+        if gdef is None:
+            hint = ", ".join((d["category"] or d["display_name"]) for d in defs)
+            self.reply(chat_id, T(lang, "journal_which") + ("\n" + hint if hint else ""))
+            return None, None
+        rows = store.journal_entries_for(self.conn, gdef["id"])
+        entries = [{
+            "note_no": self.note_no(r["message_id"]),
+            "occurred_at": r["occurred_at"],
+            "raw_text": r["raw_text"],
+            "summary": r["summary"],
+            "payload": store.journal_entry_payload(r),
+            "extraction_status": r["extraction_status"],
+        } for r in rows]
+        display = gdef["category"] or gdef["display_name"]
+        md = journals_mod.export_markdown(display, entries, lang)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+        return f"cara-journal-{gdef['slug']}-{stamp}.md", md

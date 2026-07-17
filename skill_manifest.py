@@ -87,6 +87,11 @@ SKILLS = {
                     "title": {"en": "Set journal", "ru": "Сделать дневником"}},
     "journal_show": {"risk": "read_only", "persona_context": True,
                      "title": {"en": "Show journal", "ru": "Показать дневник"}},
+    # Enabling a scheduled journal invitation is a PROACTIVE preference —
+    # explicit confirmation before it turns on (plan v1.1 §11); disable is direct.
+    "journal_prompt": {"risk": "state_write", "writes_state": True,
+                       "requires_confirmation": True, "persona_context": True,
+                       "title": {"en": "Journal prompts", "ru": "Приглашения к дневнику"}},
     "review": {"risk": "read_only", "uses_llm": False, "allowed_proactive": True,
                "persona_context": True, "title": {"en": "Performance review", "ru": "Сводка работы"}},
     # -- memory / personality

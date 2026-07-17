@@ -20,6 +20,7 @@ import fetch
 import ingest
 import gcal
 import jobs
+import journals
 import knowledge
 import llm
 import memory_curator
@@ -7142,6 +7143,572 @@ class Batch2ReviewResurfacingTests(unittest.TestCase):
         self.assertIn("показать", sent[0])
         self.assertEqual(store.get_message(self.conn, inbox)["knowledge_state"],
                          "inbox")  # suggestion-only: nothing changed
+
+
+class JournalRegistryTests(unittest.TestCase):
+    """Closed entry-type registry + payload validation (plan v1.1 §6, JRN-002):
+    the LLM can never invent schemas; every non-null field needs lexical
+    support in the source; invalid payloads degrade to {}."""
+
+    SRC = "Я благодарен Вере за помощь с презентацией"
+
+    def test_registry_is_closed_and_gratitude_only_active(self):
+        self.assertEqual(len(journals.ENTRY_TYPES), 10)
+        active = [k for k, v in journals.ENTRY_TYPES.items() if v["active"]]
+        self.assertEqual(active, ["gratitude"])
+        self.assertEqual(journals.ENTRY_TYPES["mood"]["sensitivity"], "sensitive")
+
+    def test_validate_keeps_supported_fields_drops_unknown(self):
+        payload = {"subject": "Вера", "reason": "помогла с презентацией",
+                   "people": ["Вера"], "tags": ["работа"],
+                   "hacked_field": "x", "diagnosis": "y"}
+        clean, status = journals.validate_payload("gratitude", payload, self.SRC)
+        self.assertEqual(status, "complete")
+        self.assertEqual(clean["subject"], "Вера")           # inflection-tolerant (Вере)
+        self.assertEqual(clean["people"], ["Вера"])
+        self.assertNotIn("hacked_field", clean)              # unknown fields dropped
+        self.assertNotIn("diagnosis", clean)
+
+    def test_invented_person_rejected(self):
+        clean, _ = journals.validate_payload(
+            "gratitude", {"people": ["Вера", "Наполеон"]}, self.SRC)
+        self.assertEqual(clean.get("people"), ["Вера"])      # invented name rejected
+
+    def test_unsupported_text_field_rejected(self):
+        clean, status = journals.validate_payload(
+            "gratitude", {"reason": "выиграл марафон в Барселоне"}, self.SRC)
+        self.assertNotIn("reason", clean)
+        self.assertEqual(status, "empty")                    # nothing survived -> {}
+
+    def test_malformed_payload_degrades_to_empty(self):
+        self.assertEqual(journals.validate_payload("gratitude", "not a dict", self.SRC),
+                         ({}, "invalid"))
+        self.assertEqual(journals.validate_payload("no_such_type", {}, self.SRC),
+                         ({}, "invalid"))
+
+    def test_lengths_bounded(self):
+        clean, _ = journals.validate_payload(
+            "gratitude", {"reason": ("помощь " * 200)}, "помощь")
+        self.assertLessEqual(len(clean["reason"]), journals.MAX_FIELD_CHARS)
+        clean, _ = journals.validate_payload(
+            "gratitude", {"tags": [f"t{i}" for i in range(20)]}, self.SRC)
+        self.assertLessEqual(len(clean["tags"]), journals.MAX_LIST_ITEMS)
+
+    def test_numeric_fields_only_explicit_numbers(self):
+        clean, _ = journals.validate_payload("mood", {"intensity": "очень сильно",
+                                                      "label": "спокойный"},
+                                             "сегодня я спокойный")
+        self.assertNotIn("intensity", clean)                 # prose never coerced
+        clean, _ = journals.validate_payload("mood", {"intensity": 7, "label": "спокойный"},
+                                             "сегодня я спокойный")
+        self.assertEqual(clean["intensity"], 7)
+
+    def test_person_counts_deterministic(self):
+        entries = [({"people": ["Вера"]}, 41), ({"people": ["Вера", "Иван"]}, 42),
+                   ({"subject": "хорошая погода"}, 43), ({}, 44)]
+        counts = journals.person_counts(entries)
+        self.assertEqual(counts[0][0], "Вера")
+        self.assertEqual(counts[0][1], 2)
+        self.assertEqual(counts[0][2], [41, 42])
+        self.assertEqual(counts[1], ("Иван", 1, [42]))       # subject never counted as a person
+
+    def test_prompt_config_validated_data_only(self):
+        self.assertEqual(journals.validate_prompt_config('{"hour": 22}'), {"hour": 22})
+        self.assertEqual(journals.validate_prompt_config('{"hour": 99}'), {})
+        self.assertEqual(journals.validate_prompt_config("rm -rf /"), {})
+        self.assertEqual(journals.validate_prompt_config({"hour": "21"}), {"hour": 21})
+
+    def test_export_markdown_cites_entries(self):
+        md = journals.export_markdown("Благодарности", [
+            {"note_no": 41, "occurred_at": "2026-07-16T10:00:00+00:00",
+             "raw_text": "спасибо Вере", "summary": None,
+             "payload": {"subject": "Вера"}, "extraction_status": "complete"},
+            {"note_no": 42, "occurred_at": "2026-07-17T10:00:00+00:00",
+             "raw_text": "старая запись", "summary": None,
+             "payload": {}, "extraction_status": "legacy_unstructured"},
+        ], "ru")
+        self.assertIn("J#41", md)
+        self.assertIn("спасибо Вере", md)                    # raw text authoritative
+        self.assertIn("2026-07-16", md)
+        self.assertIn("до структурирования", md)             # legacy label
+
+
+class StructuredJournalStoreTests(unittest.TestCase):
+    """Schema, built-in binding, legacy backfill, manual cascades and purge
+    boundaries (JRN-001/JRN-004)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "sj.db"
+        self.conn = store.open_db(self.db)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _msg(self, tg_id, text, category=None, confirm=False):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": tg_id,
+                                               "received_at": store._now(),
+                                               "raw_text": text})
+        if category and confirm:
+            store.confirm_category(self.conn, mid, category)
+        return mid
+
+    def test_fresh_db_has_tables_but_no_phantom_definition(self):
+        rows = self.conn.execute("SELECT * FROM journal_definitions").fetchall()
+        self.assertEqual(rows, [])                            # no phantom «Благодарность»
+        self.conn.execute("SELECT * FROM journal_entries")    # table exists
+
+    def test_builtin_binds_when_gratitude_journal_appears(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        gdef = store.journal_def_get(self.conn, "gratitude")
+        self.assertIsNotNone(gdef)
+        self.assertEqual(gdef["category"], "Благодарности")
+        self.assertEqual(gdef["entry_type"], "gratitude")
+        self.assertTrue(gdef["active"])
+        self.assertFalse(gdef["proactive_enabled"])           # prompts opt-in (off)
+        # created exactly once — re-marking never duplicates
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        n = self.conn.execute("SELECT COUNT(*) FROM journal_definitions").fetchone()[0]
+        self.assertEqual(n, 1)
+
+    def test_migration_discovers_canonical_and_backfills_legacy(self):
+        # A pre-Batch-3 DB: journal-kind category with confirmed history, no defs.
+        self.conn.execute("INSERT INTO categories (name, norm_key, created_at, kind)"
+                          " VALUES ('Благодарности', 'благодарности', ?, 'journal')",
+                          (store._now(),))
+        self.conn.execute("INSERT INTO categories (name, norm_key, created_at)"
+                          " VALUES ('Благодарность', 'благодарность', ?)", (store._now(),))
+        m1 = self._msg(1, "спасибо один", "Благодарности", confirm=True)
+        m2 = self._msg(2, "спасибо два", "Благодарности", confirm=True)
+        store._migrate_gratitude_builtin(self.conn)           # next service start
+        gdef = store.journal_def_get(self.conn, "gratitude")
+        self.assertEqual(gdef["category"], "Благодарности")   # journal-kind preferred
+        entries = store.journal_entries_for(self.conn, gdef["id"])
+        self.assertEqual([e["message_id"] for e in entries], [m1, m2])
+        for e in entries:
+            self.assertEqual(e["extraction_status"], "legacy_unstructured")
+            self.assertEqual(store.journal_entry_payload(e), {})
+        # idempotent: another restart changes nothing
+        store._migrate_gratitude_builtin(self.conn)
+        self.assertEqual(len(store.journal_entries_for(self.conn, gdef["id"])), 2)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM journal_definitions").fetchone()[0], 1)
+
+    def test_confirm_creates_entry_and_delete_cascades_manually(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        mid = self._msg(1, "Я благодарен Вере за помощь")
+        store.confirm_category(self.conn, mid, "Благодарности",
+                               journal_payload={"subject": "Вера"},
+                               journal_status="complete")
+        entry = store.journal_entry_get(self.conn, mid)
+        self.assertIsNotNone(entry)
+        self.assertEqual(store.journal_entry_payload(entry), {"subject": "Вера"})
+        row = store.get_message(self.conn, mid)
+        self.assertIsNone(row["knowledge_state"])             # outside note lifecycle
+        self.assertEqual(row["raw_text"], "Я благодарен Вере за помощь")  # untouched
+        store.delete_message(self.conn, mid)                  # manual cascade
+        self.assertIsNone(store.journal_entry_get(self.conn, mid))
+
+    def test_notes_purge_spares_entries_journal_purge_has_own_scope(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        jm = self._msg(1, "спасибо", "Благодарности", confirm=True)
+        nm = self._msg(2, "разовая заметка", "Разное", confirm=True)
+        info, _ = store.purge_execute(self.conn, "messages")   # notes purge spares journals
+        self.assertIsNotNone(store.get_message(self.conn, jm))
+        self.assertIsNotNone(store.journal_entry_get(self.conn, jm))
+        self.assertIsNone(store.get_message(self.conn, nm))
+        preview = store.purge_preview(self.conn, "journal", "Благодарности")
+        self.assertEqual(preview["messages"], 1)
+        info, _ = store.purge_execute(self.conn, "journal", "Благодарности")
+        self.assertEqual(info["messages"], preview["messages"])  # preview == execute
+        self.assertIsNone(store.get_message(self.conn, jm))
+        self.assertIsNone(store.journal_entry_get(self.conn, jm))
+        # the diary itself survives: category still journal, definition intact
+        self.assertTrue(store.is_journal(self.conn, "Благодарности"))
+        self.assertIsNotNone(store.journal_def_get(self.conn, "gratitude"))
+
+    def test_purge_all_clears_entries_without_fk_error(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        self._msg(1, "спасибо", "Благодарности", confirm=True)
+        store.purge_execute(self.conn, "all")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM journal_entries").fetchone()[0], 0)
+        # definitions are config (like preferences) — kept
+        self.assertIsNotNone(store.journal_def_get(self.conn, "gratitude"))
+
+    def test_merge_moves_definition_with_category(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        self._msg(1, "спасибо", "Благодарности", confirm=True)
+        moved, dst = store.merge_categories(self.conn, "Благодарности", "Спасибо")
+        self.assertEqual(moved, 1)
+        gdef = store.journal_def_get(self.conn, "gratitude")
+        self.assertEqual(gdef["category"], dst)               # definition follows the merge
+        self.assertTrue(store.is_journal(self.conn, dst))     # P0-1 contagion intact
+
+    def test_unmark_deactivates_definition_boss_decision_wins(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        store.set_category_kind(self.conn, "Благодарности", "inbox")
+        gdef = store.journal_def_get(self.conn, "gratitude")
+        self.assertFalse(gdef["active"])
+        mid = self._msg(1, "спасибо")
+        store.confirm_category(self.conn, mid, "Благодарности")
+        self.assertIsNone(store.journal_entry_get(self.conn, mid))  # no new entries
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        self.assertTrue(store.journal_def_get(self.conn, "gratitude")["active"])
+
+
+class JournalCaptureFlowTests(unittest.TestCase):
+    """Gratitude capture end-to-end (JRN-003): draft card with fields, edit
+    pending, write only on confirm, honest failure degradation."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "c.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    SRC = "Я благодарен Вере за помощь с презентацией"
+    PAYLOAD = {"subject": "Вера", "reason": "помогла с презентацией",
+               "people": ["Вера"], "tags": ["работа"]}
+
+    def _suggest(self, extract_result=None, tg_id=1):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": tg_id,
+                                               "received_at": store._now(),
+                                               "raw_text": self.SRC})
+        row = store.get_message(self.conn, mid)
+        fake_suggest = mock.Mock(return_value=("Благодарности", [], "Благодарность Вере", []))
+        with mock.patch.object(ingest, "suggest", fake_suggest), \
+                mock.patch.object(self.agent, "index_message"), \
+                mock.patch.object(journals, "extract",
+                                  return_value=extract_result or (dict(self.PAYLOAD),
+                                                                  "complete")):
+            self.agent.suggest_row(row)
+        return mid
+
+    def test_capture_card_shows_fields_and_writes_only_on_confirm(self):
+        mid = self._suggest()
+        draft = json.loads(store.kv_get(self.conn, f"journal_draft:{mid}"))
+        self.assertEqual(draft["payload"]["subject"], "Вера")
+        self.assertIsNone(store.journal_entry_get(self.conn, mid))  # nothing before confirm
+        with mock.patch.object(self.agent, "reply",
+                               return_value={"message_id": 7}) as r:
+            self.agent.present_suggestion(mid, 1, None, "Благодарности", [],
+                                          "Благодарность Вере", "")
+        card = r.call_args[0][1]
+        self.assertIn("Добавить", card)
+        self.assertIn("Вера", card)                          # core fields shown before save
+        keyboard = r.call_args[1]["reply_markup"]["inline_keyboard"]
+        flat = json.dumps(keyboard, ensure_ascii=False)
+        self.assertIn(f"j|{mid}", flat)                      # Edit button
+        self.assertNotIn("Временно", flat)                   # journal card: no lifecycle buttons
+        row = store.get_message(self.conn, mid)
+        with mock.patch.object(self.agent, "edit_suggestion_message"), \
+                mock.patch.object(self.agent, "reply") as r2:
+            self.agent.apply_category_confirm(1, row, "Благодарности", None)
+        entry = store.journal_entry_get(self.conn, mid)
+        self.assertIsNotNone(entry)
+        self.assertEqual(store.journal_entry_payload(entry)["subject"], "Вера")
+        self.assertEqual(entry["extraction_status"], "complete")
+        self.assertEqual(store.kv_get(self.conn, f"journal_draft:{mid}"), "")
+        self.assertIn("дневник", r2.call_args[0][1].lower())  # journal_saved ack
+        self.assertEqual(store.get_message(self.conn, mid)["raw_text"], self.SRC)
+
+    def test_failed_extraction_still_saves_raw_entry_honestly(self):
+        mid = self._suggest(extract_result=({}, "failed"))
+        row = store.get_message(self.conn, mid)
+        with mock.patch.object(self.agent, "edit_suggestion_message"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.apply_category_confirm(1, row, "Благодарности", None)
+        entry = store.journal_entry_get(self.conn, mid)
+        self.assertEqual(store.journal_entry_payload(entry), {})
+        self.assertEqual(entry["extraction_status"], "failed")   # never claims structure
+        self.assertNotIn("Кому", r.call_args[0][1])              # no invented fields in the ack
+
+    def test_edit_pending_reextracts_draft_only(self):
+        mid = self._suggest()
+        store.pending_set(self.conn, 1, "journal_edit", {"row_id": mid})
+        corrected = {"subject": "Ольга", "reason": "помогла с отчётом",
+                     "people": ["Ольга"]}
+        with mock.patch.object(journals, "extract",
+                               return_value=(corrected, "complete")) as ex, \
+                mock.patch.object(self.agent, "reply",
+                                  return_value={"message_id": 8}) as r:
+            self.agent.resolve_journal_edit(1, "ru",
+                                            store.pending_get(self.conn, 1),
+                                            "Кому: Ольга, за что: помогла с отчётом")
+        self.assertIn("Ольга", ex.call_args[0][3])           # correction folded into source
+        draft = json.loads(store.kv_get(self.conn, f"journal_draft:{mid}"))
+        self.assertEqual(draft["payload"]["subject"], "Ольга")
+        self.assertIsNone(store.journal_entry_get(self.conn, mid))  # still draft-only
+        self.assertIn("Ольга", r.call_args[0][1])            # card re-presented
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "category")        # slot back to the card
+
+    def test_edit_cancel_restores_card_pending(self):
+        mid = self._suggest()
+        store.pending_set(self.conn, 1, "journal_edit", {"row_id": mid})
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.resolve_journal_edit(1, "ru", store.pending_get(self.conn, 1),
+                                            "отмена")
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "category")
+        self.assertIn("отменила", r.call_args[0][1].lower())
+
+    def test_edit_button_never_clobbers_unrelated_pending(self):
+        mid = self._suggest()
+        store.pending_set(self.conn, 1, "reminder",
+                          {"title": "позвонить", "due_utc": store._now(),
+                           "recurrence": "none"})
+        callback = {"id": "cb1", "from": {"id": 1},
+                    "message": {"message_id": 9, "chat": {"id": 1}},
+                    "data": f"j|{mid}"}
+        with mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.handle_callback(callback)
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "reminder")  # untouched
+        self.assertIn("подтверждение", r.call_args[0][1].lower())
+
+    def test_casual_thanks_stays_smalltalk_never_an_entry(self):
+        self.assertEqual(router.detect_smalltalk("спасибо"), "thanks")
+        self.assertEqual(router.detect_smalltalk("thank you"), "thanks")
+
+    def test_discard_clears_draft(self):
+        mid = self._suggest()
+        callback = {"id": "cb1", "from": {"id": 1},
+                    "message": {"message_id": 9, "chat": {"id": 1}},
+                    "data": f"d|{mid}"}
+        with mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch("tg_ingest_agent.tg_call"):
+            self.agent.handle_callback(callback)
+        self.assertEqual(store.kv_get(self.conn, f"journal_draft:{mid}"), "")
+        self.assertIsNone(store.get_message(self.conn, mid))
+
+
+class JournalRecallTests(unittest.TestCase):
+    """Recall/filters/stats/export and the J# stable address (JRN-005)."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "r.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _entry(self, tg_id, text, payload=None):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": tg_id,
+                                               "received_at": store._now(),
+                                               "raw_text": text})
+        store.confirm_category(self.conn, mid, "Благодарности",
+                               journal_payload=payload,
+                               journal_status="complete" if payload else None)
+        return mid
+
+    def test_journal_show_uses_j_numbers_and_dates(self):
+        self._entry(1, "спасибо Вере", {"subject": "Вера", "people": ["Вера"]})
+        self._entry(2, "спасибо Ивану", {"subject": "Иван", "people": ["Иван"]})
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_journal_show(1, "ru", {"category": "Благодарности",
+                                                 "period": "all"})
+        out = r.call_args[0][1]
+        self.assertIn("J#", out)
+        self.assertIn("спасибо Вере", out)
+        self.assertIn("📅", out)
+
+    def test_person_filter_and_stats_are_deterministic(self):
+        v1 = self._entry(1, "спасибо Вере", {"subject": "Вера", "people": ["Вера"]})
+        self._entry(2, "спасибо Ивану", {"subject": "Иван", "people": ["Иван"]})
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_journal_show(1, "ru", {"category": "Благодарности",
+                                                 "period": "all", "person": "Вера"})
+        out = r.call_args[0][1]
+        self.assertIn("спасибо Вере", out)
+        self.assertNotIn("Ивану", out)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_journal_show(1, "ru", {"category": "Благодарности",
+                                                 "period": "all", "stats": True})
+        out = r.call_args[0][1]
+        self.assertIn("Вера — 1", out)
+        self.assertIn(f"J#{self.agent.note_no(v1)}", out)     # citations, not vibes
+
+    def test_j_number_resolves_in_item_lookup(self):
+        mid = self._entry(1, "спасибо Вере")
+        no = self.agent.note_no(mid)
+        row = self.agent.resolve_item({"query": f"J#{no}"})
+        self.assertEqual(row["id"], mid)
+        row = self.agent.resolve_item({"query": f"#{no}"})    # legacy form still works
+        self.assertEqual(row["id"], mid)
+
+    def test_entries_stay_out_of_general_note_lists(self):
+        self._entry(1, "спасибо Вере")
+        nid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 2,
+                                               "received_at": store._now(),
+                                               "raw_text": "обычная заметка"})
+        store.confirm_category(self.conn, nid, "Разное")
+        ids = [r["id"] for r in store.list_messages(self.conn, limit=None)]
+        self.assertEqual(ids, [nid])                          # journal entry hidden
+
+    def test_journal_export_markdown_document(self):
+        self._entry(1, "спасибо Вере", {"subject": "Вера"})
+        filename, md = self.agent._journal_export_markdown(1, "ru", {})
+        self.assertTrue(filename.startswith("cara-journal-gratitude-"))
+        self.assertIn("спасибо Вере", md)
+        self.assertIn("J#", md)
+
+    def test_journal_purge_uses_its_own_typed_phrase(self):
+        mid = self._entry(1, "спасибо Вере")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_purge(1, "ru", {"scope": "category",
+                                          "category": "Благодарности"})
+        preview = r.call_args[0][1]
+        self.assertIn("дневник", preview.lower())             # journal phrase, not category
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["payload"]["scope"], "journal")
+        phrase = pending["payload"]["phrase"]
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_purge(1, "ru", pending, "не та фраза")
+        self.assertIsNotNone(store.get_message(self.conn, mid))   # refused -> intact
+        self.assertIsNotNone(store.journal_entry_get(self.conn, mid))
+        store.pending_set(self.conn, 1, "purge", pending["payload"])
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_purge(1, "ru", store.pending_get(self.conn, 1), phrase)
+        self.assertIsNone(store.get_message(self.conn, mid))  # exact phrase -> purged
+        self.assertIsNone(store.journal_entry_get(self.conn, mid))
+        self.assertTrue(store.is_journal(self.conn, "Благодарности"))  # diary survives
+
+
+class JournalPromptTests(unittest.TestCase):
+    """Opt-in journal prompts (JRN-006): off by default, explicit confirm to
+    enable, quiet-hours/cap/delivery gating via the heartbeat."""
+
+    def setUp(self):
+        import proactive
+        import tg_ingest_agent
+        self.proactive = proactive
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "p.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.cfg = cfg
+        self.conn = self.agent.conn
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _now_local(self, local_hour):
+        return datetime(2026, 7, 17, (local_hour - 3) % 24, 0, tzinfo=timezone.utc)
+
+    def _enable(self, hour=21):
+        store.journal_def_update(self.conn, "gratitude", proactive_enabled=1,
+                                 prompt_config_json=json.dumps({"hour": hour}))
+
+    def test_prompts_off_by_default_no_nudge(self):
+        key = self.proactive._journal_prompts(self.conn, self.cfg, "ru",
+                                              self._now_local(21))
+        self.assertIsNone(key)
+
+    def test_enable_requires_explicit_confirmation(self):
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_journal_prompt(1, "ru", {"category": "Благодарности",
+                                                   "on": True, "time": "21:00"})
+        self.assertIn("Включить", r.call_args[0][1])
+        gdef = store.journal_def_get(self.conn, "gratitude")
+        self.assertFalse(gdef["proactive_enabled"])           # not yet — pending only
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "journal_prompt")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
+        gdef = store.journal_def_get(self.conn, "gratitude")
+        self.assertTrue(gdef["proactive_enabled"])
+        self.assertEqual(journals.validate_prompt_config(gdef["prompt_config_json"]),
+                         {"hour": 21})
+
+    def test_unrelated_reply_leaves_prompts_off(self):
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_journal_prompt(1, "ru", {"category": "Благодарности",
+                                                   "on": True})
+        pending = store.pending_get(self.conn, 1)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_pending(1, "cancel", {}, pending, "ru")
+        self.assertFalse(store.journal_def_get(self.conn, "gratitude")["proactive_enabled"])
+
+    def test_disable_is_immediate(self):
+        self._enable()
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_journal_prompt(1, "ru", {"category": "Благодарности",
+                                                   "on": False})
+        self.assertFalse(store.journal_def_get(self.conn, "gratitude")["proactive_enabled"])
+        self.assertIn("не предлагаю", r.call_args[0][1])
+
+    def test_nudge_fires_after_hour_when_no_entry_today(self):
+        self._enable(hour=21)
+        self.assertIsNone(self.proactive._journal_prompts(
+            self.conn, self.cfg, "ru", self._now_local(12)))   # too early
+        hit = self.proactive._journal_prompts(self.conn, self.cfg, "ru",
+                                              self._now_local(21))
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit[0], "journal:gratitude")
+        self.assertIn("Благодарности", hit[1])
+
+    def test_no_nudge_when_entry_exists_today(self):
+        self._enable(hour=12)
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
+                                               "received_at": store._now(),
+                                               "raw_text": "спасибо"})
+        store.confirm_category(self.conn, mid, "Благодарности")
+        self.assertIsNone(self.proactive._journal_prompts(
+            self.conn, self.cfg, "ru",
+            datetime.now(timezone.utc) + timedelta(minutes=1)))
+
+    def test_run_gates_quiet_hours_and_delivery(self):
+        self._enable(hour=12)
+        key = self.proactive.run(self.conn, self.cfg, "ru", lambda t: None,
+                                 now=self._now_local(23))      # quiet hours
+        self.assertIsNone(key)
+        sent = []
+        key = self.proactive.run(self.conn, self.cfg, "ru",
+                                 lambda t: sent.append(t) or {"message_id": 1},
+                                 now=self._now_local(13))
+        self.assertEqual(key, "journal:gratitude")
+        self.assertEqual(len(sent), 1)
+        day = self._now_local(13).strftime("%Y-%m-%d")
+        self.assertTrue(store.proactive_key_sent_today(self.conn, day,
+                                                       "journal:gratitude"))
+        self.assertIn("journal:gratitude", self.proactive._nonurgent_keys(self.conn))
+
+    def test_journal_nudge_counts_against_daily_cap(self):
+        self._enable(hour=12)
+        day = self._now_local(13).strftime("%Y-%m-%d")
+        store.proactive_log_add(self.conn, "journal:gratitude", "sent", sent=True,
+                                day=day)
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        key = self.proactive.run(self.conn, self.cfg, "ru",
+                                 lambda t: {"message_id": 1},
+                                 now=self._now_local(13))
+        self.assertIsNone(key)                                # cap (1/day) already spent
+
+    def test_followup_after_journal_nudge_invites_entry(self):
+        store.kv_set(self.conn, "proactive_context", json.dumps(
+            {"kind": "journal:gratitude", "ids": [],
+             "sent_at": datetime.now(timezone.utc).isoformat()}))
+        with mock.patch.object(self.agent, "reply") as r:
+            handled = self.agent._resolve_proactive_followup(1, "ru", "давай")
+        self.assertTrue(handled)
+        self.assertIn("Благодарности", r.call_args[0][1])
 
 
 if __name__ == "__main__":

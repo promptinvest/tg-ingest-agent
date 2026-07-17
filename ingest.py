@@ -375,13 +375,25 @@ CALLBACK_BYTE_LIMIT = 64
 
 
 def build_suggestion_keyboard(row_id, category, alternatives, has_action=False,
-                              lang="ru"):
+                              lang="ru", journal=False):
     """One capture card, conditional buttons (plan v1.1 §8.2): the confirm row
     (+ alternatives) as before, plus Temporary/Discard; a validated action
     candidate adds a Save-with-reminder row (the reminder still goes through
-    the normal draft confirmation — nothing fires from the button alone)."""
+    the normal draft confirmation — nothing fires from the button alone).
+    A JOURNAL-intent card gets its own trio instead: Add / Edit / Cancel —
+    no Temporary (entries have no lifecycle) and no reminder shortcut."""
     ru = lang == "ru"
     keyboard = []
+    if journal:
+        keyboard.append([{"text": ("📔 Добавить" if ru else "📔 Add"),
+                          "callback_data": f"s|{row_id}"}])
+        keyboard.append([
+            {"text": ("✏️ Изменить" if ru else "✏️ Edit"),
+             "callback_data": f"j|{row_id}"},
+            {"text": ("✖️ Отмена" if ru else "✖️ Cancel"),
+             "callback_data": f"d|{row_id}"},
+        ])
+        return keyboard
     if has_action:
         keyboard.append([{"text": ("✅⏰ Сохранить + напоминание" if ru
                                    else "✅⏰ Save + reminder"),
@@ -409,8 +421,8 @@ def build_suggestion_keyboard(row_id, category, alternatives, has_action=False,
 def parse_callback_data(data):
     """Parse the capture-card callbacks: 's|<row_id>' (save as suggested),
     'a|<row_id>|<category>' (named alternative), 'r|<row_id>' (save + reminder
-    draft), 't|<row_id>' (save as temporary), 'd|<row_id>' (discard).
-    None when malformed."""
+    draft), 't|<row_id>' (save as temporary), 'd|<row_id>' (discard),
+    'j|<row_id>' (edit the pending journal-entry draft). None when malformed."""
     parts = str(data or "").split("|", 2)
     if len(parts) < 2:
         return None
@@ -422,7 +434,7 @@ def parse_callback_data(data):
         return ("suggested", row_id, None)
     if parts[0] == "a" and len(parts) == 3 and parts[2].strip():
         return ("named", row_id, parts[2].strip())
-    if parts[0] in ("r", "t", "d") and len(parts) == 2:
-        return ({"r": "remind", "t": "temporary", "d": "discard"}[parts[0]],
+    if parts[0] in ("r", "t", "d", "j") and len(parts) == 2:
+        return ({"r": "remind", "t": "temporary", "d": "discard", "j": "edit"}[parts[0]],
                 row_id, None)
     return None

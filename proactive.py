@@ -18,6 +18,7 @@ digest auto-sends on schedule — neither is duplicated here.
 """
 from datetime import datetime, timezone, timedelta
 
+import journals
 import skill_manifest
 import store
 from texts import T
@@ -98,11 +99,43 @@ def _notes_review_due(conn, cfg, lang, now):
             if batch else None)
 
 
+def _journal_prompts(conn, cfg, lang, now):
+    """Opt-in journal invitation (plan v1.1 §D-06, JRN-006): only for journals
+    the boss explicitly enabled prompts on; only past the configured local
+    hour; only when today has no entry yet. Suggestion-only, non-urgent — so
+    quiet hours, off-days and the daily cap in run() all apply on top."""
+    offset = _tz_offset(conn, cfg)
+    local = now + timedelta(hours=offset)
+    for d in store.journal_defs(conn, active_only=True):
+        if not d["proactive_enabled"]:
+            continue
+        hour = journals.validate_prompt_config(d["prompt_config_json"]).get("hour", 21)
+        if local.hour < hour:
+            continue
+        day_start_utc = (datetime(local.year, local.month, local.day,
+                                  tzinfo=timezone.utc)
+                         - timedelta(hours=offset)).isoformat()
+        today = store.journal_entries_for(conn, d["id"], since_iso=day_start_utc)
+        if today:
+            continue
+        category = d["category"] or d["display_name"]
+        return (f"journal:{d['slug']}", T(lang, "nudge_journal", category=category),
+                False)
+    return None
+
+
 # urgent first, then by usefulness
-CHECKS = (_overdue_reminders, _memory_candidates, _notes_review_due)
+CHECKS = (_overdue_reminders, _memory_candidates, _notes_review_due, _journal_prompts)
 # The "≤ max_per_day non-urgent" cap counts only the NON-URGENT heartbeat nudges.
 # Urgent ones (overdue) bypass the cap, so they must not consume it either.
 NONURGENT_KEYS = ("candidates", "note_review")
+
+
+def _nonurgent_keys(conn):
+    """Static non-urgent keys plus the per-journal prompt keys (dynamic), so an
+    enabled journal prompt counts against the same daily cap."""
+    return NONURGENT_KEYS + tuple(
+        f"journal:{d['slug']}" for d in store.journal_defs(conn))
 
 
 def run(conn, cfg, lang, reply_fn, now=None):
@@ -136,7 +169,7 @@ def run(conn, cfg, lang, reply_fn, now=None):
         if store.proactive_key_sent_today(conn, day, key):
             store.proactive_log_add(conn, key, "suppressed", reason="already sent today", day=day)
             continue
-        if not urgent and store.proactive_sent_count(conn, day, NONURGENT_KEYS) >= s["max_per_day"]:
+        if not urgent and store.proactive_sent_count(conn, day, _nonurgent_keys(conn)) >= s["max_per_day"]:
             store.proactive_log_add(conn, key, "suppressed", reason="daily cap", day=day)
             continue
         # Log "sent" only on a SUCCESSFUL delivery: reply_fn (agent.reply) swallows a

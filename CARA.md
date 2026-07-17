@@ -218,10 +218,44 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **resolves a loosely‑typed name** (`_match_journal_category`) so an inflection ("благодарности"
   vs the stored "Благодарность") hits the real journal instead of spawning a phantom empty
   one. Recall is a real **5-entry inline pager** (◀ · X/Y · ▶) that edits the same Telegram
-  message; the category + period live in the `list_views` token, so pages do not repeat or
-  silently truncate. A "📔 Дневники" digest appears in the weekly review and morning brief, and a "clear
-  all notes" purge **spares it**. Turn it back off with "X больше не дневник". One‑time notes
-  behave exactly as before.
+  message; the category + period (+ person/tag filter) live in the `list_views` token, so pages
+  do not repeat or silently truncate. A "📔 Дневники" digest appears in the weekly review and
+  morning brief, and a "clear all notes" purge **spares it**. Turn it back off with "X больше
+  не дневник". One‑time notes behave exactly as before.
+- **Structured journals + Gratitude built‑in (2026‑07‑17, Batch 3 JRN‑001…006):**
+  journals are now first‑class semantic entities: `journal_definitions` (slug ·
+  entry type · linked category · sensitivity · per‑journal prompt opt‑in) +
+  `journal_entries` (one row per source message: `occurred_at`, validated
+  `payload_json`, `extraction_status`). The **entry‑type registry is closed, in
+  code** (`journals.py`: gratitude · win · lesson · decision · memorable_moment ·
+  mood · health · mistake · idea · generic_event — only **gratitude** is active;
+  the rest are the extension contract). The LLM can never invent schemas or
+  validators. **Gratitude capture:** «запиши в благодарности: …» / «я благодарен
+  Вере за …» → the card shows the extracted core fields («Кому/чему · За что …»)
+  with «📔 Добавить / ✏️ Изменить / ✖️ Отмена»; every non‑null field needs
+  **lexical support** in the source text (invented names are rejected), «Изменить»
+  edits the pending **draft** (his correction re‑extracts; nothing is written
+  until confirm), a failed extraction still saves the raw entry honestly
+  (`extraction_status='failed'` — no invented structure), and the source text is
+  never rewritten. Entries display as **J#N** — the linked message's stable note
+  number, no second counter; `J#41` and legacy `#41` both resolve. Legacy
+  gratitude history was **migrated deterministically** (no bulk LLM): the
+  canonical «Благодарности» journal got one `legacy_unstructured` entry per
+  confirmed message; the built‑in definition binds to an existing gratitude
+  category at migration (fresh DBs bind the moment one is made a journal).
+  **Recall extras:** filter by person/tag («покажи благодарности про Веру»),
+  deterministic person counts with citations («кому я чаще всего был
+  благодарен?» → «Вера — 3 (J#41, J#43…)» — from validated fields only, never a
+  diagnosis), per‑journal **Markdown export** («выгрузи дневник благодарности в
+  md»), and a journal‑specific **typed purge phrase** («да, очистить дневник X» —
+  entries go, the diary + definition survive; a category purge aimed at a journal
+  automatically switches to the journal phrase). **Opt‑in prompts (off by
+  default):** «предлагай мне вечером записывать благодарность» — enabling needs
+  an explicit «да» (pending confirm), the invitation fires at most once a day
+  past the configured hour, only when today has no entry, honors quiet
+  hours/days/the daily proactive cap, and «выключи приглашения» turns it off
+  instantly. «X больше не дневник» also deactivates the structured definition —
+  the boss's decision wins; existing entries stay readable.
 - **Overview & stats:** "что у тебя есть?" → a digest (counts, reminders, memory,
   spend); per‑status/category **stats** (`stats`) and the **category list**
   (`categories`).
@@ -239,10 +273,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   re‑categorize (category) and reminder rename (a reminder's title).
 - **Delete / discard / purge:** delete by id/ids/count/query; decline a fresh
   suggestion; bulk purge by scope (all / category / stats / reminders / messages /
-  issues) behind a typed phrase. The preview lists **exactly** what the execute
-  deletes: `stats` never touches our conversation history, and `all` — the only
-  scope that does — discloses the conversation‑turn count before you type the
-  phrase (2026‑07‑16).
+  issues / journal) behind a typed phrase. The preview lists **exactly** what the
+  execute deletes: `stats` never touches our conversation history, and `all` — the
+  only scope that does — discloses the conversation‑turn count before you type the
+  phrase (2026‑07‑16). A journal purge has its **own** phrase («да, очистить
+  дневник X», 2026‑07‑17) and leaves the diary itself (category + definition) in
+  place.
 - **One-card capture (2026‑07‑17, NTE‑003):** the suggestion card now carries the
   **why** — a source‑grounded `saved_reason` + proposed purpose (📌 line; the
   meta‑copy guard drops a reason that describes the request instead of the
@@ -650,10 +686,15 @@ lifecycle** 2026‑07‑17: `knowledge_state` inbox/active/archived, `note_purpo
 `saved_reason`, `review_at`, `expires_at` advisory, `use_count`/`last_used_at`
 real-use counters, `archived_at`/`archive_reason`) · `urls` · `images` · `files` (any attachment by
 file_id) · `facts` · `chunks` (BGE‑M3 embeddings) · `categories` (Cyrillic‑safe;
-`kind` = `inbox`|`journal`) · `reminders` (incl. `prev_due_utc`, `closed_at`,
-`close_reason`) + `reminder_events` lifecycle log · `feedback` ·
-`preferences` (identity/config + budget overrides) · `pending_actions` (TTL) ·
-`conversation` (recent turns) · `kv`.
+`kind` = `inbox`|`journal`) · `journal_definitions` (2026‑07‑17: slug‑stable
+structured‑journal entities — entry type from the closed code registry, linked
+category, sensitivity, per‑journal prompt opt‑in + validated `prompt_config_json`)
+· `journal_entries` (one per source message — UNIQUE `message_id`, `occurred_at`,
+validated `payload_json`, `extraction_status`; deletion cascades **manually**
+through `delete_message`/purge, never FK pragmas) · `reminders` (incl.
+`prev_due_utc`, `closed_at`, `close_reason`) + `reminder_events` lifecycle log ·
+`feedback` · `preferences` (identity/config + budget overrides) ·
+`pending_actions` (TTL) · `conversation` (recent turns) · `kv`.
 
 Spend & reliability: `llm_usage` · `model_cooldowns`.
 

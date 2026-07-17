@@ -15,6 +15,7 @@ from pathlib import Path
 
 import events
 import ingest
+import journals
 import llm
 import reminders
 import store
@@ -103,24 +104,31 @@ class NotesMixin:
         return ""
 
     def do_journal_show(self, chat_id, lang, params):
-        """Recall one journal page; callbacks keep the same period/category filter."""
+        """Recall one journal page; callbacks keep the same period/category/
+        person/tag filter. A structured journal also answers `stats` — a
+        deterministic person-frequency view from VALIDATED fields only."""
         name = str(params.get("category") or "").strip()
-        journals = store.journal_categories(self.conn)
-        if not name and len(journals) == 1:
-            name = journals[0]
+        journal_names = store.journal_categories(self.conn)
+        if not name and len(journal_names) == 1:
+            name = journal_names[0]
         if not name:
-            hint = ("\n" + ", ".join(journals)) if journals else ""
+            hint = ("\n" + ", ".join(journal_names)) if journal_names else ""
             self.reply(chat_id, T(lang, "journal_which") + hint)
             return
-        canonical = self._match_journal_category(name, journals)
+        canonical = self._match_journal_category(name, journal_names)
         if not canonical:
             self.reply(chat_id, T(lang, "journal_empty", category=name))
             return
         period = str(params.get("period") or "").strip().lower() or "month"
         if period not in ("day", "week", "month", "all"):
             period = "month"
-        _entries, total = store.journal_entries_page(
-            self.conn, canonical, self._journal_since(period), 0, self.JOURNAL_PAGE_SIZE)
+        person = str(params.get("person") or "").strip() or None
+        tag = str(params.get("tag") or "").strip() or None
+        if params.get("stats"):
+            self.reply(chat_id, self._journal_stats_text(lang, canonical, period))
+            return
+        _rows, total = self._journal_rows(canonical, period, person, tag,
+                                          0, self.JOURNAL_PAGE_SIZE)
         if not total:
             self.reply(chat_id, T(lang, "journal_empty", category=canonical))
             return
@@ -128,34 +136,140 @@ class NotesMixin:
                                (datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
         token = store.list_view_add(
             self.conn, chat_id,
-            {"view": "journal", "category": canonical, "period": period},
+            {"view": "journal", "category": canonical, "period": period,
+             "person": person, "tag": tag},
         )
-        text, keyboard, _ = self._journal_page(lang, canonical, period, 0, token)
+        text, keyboard, _ = self._journal_page(lang, canonical, period, 0, token,
+                                               person=person, tag=tag)
         self.reply(chat_id, text, reply_markup=keyboard)
 
-    def _journal_page(self, lang, canonical, period, offset, token):
-        """Render one oldest-first journal page with a stable period filter."""
+    def _journal_rows(self, canonical, period, person, tag, offset, limit):
+        """One page of a journal + the filtered total. A structured journal
+        reads from journal_entries (occurred_at order, payload filters); a
+        plain journal category keeps the message-based page. Rows come back as
+        (message-like row, payload dict)."""
+        since = self._journal_since(period)
+        gdef = store.journal_def_by_category(self.conn, canonical, active_only=False)
+        if gdef is not None:
+            rows = store.journal_entries_for(self.conn, gdef["id"], since)
+            if person or tag:
+                p = (person or "").casefold()
+                t = (tag or "").casefold()
+                kept = []
+                for r in rows:
+                    payload = store.journal_entry_payload(r)
+                    people = [str(x).casefold() for x in payload.get("people") or []]
+                    subject = str(payload.get("subject") or "").casefold()
+                    tags = [str(x).casefold() for x in payload.get("tags") or []]
+                    if p and not (any(p in x for x in people) or (p and p in subject)):
+                        continue
+                    if t and not any(t in x for x in tags):
+                        continue
+                    kept.append(r)
+                rows = kept
+            start = max(0, int(offset or 0))
+            page = rows[start:start + max(1, int(limit or 5))]
+            return [(r, store.journal_entry_payload(r)) for r in page], len(rows)
+        page, total = store.journal_entries_page(self.conn, canonical, since,
+                                                 offset, limit)
+        return [(r, {}) for r in page], total
+
+    def _journal_page(self, lang, canonical, period, offset, token,
+                      person=None, tag=None):
+        """Render one oldest-first journal page with a stable filter. Entries of
+        a structured journal carry the J#-prefixed stable number (§5.6 — the
+        linked message's lazy note number, never a second counter)."""
         ru = lang == "ru"
-        entries, total = store.journal_entries_page(
-            self.conn, canonical, self._journal_since(period), offset, self.JOURNAL_PAGE_SIZE)
+        gdef = store.journal_def_by_category(self.conn, canonical, active_only=False)
+        prefix = "J#" if gdef is not None else "#"
+        entries, total = self._journal_rows(canonical, period, person, tag,
+                                            offset, self.JOURNAL_PAGE_SIZE)
         plabel = {"day": ("за сегодня", "today"), "week": ("за неделю", "this week"),
                   "month": ("за месяц", "this month"),
                   "all": ("за всё время", "all time")}[period][0 if ru else 1]
+        if person:
+            plabel += (f", про {person}" if ru else f", about {person}")
+        if tag:
+            plabel += (f", тег «{tag}»" if ru else f", tag \"{tag}\"")
+        all_total = (len(store.journal_entries_for(self.conn, gdef["id"]))
+                     if gdef is not None else store.journal_count(self.conn, canonical))
         lines = [T(lang, "journal_header", category=canonical, n=total,
-                   period=plabel, total=store.journal_count(self.conn, canonical))]
+                   period=plabel, total=all_total)]
         last_day = None
-        for e in entries:
-            day = self._fmt_iso_local(e["received_at"]).split(",")[0]
+        for row, payload in entries:
+            mid = row["message_id"] if gdef is not None else row["id"]
+            when = row["occurred_at"] if gdef is not None else row["received_at"]
+            day = self._fmt_iso_local(when).split(",")[0]
             if day != last_day:
                 lines.append(f"\n📅 {day}")
                 last_day = day
-            body = (e["summary"] or e["raw_text"] or "").strip()
+            body = (row["summary"] or row["raw_text"] or "").strip()
             snippet = self._ellipsize(body.splitlines()[0], 120) if body else "—"
-            lines.append(f"  #{self.note_no(e['id'])} • {snippet}")
+            lines.append(f"  {prefix}{self.note_no(mid)} • {snippet}")
+            extras = journals.draft_lines(lang, payload)
+            if extras:
+                lines.append("     " + " · ".join(extras[:2]))
         lines.append(T(lang, "journal_open_hint"))
         return ("\n".join(lines),
                 self._notes_page_keyboard(lang, token, offset, total,
                                           page_size=self.JOURNAL_PAGE_SIZE), total)
+
+    def _journal_stats_text(self, lang, canonical, period):
+        """Deterministic person counts from VALIDATED fields, with J# citations
+        (descriptive only — never an inference about the boss)."""
+        ru = lang == "ru"
+        gdef = store.journal_def_by_category(self.conn, canonical, active_only=False)
+        if gdef is None:
+            return T(lang, "journal_stats_empty", category=canonical)
+        rows = store.journal_entries_for(self.conn, gdef["id"],
+                                         self._journal_since(period))
+        pairs = [(store.journal_entry_payload(r), self.note_no(r["message_id"]))
+                 for r in rows]
+        counts = journals.person_counts(pairs)
+        if not counts:
+            return T(lang, "journal_stats_empty", category=canonical)
+        plabel = {"day": ("за сегодня", "today"), "week": ("за неделю", "this week"),
+                  "month": ("за месяц", "this month"),
+                  "all": ("за всё время", "all time")}[period][0 if ru else 1]
+        lines = [T(lang, "journal_stats_header", category=canonical, period=plabel)]
+        for name, n, nos in counts[:10]:
+            cite = ", ".join(f"J#{x}" for x in nos[:5])
+            lines.append(f"  {name} — {n} ({cite})")
+        return "\n".join(lines)
+
+    def do_journal_prompt(self, chat_id, lang, params):
+        """Opt-in journal prompts (§D-06, JRN-006): per-journal; ENABLING needs
+        an explicit confirmation (pending), disabling is immediate. The prompt
+        itself is a suggestion-only heartbeat nudge that honors quiet hours,
+        days, and the daily cap."""
+        name = str(params.get("category") or "").strip()
+        defs = store.journal_defs(self.conn, active_only=True)
+        gdef = None
+        if name:
+            gdef = store.journal_def_by_category(self.conn, name)
+            if gdef is None:
+                match = self._match_journal_category(
+                    name, [d["category"] or d["display_name"] for d in defs])
+                if match:
+                    gdef = store.journal_def_by_category(self.conn, match)
+        elif len(defs) == 1:
+            gdef = defs[0]
+        if gdef is None:
+            hint = ", ".join((d["category"] or d["display_name"]) for d in defs)
+            self.reply(chat_id, T(lang, "journal_which") + ("\n" + hint if hint else ""))
+            return
+        display = gdef["category"] or gdef["display_name"]
+        on = params.get("on")
+        on = True if on is None else bool(on)
+        if not on:
+            store.journal_def_update(self.conn, gdef["slug"], proactive_enabled=0)
+            self.reply(chat_id, T(lang, "journal_prompt_disabled", category=display))
+            return
+        hour = journals.parse_prompt_hour(params.get("time"), default=21)
+        store.pending_set(self.conn, chat_id, "journal_prompt",
+                          {"slug": gdef["slug"], "hour": hour, "display": display})
+        self.reply(chat_id, T(lang, "journal_prompt_confirm", category=display,
+                              hour=hour))
 
     # -- notes / inbox (stage 2) ----------------------------------------------
 
@@ -325,6 +439,7 @@ class NotesMixin:
             for path in store.delete_message(self.conn, row_id):
                 Path(path).unlink(missing_ok=True)
             log(f"message #{row_id} discarded (declined) by operator")
+        store.kv_set(self.conn, f"journal_draft:{row_id}", "")
         self.reply(chat_id, T(lang, "discarded"))
 
     def _purge_impact_text(self, lang, info):
@@ -346,6 +461,10 @@ class NotesMixin:
             cat = info.get("category") or "?"
             parts = [f"  • {info['messages']} " + ("сообщений в категории «" if ru else
                      "messages in category \"") + f"{cat}»"]
+        elif info.get("scope") == "journal" and "messages" in info:
+            cat = info.get("category") or "?"
+            parts = [f"  • {info['messages']} " + ("записей дневника «" if ru else
+                     "entries of the journal \"") + f"{cat}»"]
         return "\n".join(parts)
 
     def do_purge(self, chat_id, lang, params):
@@ -354,13 +473,21 @@ class NotesMixin:
             self.reply(chat_id, T(lang, "clarify"))
             return
         category = params.get("category")
+        if scope in ("category", "journal") and category:
+            category = store.canonical_category(self.conn, category) or category
+        # A diary always purges under its OWN typed phrase (plan v1.1 §11): a
+        # generic category phrase must never wipe a journal — and vice versa.
+        if scope == "category" and store.is_journal(self.conn, category):
+            scope = "journal"
+        elif scope == "journal" and not store.is_journal(self.conn, category):
+            scope = "category"
         info = store.purge_preview(self.conn, scope, category)
         if not any(info.get(k) for k in ("messages", "reminders", "categories",
                                          "issues", "feedback", "conversation")):
             self.reply(chat_id, T(lang, "purge_nothing"))
             return
-        if scope == "category":
-            phrase = T(lang, "purge_phrase_category", category=category or "?")
+        if scope in ("category", "journal"):
+            phrase = T(lang, f"purge_phrase_{scope}", category=category or "?")
         else:
             phrase = T(lang, f"purge_phrase_{scope}")
         store.pending_set(self.conn, chat_id, "purge",
@@ -411,10 +538,12 @@ class NotesMixin:
         except (TypeError, ValueError):
             no = None
         if no is None:
-            # "покажи заметку 11" / "заметку #11" / "#11" — a bare note reference
-            # (only a kind word + number) resolves by number regardless of phrasing;
-            # a richer query ("про крипту 2024") still goes to text search.
-            m = re.fullmatch(r"\s*(?:заметк\w*|запис\w*|пост\w*|note|item|#)?\s*#?(\d{1,7})\s*",
+            # "покажи заметку 11" / "заметку #11" / "#11" / "J#11" — a bare note
+            # reference (only a kind word + number) resolves by number regardless
+            # of phrasing (J# is the journal-entry form of the SAME stable number,
+            # §5.6); a richer query ("про крипту 2024") still goes to text search.
+            m = re.fullmatch(r"\s*(?:заметк\w*|запис\w*|пост\w*|note|item|[jJ]?#)?\s*"
+                             r"[jJ]?#?(\d{1,7})\s*",
                              str(params.get("query") or ""), re.IGNORECASE)
             if m:
                 no = int(m.group(1))

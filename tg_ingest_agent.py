@@ -30,6 +30,7 @@ import gcal
 import hermes
 import ingest
 import jobs  # noqa: F401 (job helpers used by registered handlers)
+import journals
 import knowledge
 import llm
 import memory_curator
@@ -106,6 +107,7 @@ _DISPATCH = {
     "report_problem":      lambda s, c: s.do_report_problem(c.chat_id, c.lang, c.params, c.text),
     "set_journal":         lambda s, c: s.do_set_journal(c.chat_id, c.lang, c.params),
     "journal_show":        lambda s, c: s.do_journal_show(c.chat_id, c.lang, c.params),
+    "journal_prompt":      lambda s, c: s.do_journal_prompt(c.chat_id, c.lang, c.params),
     "multi_action":        lambda s, c: s.reply(c.chat_id, T(c.lang, "one_at_a_time")),
     "review":              lambda s, c: s.do_review(c.chat_id, c.lang, c.params),
     "converse":            _dispatch_default,
@@ -955,6 +957,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if pending and pending["kind"] == "purge":
             self.resolve_purge(chat_id, lang, pending, text)
             return
+        # «Изменить» on a journal capture card: his next message is the
+        # correction for the pending entry DRAFT (deterministic, no router).
+        if pending and pending["kind"] == "journal_edit":
+            self.resolve_journal_edit(chat_id, lang, pending, text)
+            return
         # Explicit category assignment while a suggestion is pending ("Категория -
         # Документы", "в категорию X", "set category to X") — resolve it
         # deterministically so the named category is never lost to a router
@@ -1205,6 +1212,19 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 self.reply(chat_id, T(lang, "boss_remembered", value=payload["value"]))
             # cancel handled by the generic branch above; an unrelated message
             # leaves the flagged item unsaved, which is the safe default.
+        elif kind == "journal_prompt":
+            # Opt-in journal prompt (plan v1.1 §D-06/JRN-006): enabled ONLY on
+            # an explicit yes; anything else leaves prompts off.
+            store.pending_clear(self.conn, chat_id)
+            if action != "confirm":
+                self.reply(chat_id, T(lang, "cancelled"))
+                return
+            store.journal_def_update(
+                self.conn, payload["slug"], proactive_enabled=1,
+                prompt_config_json=json.dumps({"hour": int(payload.get("hour") or 21)}))
+            self.reply(chat_id, T(lang, "journal_prompt_enabled",
+                                  category=payload.get("display") or payload["slug"],
+                                  hour=int(payload.get("hour") or 21)))
         else:
             store.pending_clear(self.conn, chat_id)
 
@@ -2236,6 +2256,13 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if kind == "overdue":
             self.reply(chat_id, self._reminder_list_body(chat_id, lang))
             return True
+        if isinstance(kind, str) and kind.startswith("journal:"):
+            # Journal invitation accepted: invite the entry itself. His next
+            # message routes normally (ingest -> the journal's capture card).
+            gdef = store.journal_def_get(self.conn, kind.split(":", 1)[1])
+            category = (gdef["category"] or gdef["display_name"]) if gdef else "?"
+            self.reply(chat_id, T(lang, "journal_prompt_go", category=category))
+            return True
         return False
 
     def check_model_health(self):
@@ -2458,12 +2485,25 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         pending = store.pending_get(self.conn, chat_id)
         ours = (pending and pending["kind"] == "category"
                 and pending["payload"].get("row_id") == row_id)
+        if kind == "edit":
+            # «Изменить» on a journal capture card: his NEXT message corrects the
+            # pending entry draft (deterministic — no router). Single-slot rule:
+            # never clobber an unrelated confirmation mid-flight.
+            if pending is not None and not ours:
+                self.answer_callback(callback_id, "⏳")
+                self.reply(chat_id, T(lang, "journal_edit_slot_busy"))
+                return
+            store.pending_set(self.conn, chat_id, "journal_edit", {"row_id": row_id})
+            self.answer_callback(callback_id, "✏️")
+            self.reply(chat_id, T(lang, "journal_edit_prompt"))
+            return
         if kind == "discard":
             if ours:
                 store.pending_clear(self.conn, chat_id)
             for path in store.delete_message(self.conn, row_id):
                 Path(path).unlink(missing_ok=True)
             store.kv_set(self.conn, f"capture_action:{row_id}", "")
+            store.kv_set(self.conn, f"journal_draft:{row_id}", "")
             log(f"message #{row_id} discarded via card button")
             self.answer_callback(callback_id, "🗑 Ок" if lang == "ru" else "🗑 OK")
             try:  # strip the now-dead keyboard from the card
@@ -2539,7 +2579,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         offset = page * page_size
         if is_journal:
             text, keyboard, total = self._journal_page(
-                lang, filt.get("category"), filt.get("period") or "month", offset, token)
+                lang, filt.get("category"), filt.get("period") or "month", offset, token,
+                person=filt.get("person"), tag=filt.get("tag"))
         else:
             text, keyboard, total = self._notes_page(
                 lang, filt.get("category"), filt.get("query"), offset, token,
@@ -2548,7 +2589,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             offset = ((total - 1) // page_size) * page_size
             if is_journal:
                 text, keyboard, total = self._journal_page(
-                    lang, filt.get("category"), filt.get("period") or "month", offset, token)
+                    lang, filt.get("category"), filt.get("period") or "month", offset, token,
+                    person=filt.get("person"), tag=filt.get("tag"))
             else:
                 text, keyboard, total = self._notes_page(
                     lang, filt.get("category"), filt.get("query"), offset, token,
@@ -2569,13 +2611,52 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             store.pending_clear(self.conn, chat_id)
         self.apply_category_confirm(chat_id, row, category, reply_to=reply_to)
 
+    _JOURNAL_EDIT_CANCEL = ("отмена", "не надо", "нет", "cancel", "no", "стоп", "stop")
+
+    def resolve_journal_edit(self, chat_id, lang, pending, text):
+        """The message after «Изменить» on a journal capture card: his words are
+        the correction of the pending DRAFT. Re-extract against source +
+        correction (his own words are legitimate lexical support), then restore
+        the card. The entry is still written ONLY on confirm."""
+        row_id = pending["payload"].get("row_id")
+        store.pending_clear(self.conn, chat_id)
+        row = store.get_message(self.conn, row_id) if row_id else None
+        if row is None or row["status"] == "confirmed":
+            self.reply(chat_id, T(lang, "nothing_pending"))
+            return
+        norm = str(text or "").strip().casefold().rstrip("!.")
+        if norm in self._JOURNAL_EDIT_CANCEL:
+            store.pending_set(self.conn, chat_id, "category", {"row_id": row_id})
+            self.reply(chat_id, T(lang, "cancelled"))
+            return
+        category = row["suggested_category"] or ""
+        gdef = store.journal_def_by_category(self.conn, category)
+        if gdef is None:
+            self.reply(chat_id, T(lang, "nothing_pending"))
+            return
+        source = (row["raw_text"] or "") + "\n" + str(text or "")
+        payload, jstatus = journals.extract(self.cfg, self.conn,
+                                            gdef["entry_type"], source, lang)
+        store.kv_set(self.conn, f"journal_draft:{row_id}",
+                     json.dumps({"payload": payload, "status": jstatus},
+                                ensure_ascii=False))
+        self.present_suggestion(row_id, chat_id, None, category, [],
+                                row["summary"] or "", "")
+
     # -- Ingest flow
 
     def apply_category_confirm(self, chat_id, row, category, reply_to,
                                edit_message_id=None, quiet=False):
         lang = self.lang()
         canonical = store.ensure_category(self.conn, category)
-        store.confirm_category(self.conn, row["id"], canonical)
+        # The confirm boundary: for a structured journal the stashed validated
+        # draft becomes the entry payload NOW (never earlier); raw text stays
+        # authoritative either way.
+        draft = self._journal_draft(row["id"]) or {}
+        store.confirm_category(self.conn, row["id"], canonical,
+                               journal_payload=draft.get("payload"),
+                               journal_status=draft.get("status"))
+        store.kv_set(self.conn, f"journal_draft:{row['id']}", "")
         corrected = bool(row["suggested_category"]
                          and canonical.casefold() != row["suggested_category"].casefold())
         if corrected:
@@ -2602,9 +2683,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if not quiet:
             if store.is_journal(self.conn, canonical):
                 day = self._fmt_iso_local(store._now()).split(",")[0]
-                self.reply(chat_id, T(lang, "journal_saved", category=canonical,
-                                      n=store.journal_count(self.conn, canonical), date=day),
-                           reply_to)
+                ack = T(lang, "journal_saved", category=canonical,
+                        n=store.journal_count(self.conn, canonical), date=day)
+                lines = journals.draft_lines(lang, draft.get("payload") or {})
+                if lines:
+                    ack += "\n" + "\n".join(f"• {ln}" for ln in lines)
+                self.reply(chat_id, ack, reply_to)
             else:
                 self.reply(chat_id, T(lang, "confirmed", category=canonical, row_id=self.note_no(row["id"])),
                            reply_to)
@@ -3109,6 +3193,19 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 store.kv_set(self.conn, f"capture_action:{row_id}",
                              json.dumps(capture_meta["action_candidate"],
                                         ensure_ascii=False))
+        # Structured journal DRAFT (plan v1.1 §7, JRN-003): when the suggestion
+        # targets an active structured journal, extract the typed fields now so
+        # the card can show them. Draft only — the validated payload is stashed
+        # and written exclusively at the confirm boundary; a failed extraction
+        # still lets the raw entry save.
+        gdef = store.journal_def_by_category(self.conn, category)
+        if gdef is not None and journals.ENTRY_TYPES.get(gdef["entry_type"], {}).get("active"):
+            payload, jstatus = journals.extract(
+                self.cfg, self.conn, gdef["entry_type"],
+                row["raw_text"] or summary or "", self.lang())
+            store.kv_set(self.conn, f"journal_draft:{row_id}",
+                         json.dumps({"payload": payload, "status": jstatus},
+                                    ensure_ascii=False))
         # Index for semantic recall: full text for documents, else summary+facts.
         # For a referential save the thin command isn't worth indexing — the
         # resolved summary is the real content for `ask`. Fetched page content is
@@ -3176,10 +3273,43 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return candidate
         return None
 
+    def _journal_draft(self, row_id):
+        """The validated journal-entry draft stashed at suggestion time
+        ({'payload': ..., 'status': ...}), or None."""
+        raw = store.kv_get(self.conn, f"journal_draft:{row_id}")
+        if not raw:
+            return None
+        try:
+            draft = json.loads(raw)
+        except ValueError:
+            return None
+        return draft if isinstance(draft, dict) else None
+
     def present_suggestion(self, row_id, chat_id, reply_to, category, alternatives, summary, counts):
         lang = self.lang()
         ru = lang == "ru"
         row = store.get_message(self.conn, row_id)
+        gdef = store.journal_def_by_category(self.conn, category)
+        if gdef is not None and journals.ENTRY_TYPES.get(gdef["entry_type"], {}).get("active"):
+            # Journal-intent card (plan v1.1 §4.5/§8.2): core fields shown BEFORE
+            # save; Add / Edit / Cancel — one compact card, same single pending slot.
+            draft = self._journal_draft(row_id) or {}
+            day = self._fmt_iso_local(store._now()).split(",")[0]
+            text = T(lang, "journal_capture_card", category=category, date=day,
+                     summary=(summary or (row["raw_text"] if row else "") or "")[:300])
+            lines = journals.draft_lines(lang, draft.get("payload") or {})
+            if lines:
+                text += "\n" + "\n".join(f"• {ln}" for ln in lines)
+            keyboard = ingest.build_suggestion_keyboard(row_id, category, [],
+                                                        lang=lang, journal=True)
+            result = self.reply(chat_id, text, reply_to,
+                                reply_markup={"inline_keyboard": keyboard})
+            if result and result.get("message_id"):
+                store.set_suggestion_message(self.conn, row_id, result["message_id"])
+            existing = store.pending_get(self.conn, chat_id)
+            if existing is None or existing.get("kind") == "category":
+                store.pending_set(self.conn, chat_id, "category", {"row_id": row_id})
+            return
         candidate = self._capture_action(row_id)
         keyboard = ingest.build_suggestion_keyboard(
             row_id, category, alternatives, has_action=bool(candidate), lang=lang)

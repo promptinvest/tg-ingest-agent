@@ -481,6 +481,8 @@ TEXTS = {
     "purge_phrase_reminders": {"ru": "удалить все напоминания", "en": "delete all reminders"},
     "purge_phrase_messages": {"ru": "удалить все заметки", "en": "delete all notes"},
     "purge_phrase_issues": {"ru": "очистить журнал проблем", "en": "clear the issues log"},
+    "purge_phrase_journal": {"ru": "да, очистить дневник {category}",
+                             "en": "yes, clear the {category} journal"},
     "calendar_added": {
         "ru": "Записала в Google Calendar: {title} 📅\n{link}",
         "en": "Added to Google Calendar: {title} 📅\n{link}",
@@ -628,6 +630,54 @@ TEXTS = {
     "journal_empty": {
         "ru": "В дневнике «{category}» пока нет записей за этот период.",
         "en": "No «{category}» journal entries for that period yet.",
+    },
+    "journal_capture_card": {
+        "ru": "📔 Добавить в «{category}» — запись за {date}?\n📝 {summary}",
+        "en": "📔 Add to «{category}» — an entry for {date}?\n📝 {summary}",
+    },
+    "journal_edit_slot_busy": {
+        "ru": "Сначала закончим текущее подтверждение, босс — потом поправлю запись.",
+        "en": "Let's finish the confirmation in flight first, boss — then I'll fix the entry.",
+    },
+    "journal_edit_prompt": {
+        "ru": ("Что поправить, босс? Напиши, как должно быть — например: "
+               "«Кому: Вера, за что: помогла с презентацией». Или «отмена»."),
+        "en": ("What should I fix, boss? Tell me how it should read — e.g. "
+               "\"To: Vera, for: helped with the deck\". Or say \"cancel\"."),
+    },
+    "journal_stats_header": {
+        "ru": "📔 «{category}» — кто чаще всего появляется в записях {period}:",
+        "en": "📔 «{category}» — who appears most in the entries {period}:",
+    },
+    "journal_stats_empty": {
+        "ru": "В записях «{category}» пока нет отмеченных людей за этот период.",
+        "en": "No people recorded in «{category}» entries for that period yet.",
+    },
+    "journal_prompt_confirm": {
+        "ru": ("Включить приглашение к дневнику «{category}» около {hour}:00? "
+               "Не чаще раза в день, тихие часы уважаю. Скажи «да» — включу."),
+        "en": ("Turn on a journal invitation for «{category}» around {hour}:00? "
+               "At most once a day, quiet hours respected. Say \"yes\" and I'll enable it."),
+    },
+    "journal_prompt_enabled": {
+        "ru": ("Готово — буду предлагать запись в «{category}» около {hour}:00 🙂 "
+               "Скажи «не предлагай больше» — выключу."),
+        "en": ("Done — I'll suggest a «{category}» entry around {hour}:00 🙂 "
+               "Say \"stop prompting\" to turn it off."),
+    },
+    "journal_prompt_disabled": {
+        "ru": "Хорошо — больше не предлагаю записи в «{category}».",
+        "en": "Okay — no more «{category}» journal prompts from me.",
+    },
+    "journal_prompt_go": {
+        "ru": "Слушаю 🙂 За что сегодня благодарность, что записать в «{category}»?",
+        "en": "Listening 🙂 What should today's «{category}» entry say?",
+    },
+    "nudge_journal": {
+        "ru": ("📔 Хочешь записать что-нибудь в «{category}» за сегодня? "
+               "Если не сейчас — просто пропусти."),
+        "en": ("📔 Want to add something to «{category}» for today? "
+               "If not now — just skip it."),
     },
     "model_down": {
         "ru": "⚠️ Босс, модель «{model}» сейчас недоступна ({reason}). Держусь на запасной, но загляни в доступ к моделям, когда сможешь.",
