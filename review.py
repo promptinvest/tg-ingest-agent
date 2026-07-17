@@ -196,6 +196,14 @@ def collect(conn, period):
     status_counts = {r["status"]: r["n"] for r in data["messages"]}
     data["confirmed_count"] = status_counts.get("confirmed", 0)
     data["corrections_count"] = sum(r["n"] for r in data["corrections"])
+    # First-guess success computed from THIS period's messages themselves —
+    # feedback rows also cover recategorized OLD notes, so subtracting them
+    # produced a negative «категорий с первого раза: -8/2».
+    data["first_guess_kept"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE received_at >= ?"
+        " AND status = 'confirmed' AND category IS NOT NULL"
+        " AND category = suggested_category", (since,),
+    ).fetchone()["n"]
     data["unclear_count"] = sum(r["n"] for r in data["issue_counts"] if r["kind"] == "unclear_request")
     data["proactive_by_type"] = conn.execute(
         "SELECT check_name, COUNT(*) AS n FROM proactive_log"
@@ -359,11 +367,11 @@ def chat_text(conn, cfg, lang, period="week"):
         lines.append(c)
     lines.append((f"📊 Память: {data['mem_confirmed']} подтверждено, "
                   f"{data['mem_inferred']} наблюдений; категорий с первого раза: "
-                  f"{data['confirmed_count'] - data['corrections_count']}/{data['confirmed_count']}"
+                  f"{data['first_guess_kept']}/{data['confirmed_count']}"
                   if ru else
                   f"📊 Memory: {data['mem_confirmed']} confirmed, {data['mem_inferred']} sensed; "
                   f"first-guess categories: "
-                  f"{data['confirmed_count'] - data['corrections_count']}/{data['confirmed_count']}"))
+                  f"{data['first_guess_kept']}/{data['confirmed_count']}"))
     if data["pending_candidates"]:
         n = len(data["pending_candidates"])
         lines.append((f"📋 Хочу уточнить ({n}) — скажи «обзор памяти»" if ru
@@ -544,9 +552,9 @@ def markdown(conn, cfg, period="week"):
                  f"issues logged: {sum(r['n'] for r in data['issue_counts'])}")
     lines.append("")
     lines.append("## Scorecard")
-    kept = data["confirmed_count"] - data["corrections_count"]
+    kept = data["first_guess_kept"]
     lines.append(f"- categorizations: {data['confirmed_count']} confirmed "
-                 f"({kept} kept as suggested, {data['corrections_count']} corrected)")
+                 f"({kept} kept as suggested, {data['confirmed_count'] - kept} corrected)")
     open_unclear = sum(
         1 for row in data["open_issue_patterns"] if row["kind"] == "unclear_request"
     )

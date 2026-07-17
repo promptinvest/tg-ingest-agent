@@ -139,6 +139,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   as context for "this".
 - **Ingest forwards/notes:** forwarded posts and typed notes (text, URLs, photos;
   an album = one item) are saved with forward origin, t.me source link, post date.
+  Forwarded albums are **crash-safe** (2026‑07‑17): buffered parts stay pending in
+  the durable update inbox until the album is filed, a restart replays them, and a
+  filing error gets an honest «перешли ещё раз» instead of a silent loss.
   A vision LLM suggests a **category** (from your taxonomy), a **summary**, and up to
   5 **key facts** — strictly in the source language. Duplicates are detected.
   A **referential save** ("сохрани заметку про этот фильм") with no subject of its
@@ -228,6 +231,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   Generic rejection while a category suggestion is pending (for example
   «Неправильно!» / “wrong category”) never becomes an LLM-invented category: the
   suggestion stays unconfirmed and Cara asks for an explicit «Категория — …».
+  Merging categories **never strips journal protection** (2026‑07‑17): folding a
+  journal into another name carries the journal kind to the destination.
 - **Edit a note's summary** (`note_edit`): "исправь заметку #11 на …", "поменяй краткое
   #3 на …" — fixes the LLM‑written summary shown in lists/detail **in place**; the
   original message text (`raw_text`, the KB‑search source) is preserved. Distinct from
@@ -691,7 +696,7 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 494 offline unit tests (as of 2026‑07‑16; no network; temp SQLite), run on
+- **Tests:** 503 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run on
   the box as part of every deploy and in GitHub Actions — including a
   **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and

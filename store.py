@@ -1074,6 +1074,15 @@ def telegram_update_done(conn, update_id):
     conn.commit()
 
 
+def telegram_updates_pending(conn, limit=100):
+    """Pending inbox rows, oldest first — replayed once at startup so
+    buffered-but-unfiled album parts survive a crash in the settle window."""
+    return conn.execute(
+        "SELECT * FROM telegram_updates WHERE status = 'pending'"
+        " ORDER BY update_id LIMIT ?", (int(limit),),
+    ).fetchall()
+
+
 def telegram_update_fail(conn, update_id, error, terminal=False):
     conn.execute(
         "UPDATE telegram_updates SET status = ?, last_error = ?, updated_at = ?"
@@ -1148,7 +1157,7 @@ def merge_categories(conn, src, dst):
     still-suggested) from src to dst, then delete the now-empty src category. Returns
     (moved_count, dst_canonical_name), or (0, None) if src doesn't exist; (0, dst) if
     src == dst. Preserves message ids/embeddings (only the category string changes)."""
-    src_row = conn.execute("SELECT name FROM categories WHERE norm_key = ?",
+    src_row = conn.execute("SELECT name, kind FROM categories WHERE norm_key = ?",
                            (str(src or "").casefold(),)).fetchone()
     if not src_row:
         return 0, None
@@ -1161,6 +1170,12 @@ def merge_categories(conn, src, dst):
     conn.execute("UPDATE messages SET suggested_category = ? WHERE suggested_category = ?",
                  (dst_name, src_name))
     conn.execute("DELETE FROM categories WHERE norm_key = ?", (src_name.casefold(),))
+    if (src_row["kind"] or "inbox") == "journal":
+        # Journal protection is CONTAGIOUS on merge: folding a diary into another
+        # name (new or existing) must never silently strip dated recall and the
+        # purge exemption. Undo stays available via «X больше не дневник».
+        conn.execute("UPDATE categories SET kind = 'journal' WHERE norm_key = ?",
+                     (dst_name.casefold(),))
     conn.commit()
     return moved, dst_name
 

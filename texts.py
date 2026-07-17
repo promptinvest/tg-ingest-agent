@@ -28,6 +28,11 @@ TEXTS = {
         "ru": "Хм, не совсем уловила 🤔 Скажи чуть конкретнее — и я подхвачу.",
         "en": "Hmm, I didn't quite catch that 🤔 Tell me a touch more and I've got it.",
     },
+    # NB: no final verbs (action_truth catalogue guard) — a failure, nothing stored.
+    "album_failed": {
+        "ru": "Не получилось сохранить этот альбом 😔 Перешли его ещё раз, пожалуйста.",
+        "en": "I couldn't save that album 😔 Please forward it again.",
+    },
     # NB: no final verbs here (action_truth catalogue guard) — it's a decline,
     # nothing was stored.
     "own_photo_not_stored": {

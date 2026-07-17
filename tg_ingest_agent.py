@@ -183,6 +183,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # or the message he's replying to/quoting) — folded into the converse prompt
         # so she understands what he sent. Reset at the start of each inbound turn.
         self.turn_extra = []
+        # update_id of the update currently in handle_update — buffered album
+        # parts record it so flush_albums can mark their inbox rows done.
+        self._current_update_id = None
         # True while dispatching a turn whose payload is the boss's own picture(s):
         # own photos are conversation, never notes — `ingest` declines honestly
         # instead of filing them (own-photo storage retired 2026-07-16).
@@ -358,6 +361,26 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     # -- Main loop
 
+    def replay_pending_updates(self):
+        """Re-handle inbox rows left 'pending' by a crash — e.g. album parts
+        buffered but not yet flushed. The poll offset has already moved past
+        them, so Telegram will never redeliver; the durable inbox is the only
+        source. Attempts still increment per replay, so a poison update
+        dead-letters at the usual cap. Called once at startup, before polling."""
+        rows = store.telegram_updates_pending(self.conn)
+        if not rows:
+            return
+        log(f"replaying {len(rows)} pending update(s) from the durable inbox")
+        updates = []
+        for row in rows:
+            try:
+                updates.append(json.loads(row["payload"]))
+            except (TypeError, ValueError):
+                store.telegram_update_fail(self.conn, row["update_id"],
+                                           "unreadable payload", terminal=True)
+        if updates:
+            self.process_update_batch(updates)
+
     def process_update_batch(self, updates):
         """Dispatch a Telegram batch with durable retry and dead-letter state.
 
@@ -378,7 +401,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             attempts = store.telegram_update_attempt(self.conn, update_id)
             tid = trace.start(self.conn, "inbound", chat_id)
             try:
-                self.handle_update(update)
+                deferred = self.handle_update(update) == "defer"
             except ShutdownInterrupt:
                 log(f"update {update_id} left for redelivery (shutdown)")
                 trace.finish(self.conn, tid, "suppressed", "shutdown mid-update")
@@ -398,7 +421,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                 f"update_id={update_id}; {repr(exc)[:220]}")
                 processed_max = update_id
                 continue
-            store.telegram_update_done(self.conn, update_id)
+            if not deferred:
+                # A buffered forwarded-album part stays 'pending' in the durable
+                # inbox until flush_albums files the whole album — a crash inside
+                # the settle window is then recovered by the startup replay
+                # instead of silently losing the album (the offset moves on).
+                store.telegram_update_done(self.conn, update_id)
             trace.finish(self.conn, tid, "ok")
             events.record_done(self.conn, "telegram_message_received",
                                chat_id=chat_id, trace_id=tid)
@@ -422,6 +450,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         except TelegramError as exc:
             log(f"deleteWebhook failed (continuing): {exc}")
         self.announce_deploy_if_changed()
+        self.replay_pending_updates()
         offset = int(store.kv_get(self.conn, "offset", "0") or 0)
         errors = 0
         log(
@@ -596,6 +625,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         log(f"boss reacted {emoji} ({sentiment}) on message {mr.get('message_id')}")
 
     def handle_update(self, update):
+        self._current_update_id = update.get("update_id")
         callback = update.get("callback_query")
         if callback:
             self.handle_callback(callback)
@@ -695,10 +725,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if auto_store:
             group_id = msg.get("media_group_id")
             if group_id:
-                buffer = self.albums.setdefault(str(group_id), {"parts": [], "store": True})
-                buffer["parts"].append(msg)
+                buffer = self.albums.setdefault(
+                    str(group_id), {"parts": [], "store": True, "update_ids": []})
+                if not any(p.get("message_id") == msg.get("message_id")
+                           for p in buffer["parts"]):  # replay/redelivery dedupe
+                    buffer["parts"].append(msg)
+                    if self._current_update_id is not None:
+                        buffer.setdefault("update_ids", []).append(self._current_update_id)
                 buffer["deadline"] = time.time() + self.cfg.album_settle
-                return
+                return "defer"  # inbox row stays pending until the album is filed
             self.finalize([msg])
             return
 
@@ -2646,6 +2681,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if force or buffer.get("deadline", 0) <= now:
                 del self.albums[group_id]
                 parts = sorted(buffer["parts"], key=lambda m: m.get("message_id", 0))
+                update_ids = buffer.get("update_ids") or []
                 try:
                     if buffer.get("store", True):
                         self.finalize(parts)
@@ -2655,6 +2691,22 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                         self.handle_own_media(parts, parts[0]["chat"]["id"], cap)
                 except Exception as exc:
                     log(f"error finalizing album {group_id}: {exc!r}")
+                    if buffer.get("store", True):
+                        # A forwarded album must never vanish silently: tell the
+                        # boss honestly and dead-letter the part rows (payloads
+                        # preserved for recovery) instead of consuming them.
+                        chat_id = ((parts[0].get("chat") or {}).get("id")
+                                   if parts else None)
+                        if chat_id:
+                            store.issue_add(self.conn, chat_id, "album_failed",
+                                            f"group={group_id}: {exc!r}"[:220])
+                            self.reply(chat_id, T(self.lang(), "album_failed"))
+                        for uid in update_ids:
+                            store.telegram_update_fail(
+                                self.conn, uid, repr(exc), terminal=True)
+                    continue
+                for uid in update_ids:
+                    store.telegram_update_done(self.conn, uid)
 
     TEXT_DOC_EXTS = (".md", ".markdown", ".txt", ".text")
     MAX_DOC_CHARS = 100_000

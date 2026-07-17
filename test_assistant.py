@@ -6456,5 +6456,151 @@ class ReviewFixes20260716Tests(unittest.TestCase):
                          "пьёт кофе без сахара")
 
 
+class Phase0Fixes20260717Tests(unittest.TestCase):
+    """Phase 0 of the notes/journals plan (spec v1.1): journal-kind survives a
+    merge, first-guess metric derives from messages, forwarded-album durability."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "p0.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    # -- P0-1: journal protection is contagious on merge ------------------------
+
+    def test_merge_preserves_journal_kind_into_new_name(self):
+        store.set_category_kind(self.conn, "Благодарность", "journal")
+        moved, dst = store.merge_categories(self.conn, "Благодарность",
+                                            "Дневник благодарности")
+        self.assertEqual(dst, "Дневник благодарности")
+        self.assertEqual(store.category_kind(self.conn, dst), "journal")
+
+    def test_merge_upgrades_existing_inbox_destination(self):
+        store.set_category_kind(self.conn, "Благодарность", "journal")
+        store.ensure_category(self.conn, "Личное")  # plain inbox category
+        store.merge_categories(self.conn, "Благодарность", "Личное")
+        self.assertEqual(store.category_kind(self.conn, "Личное"), "journal")
+
+    def test_merge_of_inbox_categories_stays_inbox(self):
+        store.ensure_category(self.conn, "AI tools")
+        store.ensure_category(self.conn, "AI Tools & Resources")
+        store.merge_categories(self.conn, "AI tools", "AI Tools & Resources")
+        self.assertEqual(store.category_kind(self.conn, "AI Tools & Resources"),
+                         "inbox")
+
+    # -- P0-2: first-guess metric from this period's messages -------------------
+
+    def test_first_guess_metric_ignores_old_note_recategorization(self):
+        now = datetime.now(timezone.utc).isoformat()
+        a = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 1,
+                                             "received_at": now, "raw_text": "x"})
+        store.set_suggestion(self.conn, a, "News", "s", "m")
+        store.confirm_category(self.conn, a, "News")     # first guess kept
+        b = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 2,
+                                             "received_at": now, "raw_text": "y"})
+        store.set_suggestion(self.conn, b, "News", "s", "m")
+        store.confirm_category(self.conn, b, "Crypto")   # corrected
+        # 10 recategorizations of OLD notes logged as period feedback — these
+        # used to drive the metric negative («категорий с первого раза: -8/2»).
+        for i in range(10):
+            store.feedback_add(self.conn, "ingest", f"old{i}", "A", "B")
+        text = review.chat_text(self.conn, self.cfg, "ru", "week")
+        self.assertIn("категорий с первого раза: 1/2", text)
+        self.assertNotIn("первого раза: -", text)  # never negative again
+        md = review.markdown(self.conn, self.cfg, "week")
+        self.assertIn("(1 kept as suggested, 1 corrected)", md)
+
+    # -- P0-3: forwarded-album durability ---------------------------------------
+
+    def _album_update(self, uid, mid, text):
+        return {"update_id": uid,
+                "message": {"chat": {"id": 1}, "from": {"id": 1}, "message_id": mid,
+                            "media_group_id": "g1", "caption": text,
+                            "forward_origin": {"type": "channel",
+                                               "chat": {"id": -100, "title": "Chan"}}}}
+
+    def test_album_parts_stay_pending_until_flush_then_one_note(self):
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "suggest_row", return_value=None):
+            self.agent.process_update_batch([self._album_update(700, 10, "часть 1"),
+                                             self._album_update(701, 11, "часть 2")])
+            rows = self.conn.execute(
+                "SELECT status FROM telegram_updates ORDER BY update_id").fetchall()
+            self.assertEqual([r["status"] for r in rows], ["pending", "pending"])
+            self.agent.flush_albums(0, force=True)
+        rows = self.conn.execute(
+            "SELECT status FROM telegram_updates ORDER BY update_id").fetchall()
+        self.assertEqual([r["status"] for r in rows], ["done", "done"])
+        n = self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        self.assertEqual(n, 1)  # the whole album is ONE note
+
+    def test_restart_replay_files_crashed_album_once(self):
+        import tg_ingest_agent
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "suggest_row", return_value=None):
+            self.agent.process_update_batch([self._album_update(700, 10, "часть 1"),
+                                             self._album_update(701, 11, "часть 2")])
+        # "crash" inside the settle window: no flush; a fresh Agent on the same DB
+        b = tg_ingest_agent.Agent(self.cfg)
+        try:
+            with mock.patch.object(b, "reply"), \
+                    mock.patch.object(b, "suggest_row", return_value=None):
+                b.replay_pending_updates()
+                b.flush_albums(0, force=True)
+            n = b.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            self.assertEqual(n, 1)
+            statuses = {r["status"] for r in
+                        b.conn.execute("SELECT status FROM telegram_updates")}
+            self.assertEqual(statuses, {"done"})
+        finally:
+            b.conn.close()
+
+    def test_flush_error_replies_and_dead_letters(self):
+        with mock.patch.object(self.agent, "reply") as r, \
+                mock.patch.object(self.agent, "finalize",
+                                  side_effect=RuntimeError("boom")):
+            self.agent.process_update_batch([self._album_update(800, 20, "x")])
+            self.agent.flush_albums(0, force=True)
+        self.assertEqual(r.call_args[0][1],
+                         texts.T(self.agent.lang(), "album_failed"))
+        row = self.conn.execute(
+            "SELECT status FROM telegram_updates WHERE update_id = 800").fetchone()
+        self.assertEqual(row["status"], "failed")  # dead letter, payload kept
+        self.assertIsNotNone(self.conn.execute(
+            "SELECT 1 FROM issues WHERE kind = 'album_failed'").fetchone())
+
+    def test_redelivered_part_dedupes_in_buffer(self):
+        batch = [self._album_update(900, 30, "a")]
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "suggest_row", return_value=None):
+            self.agent.process_update_batch(batch)
+            self.agent.process_update_batch(batch)  # pending row redelivered
+            self.assertEqual(len(self.agent.albums["g1"]["parts"]), 1)
+            self.assertEqual(self.agent.albums["g1"]["update_ids"], [900])
+            self.agent.flush_albums(0, force=True)
+        n = self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        self.assertEqual(n, 1)
+
+    def test_single_forward_is_done_immediately(self):
+        upd = {"update_id": 950,
+               "message": {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 40,
+                           "text": "пересланный текст",
+                           "forward_origin": {"type": "channel",
+                                              "chat": {"id": -100, "title": "Chan"}}}}
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "suggest_row", return_value=None):
+            self.agent.process_update_batch([upd])
+        row = self.conn.execute(
+            "SELECT status FROM telegram_updates WHERE update_id = 950").fetchone()
+        self.assertEqual(row["status"], "done")
+
+
 if __name__ == "__main__":
     unittest.main()
