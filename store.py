@@ -82,6 +82,31 @@ CREATE TABLE IF NOT EXISTS messages (
   UNIQUE (chat_id, tg_message_id)
 );
 
+-- Durable, content-free outcome ledger for saved notes. Unlike the generic
+-- events queue this is NOT telemetry and is never retention-pruned: deleted
+-- notes must remain in the saved-to-used denominator. `note_no` is the stable
+-- boss-facing identity; there is deliberately no FK to messages, so an
+-- intentional delete records its outcome instead of erasing its history.
+CREATE TABLE IF NOT EXISTS note_outcomes (
+  id INTEGER PRIMARY KEY,
+  chat_id INTEGER NOT NULL,
+  note_no INTEGER NOT NULL,
+  event TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'app',
+  source_event_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_note_outcomes_event_time
+  ON note_outcomes(event, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_note_outcomes_note
+  ON note_outcomes(chat_id, note_no, occurred_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_note_outcomes_milestone
+  ON note_outcomes(chat_id, note_no, event)
+  WHERE event IN ('captured', 'first_used');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_note_outcomes_source_event
+  ON note_outcomes(source_event_id, chat_id, note_no, event, occurred_at)
+  WHERE source_event_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS urls (
   id INTEGER PRIMARY KEY,
   message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -1097,6 +1122,134 @@ def _migrate(conn):
             conn.execute(f"UPDATE {tbl} SET embedding = ? WHERE id = ?",
                          (pack_embedding(vec), r["id"]))
     _migrate_gratitude_builtin(conn)
+    _migrate_note_outcomes(conn)
+
+
+NOTE_OUTCOME_MIRROR_KINDS = (
+    "note_opened", "note_cited", "note_resurfaced",
+    "note_resurface_accepted", "note_archived", "note_restored",
+    "note_kept", "note_review_deferred", "note_triaged",
+    "note_review_shown", "note_reminder_proposed", "note_reminder_created",
+)
+
+
+def note_outcome_record(conn, message_id, event, *, occurred_at=None,
+                        source="app", source_event_id=None, commit=True):
+    """Append one privacy-safe note outcome while the source row exists.
+
+    The ledger stores only chat id, stable note number, a closed event label,
+    timestamp and provenance ids — never note text/category/summary. Milestones
+    (`captured`, `first_used`) are idempotent via a partial unique index; a
+    generic event is idempotent only against its durable events-row provenance.
+    """
+    row = conn.execute(
+        "SELECT chat_id, note_no, knowledge_state FROM messages WHERE id = ?",
+        (message_id,),
+    ).fetchone()
+    if row is None or row["knowledge_state"] is None:
+        return False
+    note_no = row["note_no"]
+    if note_no is None:
+        note_no = ensure_note_no(conn, message_id)
+    if note_no is None:
+        return False
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO note_outcomes"
+        " (chat_id, note_no, event, occurred_at, source, source_event_id)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (row["chat_id"], note_no, str(event), occurred_at or _now(),
+         str(source or "app")[:40], source_event_id),
+    )
+    if commit:
+        conn.commit()
+    return cur.rowcount > 0
+
+
+def note_outcomes_from_event(conn, event_id, *, source="event", commit=True):
+    """Mirror one generic `events` row into the durable note ledger.
+
+    Existing callers keep their operational event stream; this adapter makes
+    the review history independent of that stream's 90-day retention window.
+    A review-batch event contains several ids and becomes one ledger row per
+    note, all tied back to the same source event id.
+    """
+    row = conn.execute(
+        "SELECT id, kind, payload, created_at FROM events WHERE id = ?",
+        (event_id,),
+    ).fetchone()
+    if row is None or row["kind"] not in NOTE_OUTCOME_MIRROR_KINDS:
+        return 0
+    try:
+        payload = json.loads(row["payload"] or "{}") or {}
+    except (TypeError, ValueError):
+        return 0
+    ids = payload.get("ids") if isinstance(payload.get("ids"), list) else []
+    if payload.get("message_id") is not None:
+        ids = [payload["message_id"], *ids]
+    written = 0
+    for message_id in dict.fromkeys(ids):
+        try:
+            message_id = int(message_id)
+        except (TypeError, ValueError):
+            continue
+        written += int(note_outcome_record(
+            conn, message_id, row["kind"], occurred_at=row["created_at"],
+            source=source, source_event_id=row["id"], commit=False,
+        ))
+    if commit:
+        conn.commit()
+    return written
+
+
+def _migrate_note_outcomes(conn):
+    """One-time deterministic backfill for the durable outcome ledger.
+
+    Surviving lifecycle notes seed capture/first-use milestones at their real
+    stored timestamps. Any still-retained generic note events are mirrored with
+    their event ids. The marker deliberately survives `purge stats/all`, so an
+    explicit metric reset is not silently undone on the next process start.
+    """
+    marker = conn.execute(
+        "SELECT value FROM kv WHERE key = 'note_outcomes_backfill_v1'"
+    ).fetchone()
+    if marker is not None:
+        return
+    retained_first_use = {}
+    for event in conn.execute(
+            "SELECT payload, created_at FROM events WHERE status='done'"
+            " AND kind IN ('note_opened','note_cited','note_resurface_accepted')"
+            " ORDER BY created_at"):
+        try:
+            message_id = (json.loads(event["payload"] or "{}") or {}).get("message_id")
+            message_id = int(message_id)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        retained_first_use.setdefault(message_id, event["created_at"])
+    for row in conn.execute(
+            "SELECT id, received_at, last_used_at, use_count FROM messages"
+            " WHERE status='confirmed' AND knowledge_state IS NOT NULL"
+            " ORDER BY id"):
+        note_outcome_record(conn, row["id"], "captured",
+                            occurred_at=row["received_at"], source="migration",
+                            commit=False)
+        if (row["use_count"] or 0) > 0:
+            first_at = retained_first_use.get(row["id"])
+            note_outcome_record(conn, row["id"], "first_used",
+                                occurred_at=(first_at or row["last_used_at"]
+                                             or row["received_at"]),
+                                source=("migration" if first_at else "migration_approx"),
+                                commit=False)
+    marks = ",".join("?" for _ in NOTE_OUTCOME_MIRROR_KINDS)
+    for row in conn.execute(
+            f"SELECT id FROM events WHERE status='done' AND kind IN ({marks})"
+            " ORDER BY id", NOTE_OUTCOME_MIRROR_KINDS):
+        note_outcomes_from_event(conn, row["id"], source="event_backfill",
+                                 commit=False)
+    conn.execute(
+        "INSERT OR REPLACE INTO kv (key, value) VALUES"
+        " ('note_outcomes_backfill_v1', 'done')"
+    )
+    conn.commit()
 
 
 def _category_confirmed_count(conn, name):
@@ -1486,8 +1639,23 @@ def note_mark_used(conn, message_id):
     """Count a REAL use only: detail opened, cited in a delivered answer,
     included in a delivered export, or an accepted resurfacing — never mere
     ranking/retrieval."""
-    return _note_update(conn, message_id,
-                        "use_count = use_count + 1, last_used_at = ?", (_now(),))
+    row = conn.execute(
+        "SELECT use_count FROM messages WHERE id = ? AND knowledge_state IS NOT NULL",
+        (message_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    stamp = _now()
+    cur = conn.execute(
+        "UPDATE messages SET use_count = use_count + 1, last_used_at = ?"
+        " WHERE id = ? AND knowledge_state IS NOT NULL",
+        (stamp, message_id),
+    )
+    if cur.rowcount and (row["use_count"] or 0) == 0:
+        note_outcome_record(conn, message_id, "first_used", occurred_at=stamp,
+                            source="real_use", commit=False)
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def notes_by_state(conn, state, limit=50):
@@ -1944,6 +2112,7 @@ def confirm_category(conn, message_id, category, journal_payload=None,
     )
     conn.commit()
     ensure_note_no(conn, message_id)  # a confirmed note gets its stable #N now
+    note_outcome_record(conn, message_id, "captured", source="confirm")
 
 
 def find_by_suggestion_message(conn, chat_id, suggestion_message_id):
@@ -2158,6 +2327,16 @@ def message_update_summary(conn, message_id, summary):
 def delete_message(conn, message_id):
     """Delete a message row (urls/images cascade); returns media paths to
     unlink. Other rows referencing it as duplicate_of keep their copy."""
+    row = conn.execute(
+        "SELECT status, knowledge_state, use_count FROM messages WHERE id = ?",
+        (message_id,),
+    ).fetchone()
+    if row is not None and row["status"] == "confirmed" and row["knowledge_state"] is not None:
+        note_outcome_record(
+            conn, message_id,
+            "deleted_used" if (row["use_count"] or 0) > 0 else "deleted_unused",
+            source="delete", commit=False,
+        )
     paths = [r["local_path"] for r in message_images(conn, message_id) if r["local_path"]]
     paths += [r["local_path"] for r in message_files(conn, message_id) if r["local_path"]]
     conn.execute("UPDATE messages SET duplicate_of = NULL WHERE duplicate_of = ?", (message_id,))
@@ -2211,6 +2390,7 @@ def purge_preview(conn, scope, category=None):
         info["categories"] = count("SELECT COUNT(*) FROM categories")
         info["issues"] = count("SELECT COUNT(*) FROM issues")
         info["conversation"] = count("SELECT COUNT(*) FROM conversation")
+        info["note_outcomes"] = count("SELECT COUNT(*) FROM note_outcomes")
     elif scope == "category":
         info["messages"] = len(_messages_in_category(conn, category))
         info["category"] = category
@@ -2218,6 +2398,7 @@ def purge_preview(conn, scope, category=None):
         info["categories"] = count("SELECT COUNT(*) FROM categories")
         info["issues"] = count("SELECT COUNT(*) FROM issues")
         info["feedback"] = count("SELECT COUNT(*) FROM feedback")
+        info["note_outcomes"] = count("SELECT COUNT(*) FROM note_outcomes")
     elif scope == "reminders":
         info["reminders"] = count("SELECT COUNT(*) FROM reminders WHERE status='active'")
     elif scope == "messages":  # all saved notes/messages, keep categories/reminders/settings
@@ -2248,7 +2429,8 @@ def purge_execute(conn, scope, category=None):
         # journal_entries before messages (manual cascade; FK would fail closed).
         # journal_definitions stay, like preferences — config, not content; the
         # gratitude built-in self-heals its category on the next start.
-        for table in ("facts", "chunks", "urls", "images", "journal_entries", "messages",
+        for table in ("facts", "chunks", "urls", "images", "journal_entries",
+                      "note_outcomes", "messages",
                       "categories", "issue_patterns", "issues", "feedback", "conversation"):
             conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM reminders WHERE status='active'")
@@ -2263,7 +2445,7 @@ def purge_execute(conn, scope, category=None):
         # NOT conversation: dialog history is not "stats" — the boss confirming
         # «сбросить всю статистику» was never shown (and never meant) a wipe of
         # everything the two of them ever said. Only 'all' deletes it.
-        for table in ("categories", "issue_patterns", "issues", "feedback"):
+        for table in ("categories", "issue_patterns", "issues", "feedback", "note_outcomes"):
             conn.execute(f"DELETE FROM {table}")
     elif scope == "reminders":
         conn.execute("DELETE FROM reminders WHERE status='active'")

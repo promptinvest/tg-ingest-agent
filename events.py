@@ -42,6 +42,8 @@ def record_done(conn, kind, *, chat_id=None, payload=None, trace_id=None, status
     eid = add_event(conn, kind, chat_id=chat_id, payload=payload, trace_id=trace_id, status=status)
     conn.execute("UPDATE events SET finished_at = ?, error = ? WHERE id = ?", (_now(), error, eid))
     conn.commit()
+    if status == "done":
+        store.note_outcomes_from_event(conn, eid)
     return eid
 
 

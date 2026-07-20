@@ -677,6 +677,7 @@ class ReviewTests(unittest.TestCase):
             (datetime.now(timezone.utc).isoformat(),),
         )
         self.conn.commit()
+        store.note_outcome_record(self.conn, row.lastrowid, "captured", source="test")
         store.ensure_category(self.conn, "крипта")
         store.feedback_add(self.conn, "ingest", "x", "news", "крипта")
         store.issue_add(self.conn, 1, "out_of_scope", "напиши эссе")
@@ -1072,12 +1073,16 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(store.status_counts(self.conn), [])
         self.assertEqual(store.usage_total(self.conn, "month"), 0.01)  # spend history kept
         self.assertEqual(store.pref_get(self.conn, "owner_name"), "Owen")  # identity kept
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM note_outcomes").fetchone()[0], 0)
 
     def test_stats_scope_keeps_messages(self):
         store.purge_execute(self.conn, "stats")
         self.assertEqual(store.purge_preview(self.conn, "all")["messages"], 3)  # messages kept
         self.assertEqual(store.issue_counts(self.conn, "2000-01-01"), [])
         self.assertEqual(store.known_categories(self.conn), [])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM note_outcomes").fetchone()[0], 0)
 
     def test_router_accepts_purge(self):
         ok = router.validate_route({"action": "purge", "params": {"scope": "all"}}, False)
@@ -7762,7 +7767,7 @@ class NoteOutcomeMetricsTests(unittest.TestCase):
         self.assertEqual(data["archived_unused"], 1)
         self.assertEqual(data["note_events"].get("note_archived"), 1)
         self.assertEqual(data["lifecycle_counts"].get("inbox"), 1)
-        self.assertIsNotNone(data["median_first_use_hours"])   # events-based approx
+        self.assertIsNotNone(data["median_first_use_hours"])   # durable milestone ledger
         self.assertGreaterEqual(data["inbox_oldest_days"], 0)
         self.assertIsNotNone(store.get_message(self.conn, inbox))
 
@@ -8025,6 +8030,147 @@ class ReportAndDirectCommandAccuracy20260720Tests(unittest.TestCase):
             self.assertNotIn("llm.failover_served", stages)
         finally:
             tracing.finish(self.conn, tid, "error")
+
+
+class DurableNoteOutcomesAndLatency20260720Tests(unittest.TestCase):
+    """Release 2: survivorship-safe saved-to-used metrics and measured model
+    latency. The outcome ledger is durable metadata and contains no note text."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "r2.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _note(self, tg_id, text="note"):
+        mid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        store.set_suggestion(self.conn, mid, "News", "summary", "model")
+        store.confirm_category(self.conn, mid, store.ensure_category(self.conn, "News"))
+        return mid
+
+    def test_ledger_schema_is_content_free_and_milestones_are_idempotent(self):
+        cols = {r["name"] for r in self.conn.execute(
+            "PRAGMA table_info(note_outcomes)")}
+        self.assertEqual(cols, {"id", "chat_id", "note_no", "event", "occurred_at",
+                                "source", "source_event_id"})
+        self.assertTrue({"raw_text", "summary", "category", "message_id"}.isdisjoint(cols))
+        mid = self._note(1)
+        store.confirm_category(self.conn, mid, "News")       # retry/reconfirm is harmless
+        store.note_mark_used(self.conn, mid)
+        store.note_mark_used(self.conn, mid)                  # first-use stays one milestone
+        counts = {r["event"]: r["n"] for r in self.conn.execute(
+            "SELECT event, COUNT(*) AS n FROM note_outcomes GROUP BY event")}
+        self.assertEqual(counts.get("captured"), 1)
+        self.assertEqual(counts.get("first_used"), 1)
+
+    def test_delete_preserves_denominator_and_records_used_vs_unused(self):
+        used = self._note(1, "used")
+        unused = self._note(2, "unused")
+        store.note_mark_used(self.conn, used)
+        store.delete_message(self.conn, used)
+        store.delete_message(self.conn, unused)
+        data = review.collect_note_outcomes(
+            self.conn, (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+            datetime.now(timezone.utc))
+        self.assertEqual((data["capture_confirmed_total"], data["capture_used_total"]),
+                         (2, 1))
+        self.assertEqual(data["notes_saved"], 2)
+        self.assertEqual(data["note_events"].get("deleted_used"), 1)
+        self.assertEqual(data["note_events"].get("deleted_unused"), 1)
+        self.assertIsNotNone(data["median_first_use_hours"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
+
+    def test_generic_event_mirror_handles_review_batch_and_survives_pruning(self):
+        first, second = self._note(1), self._note(2)
+        eid = events.record_done(self.conn, "note_review_shown", chat_id=1,
+                                 payload={"ids": [first, second]})
+        mirrored = self.conn.execute(
+            "SELECT COUNT(*) FROM note_outcomes"
+            " WHERE event='note_review_shown' AND source_event_id=?", (eid,)
+        ).fetchone()[0]
+        self.assertEqual(mirrored, 2)
+        self.conn.execute("UPDATE events SET created_at='2000-01-01T00:00:00+00:00'"
+                          " WHERE id=?", (eid,))
+        self.conn.commit()
+        store.prune_telemetry(self.conn, "2026-01-01T00:00:00+00:00")
+        self.assertIsNone(self.conn.execute(
+            "SELECT 1 FROM events WHERE id=?", (eid,)).fetchone())
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM note_outcomes WHERE event='note_review_shown'"
+        ).fetchone()[0], 2)
+
+    def test_one_time_migration_backfills_survivors_but_respects_stats_reset(self):
+        mid = self._note(1)
+        store.note_mark_used(self.conn, mid)
+        self.conn.execute("DELETE FROM note_outcomes")
+        self.conn.execute("DELETE FROM kv WHERE key='note_outcomes_backfill_v1'")
+        self.conn.commit()
+        store._migrate_note_outcomes(self.conn)
+        counts = {r["event"]: r["n"] for r in self.conn.execute(
+            "SELECT event, COUNT(*) AS n FROM note_outcomes GROUP BY event")}
+        self.assertEqual(counts.get("captured"), 1)
+        self.assertEqual(counts.get("first_used"), 1)
+        store._migrate_note_outcomes(self.conn)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM note_outcomes WHERE event='captured'"
+        ).fetchone()[0], 1)
+        preview = store.purge_preview(self.conn, "stats")
+        self.assertGreaterEqual(preview["note_outcomes"], 2)
+        store.purge_execute(self.conn, "stats")
+        store._migrate_note_outcomes(self.conn)                # marker survives reset
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM note_outcomes").fetchone()[0], 0)
+
+    def test_chat_and_embedding_usage_capture_real_elapsed_seconds(self):
+        chat_body = {"choices": [{"message": {"content": "ok"}}],
+                     "usage": {"prompt_tokens": 10, "completion_tokens": 2}}
+        embed_body = {"data": [{"index": 0, "embedding": [0.1, 0.2]}],
+                      "usage": {"prompt_tokens": 4}}
+
+        class Resp:
+            def __init__(self, body): self.body = body
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return json.dumps(self.body).encode("utf-8")
+
+        with mock.patch.object(llm, "urlopen", return_value=Resp(chat_body)), \
+                mock.patch.object(llm.time, "monotonic", side_effect=[10.0, 11.25]):
+            llm.chat(self.cfg, self.conn, "router", [{"role": "user", "content": "x"}])
+        with mock.patch.object(llm, "urlopen", return_value=Resp(embed_body)), \
+                mock.patch.object(llm.time, "monotonic", side_effect=[20.0, 22.5]):
+            llm.embed(self.cfg, self.conn, "ask", ["text"])
+        rows = self.conn.execute(
+            "SELECT kind, seconds FROM llm_usage ORDER BY id").fetchall()
+        self.assertEqual([r["kind"] for r in rows], ["chat", "embed"])
+        self.assertAlmostEqual(rows[0]["seconds"], 1.25)
+        self.assertAlmostEqual(rows[1]["seconds"], 2.5)
+
+    def test_report_latency_percentiles_exclude_health_and_stt(self):
+        for seconds in (1.0, 3.0, 5.0):
+            store.usage_add(self.conn, "router", "chat", "m", 1, 1,
+                            seconds=seconds, cost_usd=0.001)
+        store.usage_add(self.conn, "healthcheck", "chat", "m", 1, 1,
+                        seconds=10.0, cost_usd=0.001)
+        store.usage_add(self.conn, "stt", "stt", "whisper", seconds=99.0)
+        data = review.collect(self.conn, "week")
+        self.assertEqual(data["functional_latency"]["calls"], 3)
+        self.assertAlmostEqual(data["functional_latency"]["p50"], 3.0)
+        self.assertAlmostEqual(data["functional_latency"]["p95"], 4.8)
+        self.assertEqual(data["healthcheck_latency"]["calls"], 1)
+        text = review.chat_text(self.conn, self.cfg, "ru", "week")
+        self.assertIn("p50 3.00с · p95 4.80с (3)", text)
+        md = review.markdown(self.conn, self.cfg, "week")
+        self.assertIn("functional chat/embed latency: p50 3.00s · p95 4.80s", md)
+        self.assertIn("model-health latency: p50 10.00s", md)
 
 
 if __name__ == "__main__":

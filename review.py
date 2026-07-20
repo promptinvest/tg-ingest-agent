@@ -86,6 +86,26 @@ def normalize_period(value):
     return value if value in PERIOD_DAYS else "week"
 
 
+def _percentile(values, quantile):
+    """Linear-interpolated percentile for a small deterministic latency set."""
+    ordered = sorted(float(v) for v in values if v is not None)
+    if not ordered:
+        return None
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * float(quantile)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _latency_summary(rows):
+    values = [r["seconds"] for r in rows if r["seconds"] is not None]
+    return {"calls": len(values), "p50": _percentile(values, 0.50),
+            "p95": _percentile(values, 0.95)}
+
+
 def collect(conn, period):
     period = normalize_period(period)
     days = PERIOD_DAYS[period]
@@ -133,6 +153,22 @@ def collect(conn, period):
         r["calls"] for r in data["spend_by_skill"] if r["skill"] != "healthcheck")
     data["functional_cost"] = sum(
         r["cost"] for r in data["spend_by_skill"] if r["skill"] != "healthcheck")
+    latency_rows = conn.execute(
+        "SELECT skill, seconds FROM llm_usage WHERE ts>=?"
+        " AND kind IN ('chat','embed') AND seconds IS NOT NULL ORDER BY id",
+        (since,),
+    ).fetchall()
+    functional_latency_rows = [r for r in latency_rows if r["skill"] != "healthcheck"]
+    health_latency_rows = [r for r in latency_rows if r["skill"] == "healthcheck"]
+    data["functional_latency"] = _latency_summary(functional_latency_rows)
+    data["healthcheck_latency"] = _latency_summary(health_latency_rows)
+    latency_by_skill = {}
+    for row in functional_latency_rows:
+        latency_by_skill.setdefault(row["skill"], []).append(row)
+    data["latency_by_skill"] = [
+        {"skill": skill, **_latency_summary(rows)}
+        for skill, rows in sorted(latency_by_skill.items())
+    ]
     data["ask_count"] = conn.execute(
         "SELECT COUNT(*) AS n FROM llm_usage WHERE skill='ask' AND kind='chat' AND ts >= ?",
         (since,),
@@ -252,7 +288,9 @@ NOTE_EVENT_KINDS = ("note_opened", "note_cited", "note_resurfaced",
                     "note_resurface_accepted", "note_archived", "note_restored",
                     "note_kept", "note_review_deferred", "note_triaged",
                     "note_review_shown", "note_reminder_proposed",
-                    "note_reminder_created")
+                    "note_reminder_created", "deleted_used", "deleted_unused")
+REAL_USE_OUTCOME_KINDS = ("first_used", "note_opened", "note_cited",
+                          "note_resurface_accepted")
 
 
 def _parse_iso(value):
@@ -271,18 +309,21 @@ def collect_note_outcomes(conn, since, now):
     out = {}
     now_iso = now.isoformat()
     out["notes_saved"] = conn.execute(
-        "SELECT COUNT(*) AS n FROM messages WHERE received_at >= ?"
-        " AND status = 'confirmed' AND knowledge_state IS NOT NULL",
-        (since,)).fetchone()["n"]
+        "SELECT COUNT(*) AS n FROM note_outcomes"
+        " WHERE event='captured' AND occurred_at>=?", (since,)
+    ).fetchone()["n"]
     # distinct notes with a REAL use this period (open/citation/delivered
     # export/accepted resurfacing bump last_used_at; ranking never does)
+    use_marks = ",".join("?" for _ in REAL_USE_OUTCOME_KINDS)
     out["notes_used_period"] = conn.execute(
-        "SELECT COUNT(*) AS n FROM messages WHERE last_used_at >= ?",
-        (since,)).fetchone()["n"]
+        f"SELECT COUNT(*) AS n FROM (SELECT chat_id, note_no FROM note_outcomes"
+        f" WHERE occurred_at>=? AND event IN ({use_marks})"
+        f" GROUP BY chat_id, note_no)", (since, *REAL_USE_OUTCOME_KINDS)
+    ).fetchone()["n"]
     marks = ",".join("?" for _ in NOTE_EVENT_KINDS)
     out["note_events"] = {r["kind"]: r["n"] for r in conn.execute(
-        f"SELECT kind, COUNT(*) AS n FROM events WHERE created_at >= ?"
-        f" AND kind IN ({marks}) GROUP BY kind", (since, *NOTE_EVENT_KINDS))}
+        f"SELECT event AS kind, COUNT(*) AS n FROM note_outcomes WHERE occurred_at >= ?"
+        f" AND event IN ({marks}) GROUP BY event", (since, *NOTE_EVENT_KINDS))}
     out["lifecycle_counts"] = store.notes_lifecycle_counts(conn)
     week_ahead = (now + timedelta(days=7)).isoformat()
     out["reviews_upcoming"] = conn.execute(
@@ -300,33 +341,34 @@ def collect_note_outcomes(conn, since, now):
     # KPI: capture_to_use_rate = distinct notes used after saving / distinct
     # notes confirmed (lifecycle notes, all-time — journals are outside).
     out["capture_confirmed_total"] = conn.execute(
-        "SELECT COUNT(*) AS n FROM messages WHERE status = 'confirmed'"
-        " AND knowledge_state IS NOT NULL").fetchone()["n"]
+        "SELECT COUNT(*) AS n FROM (SELECT chat_id, note_no FROM note_outcomes"
+        " WHERE event='captured' GROUP BY chat_id, note_no)"
+    ).fetchone()["n"]
     out["capture_used_total"] = conn.execute(
-        "SELECT COUNT(*) AS n FROM messages WHERE status = 'confirmed'"
-        " AND knowledge_state IS NOT NULL AND use_count > 0").fetchone()["n"]
+        "SELECT COUNT(*) AS n FROM (SELECT chat_id, note_no FROM note_outcomes"
+        " WHERE event='first_used' GROUP BY chat_id, note_no)"
+    ).fetchone()["n"]
+    out["first_use_approx_count"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM note_outcomes"
+        " WHERE event='first_used' AND source='migration_approx'"
+    ).fetchone()["n"]
     out["archived_unused"] = conn.execute(
         "SELECT COUNT(*) AS n FROM messages WHERE knowledge_state = 'archived'"
         " AND use_count = 0").fetchone()["n"]
-    # median capture→first-use, from the events log (bounded by the telemetry
-    # retention window — an approximation, labeled as such in the report)
+    # Exact all-time median from durable milestones; neither generic telemetry
+    # pruning nor deleting the source note can erase this history.
+    captured = {}
     first_use = {}
     for r in conn.execute(
-            "SELECT payload, created_at FROM events WHERE kind IN"
-            " ('note_opened','note_cited','note_resurface_accepted')"
-            " ORDER BY created_at"):
-        try:
-            mid = (json.loads(r["payload"] or "{}") or {}).get("message_id")
-        except ValueError:
-            continue
-        if mid and mid not in first_use:
-            first_use[mid] = r["created_at"]
+            "SELECT chat_id, note_no, event, MIN(occurred_at) AS ts"
+            " FROM note_outcomes WHERE event IN ('captured','first_used')"
+            " GROUP BY chat_id, note_no, event"):
+        key = (r["chat_id"], r["note_no"])
+        (captured if r["event"] == "captured" else first_use)[key] = r["ts"]
     deltas = []
-    for mid, ts in first_use.items():
-        row = conn.execute("SELECT received_at FROM messages WHERE id = ?",
-                           (mid,)).fetchone()
+    for key, ts in first_use.items():
         used_at = _parse_iso(ts)
-        saved_at = _parse_iso(row["received_at"]) if row else None
+        saved_at = _parse_iso(captured.get(key))
         if used_at and saved_at and used_at >= saved_at:
             deltas.append((used_at - saved_at).total_seconds() / 3600)
     out["median_first_use_hours"] = (sorted(deltas)[len(deltas) // 2]
@@ -457,6 +499,12 @@ def chat_text(conn, cfg, lang, period="week"):
               f" · restored: {ev.get('note_restored', 0)}"
               f" · awaiting triage: {counts.get('inbox', 0)}"
               f" · review due: {counts.get('review_due', 0)}")
+    deleted = ev.get("deleted_used", 0) + ev.get("deleted_unused", 0)
+    if deleted:
+        triage += (f" · удалено: {deleted}"
+                   f" (использовано {ev.get('deleted_used', 0)})" if ru else
+                   f" · deleted: {deleted}"
+                   f" (used {ev.get('deleted_used', 0)})")
     lines.append(triage)
     if data["reviews_upcoming"] or data["temp_expiring"]:
         lines.append((f"🔜 Пересмотр на неделе: {data['reviews_upcoming']}"
@@ -528,6 +576,13 @@ def chat_text(conn, cfg, lang, period="week"):
                   f"  💸 AI spend: ${spend:.3f} · work calls: {data['functional_calls']} · "
                   f"model-health probes: {data['healthcheck_calls']} "
                   f"(${data['healthcheck_cost']:.3f})"))
+    latency = data["functional_latency"]
+    if latency["calls"]:
+        lines.append((f"  ⏱ Задержка рабочих AI-вызовов: "
+                      f"p50 {latency['p50']:.2f}с · p95 {latency['p95']:.2f}с "
+                      f"({latency['calls']})" if ru else
+                      f"  ⏱ Work-call latency: p50 {latency['p50']:.2f}s · "
+                      f"p95 {latency['p95']:.2f}s ({latency['calls']})"))
     if data["failover_served_count"]:
         lines.append((f"  🔁 Резервная модель успешно ответила: {data['failover_served_count']}" if ru
                       else f"  🔁 Backup model successfully served: {data['failover_served_count']}×"))
@@ -656,6 +711,17 @@ def markdown(conn, cfg, period="week"):
         lines.append(f"- {row['skill']}: ${row['cost']:.4f} ({row['calls']} calls)")
     if not data["spend_by_skill"]:
         lines.append("- none")
+    latency = data["functional_latency"]
+    if latency["calls"]:
+        lines.append(f"- functional chat/embed latency: p50 {latency['p50']:.2f}s · "
+                     f"p95 {latency['p95']:.2f}s ({latency['calls']} calls)")
+        for row in data["latency_by_skill"]:
+            lines.append(f"  - {row['skill']}: p50 {row['p50']:.2f}s · "
+                         f"p95 {row['p95']:.2f}s ({row['calls']})")
+    health_latency = data["healthcheck_latency"]
+    if health_latency["calls"]:
+        lines.append(f"- model-health latency: p50 {health_latency['p50']:.2f}s · "
+                     f"p95 {health_latency['p95']:.2f}s ({health_latency['calls']} probes)")
     lines.append("")
     lines.append("## Improvement backlog (open patterns)")
     if data["open_issue_patterns"]:
@@ -747,10 +813,16 @@ def markdown(conn, cfg, period="week"):
     lines.append(f"- this period: saved {data['notes_saved']} · used {data['notes_used_period']} · "
                  f"reminders from notes {ev.get('note_reminder_created', 0)} "
                  f"(proposed {ev.get('note_reminder_proposed', 0)}) · "
-                 f"archived {ev.get('note_archived', 0)} · restored {ev.get('note_restored', 0)}")
+                 f"archived {ev.get('note_archived', 0)} · restored {ev.get('note_restored', 0)} · "
+                 f"deleted used/unused {ev.get('deleted_used', 0)}/"
+                 f"{ev.get('deleted_unused', 0)}")
     if data["median_first_use_hours"] is not None:
+        provenance = (f"durable ledger; {data['first_use_approx_count']} legacy "
+                      "first-use time(s) approximated from last use"
+                      if data["first_use_approx_count"] else
+                      "durable all-time ledger")
         lines.append(f"- median capture→first-use: {data['median_first_use_hours']:.1f} h "
-                     "(events-window approximation)")
+                     f"({provenance})")
     counts = data["lifecycle_counts"]
     lines.append(f"- inbox: {counts.get('inbox', 0)} awaiting triage "
                  f"(oldest {data['inbox_oldest_days']} d) · review due: {counts.get('review_due', 0)} · "

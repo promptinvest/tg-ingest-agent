@@ -482,7 +482,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   tail**. The engineering Markdown adds a **"Notes outcomes"** section with the KPI
   `capture_to_use_rate` (distinct notes used / distinct notes confirmed — never
   optimized toward more saves/nudges/entries), median capture→first‑use
-  (events‑window approximation), % archived unused, inbox age, review‑batch and
+  (durable all‑time milestones; an upgrade with no retained first-use event is
+  honestly labelled as a legacy last-use approximation), % archived unused, inbox age, review‑batch and
   resurfacing acceptance counts, and journal entries per journal. A reminder
   created from a note (capture card «Сохранить + напоминание» or «напомни по
   заметке N») records `note_reminder_proposed`/`note_reminder_created` outcome
@@ -512,6 +513,19 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   `llm.failover_failed`, and labels older traces without either outcome as unknown.
   Correction/action-claim issue kinds are rendered as human Russian/English labels,
   never raw internal keys.
+  **Durable outcomes + latency (2026‑07‑20):** a separate, content-free
+  `note_outcomes` ledger records only chat id, stable note number, closed event
+  label, time and provenance — never note text/summary/category. Confirmation,
+  first real use, review/triage/resurfacing/reminder outcomes and used/unused
+  deletion all write it. It is not telemetry and is not retention-pruned, so
+  deleting an unused note cannot improve `capture_to_use_rate`; the denominator,
+  deleted outcome and capture→first-use interval remain. A one-time migration
+  backfills surviving notes and still-retained events. Explicit `stats`/`all`
+  purge clears the ledger and its preview discloses the row count; the migration
+  marker prevents an intentional reset being silently reconstructed next boot.
+  Chat/embed request duration now populates `llm_usage.seconds`; reports show
+  functional p50/p95 latency (and engineering exports show per-skill and health-
+  probe latency separately). STT audio duration is not mixed into model latency.
   **Delivered‑or‑retried (2026‑07‑06):** the weekly review and the morning brief mark
   their slot done only **after a successful send** — a transient Telegram failure backs
   off 15 min and retries (up to 3 attempts, then a `sched_send_failed` issue), instead
@@ -681,6 +695,9 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   `usage` block is metered from text length** (≈4 chars/token) rather than logged as $0,
   and a billed‑but‑empty response is metered before it errors — so an under‑reporting
   model can't quietly slip the meter past the "enforced" cap.
+  Successful/billed chat and embedding responses also store measured wall-clock
+  request duration in `seconds`; latency summaries use chat/embed only and keep
+  model-health probes separate from functional calls.
 
 ### Voice (STT)
 - DO has no transcription model, so Cara runs **whisper.cpp locally**: a warm
@@ -725,7 +742,9 @@ structured‑journal entities — entry type from the closed code registry, link
 category, sensitivity, per‑journal prompt opt‑in + validated `prompt_config_json`)
 · `journal_entries` (one per source message — UNIQUE `message_id`, `occurred_at`,
 validated `payload_json`, `extraction_status`; deletion cascades **manually**
-through `delete_message`/purge, never FK pragmas) · `reminders` (incl.
+through `delete_message`/purge, never FK pragmas) · `note_outcomes` (content-free,
+durable capture/use/triage/delete ledger keyed by stable note number; deliberately
+no message FK, never retention-pruned) · `reminders` (incl.
 `prev_due_utc`, `closed_at`, `close_reason`) + `reminder_events` lifecycle log ·
 `feedback` · `preferences` (identity/config + budget overrides) ·
 `pending_actions` (TTL) · `conversation` (recent turns) · `kv`.
@@ -748,6 +767,8 @@ permanent gaps on deletion (it never alters the internal row id that attachments
 embeddings/memory reference). **Reminder numbers** are different: a **contiguous 1…N
 display position** in the active list (due order, from the stable `reminders.id`) that
 compacts on fire/cancel.
+Normal note/category/message deletion preserves `note_outcomes` so historical KPIs
+cannot be gamed by deletion; explicit `stats` and `all` purge preview and clear it.
 
 ---
 

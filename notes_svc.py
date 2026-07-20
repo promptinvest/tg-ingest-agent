@@ -451,6 +451,8 @@ class NotesMixin:
             "issues": ("записей о проблемах" if ru else "issue records"),
             "feedback": ("поправок" if ru else "corrections"),
             "conversation": ("реплик нашей переписки" if ru else "conversation turns"),
+            "note_outcomes": ("метрик использования заметок" if ru else
+                              "note outcome records"),
         }
         parts = []
         for key, label in labels.items():
@@ -483,7 +485,8 @@ class NotesMixin:
             scope = "category"
         info = store.purge_preview(self.conn, scope, category)
         if not any(info.get(k) for k in ("messages", "reminders", "categories",
-                                         "issues", "feedback", "conversation")):
+                                         "issues", "feedback", "conversation",
+                                         "note_outcomes")):
             self.reply(chat_id, T(lang, "purge_nothing"))
             return
         if scope in ("category", "journal"):

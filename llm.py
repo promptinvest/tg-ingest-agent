@@ -190,6 +190,7 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
         },
         method="POST",
     )
+    started = time.monotonic()
     try:
         with urlopen(request, timeout=cfg.llm_timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -209,6 +210,7 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
         raise LLMError(f"inference response truncated/malformed: {exc!r}") from exc
     except json.JSONDecodeError as exc:
         raise LLMError("inference response was not valid JSON") from exc
+    elapsed = max(0.0, time.monotonic() - started)
     choices = data.get("choices") or []
     content = str((choices[0].get("message") or {}).get("content") or "") if choices else ""
     # Meter the call BEFORE the no-choices guard so a billed-but-empty response is still
@@ -220,6 +222,7 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
     tokens_out = int(usage.get("completion_tokens") or (len(content) // 4))
     store.usage_add(
         conn, skill, "chat", model, tokens_in, tokens_out,
+        seconds=elapsed,
         cost_usd=chat_cost(model, tokens_in, tokens_out, pricing_table(cfg)),
     )
     if not choices:
@@ -495,6 +498,7 @@ def embed(cfg, conn, skill, texts):
         },
         method="POST",
     )
+    started = time.monotonic()
     try:
         with urlopen(request, timeout=cfg.llm_timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -511,6 +515,7 @@ def embed(cfg, conn, skill, texts):
         raise LLMError(f"embeddings response truncated/malformed: {exc!r}") from exc
     except json.JSONDecodeError as exc:
         raise LLMError("embeddings response was not valid JSON") from exc
+    elapsed = max(0.0, time.monotonic() - started)
     rows = sorted(data.get("data") or [], key=lambda r: r.get("index", 0))
     vectors = [[float(x) for x in r.get("embedding") or []] for r in rows]
     if len(vectors) != len(texts):
@@ -518,6 +523,7 @@ def embed(cfg, conn, skill, texts):
     tokens = int((data.get("usage") or {}).get("prompt_tokens")
                  or sum(len(t) for t in texts) // 4)
     store.usage_add(conn, skill, "embed", cfg.embedding_model, tokens, 0,
+                    seconds=elapsed,
                     cost_usd=tokens / 1_000_000 * EMBED_PRICE_PER_1M)
     return vectors
 
