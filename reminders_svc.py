@@ -259,6 +259,35 @@ class ReminderMixin:
             local_due = local_due.replace(hour=hour, minute=minute)
             due = local_due - timedelta(hours=self.tz_offset())
             return "amend", {"due_utc": due.isoformat()}
+        # A bare absolute-clock snooze is common boss language: «отложи на 12»
+        # means 12:00 LOCAL TODAY, not 12 minutes/hours from now and not a trip
+        # through the probabilistic router. If today's clock time already passed,
+        # fail closed with a clarification instead of silently rolling tomorrow.
+        absolute = re.fullmatch(
+            r"(?:отложи|перенеси|напомни)(?:\s+(?:это|напоминание|его))?\s+"
+            r"(?:на|до)\s+(\d{1,2})(?::(\d{2}))?"
+            r"(?:\s*(?:час(?:а|ов)?|ч))?[.! ]*",
+            t,
+        )
+        if absolute is None:
+            absolute = re.fullmatch(
+                r"(?:snooze|remind me|move it)(?:\s+(?:until|to|at))\s+"
+                r"(\d{1,2})(?::(\d{2}))?[.! ]*",
+                t,
+            )
+        if absolute is not None:
+            hour = int(absolute.group(1))
+            minute = int(absolute.group(2) or 0)
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                return None
+            local_now = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
+            local_due = datetime.combine(local_now.date(), datetime.min.time(),
+                                         tzinfo=timezone.utc).replace(
+                                             hour=hour, minute=minute)
+            if local_due <= local_now:
+                return "clarify_time", {"time": f"{hour:02d}:{minute:02d}"}
+            due = local_due - timedelta(hours=self.tz_offset())
+            return "amend", {"due_utc": due.isoformat()}
         if "полчас" in t or "half an hour" in t:
             return "amend", {"snooze_minutes": 30}
         m = re.search(r"(\d{1,4})\s*(минут|минуты|минуту|мин|minutes?|mins?)\b", t)
@@ -294,6 +323,15 @@ class ReminderMixin:
             context = {"kind": "reminder_fired",
                        "payload": {"reminder_id": row["id"], "title": row["title"]}}
         action, params = parsed
+        if action == "clarify_time":
+            # Remove the short yes/no pending: after this clarification a bare
+            # «да» must not accidentally ACK/close the fired reminder. The
+            # reminder remains addressable through last_reminder_id, so an
+            # explicit «завтра в 12» still resolves deterministically.
+            if live_pending is not None:
+                store.pending_clear(self.conn, chat_id)
+            self.reply(chat_id, T(lang, "reminder_snooze_past", time=params["time"]))
+            return True
         self.resolve_pending(chat_id, action, params, context, lang)
         return True
 

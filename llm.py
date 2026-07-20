@@ -413,6 +413,8 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
         active = models  # everything is cooling down — try anyway rather than fail outright
     last_exc = None
     last_content = None
+    failed_models = []
+    primary_model = prof["primary"]
     for model in active:
         content = None
         for attempt in range(2):
@@ -436,6 +438,7 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
                     store.trace_event(conn, current_trace(), "llm.fallback",
                                       fallback_message, level="warn", skill=skill,
                                       data=fallback_data)
+                failed_models.append(model)
                 log(f"{fallback_message}; trying next")
                 break
         if content is None:
@@ -445,10 +448,33 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
             if current_trace():
                 store.trace_event(conn, current_trace(), "llm.fallback",
                                   f"{profile}:{model} returned non-JSON", level="warn", skill=skill)
+            failed_models.append(model)
             continue  # try a fallback model for a clean JSON object
+        if current_trace() and (failed_models or model != primary_model):
+            store.trace_event(
+                conn, current_trace(), "llm.failover_served",
+                f"{profile}: served by {model} after failover", level="info", skill=skill,
+                data={"profile": profile, "served_by": model,
+                      "failed_models": list(dict.fromkeys(failed_models))},
+            )
         return content
     if last_content is not None:
+        if current_trace() and failed_models:
+            store.trace_event(
+                conn, current_trace(), "llm.failover_failed",
+                f"{profile}: no model returned valid structured output",
+                level="warn", skill=skill,
+                data={"profile": profile,
+                      "failed_models": list(dict.fromkeys(failed_models))},
+            )
         return last_content  # let the caller's defensive parsing handle it
+    if current_trace() and failed_models:
+        store.trace_event(
+            conn, current_trace(), "llm.failover_failed",
+            f"{profile}: all available models failed", level="warn", skill=skill,
+            data={"profile": profile,
+                  "failed_models": list(dict.fromkeys(failed_models))},
+        )
     raise last_exc or LLMError(f"profile {profile}: all models failed")
 
 

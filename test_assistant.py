@@ -760,7 +760,7 @@ class ReviewTests(unittest.TestCase):
         trace.finish(self.conn, tid, "finished")
         md = review.markdown(self.conn, self.cfg, "week")
         for section in ("saved items by category", "facts extracted from saved items: 2",
-                        "## Working history", "## Model fallback incidents",
+                        "## Working history", "## Model failover",
                         "## Trace summary"):
             self.assertIn(section, md)
         self.assertIn("крипта: 1", md)            # confirmed item counted by category
@@ -769,7 +769,7 @@ class ReviewTests(unittest.TestCase):
         fname, body = review.export_document(self.conn, self.cfg, "trace", "en", "week")
         self.assertIn("cara-trace-summary-", fname)
         self.assertIn("CARA_TRACE_SUMMARY", body)
-        self.assertIn("Model fallbacks: 1", body)
+        self.assertIn("low-level failed attempts: 1", body)
         self.assertIn("trace", review.EXPORT_KINDS)
 
     def test_review_distinguishes_fired_from_overdue_and_preserves_close_time(self):
@@ -7844,6 +7844,187 @@ class NoteOutcomeMetricsTests(unittest.TestCase):
                             + timedelta(days=2)).isoformat()}, pending, "ru")
         pending = store.pending_get(self.conn, 1)
         self.assertEqual(pending["payload"]["note_msg_id"], mid)  # link survives amend
+
+
+class ReportAndDirectCommandAccuracy20260720Tests(unittest.TestCase):
+    """Regressions from the 2026-07-20 review: closed-world #N commands,
+    absolute snooze language, and performance-report outcome semantics."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "r1.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        common.set_current_trace(None)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _note(self, tg_id, text):
+        mid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        store.set_suggestion(self.conn, mid, "Разное", "s", "m")
+        store.confirm_category(self.conn, mid, "Разное")
+        return mid, self.agent.note_no(mid)
+
+    def _trace_event(self, trace_id, stage, message="x"):
+        store.trace_start(self.conn, trace_id, "telegram_message", 1)
+        store.trace_event(self.conn, trace_id, stage, message, skill="router")
+
+    def test_both_numbered_delete_word_orders_skip_router_and_target_note(self):
+        first_id, first_no = self._note(1, "первая")
+        second_id, second_no = self._note(2, "вторая")
+        with mock.patch.object(router, "route",
+                               side_effect=AssertionError("router must not run")), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 100}, f"Удали #{second_no}")
+            self.assertEqual(store.pending_get(self.conn, 1)["payload"]["row_ids"],
+                             [second_id])
+            store.pending_clear(self.conn, 1)
+            self.agent.dispatch(1, {"message_id": 101}, f"#{first_no} — удали")
+            self.assertEqual(store.pending_get(self.conn, 1)["payload"]["row_ids"],
+                             [first_id])
+
+    def test_numbered_delete_after_reminder_list_still_cancels_reminder(self):
+        rid = store.reminder_add(
+            self.conn, 1, "позвонить",
+            (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+        self.agent._reminder_list_body(1, "ru")
+        with mock.patch.object(router, "route",
+                               side_effect=AssertionError("router must not run")), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 102}, "Удали #1")
+        row = store.reminder_get(self.conn, rid)
+        self.assertEqual((row["status"], row["close_reason"]),
+                         ("cancelled", "cancelled"))
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    def test_absolute_snooze_uses_future_local_time_today(self):
+        import reminders_svc
+
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 7, 20, 6, 0, tzinfo=timezone.utc)  # 09:00 MSK
+
+        with mock.patch.object(reminders_svc, "datetime", FixedDateTime):
+            action, params = self.agent._parse_fired_followup("Отложи на 12")
+        self.assertEqual(action, "amend")
+        self.assertEqual(params["due_utc"], "2026-07-20T09:00:00+00:00")
+
+    def test_past_absolute_snooze_clarifies_without_closing_reminder(self):
+        import reminders_svc
+
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 7, 20, 10, 0, tzinfo=timezone.utc)  # 13:00 MSK
+
+        rid = store.reminder_add(self.conn, 1, "позвонить",
+                                 "2026-07-20T08:00:00+00:00")
+        store.reminder_touch_fired(self.conn, rid, "2026-07-20T08:00:01+00:00")
+        store.kv_set(self.conn, "last_reminder_id", str(rid))
+        store.pending_set(self.conn, 1, "reminder_fired",
+                          {"reminder_id": rid, "title": "позвонить"})
+        pending = store.pending_get(self.conn, 1)
+        with mock.patch.object(reminders_svc, "datetime", FixedDateTime), \
+                mock.patch.object(self.agent, "reply") as reply:
+            handled = self.agent.resolve_fired_followup(
+                1, "ru", "Отложи на 12", pending)
+        self.assertTrue(handled)
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertEqual(store.reminder_get(self.conn, rid)["status"], "active")
+        self.assertIn("завтра", reply.call_args.args[1])
+
+    def test_report_separates_work_calls_from_health_probes(self):
+        store.usage_add(self.conn, "router", "chat", "work", 10, 1,
+                        cost_usd=0.01)
+        store.usage_add(self.conn, "healthcheck", "chat", "probe", 1, 1,
+                        cost_usd=0.002)
+        data = review.collect(self.conn, "week")
+        self.assertEqual((data["functional_calls"], data["healthcheck_calls"]), (1, 1))
+        text = review.chat_text(self.conn, self.cfg, "ru", "week")
+        self.assertIn("рабочих вызовов: 1", text)
+        self.assertIn("проверок моделей: 1 ($0.002)", text)
+
+    def test_report_surfaces_complete_reminder_lifecycle(self):
+        now = datetime.now(timezone.utc)
+        for idx, reason in enumerate(("done", "cancelled", "skipped", "expired"), 1):
+            rid = store.reminder_add(
+                self.conn, 1, reason, (now + timedelta(hours=idx)).isoformat())
+            store.reminder_close(self.conn, rid, reason, reason=reason)
+        snoozed = store.reminder_add(
+            self.conn, 1, "snoozed", (now + timedelta(hours=8)).isoformat())
+        store.reminder_event(self.conn, snoozed, "snoozed", "later")
+        text = review.chat_text(self.conn, self.cfg, "ru", "week")
+        for fragment in ("выполнено: 1", "отменено: 1", "пропущено: 1",
+                         "истекло: 1", "отложено: 1", "Сейчас: просрочено 0"):
+            self.assertIn(fragment, text)
+
+    def test_report_distinguishes_served_failed_and_legacy_failovers(self):
+        self._trace_event("legacy", "llm.fallback", "primary failed")
+        store.trace_event(self.conn, "legacy", "llm.fallback", "backup invalid",
+                          skill="router")
+        self._trace_event("served", "llm.fallback", "primary failed")
+        store.trace_event(self.conn, "served", "llm.failover_served", "backup served",
+                          skill="router")
+        self._trace_event("failed", "llm.fallback", "primary failed")
+        store.trace_event(self.conn, "failed", "llm.failover_failed", "chain failed",
+                          skill="router")
+        data = review.collect(self.conn, "week")
+        self.assertEqual(data["fallback_count"], 4)  # low-level attempts, not successes
+        self.assertEqual(data["fallback_legacy_trace_count"], 1)
+        self.assertEqual(data["failover_served_count"], 1)
+        self.assertEqual(data["failover_failed_count"], 1)
+        text = review.chat_text(self.conn, self.cfg, "ru", "week")
+        self.assertIn("Резервная модель успешно ответила: 1", text)
+        self.assertIn("Цепочек моделей не справилось: 1", text)
+        self.assertNotIn("Запасная модель выручала", text)
+
+    def test_report_translates_correction_and_action_claim_issue_kinds(self):
+        store.issue_add(self.conn, 1, "correction", "x")
+        store.issue_add(self.conn, 1, "converse_action_claim", "y")
+        text = review.chat_text(self.conn, self.cfg, "ru", "week")
+        self.assertIn("замечания, по которым я скорректировалась", text)
+        self.assertIn("безопасно заблокированные ложные подтверждения действий", text)
+        self.assertNotIn("converse_action_claim", text)
+
+    def test_chat_profile_records_successful_and_failed_chain_outcomes(self):
+        tid = tracing.start(self.conn, "telegram_message", 1)
+
+        def fail_primary(cfg, conn, skill, messages, max_tokens=300,
+                         model=None, temperature=0):
+            if model == cfg.router_model:
+                raise llm.LLMError("HTTP 403 primary unavailable")
+            return '{"action":"spend","params":{},"confidence":0.9}'
+
+        try:
+            with mock.patch.object(llm, "chat", side_effect=fail_primary):
+                llm.chat_profile(self.cfg, self.conn, "router", [],
+                                 profile="router_fast")
+            stages = [r["stage"] for r in store.trace_events(self.conn, tid)]
+            self.assertIn("llm.failover_served", stages)
+            self.assertNotIn("llm.failover_failed", stages)
+        finally:
+            tracing.finish(self.conn, tid, "ok")
+
+        tid = tracing.start(self.conn, "telegram_message", 1)
+        try:
+            with mock.patch.object(llm, "chat",
+                                   side_effect=llm.LLMError("HTTP 403 all unavailable")):
+                with self.assertRaises(llm.LLMError):
+                    llm.chat_profile(self.cfg, self.conn, "converse", [],
+                                     profile="converse")
+            stages = [r["stage"] for r in store.trace_events(self.conn, tid)]
+            self.assertIn("llm.failover_failed", stages)
+            self.assertNotIn("llm.failover_served", stages)
+        finally:
+            tracing.finish(self.conn, tid, "error")
 
 
 if __name__ == "__main__":

@@ -210,6 +210,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   first) that **compacts** as reminders fire/cancel; "#N" in reschedule/cancel/undo
   resolves to that position, and Cara re‑shows the refreshed list after a cancel so a
   captured number never goes stale.
+  An explicit note delete in either common word order — **«Удали #N»** or
+  **«#N — удали»** — is a deterministic closed-world command and never depends on
+  an LLM route. The recent-reminder-list stamp remains the deliberate exception: after
+  Cara has shown reminders, the same `#N` form cancels that displayed reminder.
 - **Journals (long‑term areas):** mark a category as a journal — "веди Благодарности
   как дневник" / "сделай X журналом" — and it becomes append‑only: each note acks as a
   dated entry ("запись за 18.06, всего N"), "покажи дневник благодарности [за неделю/
@@ -347,7 +351,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     **recurring** reminder a snooze is a **one‑time deferral**: a one‑shot echo fires at
     the snoozed time and the daily/weekly schedule stays exactly where you set it
     (2026‑07‑06 fix — snoozes used to shift the daily anchor: благодарности drifted
-    22:00 → 23:33 over two snoozes). The reminder
+    22:00 → 23:33 over two snoozes). Bare local-clock language such as
+    **«Отложи на 12»** means 12:00 today
+    when that time is still ahead. If it already passed, Cara asks for «завтра
+    в 12» or another future time and leaves the reminder open; she never silently
+    rolls it to tomorrow or treats a following bare «да» as completion.
+    The reminder
     **list marks status** — a one‑shot that already fired shows *"⚠️ сработало, ждёт «готово»"*
     and a past‑due one *"⚠️ просрочено"*, so an old reminder never looks like a future one.
   - **She knows her own reminders in conversation.** Asking *about* a reminder — "почему не
@@ -494,6 +503,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   explicit `legacy-unverified` label, and count as recurring only after two occurrences.
   Proactive sends are broken down by check, `ok` is the single successful trace status,
   and fallback output is structured/scrubbed rather than dumping provider response bodies.
+  **Review-accuracy release (2026‑07‑20):** reminder results now show the complete
+  period lifecycle (completed/cancelled/skipped/expired/snoozed) separately from the
+  current overdue and fired-awaiting-ack snapshot. AI traffic separates functional
+  calls from model-health probes and their cost. A low-level `llm.fallback` row means
+  only that one model attempt failed; the report calls a backup successful only when
+  the same trace has `llm.failover_served`, calls the whole chain failed only on
+  `llm.failover_failed`, and labels older traces without either outcome as unknown.
+  Correction/action-claim issue kinds are rendered as human Russian/English labels,
+  never raw internal keys.
   **Delivered‑or‑retried (2026‑07‑06):** the weekly review and the morning brief mark
   their slot done only **after a successful send** — a transient Telegram failure backs
   off 15 min and retries (up to 3 attempts, then a `sched_send_failed` issue), instead
@@ -654,6 +672,9 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   open‑weight slug** (`openai-gpt-oss-20b`), not the tier‑403 `openai-gpt-4o` that used
   to be a dead fallback on a fresh deploy; a profile added via `LLM_PROFILES_JSON`
   without a `primary` is backfilled with the configured chat model so it can't crash a turn.
+  Every failover chain records its terminal result: `llm.failover_served` only after a
+  fallback produces a usable response, and `llm.failover_failed` when no configured
+  model does. `llm.fallback` remains the per-attempt failure signal.
 - **Budget‑guarded:** every chat/STT/embedding call is priced and logged to
   `llm_usage`; daily/monthly caps warn at 80% and **hard‑stop** at 100% (above
   failover). Caps are overridable at runtime via `budget_set`. **A response missing its

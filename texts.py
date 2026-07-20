@@ -542,6 +542,18 @@ TEXTS = {
     "issue_kind_calendar_failed": {"ru": "проблемы с календарём", "en": "calendar trouble"},
     "issue_kind_fetch_failed": {"ru": "ссылки, которые не открылись", "en": "links I couldn't open"},
     "issue_kind_ask_no_context": {"ru": "вопросы без ответа в заметках", "en": "questions with no note match"},
+    "issue_kind_correction": {
+        "ru": "замечания, по которым я скорректировалась",
+        "en": "corrections learned from your feedback",
+    },
+    "issue_kind_correction_unresolved": {
+        "ru": "повторяющиеся замечания, которым нужна правка кода",
+        "en": "recurring corrections that need a code fix",
+    },
+    "issue_kind_converse_action_claim": {
+        "ru": "безопасно заблокированные ложные подтверждения действий",
+        "en": "safely blocked false action confirmations",
+    },
     "issue_kind_converse_artifact_claim": {
         "ru": "заблокированные выдуманные файлы",
         "en": "blocked fabricated file claims",
@@ -565,6 +577,12 @@ TEXTS = {
                "не изменено. Повтори команду конкретно — обработаю её через нужный раздел."),
         "en": ("I didn't perform that action: the previous reply was only text, and no "
                "state changed. Repeat the specific command and I'll route it correctly."),
+    },
+    "reminder_snooze_past": {
+        "ru": ("{time} сегодня уже прошло. Скажи «отложи на завтра в {time}» "
+               "или укажи другое будущее время."),
+        "en": ("{time} has already passed today. Say “snooze until tomorrow at {time}” "
+               "or give me another future time."),
     },
     "review_schedule": {
         "ru": "Наш performance review — еженедельно, в {weekday}. Следующий: {date} в {time}. Хочешь, проведу прямо сейчас?",

@@ -871,6 +871,59 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 "пропуст", "skip")  # "сегодня пропустим" closes today's instance
         return len(t) <= 25 and any(w in t for w in acks)
 
+    @staticmethod
+    def _explicit_numbered_delete(text):
+        """Return one explicit stable/display number for a delete command.
+
+        This deliberately covers only unambiguous #N forms. Bare numbers remain
+        with the router because «удали 7 сообщений» is a count, not note #7.
+        Both word orders are deterministic: the live incident succeeded as
+        «#2 — удали» but the equivalent «Удали #2» fell into converse once.
+        """
+        t = str(text or "").strip().casefold()
+        patterns = (
+            r"^(?:удали|сотри|delete|remove)\s+(?:заметк\w*\s+)?#\s*(\d{1,7})[.! ]*$",
+            r"^#\s*(\d{1,7})\s*(?:[-—:]\s*)?(?:удали|сотри|delete|remove)[.! ]*$",
+        )
+        for pattern in patterns:
+            matched = re.fullmatch(pattern, t)
+            if matched:
+                return int(matched.group(1))
+        return None
+
+    def _reminders_were_just_listed(self, chat_id, max_age_seconds=300):
+        """Whether #N currently denotes the freshly shown reminder list."""
+        listed = store.kv_get(self.conn, "reminders_listed_at")
+        try:
+            stamp = datetime.fromisoformat(listed)
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            recent = (datetime.now(timezone.utc) - stamp).total_seconds() < max_age_seconds
+        except (TypeError, ValueError):
+            return False
+        return recent and bool(store.reminders_active(self.conn, chat_id))
+
+    def _dispatch_numbered_delete(self, chat_id, lang, text):
+        """Handle explicit #N deletion without an LLM, preserving the existing
+        reminder-list disambiguation and note confirmation boundary."""
+        number = self._explicit_numbered_delete(text)
+        if number is None:
+            return False
+        if self._reminders_were_just_listed(chat_id):
+            action = "reminder_cancel"
+            self.do_reminder_cancel(chat_id, lang, {"id": number})
+        else:
+            action = "item_delete"
+            self.do_item_delete(chat_id, lang, {"id": number})
+        store.kv_set(self.conn, "last_business_at", datetime.now(timezone.utc).isoformat())
+        policy = skill_manifest.get_policy(action)
+        trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED,
+                    f"action={action} deterministic", skill=action,
+                    data={"confidence": 1.0, "risk": policy["risk"],
+                          "source": "explicit_numbered_delete"})
+        log(f"deterministic chat={chat_id} action={action} number={number}")
+        return True
+
     # The Hermes (business) domain — routing one of these means "he's working": it
     # mobilizes Cara's resting register to a business tone (see _register_state) and is
     # answered in the Hermes voice. Personal actions (converse, smalltalk, persona,
@@ -1002,6 +1055,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 and not self._is_reminder_ack(text)):
             store.pending_clear(self.conn, chat_id)
             pending = None
+        # Basic #N deletion is a closed-world state command, not a language-
+        # model judgment. Keep it before proactive/smalltalk/router handling so
+        # identical word orders cannot randomly alternate between real deletion
+        # confirmation and a blocked converse claim.
+        if pending is None and self._dispatch_numbered_delete(chat_id, lang, text):
+            return
         # A short reply to a proactive nudge belongs to the exact queue that was
         # offered. Do this before small-talk/router handling so «Давай» cannot
         # become an unrelated free-form promise.

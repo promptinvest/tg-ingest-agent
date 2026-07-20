@@ -125,6 +125,14 @@ def collect(conn, period):
         "SELECT skill, COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost"
         " FROM llm_usage WHERE ts >= ? GROUP BY skill ORDER BY cost DESC", (since,),
     ).fetchall()
+    data["healthcheck_calls"] = sum(
+        r["calls"] for r in data["spend_by_skill"] if r["skill"] == "healthcheck")
+    data["healthcheck_cost"] = sum(
+        r["cost"] for r in data["spend_by_skill"] if r["skill"] == "healthcheck")
+    data["functional_calls"] = sum(
+        r["calls"] for r in data["spend_by_skill"] if r["skill"] != "healthcheck")
+    data["functional_cost"] = sum(
+        r["cost"] for r in data["spend_by_skill"] if r["skill"] != "healthcheck")
     data["ask_count"] = conn.execute(
         "SELECT COUNT(*) AS n FROM llm_usage WHERE skill='ask' AND kind='chat' AND ts >= ?",
         (since,),
@@ -153,6 +161,10 @@ def collect(conn, period):
         " WHERE ts>=? GROUP BY event ORDER BY event",
         (since,),
     ).fetchall()
+    data["reminder_closure_counts"] = {
+        r["reason"]: r["n"] for r in data["reminder_closures"]}
+    data["reminder_event_counts"] = {
+        r["event"]: r["n"] for r in data["reminder_events"]}
     data["reminders_done"] = sum(
         r["n"] for r in data["reminder_closures"] if r["reason"] == "done"
     )
@@ -174,6 +186,24 @@ def collect(conn, period):
         "SELECT ts, skill, message FROM trace_events WHERE stage = 'llm.fallback'"
         " AND ts >= ? ORDER BY id DESC LIMIT 10", (since,),
     ).fetchall()
+    data["fallback_trace_count"] = conn.execute(
+        "SELECT COUNT(DISTINCT trace_id) AS n FROM trace_events"
+        " WHERE stage='llm.fallback' AND ts>=?", (since,),
+    ).fetchone()["n"]
+    data["failover_served_count"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM trace_events"
+        " WHERE stage='llm.failover_served' AND ts>=?", (since,),
+    ).fetchone()["n"]
+    data["failover_failed_count"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM trace_events"
+        " WHERE stage='llm.failover_failed' AND ts>=?", (since,),
+    ).fetchone()["n"]
+    data["fallback_legacy_trace_count"] = conn.execute(
+        "SELECT COUNT(DISTINCT f.trace_id) AS n FROM trace_events f"
+        " WHERE f.stage='llm.fallback' AND f.ts>=?"
+        " AND NOT EXISTS (SELECT 1 FROM trace_events o WHERE o.trace_id=f.trace_id"
+        " AND o.stage IN ('llm.failover_served','llm.failover_failed'))", (since,),
+    ).fetchone()["n"]
     # trace summary: how many units of work, by outcome
     data["trace_status"] = conn.execute(
         "SELECT kind, CASE WHEN status IN ('ok','finished') THEN 'ok' ELSE status END AS status,"
@@ -435,16 +465,20 @@ def chat_text(conn, cfg, lang, period="week"):
                       f" · temporary expiring: {data['temp_expiring']}"))
     rem = (f"⏰ Напоминаний поставлено: {data['reminders_set']}" if ru
            else f"⏰ Reminders set: {data['reminders_set']}")
-    if data["reminders_done"]:
-        rem += (f" · выполнено: {data['reminders_done']}" if ru
-                else f" · completed: {data['reminders_done']}")
-    if data["reminders_fired_unacked"]:
-        rem += (f" · сработало, ждёт подтверждения: {data['reminders_fired_unacked']}" if ru
-                else f" · fired, awaiting acknowledgement: {data['reminders_fired_unacked']}")
-    if data["reminders_overdue"]:
-        rem += (f" · просрочено: {data['reminders_overdue']}" if ru
-                else f" · overdue: {data['reminders_overdue']}")
+    closures = data["reminder_closure_counts"]
+    lifecycle = (("выполнено", "completed", closures.get("done", 0)),
+                 ("отменено", "cancelled", closures.get("cancelled", 0)),
+                 ("пропущено", "skipped", closures.get("skipped", 0)),
+                 ("истекло", "expired", closures.get("expired", 0)),
+                 ("отложено", "snoozed", data["reminder_event_counts"].get("snoozed", 0)))
+    for ru_label, en_label, count in lifecycle:
+        if count:
+            rem += f" · {ru_label if ru else en_label}: {count}"
     lines.append(rem)
+    lines.append((f"  Сейчас: просрочено {data['reminders_overdue']} · "
+                  f"сработало, ждёт подтверждения {data['reminders_fired_unacked']}" if ru else
+                  f"  Now: overdue {data['reminders_overdue']} · "
+                  f"fired, awaiting acknowledgement {data['reminders_fired_unacked']}"))
     if data["ask_count"]:
         lines.append((f"❓ Ответила по базе: {data['ask_count']}" if ru
                       else f"❓ Answered from your KB: {data['ask_count']}"))
@@ -484,13 +518,27 @@ def chat_text(conn, cfg, lang, period="week"):
         lines.append(("  ⚠️ Проблемы: " if ru else "  ⚠️ Issues: ") + issues)
     else:
         lines.append("  ✅ " + ("Проблем не было" if ru else "No issues"))
+    if data["open_issue_patterns"]:
+        lines.append((f"  🧩 Открытых паттернов: {len(data['open_issue_patterns'])}" if ru
+                      else f"  🧩 Open issue patterns: {len(data['open_issue_patterns'])}"))
     spend = sum(r["cost"] for r in data["spend_by_skill"])
-    calls = sum(r["calls"] for r in data["spend_by_skill"])
-    lines.append((f"  💸 Расходы AI: ${spend:.3f} ({calls} вызовов)" if ru
-                  else f"  💸 AI spend: ${spend:.3f} ({calls} calls)"))
-    if data["fallback_count"]:
-        lines.append((f"  🔁 Запасная модель выручала: {data['fallback_count']}" if ru
-                      else f"  🔁 Backup model used: {data['fallback_count']}×"))
+    lines.append((f"  💸 Расходы AI: ${spend:.3f} · рабочих вызовов: "
+                  f"{data['functional_calls']} · проверок моделей: "
+                  f"{data['healthcheck_calls']} (${data['healthcheck_cost']:.3f})" if ru else
+                  f"  💸 AI spend: ${spend:.3f} · work calls: {data['functional_calls']} · "
+                  f"model-health probes: {data['healthcheck_calls']} "
+                  f"(${data['healthcheck_cost']:.3f})"))
+    if data["failover_served_count"]:
+        lines.append((f"  🔁 Резервная модель успешно ответила: {data['failover_served_count']}" if ru
+                      else f"  🔁 Backup model successfully served: {data['failover_served_count']}×"))
+    if data["failover_failed_count"]:
+        lines.append((f"  ⚠️ Цепочек моделей не справилось: {data['failover_failed_count']}" if ru
+                      else f"  ⚠️ Model chains failed: {data['failover_failed_count']}×"))
+    if data["fallback_legacy_trace_count"]:
+        lines.append((f"  🔁 Старых переключений без подтверждённого исхода: "
+                      f"{data['fallback_legacy_trace_count']}" if ru else
+                      f"  🔁 Legacy failovers with unknown outcome: "
+                      f"{data['fallback_legacy_trace_count']}"))
     if data["corrections_learned"] or data["corrections_unresolved"]:
         c = (f"  📝 Корректировки: применяю {len(data['corrections_learned'])}" if ru
              else f"  📝 Corrections: applying {len(data['corrections_learned'])}")
@@ -544,7 +592,10 @@ def markdown(conn, cfg, period="week"):
         f"**{len(data['resolved_issue_patterns'])}** resolved this period",
         f"- AI spend **${spend:.4f}** of the ${allowance:.2f} rolling daily allowance "
         f"({(100 * spend / allowance) if allowance else 0:.1f}%) · "
-        f"{data['fallback_count']} fallback event(s)",
+        f"{data['functional_calls']} work call(s) + {data['healthcheck_calls']} health probe(s)",
+        f"- model routing: {data['failover_served_count']} successfully served by backup · "
+        f"{data['failover_failed_count']} failed chain(s) · "
+        f"{data['fallback_legacy_trace_count']} legacy chain(s) with unknown outcome",
         "",
         "## Activity",
         f"- saved knowledge items: **{total}**",
@@ -665,15 +716,17 @@ def markdown(conn, cfg, period="week"):
     else:
         lines.append("- none recorded")
     lines.append("")
-    lines.append("## Model fallback incidents")
+    lines.append("## Model failover")
+    lines.append(f"- successfully served by backup: {data['failover_served_count']}")
+    lines.append(f"- failed model chains: {data['failover_failed_count']}")
+    lines.append(f"- legacy chains with unknown outcome: {data['fallback_legacy_trace_count']}")
     if data["fallbacks"]:
-        lines.append(f"- {data['fallback_count']} fallback event(s) — primary model "
-                     "unavailable/invalid, served by a backup:")
+        lines.append(f"- {data['fallback_count']} low-level failed-attempt event(s):")
         for row in data["fallbacks"]:
             msg = _safe_fallback_message(row["message"])
             lines.append(f"  - `{row['ts'][:16]}` {row['skill'] or '-'} — {msg}")
     else:
-        lines.append("- none — primary models served every call")
+        lines.append("- no low-level failed attempts")
     lines.append("")
     lines.append("## Trace summary")
     if data["trace_status"]:
@@ -681,7 +734,7 @@ def markdown(conn, cfg, period="week"):
             lines.append(f"- {row['kind']} · {row['status']}: {row['n']}")
     else:
         lines.append("- no traces this period")
-    lines.append(f"- model fallbacks: {data['fallback_count']} · "
+    lines.append(f"- failed model attempts: {data['fallback_count']} · "
                  f"issues logged: {sum(r['n'] for r in data['issue_counts'])}")
     lines.append("")
     lines.append("## Notes outcomes (saved-to-used, MET-001)")
@@ -794,7 +847,11 @@ def export_document(conn, cfg, what, lang="en", period="week", full=False):
         body.append("## Units of work (traces)")
         body += [f"- {r['kind']} · {r['status']}: {r['n']}"
                  for r in data["trace_status"]] or ["- none"]
-        body += ["", f"## Model fallbacks: {data['fallback_count']}"]
+        body += ["", "## Model failover outcomes",
+                 f"- successfully served by backup: {data['failover_served_count']}",
+                 f"- failed model chains: {data['failover_failed_count']}",
+                 f"- legacy chains with unknown outcome: {data['fallback_legacy_trace_count']}",
+                 f"- low-level failed attempts: {data['fallback_count']}"]
         if data["fallbacks"]:
             for r in data["fallbacks"]:
                 msg = _safe_fallback_message(r["message"])
