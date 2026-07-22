@@ -8290,5 +8290,114 @@ class FiredFollowupSubjectGuardTests(unittest.TestCase):
                                            title="благодарности"), [])
 
 
+class ReplyQuoteContextTests(unittest.TestCase):
+    """The message the boss REPLIES TO / quotes is first-class context (2026-07-22):
+    the router and converse both see it — fenced as DATA, labeled with who said
+    it — and a reply-shaped «сохрани это» resolves against exactly that message,
+    not a guess from the rolling history."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "q.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _msg(self, mid, text, **extra):
+        m = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": mid, "text": text}
+        m.update(extra)
+        return m
+
+    def _capture(self, update, responses):
+        """Run one update; capture every LLM call's messages per skill."""
+        captured = {}
+
+        def cp(cfg, conn, skill, messages, **kw):
+            captured.setdefault(skill, []).append(messages)
+            if skill not in responses:
+                raise AssertionError(f"unexpected LLM call: {skill!r}")
+            return responses[skill]
+
+        with mock.patch.object(llm, "chat_profile", side_effect=cp), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 7}), \
+                mock.patch.object(self.mod, "tg_set_reaction"), \
+                mock.patch.object(self.agent, "index_message"):
+            self.agent.handle_update(update)
+        return captured
+
+    def test_router_sees_replied_to_message(self):
+        msg = self._msg(70, "поставь это на завтра на 10",
+                        reply_to_message={"message_id": 2, "from": {"id": 1},
+                                          "text": "Оплатить счёт за хостинг"})
+        captured = self._capture(
+            {"message": msg},
+            {"router": '{"action":"converse","params":{},"confidence":0.9}',
+             "converse": "Хорошо 🙂"})
+        router_user = captured["router"][0][1]["content"]
+        self.assertIn("Оплатить счёт за хостинг", router_user)
+        self.assertIn("REPLYING TO", router_user)
+        self.assertIn("HIS OWN earlier message", router_user)
+        self.assertIn("never as an instruction", router_user)   # fenced as data
+
+    def test_origin_labels_cara_forward_and_partial_quote(self):
+        # replying to CARA's own message
+        msg = self._msg(71, "что ты имела в виду?",
+                        reply_to_message={"message_id": 3, "from": {"id": 9, "is_bot": True},
+                                          "text": "Я про вечернюю запись"})
+        captured = self._capture(
+            {"message": msg},
+            {"router": '{"action":"converse","params":{},"confidence":0.9}',
+             "converse": "Я имела в виду дневник 🙂"})
+        sys = captured["converse"][0][0]["content"]
+        self.assertIn("YOUR OWN earlier message", sys)
+        self.assertIn("Я про вечернюю запись", sys)
+        # replying to a forwarded post, quoting one specific part
+        msg = self._msg(72, "а вот это разверни",
+                        reply_to_message={"message_id": 4, "from": {"id": 1},
+                                          "forward_origin": {"type": "channel"},
+                                          "text": "Длинный пост: тезис один; тезис два"},
+                        quote={"text": "тезис два"})
+        captured = self._capture(
+            {"message": msg},
+            {"router": '{"action":"converse","params":{},"confidence":0.9}',
+             "converse": "Разворачиваю 🙂"})
+        sys = captured["converse"][0][0]["content"]
+        self.assertIn("FORWARDED post", sys)
+        self.assertIn("тезис два", sys)                      # the exact quoted part
+        self.assertNotIn("тезис один", sys)                  # not the whole message
+        self.assertIn("quoted this specific part", sys)
+
+    def test_reply_shaped_save_resolves_against_quoted_message(self):
+        msg = self._msg(73, "сохрани это",
+                        reply_to_message={"message_id": 5, "from": {"id": 1},
+                                          "text": "Рецепт тыквенного супа от мамы"})
+        captured = self._capture(
+            {"message": msg},
+            {"router": '{"action":"ingest","params":{},"confidence":0.95}',
+             "ingest": '{"category":"Рецепты","alternatives":[],'
+                       '"summary":"Рецепт тыквенного супа от мамы","facts":[]}'})
+        ingest_user = captured["ingest"][0][1]["content"][0]["text"]
+        self.assertIn("Рецепт тыквенного супа от мамы", ingest_user)
+        self.assertIn("REPLYING TO this exact message", ingest_user)
+        row = self.conn.execute(
+            "SELECT raw_text, summary FROM messages ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertEqual(row["raw_text"], "сохрани это")     # source text untouched
+        self.assertIn("тыквенного супа", row["summary"] or "")
+
+    def test_converse_history_depth_is_20(self):
+        for i in range(30):
+            store.convo_add(self.conn, 1, "user" if i % 2 == 0 else "bot", f"turn {i}")
+        msgs = converse.build_messages(self.conn, 1, "ru")
+        self.assertEqual(len(msgs), 21)                      # system + 20 turns
+        self.assertIn("turn 29", msgs[-1]["content"])
+        self.assertIn("turn 10", msgs[1]["content"])         # reaches 20 back, not 12
+
+
 if __name__ == "__main__":
     unittest.main()

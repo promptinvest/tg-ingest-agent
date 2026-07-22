@@ -376,8 +376,14 @@ def validate_route(parsed, has_pending):
     return {"action": action, "params": params, "confidence": confidence}
 
 
-def route(cfg, conn, chat_id, text, pending):
-    """Classify one user message; always returns a valid route dict."""
+def route(cfg, conn, chat_id, text, pending, extra_context=None):
+    """Classify one user message; always returns a valid route dict.
+
+    `extra_context` carries per-turn facts the dispatcher knows and the stored
+    history may not — above all the message the boss is REPLYING TO / quoting
+    (possibly far older than the recent-history window), already fenced as
+    DATA by the caller. Without it a reply-shaped «сохрани это» / «поставь это
+    на завтра» routes against the wrong referent."""
     if pending is None:
         partial = reminders.parse_time_only_request(text, cfg.timezone_offset)
         if partial:
@@ -401,6 +407,8 @@ def route(cfg, conn, chat_id, text, pending):
     user_content = ""
     if context_lines:
         user_content += "Recent conversation:\n" + "\n".join(context_lines) + "\n\n"
+    if extra_context:
+        user_content += str(extra_context).strip() + "\n\n"
     # Journal categories: recalling one of these as a series is journal_show
     # (dated diary), not list_items; filing into one is still ingest.
     journals = store.journal_categories(conn)

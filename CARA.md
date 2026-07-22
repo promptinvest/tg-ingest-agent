@@ -136,7 +136,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   gets an honest decline with a hint (send it as text/a file or forward the post). Your
   own **text/PDF documents** with a save caption still file normally (the .md/.txt→KB
   flow). She also understands what you're **replying to or quoting** (TG reply/quote)
-  as context for "this".
+  as context for "this" — **first‑class since 2026‑07‑22**: the replied‑to/quoted
+  text (up to 600 chars; a partial quote is used verbatim) reaches **both the
+  router and converse**, labeled with **who said it** (her own earlier message ·
+  your earlier message · a forwarded post) and fenced as DATA, so «поставь это
+  на завтра», «что ты имела в виду?» or a quote‑reply resolve against the exact
+  message you mean — even one far older than the rolling history window. A
+  reply‑shaped **«сохрани это»** treats the replied‑to message as the note's
+  subject (see referential saves below). Her conversation memory in free‑form
+  chat now spans the last **20 turns** (was 12); deeper reads stay behind
+  `recall_conversation` («перечитай наш разговор за вчера»).
 - **Ingest forwards/notes:** forwarded posts and typed notes (text, URLs, photos;
   an album = one item) are saved with forward origin, t.me source link, post date.
   Forwarded albums are **crash-safe** (2026‑07‑17): buffered parts stay pending in
@@ -146,7 +155,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   5 **key facts** — strictly in the source language. Duplicates are detected.
   A **referential save** ("сохрани заметку про этот фильм") with no subject of its
   own resolves the subject from the recent conversation — so the note captures the
-  actual film/topic discussed, not the bare command. If the model's reply won't parse,
+  actual film/topic discussed, not the bare command; a save sent as a **reply**
+  («сохрани это» on a specific message, 2026‑07‑22) resolves against exactly the
+  replied‑to/quoted message as the primary referent, ahead of the rolling history. If the model's reply won't parse,
   she **never stores raw JSON** as the summary — she salvages the fields, else leaves it
   empty so the note shows its real text. Long note/journal listings are **paginated**,
   not cut off at Telegram's length limit. Gratitude (and any **journal** entry) lands in

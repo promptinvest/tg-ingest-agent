@@ -212,7 +212,10 @@ def build_messages(conn, chat_id, lang, extra_context=None):
     is UNTRUSTED channel content — it's fenced (not presented as the boss's own
     words) so a forwarded post can't inject instructions into the conversation."""
     messages = [{"role": "system", "content": build_system(conn, lang, extra_context)}]
-    for row in store.convo_recent(conn, chat_id, limit=12):
+    # 20 turns (was 12, 2026-07-22): enough of the past conversation that «как я
+    # говорил выше» resolves without an explicit recall_conversation; deeper
+    # reads stay behind that action.
+    for row in store.convo_recent(conn, chat_id, limit=20):
         role = "assistant" if row["role"] == "bot" else "user"
         if not (row["text"] or "").strip():
             continue
