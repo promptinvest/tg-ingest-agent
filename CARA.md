@@ -343,6 +343,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     "готово", "сегодня пропускаем", "через 30 минут", "до завтра") resolve before the
     probabilistic router. An explicit close/skip/snooze still binds to the last fired active
     reminder after the short pending window expires; a bare «да» requires live pending context.
+    **A follow-up never introduces its own subject (2026‑07‑22 fix):** a message that
+    carries a new subject beyond the follow-up scaffold (defer/ack verbs, reminder
+    references, time words) or the fired reminder's own title — e.g. «Поставь
+    напоминание на завтра 10:30 — Эрика» — is a NEW command and goes through the
+    normal router; it is never eaten as a snooze (the live incident silently
+    dropped «Эрика» and echoed the gratitude daily at 10:30 instead). And the
+    late binding (after the pending expires) applies to a **recurring** reminder
+    only within a ~3‑hour recency window after it fired — its series has already
+    advanced, so hours later «завтра в 10» belongs to the router; a fired
+    **one‑shot** genuinely stays open and remains closable/snoozable any time.
     «Сегодня пропустим» / "skip today"
     counts as that ack (deterministic — today's instance closes; a recurring one still
     fires tomorrow on schedule). **Snooze** by minutes, hours, or an

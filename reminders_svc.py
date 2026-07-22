@@ -228,7 +228,7 @@ class ReminderMixin:
         'это напоминание' (reschedule/rename) binds to it instead of guessing (B3)."""
         store.kv_set(self.conn, "last_reminder_id", str(rid))
 
-    def _parse_fired_followup(self, text, *, allow_bare_ack=False):
+    def _parse_fired_followup(self, text, *, allow_bare_ack=False, title=""):
         """Deterministic common acknowledgements/snoozes for a fired reminder.
 
         Returns (action, params), or None when the message is substantive or
@@ -238,6 +238,15 @@ class ReminderMixin:
         if not t or len(t) > 90:
             return None
         if any(w in t for w in ("запиш", "сохран", "добав", "заметк", "note", "save")):
+            return None
+        # CORE guard (2026-07-22 incident): a follow-up never introduces its OWN
+        # subject. «Поставь напоминание на завтра 10:30 - Эрика» is a NEW
+        # reminder about Эрика — matching just «завтра … 10:30» used to eat it
+        # as a snooze of the last-fired reminder and silently drop the subject.
+        # Any content word that is neither follow-up scaffold (verb / reminder
+        # reference / time) nor part of the bound reminder's title sends the
+        # message to the normal router instead.
+        if reminders.followup_extra_words(t, title):
             return None
         if "пропуст" in t or "пропуск" in t or "skip today" in t:
             return "amend", {"done": True}
@@ -300,17 +309,23 @@ class ReminderMixin:
             return "amend", {"snooze_minutes": 60}
         return None
 
+    # A RECURRING reminder auto-advances at fire — it has no lingering
+    # awaiting-ack state, so late binding via last_reminder_id (after the
+    # 30-min pending expires) only makes sense shortly after the fire. Outside
+    # this window a «завтра в 10»-shaped message belongs to the router. Fired
+    # ONE-SHOTS genuinely stay open until «готово», so they keep the unbounded
+    # explicit-followup binding.
+    RECURRING_FOLLOWUP_WINDOW = timedelta(hours=3)
+
     def resolve_fired_followup(self, chat_id, lang, text, pending):
         """Handle a fired-reminder reply before the probabilistic router.
 
-        The pending confirmation may expire after 30 minutes, but the real
-        reminder remains fired-and-open. An explicit close/skip/snooze can still
-        bind to last_reminder_id; bare yes/ok requires the live pending context.
+        The pending confirmation may expire after 30 minutes, but a fired
+        one-shot remains open; an explicit close/skip/snooze can still bind to
+        last_reminder_id (a recurring one only within the recency window).
+        Bare yes/ok requires the live pending context.
         """
         live_pending = pending if pending and pending.get("kind") == "reminder_fired" else None
-        parsed = self._parse_fired_followup(text, allow_bare_ack=live_pending is not None)
-        if parsed is None:
-            return False
         context = live_pending
         if context is None:
             last_id = store.kv_get(self.conn, "last_reminder_id")
@@ -320,8 +335,18 @@ class ReminderMixin:
                 row = None
             if (row is None or row["status"] != "active" or row["last_fired_at"] is None):
                 return False
+            if row["recurrence"] != "none":
+                fired = reminders.parse_iso_utc(row["last_fired_at"])
+                if fired is None or (datetime.now(timezone.utc) - fired
+                                     > self.RECURRING_FOLLOWUP_WINDOW):
+                    return False
             context = {"kind": "reminder_fired",
                        "payload": {"reminder_id": row["id"], "title": row["title"]}}
+        parsed = self._parse_fired_followup(
+            text, allow_bare_ack=live_pending is not None,
+            title=str(context["payload"].get("title") or ""))
+        if parsed is None:
+            return False
         action, params = parsed
         if action == "clarify_time":
             # Remove the short yes/no pending: after this clarification a bare

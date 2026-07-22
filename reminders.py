@@ -9,6 +9,68 @@ RECURRENCES = ("none", "daily", "weekly")
 MAX_TITLE_CHARS = 200
 
 
+# -- fired-reminder follow-up subject guard -----------------------------------
+# A reply that is STILL about the fired reminder is built only from this
+# scaffold: defer/ack verbs, reminder references, time words and numbers.
+# Anything beyond it («…завтра 10:30 — Эрика», «напомни завтра про отчёт»)
+# introduces the message's OWN subject — that is a NEW command for the normal
+# router, never a snooze of whatever fired last (the 2026-07-22 incident:
+# «Поставь напоминание на завтра 10:30 - Эрика» was eaten as a snooze of the
+# gratitude daily and the «Эрика» subject was silently dropped).
+
+_FOLLOWUP_SCAFFOLD = frozenset({
+    # ru particles/prepositions/fillers
+    "в", "на", "до", "к", "и", "же", "ну", "бы", "а", "с", "о", "об", "при",
+    "за", "по", "из", "у", "через", "это", "этот", "его", "её", "ее", "их",
+    "ещё", "еще", "давай", "давайте", "лучше", "снова", "опять", "потом",
+    "позже", "чуть", "пока", "ладно", "хорошо", "ок", "окей", "да", "угу",
+    "ага", "пожалуйста", "спасибо",
+    # reminder references
+    "напоминание", "напоминания", "напоминалку", "напоминалка", "будильник",
+    "время",
+    # day/time words
+    "завтра", "послезавтра", "сегодня", "утром", "утра", "утро", "вечером",
+    "вечера", "вечер", "днем", "днём", "дня", "день", "ночью", "ночи", "ночь",
+    "полдень", "полудня", "обед", "обеда",
+    # units
+    "час", "часа", "часов", "часок", "часик", "часика", "ч", "мин", "м",
+    "полчаса", "полчасика", "минут", "минуты", "минуту", "минутку",
+    # common verb forms (stems below catch the rest)
+    "поставь", "сделай", "повтори",
+    # en
+    "remind", "reminder", "me", "it", "the", "this", "that", "a", "an", "at",
+    "in", "on", "to", "until", "till", "for", "of", "later", "again",
+    "tomorrow", "today", "tonight", "morning", "evening", "noon", "night",
+    "snooze", "move", "push", "postpone", "delay", "please", "ok", "okay",
+    "yes", "yep", "half", "hour", "hours", "hr", "hrs", "minute", "minutes",
+    "min", "mins", "am", "pm", "oclock", "skip", "done", "close", "closed",
+})
+
+_FOLLOWUP_STEMS = ("отлож", "перенес", "перенос", "сдвин", "напомн", "пропус",
+                   "закры", "закро", "готов", "сделан", "выполн", "полчас",
+                   "минут", "часик")
+
+
+def followup_extra_words(text, title=""):
+    """Content words of `text` that are neither follow-up scaffold nor words of
+    the bound reminder's title (inflection-tolerant 4-char stem match).
+    Non-empty ⇒ the message carries its OWN subject and must NOT be treated as
+    an ack/snooze of the last-fired reminder."""
+    title_words = [w for w in re.split(r"\W+", str(title or "").casefold()) if w]
+    extras = []
+    for w in re.split(r"\W+", str(text or "").casefold()):
+        if not w or w.isdigit():
+            continue
+        if w in _FOLLOWUP_SCAFFOLD or any(w.startswith(s) for s in _FOLLOWUP_STEMS):
+            continue
+        if w in title_words:
+            continue
+        if len(w) >= 4 and any(len(tw) >= 4 and w[:4] == tw[:4] for tw in title_words):
+            continue
+        extras.append(w)
+    return extras
+
+
 _TIME_ONLY_REQUESTS = (
     re.compile(
         r"^(?:напомни(?:\s+мне)?(?:\s+пожалуйста)?|"

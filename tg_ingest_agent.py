@@ -854,7 +854,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     # -- Router dispatch
 
     @staticmethod
-    def _is_reminder_ack(text):
+    def _is_reminder_ack(text, title=""):
         """True only when a message replying to a just-fired reminder is an actual
         ack ('готово'/'done') or snooze ('через 30 минут') — NOT substantive content
         (e.g. dictating the gratitude the reminder asked for), which must be saved."""
@@ -863,6 +863,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return True
         if any(w in t for w in ("запиш", "сохран", "добав", "заметк", "запис", "note", "save")):
             return False  # explicit save command -> real content, not an ack
+        if reminders.followup_extra_words(t, title):
+            return False  # carries its OWN subject («…10:30 - Эрика») -> route normally
         if any(w in t for w in ("через", "отлож", "позже", "потом", "напомни", "snooze",
                                 "later", "remind", "минут", "завтра", "час")):
             return True   # snooze
@@ -1052,7 +1054,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # the ack. Unless the message is a bare ack/snooze, drop the pending and route it
         # normally so 'запиши благодарность …' ingests into the journal.
         if (pending and pending["kind"] == "reminder_fired"
-                and not self._is_reminder_ack(text)):
+                and not self._is_reminder_ack(
+                    text, str(pending["payload"].get("title") or ""))):
             store.pending_clear(self.conn, chat_id)
             pending = None
         # Basic #N deletion is a closed-world state command, not a language-

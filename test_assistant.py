@@ -8173,5 +8173,122 @@ class DurableNoteOutcomesAndLatency20260720Tests(unittest.TestCase):
         self.assertIn("model-health latency: p50 10.00s", md)
 
 
+class FiredFollowupSubjectGuardTests(unittest.TestCase):
+    """2026-07-22 incident: «Поставь напоминание на завтра 10:30 - Эрика» —
+    a NEW reminder about Эрика — was eaten by the fired-reminder shortcut as a
+    snooze of the daily «благодарности» (echo #62 at 10:30, subject silently
+    dropped). Core rules now: (1) a follow-up never introduces its OWN subject;
+    (2) after the pending expires, a RECURRING reminder binds follow-ups only
+    within a recency window (one-shots stay open until «готово» as before)."""
+
+    INCIDENT = "Поставь напоминание на завтра 10:30 - Эрика"
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1",
+                          DB_PATH=str(Path(self.tmp.name) / "f.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _fired_recurring(self, hours_ago=1.0):
+        rid = store.reminder_add(
+            self.conn, 1, "благодарности",
+            (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat(), "daily")
+        fired = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+        store.reminder_touch_fired(self.conn, rid, fired)
+        store.kv_set(self.conn, "last_reminder_id", str(rid))
+        return rid
+
+    def test_new_subject_never_snoozes_after_pending_expired(self):
+        self._fired_recurring(hours_ago=1)
+        before = self.conn.execute("SELECT COUNT(*) FROM reminders").fetchone()[0]
+        with mock.patch.object(self.agent, "reply"):
+            handled = self.agent.resolve_fired_followup(1, "ru", self.INCIDENT, None)
+        self.assertFalse(handled)                             # goes to the router
+        after = self.conn.execute("SELECT COUNT(*) FROM reminders").fetchone()[0]
+        self.assertEqual(before, after)                       # no phantom echo
+
+    def test_new_subject_never_snoozes_with_live_pending(self):
+        rid = self._fired_recurring(hours_ago=0.1)
+        store.pending_set(self.conn, 1, "reminder_fired",
+                          {"reminder_id": rid, "title": "благодарности"})
+        with mock.patch.object(self.agent, "reply"):
+            handled = self.agent.resolve_fired_followup(
+                1, "ru", self.INCIDENT, store.pending_get(self.conn, 1))
+        self.assertFalse(handled)
+        # the ack-gate agrees: substantive -> pending dropped, routed normally
+        self.assertFalse(self.agent._is_reminder_ack(self.INCIDENT, "благодарности"))
+
+    def test_incident_creates_the_erika_reminder_end_to_end(self):
+        self._fired_recurring(hours_ago=1)
+        due = (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat()
+        with mock.patch.object(router, "route", return_value={
+                "action": "reminder_create",
+                "params": {"title": "Эрика", "due_utc": due, "recurrence": "none"},
+                "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 5}, self.INCIDENT)
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "reminder")         # a NEW reminder draft
+        self.assertEqual(pending["payload"]["title"], "Эрика")
+
+    def test_title_words_still_count_as_followup(self):
+        parsed = self.agent._parse_fired_followup(
+            "отложи благодарности на завтра в 10", title="благодарности")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed[0], "amend")
+        self.assertIn("due_utc", parsed[1])
+
+    def test_subjectless_snooze_still_binds_within_window(self):
+        self._fired_recurring(hours_ago=1)
+        with mock.patch.object(self.agent, "reply"):
+            handled = self.agent.resolve_fired_followup(
+                1, "ru", "отложи до завтра в 9", None)
+        self.assertTrue(handled)                              # legit deferral kept
+        echo = self.conn.execute(
+            "SELECT * FROM reminders WHERE recurrence='none'").fetchall()
+        self.assertEqual(len(echo), 1)
+        self.assertEqual(echo[0]["title"], "благодарности")   # one-shot echo, series intact
+
+    def test_recurring_binding_expires_after_window(self):
+        self._fired_recurring(hours_ago=4)                    # > 3h window
+        with mock.patch.object(self.agent, "reply"):
+            handled = self.agent.resolve_fired_followup(
+                1, "ru", "отложи до завтра в 9", None)
+        self.assertFalse(handled)                             # router's turn now
+
+    def test_fired_one_shot_still_closable_much_later(self):
+        past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        rid = store.reminder_add(self.conn, 1, "позвонить Диме", past)
+        store.reminder_touch_fired(self.conn, rid, past)
+        store.kv_set(self.conn, "last_reminder_id", str(rid))
+        with mock.patch.object(self.agent, "reply"):
+            handled = self.agent.resolve_fired_followup(1, "ru", "готово", None)
+        self.assertTrue(handled)                              # one-shots stay open
+        self.assertEqual(store.reminder_get(self.conn, rid)["status"], "done")
+
+    def test_scaffold_keeps_common_snoozes_and_flags_subjects(self):
+        for phrase in ("давай завтра в 10 часов", "через 2 часа",
+                       "напомни через полчаса", "отложи на 12",
+                       "сегодня пропустим", "snooze until 12",
+                       "remind me in 20 minutes"):
+            self.assertEqual(reminders.followup_extra_words(phrase), [], phrase)
+        self.assertEqual(
+            reminders.followup_extra_words(self.INCIDENT), ["эрика"])
+        self.assertEqual(
+            reminders.followup_extra_words("напомни завтра про отчёт в 10"),
+            ["про", "отчёт"])
+        # the bound reminder's own (inflected) title is not a foreign subject
+        self.assertEqual(
+            reminders.followup_extra_words("отложи благодарность на завтра",
+                                           title="благодарности"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
