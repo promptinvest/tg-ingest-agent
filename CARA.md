@@ -364,6 +364,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     only within a ~3‑hour recency window after it fired — its series has already
     advanced, so hours later «завтра в 10» belongs to the router; a fired
     **one‑shot** genuinely stays open and remains closable/snoozable any time.
+    **A TG Reply to a specific alarm names THAT reminder (2026‑07‑23 fix):** every
+    delivered fired‑notification's Telegram message id is remembered (bounded map),
+    and a reply to one of them binds the follow‑up («готово», «отложи на завтра»)
+    to **exactly that reminder** — the strongest binding, overriding both the live
+    pending and the last‑fired recency rule, with no time window (replying IS
+    explicit). The live incident: «Отложи на завтра» sent as a Reply on the
+    «заметка #9» alarm used to snooze the just‑fired gratitude daily instead.
+    Acting on a replied‑to/last‑fired alarm also **never wipes an unrelated
+    open confirmation** any more (his journal capture card survived intact).
     «Сегодня пропустим» / "skip today"
     counts as that ack (deterministic — today's instance closes; a recurring one still
     fires tomorrow on schedule). **Snooze** by minutes, hours, or an

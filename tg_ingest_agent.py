@@ -190,6 +190,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # Raw text of the message he's replying to/quoting this turn ("" when none)
         # — referential saves («сохрани это» as a reply) resolve against it.
         self.turn_reply_quote = ""
+        # The reminder whose FIRED NOTIFICATION he's replying to this turn (or
+        # None) — the strongest binding for a close/snooze follow-up.
+        self.turn_reply_reminder_id = None
         # update_id of the update currently in handle_update — buffered album
         # parts record it so flush_albums can mark their inbox rows done.
         self._current_update_id = None
@@ -679,6 +682,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         self.turn_lang = None if text.startswith("/") else common.detect_lang(text)
         self.turn_extra = []  # fresh per-turn context (own media / replied-to message)
         self.turn_reply_quote = ""
+        self.turn_reply_reminder_id = None
         sticker = msg.get("sticker")
         if sticker and not own_voice and not is_forward:
             self.handle_sticker(chat_id, msg, sticker)
@@ -721,6 +725,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if row and text and not (auto_store or own_media):
                 self.handle_correction(row, chat_id, text, msg.get("message_id"))
                 return
+            # Replying to a FIRED-REMINDER notification names that exact
+            # reminder — the follow-up (готово/отложи/…) binds to IT, never to
+            # whatever happened to fire last (the 2026-07-23 incident: «Отложи
+            # на завтра» on the «заметка #9» alarm snoozed the gratitude daily).
+            self.turn_reply_reminder_id = self.fired_reminder_for_message(
+                reply_to_msg.get("message_id"))
             quoted = ((msg.get("quote") or {}).get("text")
                       or reply_to_msg.get("text") or reply_to_msg.get("caption") or "").strip()
             if quoted:
@@ -1213,7 +1223,13 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 self.send_to_calendar(chat_id, gcal.event_from_reminder(
                     row, self.cfg.event_duration_minutes))
         elif kind == "reminder_fired":
-            store.pending_clear(self.conn, chat_id)
+            # The context may be SYNTHESIZED (a reply-bound or last-fired
+            # follow-up) while the stored pending is an unrelated confirmation
+            # mid-flight (last night: acting on a replied-to alarm wiped the
+            # boss's open journal capture card). Only clear our own kind.
+            stored = store.pending_get(self.conn, chat_id)
+            if stored is None or stored.get("kind") == "reminder_fired":
+                store.pending_clear(self.conn, chat_id)
             snooze = params.get("snooze_minutes") if action == "amend" else None
             # Snooze by an absolute time too ("отложи до завтра в 9"), not only by
             # minutes ("через полчаса") — "отложи на час"/"до завтра" used to fall

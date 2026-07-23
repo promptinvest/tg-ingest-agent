@@ -8399,5 +8399,115 @@ class ReplyQuoteContextTests(unittest.TestCase):
         self.assertIn("turn 10", msgs[1]["content"])         # reaches 20 back, not 12
 
 
+class ReplyBoundReminderTests(unittest.TestCase):
+    """2026-07-23 incident: «Отложи на завтра» sent as a TG Reply to the
+    «заметка #9» fired notification snoozed the just-fired gratitude daily
+    instead — recency (last_reminder_id) overrode the explicit reply target,
+    and acting on it also wiped the boss's open journal capture pending. Now a
+    reply to a fired notification names that EXACT reminder, and a synthesized
+    fired-context follow-up never clobbers a foreign pending."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "rb.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_delivery_records_notification_mapping(self):
+        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        rid = store.reminder_add(self.conn, 1, "позвонить Диме", past)
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 777}):
+            self.agent.fire_due_reminders()
+        self.assertEqual(self.agent.fired_reminder_for_message(777), rid)
+        self.assertIsNone(self.agent.fired_reminder_for_message(778))
+
+    def test_mapping_is_bounded(self):
+        for i in range(40):
+            self.agent._remember_fired_message(1000 + i, i + 1)
+        import json as _json
+        data = _json.loads(store.kv_get(self.conn, "fired_reminder_msgs"))
+        self.assertLessEqual(len(data), 30)
+        self.assertIn("1039", data)                          # newest kept
+        self.assertNotIn("1000", data)                       # oldest dropped
+
+    def test_incident_reply_binds_named_reminder_not_last_fired(self):
+        now = datetime.now(timezone.utc)
+        # the «заметка #9» one-shot fired 3h ago; its notification was msg 910
+        note9 = store.reminder_add(self.conn, 1, "заметка #9",
+                                   (now - timedelta(hours=3)).isoformat())
+        store.reminder_touch_fired(self.conn, note9,
+                                   (now - timedelta(hours=3)).isoformat())
+        self.agent._remember_fired_message(910, note9)
+        # the gratitude daily fired 18 min ago — the LAST fired reminder
+        grat = store.reminder_add(self.conn, 1, "благодарности",
+                                  (now + timedelta(hours=23)).isoformat(), "daily")
+        store.reminder_touch_fired(self.conn, grat,
+                                   (now - timedelta(minutes=18)).isoformat())
+        store.kv_set(self.conn, "last_reminder_id", str(grat))
+        grat_due = store.reminder_get(self.conn, grat)["due_utc"]
+        # his open journal capture card occupies the pending slot
+        store.pending_set(self.conn, 1, "category", {"row_id": 123})
+        update = {"message": {
+            "chat": {"id": 1}, "from": {"id": 1}, "message_id": 50,
+            "text": "Отложи на завтра",
+            "reply_to_message": {"message_id": 910, "from": {"id": 9, "is_bot": True},
+                                 "text": "⏰ Олег, напоминаю: заметка #9"}}}
+        with mock.patch.object(self.mod, "tg_call", return_value={"message_id": 51}), \
+                mock.patch.object(self.mod, "tg_set_reaction"), \
+                mock.patch.object(llm, "chat_profile",
+                                  side_effect=AssertionError("deterministic path expected")):
+            self.agent.handle_update(update)
+        moved = store.reminder_get(self.conn, note9)
+        self.assertEqual(moved["status"], "active")
+        self.assertGreater(moved["due_utc"], now.isoformat())  # re-armed to tomorrow
+        self.assertEqual(store.reminder_get(self.conn, grat)["due_utc"], grat_due)
+        n = self.conn.execute("SELECT COUNT(*) FROM reminders").fetchone()[0]
+        self.assertEqual(n, 2)                               # no phantom echo row
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "category")        # capture card SURVIVES
+
+    def test_bare_ack_reply_closes_named_reminder_even_much_later(self):
+        now = datetime.now(timezone.utc)
+        old = store.reminder_add(self.conn, 1, "оплатить хостинг",
+                                 (now - timedelta(days=2)).isoformat())
+        store.reminder_touch_fired(self.conn, old, (now - timedelta(days=2)).isoformat())
+        self.agent._remember_fired_message(800, old)
+        fresh = store.reminder_add(self.conn, 1, "свежее",
+                                   (now - timedelta(minutes=10)).isoformat())
+        store.reminder_touch_fired(self.conn, fresh,
+                                   (now - timedelta(minutes=10)).isoformat())
+        store.kv_set(self.conn, "last_reminder_id", str(fresh))
+        update = {"message": {
+            "chat": {"id": 1}, "from": {"id": 1}, "message_id": 60, "text": "готово",
+            "reply_to_message": {"message_id": 800, "from": {"id": 9, "is_bot": True},
+                                 "text": "⏰ напоминаю: оплатить хостинг"}}}
+        with mock.patch.object(self.mod, "tg_call", return_value={"message_id": 61}), \
+                mock.patch.object(self.mod, "tg_set_reaction"), \
+                mock.patch.object(llm, "chat_profile",
+                                  side_effect=AssertionError("deterministic path expected")):
+            self.agent.handle_update(update)
+        self.assertEqual(store.reminder_get(self.conn, old)["status"], "done")
+        self.assertEqual(store.reminder_get(self.conn, fresh)["status"], "active")
+
+    def test_substantive_reply_to_notification_still_routes_normally(self):
+        now = datetime.now(timezone.utc)
+        grat = store.reminder_add(self.conn, 1, "благодарности",
+                                  (now + timedelta(hours=23)).isoformat(), "daily")
+        store.reminder_touch_fired(self.conn, grat,
+                                   (now - timedelta(minutes=5)).isoformat())
+        self.agent.turn_reply_reminder_id = grat
+        with mock.patch.object(self.agent, "reply"):
+            handled = self.agent.resolve_fired_followup(
+                1, "ru", "В благодарность — сложный разговор с Костей", None)
+        self.assertFalse(handled)                            # content -> router/ingest
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@ so `self` is the Agent: `self.reply`/`self.conn`/`self.cfg`/`self.tz_offset()`/`
 no behaviour change — the reminder subsystem now lives together. Stateless parsing/formatting
 helpers stay in `reminders.py`; the thin create/list/cancel/calendar handlers stay on the Agent.
 """
+import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -317,6 +318,42 @@ class ReminderMixin:
     # explicit-followup binding.
     RECURRING_FOLLOWUP_WINDOW = timedelta(hours=3)
 
+    # -- fired-notification message → reminder binding (2026-07-23 incident) --
+    # The boss can TG-Reply to a SPECIFIC fired-reminder notification («Отложи
+    # на завтра» on the «заметка #9» alarm). That reply names the exact
+    # reminder — recency (last_reminder_id) must never override it: last night
+    # it snoozed the just-fired gratitude daily instead of the reminder he
+    # replied to. Delivered notification message ids are remembered (bounded)
+    # so the reply target resolves deterministically.
+    _FIRED_MSGS_KV = "fired_reminder_msgs"
+    _FIRED_MSGS_KEEP = 30
+
+    def _remember_fired_message(self, tg_message_id, reminder_id):
+        """Map a DELIVERED fired-notification Telegram message to its reminder."""
+        if not tg_message_id:
+            return
+        try:
+            data = json.loads(store.kv_get(self.conn, self._FIRED_MSGS_KV) or "{}")
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data[str(int(tg_message_id))] = int(reminder_id)
+        for key in sorted(data, key=int)[:-self._FIRED_MSGS_KEEP]:
+            del data[key]
+        store.kv_set(self.conn, self._FIRED_MSGS_KV, json.dumps(data))
+
+    def fired_reminder_for_message(self, tg_message_id):
+        """The reminder whose fired notification the boss replied to, or None."""
+        if tg_message_id is None:
+            return None
+        try:
+            data = json.loads(store.kv_get(self.conn, self._FIRED_MSGS_KV) or "{}")
+            rid = data.get(str(int(tg_message_id))) if isinstance(data, dict) else None
+            return int(rid) if rid is not None else None
+        except (TypeError, ValueError):
+            return None
+
     def resolve_fired_followup(self, chat_id, lang, text, pending):
         """Handle a fired-reminder reply before the probabilistic router.
 
@@ -326,7 +363,19 @@ class ReminderMixin:
         Bare yes/ok requires the live pending context.
         """
         live_pending = pending if pending and pending.get("kind") == "reminder_fired" else None
-        context = live_pending
+        # A TG Reply to a SPECIFIC fired notification is the STRONGEST binding:
+        # it names the exact reminder — overriding both the live pending (which
+        # may be about a different, later reminder) and the last-fired recency
+        # rule (no window: replying IS explicit, however old the alarm).
+        context = None
+        reply_rid = getattr(self, "turn_reply_reminder_id", None)
+        if reply_rid is not None:
+            row = store.reminder_get(self.conn, reply_rid)
+            if row is not None and row["status"] == "active":
+                context = {"kind": "reminder_fired",
+                           "payload": {"reminder_id": row["id"], "title": row["title"]}}
+        if context is None:
+            context = live_pending
         if context is None:
             last_id = store.kv_get(self.conn, "last_reminder_id")
             try:
@@ -343,7 +392,9 @@ class ReminderMixin:
             context = {"kind": "reminder_fired",
                        "payload": {"reminder_id": row["id"], "title": row["title"]}}
         parsed = self._parse_fired_followup(
-            text, allow_bare_ack=live_pending is not None,
+            text,
+            allow_bare_ack=(live_pending is not None
+                            or context["payload"].get("reminder_id") == reply_rid),
             title=str(context["payload"].get("title") or ""))
         if parsed is None:
             return False
@@ -499,6 +550,10 @@ class ReminderMixin:
                 # this can duplicate a reminder; losing it is the worse outcome.
                 log(f"reminder #{row['id']} delivery failed; left due for retry")
                 continue
+            # Remember the notification's message id: a TG Reply to it names
+            # THIS exact reminder for close/snooze, beating recency binding.
+            if isinstance(delivered, dict):
+                self._remember_fired_message(delivered.get("message_id"), row["id"])
             # The pending slot is single (PK = chat_id). A firing reminder must NOT
             # clobber a confirmation the boss is mid-way through (a reminder draft,
             # an ingest suggestion, a typed purge phrase): his next "да" would then
