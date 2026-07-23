@@ -137,7 +137,8 @@ Python process on one small VPS**, with no inbound ports.
 
 ### 2.1 Topology
 
-- **Host:** DigitalOcean droplet (2 vCPU / 2 GB), Ubuntu, hardened; service
+- **Host:** DigitalOcean droplet (2 vCPU / 4 GB — resized from the original
+  2 GB; the hostname still says `2gb`), Ubuntu, hardened; service
   `tg-ingest-agent` under systemd (dedicated user, `ProtectSystem=strict`,
   `NoNewPrivileges`, `PrivateTmp`, `Restart=always`).
 - **No inbound ports:** Telegram long polling only
@@ -360,7 +361,7 @@ REPLACE_ME anchor, spec-consistency sweep.
 ### 3.2 Operating constraints for any proposal
 
 - stdlib-only Python 3 (no pip deps on the box), single process, SQLite.
-- 2 GB RAM droplet shared with Nikki's process.
+- 4 GB RAM droplet (2 vCPU; ~3.8 GiB usable) shared with Nikki's process.
 - Model access limited to DO Gradient open-weight tier (Claude/GPT-4o 403).
 - Hard rules (§1.3) are non-negotiable; every change must update
   `CARA.md` + `SOLUTION.md` in the same commit, extend tests, and deploy via
