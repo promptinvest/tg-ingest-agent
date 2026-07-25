@@ -128,6 +128,19 @@ Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+# Liveness, not just "the process exists": the agent pings WATCHDOG=1 as it works,
+# so a WEDGED poll loop (which reports active/running forever) is restarted instead
+# of going silent. NotifyAccess=main lets a Type=simple service send it —
+# deliberately NOT Type=notify, whose missing READY=1 would be a startup failure and
+# a crash loop.
+# The budget must exceed the longest UN-PINGED span. Pings sit inside the long
+# primitives (every llm.chat/embed/transcribe, each whisper-server attempt, each
+# runtime.drain job), so that span is ONE bounded wait, and the largest of those is
+# a cold transcription: STT_LOCAL_TIMEOUT_SECONDS (600) + ffmpeg conversion.
+# Raising STT_LOCAL_TIMEOUT_SECONDS above ~780 invalidates this number — the agent
+# logs a startup warning if it does.
+NotifyAccess=main
+WatchdogSec=900
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

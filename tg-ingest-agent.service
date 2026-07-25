@@ -14,6 +14,14 @@ Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+# See the installer heredoc (the deployed source of truth): the agent pings
+# WATCHDOG=1 from inside its long primitives (every model call, every
+# transcription attempt, every drained job) so a wedged poll loop is restarted
+# instead of reporting active/running forever, while a legitimately slow step is
+# not. Type=simple + NotifyAccess=main on purpose. The budget must exceed the
+# longest un-pinged span: a cold transcription (STT_LOCAL_TIMEOUT_SECONDS + ffmpeg).
+NotifyAccess=main
+WatchdogSec=900
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

@@ -103,7 +103,8 @@ ROUTER_EXAMPLES = """Examples:
 "поставь напоминание по заметке 11 на 10:00" / "напомни про заметку 11 завтра" / "remind me about note 11 at 10" -> {"action": "reminder_create", "params": {"note_id": 11, "due_utc": "<that time, local, in UTC>", "recurrence": "none"}, "confidence": 0.9}
 "сколько потратили на AI в этом месяце?" -> {"action": "spend", "params": {"period": "month"}, "confidence": 0.95}
 "почему такие расходы?" / "почему нет расхода на эту модель?" / "why is this model free?" -> {"action": "spend", "params": {"period": "month"}, "confidence": 0.8}
-"подними дневной лимит до $3" / "поставь месячный бюджет 20" / "set the daily AI budget to 2" -> {"action": "budget_set", "params": {"period": "day", "amount": 3}, "confidence": 0.9}
+"подними дневной лимит до $3" / "дневной лимит 2" / "set the daily AI budget to 2" -> {"action": "budget_set", "params": {"period": "day", "amount": 3}, "confidence": 0.9}
+"поставь месячный бюджет 20" / "месячный лимит $20" / "set the monthly AI budget to 20" (MONTHLY phrasing -> period "month", never "day") -> {"action": "budget_set", "params": {"period": "month", "amount": 20}, "confidence": 0.9}
 "сохрани: ссылка на статью https://..." -> {"action": "ingest", "params": {}, "confidence": 0.9}
 "прочитай и разбери https://example.com/article" / "read this link: https://..." -> {"action": "fetch", "params": {"url": "https://example.com/article"}, "confidence": 0.9}
 "что в этой статье https://example.com/x" / "summarize https://..." -> {"action": "fetch", "params": {"url": "https://example.com/x"}, "confidence": 0.9}

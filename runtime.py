@@ -5,6 +5,7 @@ Handlers register via @handler("skill", "action"). Inert until something
 registers (no behavior change at ship). Each drained job runs under its own
 trace; failures retry per jobs.fail and are logged as issues when terminal.
 """
+import common
 import jobs
 import store
 import trace as tracing
@@ -26,9 +27,15 @@ def register(skill, action, fn):
 
 def drain(conn, ctx, *, max_jobs=5):
     """Run up to max_jobs due jobs. ctx is passed to handlers (the Agent).
-    Returns the number of jobs processed."""
+    Returns the number of jobs processed.
+
+    One drain runs up to max_jobs jobs on the poll loop's only thread, and a single
+    job (the memory consolidation, the encrypted backup) can be minutes long — so
+    the systemd watchdog is pinged BETWEEN jobs; the whole drain is never one
+    un-pinged span."""
     processed = 0
     while processed < max_jobs:
+        common.watchdog_ping()
         job = jobs.claim_next(conn)
         if not job:
             break

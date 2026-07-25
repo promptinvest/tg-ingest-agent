@@ -708,7 +708,31 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   `MODEL_HEALTH_TRANSIENT_CONFIRM_CHECKS` (default 4). Provider response bodies never reach
   Telegram; reasons are reduced to bounded labels such as `temporary provider overload
   (HTTP 429)`, and transient copy explicitly says no operator action is needed. "Back" only
-  fires if she actually announced "down".
+  fires if she actually announced "down". **2026‑07‑25:** each probe is capped at 10 s
+  (independent of `LLM_TIMEOUT_SECONDS`) — the sweep runs inline on the one thread, so
+  three models × 90 s used to freeze the bot for 4.5 minutes during exactly the outage it
+  reports — and the warm `whisper-server` is probed alongside the chat models when
+  `STT_MODE=local_server`, under its **own** alert wording: it is an on‑box unit, so the
+  remedy she names is `systemctl restart whisper-server`, and she only claims to be
+  "holding on a backup" when the `whisper-cli` binary AND its model file are really on
+  disk. Because that probe is free, it keeps running while the budget is stopped (the
+  paid model probes are skipped then, since they would all "fail" for a spend reason).
+- **Systemd watchdog (2026‑07‑25):** the agent sends `READY=1` at startup and `WATCHDOG=1`
+  as it works; the unit sets `NotifyAccess=main` + `WatchdogSec=900` on a `Type=simple`
+  service. A **wedged** poll loop used to report `active (running)` forever — silence was
+  the only symptom. The pings are at two levels: coarse ones at the loop top, each
+  scheduler tick and each update, and — the ones that make the budget a real number —
+  **fine ones inside the long primitives**: every `llm.chat`/`llm.embed`/`llm.transcribe`,
+  each whisper‑server attempt and its CLI fallback, and each job inside `runtime.drain`.
+  So the budget has to exceed the longest **un‑pinged span**, which is ONE bounded wait
+  (the largest being a cold transcription: `STT_LOCAL_TIMEOUT_SECONDS` + ffmpeg) — not a
+  whole update or scheduler tick, which nobody can put a number on (a routed turn is
+  router + converse + embed, each with primary+fallback × 2 attempts × `LLM_TIMEOUT`, and
+  one drain runs up to 5 durable jobs). **Honest limits:** raising
+  `STT_LOCAL_TIMEOUT_SECONDS` above ~780 breaks the arithmetic — she logs a startup
+  WARNING naming both numbers when you do — and a kill mid‑update would still be a
+  SIGABRT, i.e. no dead‑letter (the same update replays after restart). Outside systemd
+  the notify helper is a silent no‑op.
 
 ---
 
@@ -806,23 +830,41 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
 ### LLM gateway (`llm.py`)
 - **Model profiles** with primary + fallback + per‑profile temperature/max‑tokens/
   json‑required: `router_fast`, `ingest_balanced`, `ask_grounded`, `converse_warm`,
-  `memory_curator`, `review_balanced`. Failover to a fallback model on error/
+  `memory_curator`, `memory_consolidate` (the dead `review_balanced` was removed
+  2026‑07‑25 — the weekly review is deterministic and nothing requested it).
+  Failover to a fallback model on error/
   invalid‑JSON, with per‑model cooldowns. The default fallback is an **accessible
   open‑weight slug** (`openai-gpt-oss-20b`), not the tier‑403 `openai-gpt-4o` that used
   to be a dead fallback on a fresh deploy; a profile added via `LLM_PROFILES_JSON`
   without a `primary` is backfilled with the configured chat model so it can't crash a turn.
   Every failover chain records its terminal result: `llm.failover_served` only after a
   fallback produces a usable response, and `llm.failover_failed` when no configured
-  model does. `llm.fallback` remains the per-attempt failure signal.
+  model does. `llm.fallback` remains the per-attempt failure signal. **2026‑07‑25:**
+  the profile and pricing tables are parsed once per process (memoized on the config),
+  and a **truncated/unparsable response body is treated as transient** — one retry of
+  the preferred model and a short bench, instead of the full cooldown a hard 403 gets.
 - **Budget‑guarded:** every chat/STT/embedding call is priced and logged to
   `llm_usage`; daily/monthly caps warn at 80% and **hard‑stop** at 100% (above
-  failover). Caps are overridable at runtime via `budget_set`. **A response missing its
-  `usage` block is metered from text length** (≈4 chars/token) rather than logged as $0,
+  failover). Caps are overridable at runtime via `budget_set` — **including
+  `0`, which disables that cap** (2026‑07‑25: a numeric 0 used to be swallowed and
+  answered "I couldn't read the amount"). **A response missing its
+  `usage` block is metered from text length** rather than logged as $0,
   and a billed‑but‑empty response is metered before it errors — so an under‑reporting
-  model can't quietly slip the meter past the "enforced" cap.
+  model can't quietly slip the meter past the "enforced" cap. The estimate is
+  **script‑aware** (≈2 chars/token for Cyrillic, ≈4 for Latin; 2026‑07‑25) and is
+  recorded on the trace as `llm.usage_estimated` so a guessed row is visibly a guess.
   Successful/billed chat and embedding responses also store measured wall-clock
   request duration in `seconds`; latency summaries use chat/embed only and keep
   model-health probes separate from functional calls.
+- **Unpriced model slugs are loud (2026‑07‑25).** A slug missing from
+  `DEFAULT_PRICING`/`PRICING_JSON` bills at the punitive $3/$15 default — that is what
+  budget‑locked Cara on 2026‑06‑19 (phantom dollars, then a refusal to work), and
+  nothing detected it. Now: a **startup warning** naming every configured slug that is
+  missing (`DO_CHAT_MODEL`, `ROUTER_MODEL`, `VISION_MODEL` and every
+  `LLM_PROFILES_JSON` primary/fallback), a **`llm.unpriced_model` trace event + log on
+  first billing** of such a slug per process, and a **`(default-priced!)` flag** beside
+  that model in the spend report (chat rows only — STT is per audio minute and
+  embeddings have their own rate).
 
 ### Voice (STT)
 - DO has no transcription model, so Cara runs **whisper.cpp locally**: a warm
@@ -832,6 +874,19 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   the box env; the code defaults are `remote` / `auto`.) a non‑speech
   hallucination filter ("[Subscribe]", "[Music]", "Спасибо за просмотр"…) and a
   too‑big (>20 MB) message keep garbage out of dispatch.
+- **STT_MODE is validated at startup (2026‑07‑25)**: only `local` / `local_server` /
+  `remote`: an unknown value used to fall through to `remote`, so a typo would have
+  shipped the boss's private voice audio to an off‑box endpoint. **Outage resilience:**
+  an unreachable `whisper-server` is retried once (~3 s — its unit restarts in 5 s) and
+  then served by the co‑installed cold `whisper-cli`, and the server itself is now part
+  of the model‑health sweep (same debounced down/recovered alerts as a chat model).
+- **Stored recordings are metered with their real length (2026‑07‑25):** `files` keeps
+  Telegram's `duration`, and `read_media` passes it to `transcribe`. It used to pass 0,
+  which bills any recording as a single second in remote mode. Where the duration is
+  unknown (legacy rows, and any audio sent as a *document* — Telegram attaches no
+  duration to those) the size estimate applies **only to OGG/Opus voice** (~3.5 KB/s);
+  a `.wav`/`.mp3` returns 0 rather than being over‑billed 5–50× by a bitrate that isn't
+  its own.
 - Only the **boss's own voice notes** are transcribed on arrival (commands/questions);
   forwarded voice/audio/files are stored unparsed — **but on request** ("что в этом голосовом?",
   "разбери файл", "read this file") the **`read_media`** action fetches the most recent

@@ -224,7 +224,11 @@ class HermesMixin:
     def do_budget_set(self, chat_id, lang, params):
         """Change the AI spend cap on the boss's explicit request — a runtime
         override stored in preferences and enforced by the budget gateway."""
-        raw = str(params.get("amount") or "").replace("$", "").replace(",", ".").strip()
+        # `params.get("amount") or ""` swallowed a numeric 0 — the ONE documented
+        # way to disable the cap (llm.budget_limits enforces only `limit > 0`) was
+        # unreachable and answered with "I couldn't read the amount".
+        value = params.get("amount")
+        raw = (str(value) if value is not None else "").replace("$", "").replace(",", ".").strip()
         try:
             amount = round(float(raw), 2)
         except (TypeError, ValueError):
@@ -241,7 +245,10 @@ class HermesMixin:
             store.pref_set(self.conn, "budget_daily_usd", amount)
             plabel = "день" if lang == "ru" else "day"
         log(f"budget override set: {period}=${amount}")
-        self.reply(chat_id, T(lang, "budget_set_done", period=plabel, amount=f"{amount:.2f}"))
+        # 0 means "no cap": confirming it as «лимит $0.00» would read as the exact
+        # opposite (no spending allowed), so it gets its own honest wording.
+        key = "budget_set_off" if amount == 0 else "budget_set_done"
+        self.reply(chat_id, T(lang, key, period=plabel, amount=f"{amount:.2f}"))
 
     def do_review(self, chat_id, lang, params):
         if str(params.get("focus") or "").strip().lower() == "corrections":

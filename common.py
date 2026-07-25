@@ -32,6 +32,47 @@ def utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def watchdog_usec():
+    """systemd's configured watchdog interval in microseconds (0 = not armed).
+    Set by the service manager alongside NOTIFY_SOCKET when WatchdogSec= is used."""
+    try:
+        return int(os.environ.get("WATCHDOG_USEC") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def sd_notify(state):
+    """Best-effort sd_notify(3) datagram to systemd ("READY=1" / "WATCHDOG=1").
+
+    Deliberately silent and stdlib-only: outside systemd (every test, a manual
+    run, this developer workstation) NOTIFY_SOCKET is absent and this is a no-op,
+    and a socket error must never disturb the poll loop it exists to supervise.
+    Returns True only when a datagram actually went out."""
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address or not state:
+        return False
+    if address.startswith("@"):          # abstract namespace
+        address = "\0" + address[1:]
+    try:
+        import socket
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.sendto(str(state).encode("utf-8"), address)
+        return True
+    except (OSError, AttributeError, ValueError):
+        return False
+
+
+def watchdog_ping():
+    """"Still moving" marker for systemd's WatchdogSec.
+
+    Call it from inside the LONG primitives (a model call, a transcription, one
+    durable job), not only between whole updates: the watchdog budget only has to
+    exceed the longest span between two pings, and a whole update — router +
+    converse + embed, each with its own failover — is not a span anyone can put a
+    number on. A single bounded network call is."""
+    return sd_notify("WATCHDOG=1")
+
+
 def detect_lang(text):
     """Reply-language from the message, by WORD not letter count: a long borrowed
     English term inside a Russian sentence ("когда у нас performance review?")
@@ -227,6 +268,11 @@ def load_categories(env):
     return config_list(env.get("CATEGORIES", ""))
 
 
+# Speech-to-text backends: local = cold whisper-cli, local_server = the warm
+# on-box whisper-server, remote = an OpenAI-compatible endpoint (audio LEAVES the box).
+STT_MODES = ("local", "local_server", "remote")
+
+
 class ShutdownInterrupt(Exception):
     """Raised when an in-flight update should be left for redelivery because
     the service is shutting down mid-processing (e.g. a deploy restart killed
@@ -278,7 +324,17 @@ def load_config(env=None):
     # STT_MODE: local (cold whisper-cli) | local_server (warm whisper-server,
     # no per-call model reload) | remote (OpenAI-compatible endpoint).
     cfg.stt_enabled = (env.get("STT_ENABLED") or "true").strip().lower() == "true"
-    cfg.stt_mode = (env.get("STT_MODE") or "remote").strip().lower()
+    # systemd's EnvironmentFile does NOT strip an inline comment, so a perfectly
+    # ordinary `STT_MODE=local_server  # warm server` arrives with the comment
+    # attached. Drop it here: this is the one setting whose rejection below stops
+    # the process, and a restart loop over a trailing comment would be absurd.
+    cfg.stt_mode = (env.get("STT_MODE") or "remote").split("#")[0].strip().lower()
+    # Fail fast on a real typo: an unknown mode used to fall through to `remote`,
+    # which would ship the boss's private voice notes to an off-box endpoint because
+    # of a misspelling in an env file. Same style as the token/allowlist validation.
+    if cfg.stt_mode not in STT_MODES:
+        raise SystemExit(
+            f"STT_MODE must be one of {', '.join(STT_MODES)} (got {cfg.stt_mode!r})")
     cfg.stt_model = (env.get("STT_MODEL") or "whisper-large-v3").strip()
     # Language hint for Whisper. 'auto' lets it detect, but a wrong guess on the
     # first moments yields YouTube-style hallucinations ('[Subscribe]'); pinning

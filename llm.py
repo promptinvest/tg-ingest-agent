@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import common
 import store
 from common import log
 
@@ -65,22 +66,83 @@ DEFAULT_PRICING = {
 DEFAULT_CHAT_PRICE = (3.0, 15.0)  # unknown models priced conservatively
 STT_PRICE_PER_MINUTE = 0.006
 EMBED_PRICE_PER_1M = 0.02  # BGE-M3-class embedding, USD per 1M tokens
+# Health probes must not hold the single thread for the full LLM_TIMEOUT: three
+# models x 90 s is 4.5 minutes of a frozen bot during exactly the outage the
+# monitor exists to report. Reachability needs seconds, not a full generation.
+HEALTH_PROBE_TIMEOUT_SECONDS = 10
 
 
 def pricing_table(cfg):
+    """Effective prices (defaults + PRICING_JSON overrides).
+
+    Memoized on the cfg and keyed by the env string, so the JSON is parsed — and an
+    invalid-JSON warning logged — once per process instead of on every model call."""
+    key = cfg.pricing_json
+    cached = getattr(cfg, "_pricing_cache", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
     table = dict(DEFAULT_PRICING)
-    if cfg.pricing_json:
+    if key:
         try:
-            for model, pair in json.loads(cfg.pricing_json).items():
+            for model, pair in json.loads(key).items():
                 table[model] = (float(pair[0]), float(pair[1]))
         except Exception as exc:
             log(f"PRICING_JSON ignored (invalid): {exc!r}")
+    try:
+        cfg._pricing_cache = (key, table)
+    except AttributeError:      # an exotic cfg object — correctness first, cache optional
+        pass
     return table
 
 
 def chat_cost(model, tokens_in, tokens_out, table):
     price_in, price_out = table.get(model, DEFAULT_CHAT_PRICE)
     return (tokens_in * price_in + tokens_out * price_out) / 1_000_000
+
+
+def configured_models(cfg, profile_table=None):
+    """Every chat-model slug this process may call: the configured chat/router/vision
+    models plus each profile's primary and fallbacks."""
+    slugs = [getattr(cfg, "do_model", ""), getattr(cfg, "router_model", ""),
+             getattr(cfg, "vision_model", "")]
+    table = profiles(cfg) if profile_table is None else profile_table
+    for prof in table.values():
+        slugs.append(prof.get("primary"))
+        slugs.extend(prof.get("fallbacks") or [])
+    out = []
+    for slug in slugs:
+        slug = str(slug or "").strip()
+        if slug and slug not in out:
+            out.append(slug)
+    return out
+
+
+def unpriced_models(cfg, profile_table=None):
+    """Configured slugs MISSING from the pricing table. Every one of them bills at
+    DEFAULT_CHAT_PRICE ($3/$15) — a typo in DO_CHAT_MODEL/ROUTER_MODEL/VISION_MODEL/
+    LLM_PROFILES_JSON therefore inflates the meter 3-10x in complete silence and
+    trips the budget on phantom dollars (the 2026-06-19 lockout)."""
+    table = pricing_table(cfg)
+    return [m for m in configured_models(cfg, profile_table) if m not in table]
+
+
+_UNPRICED_SEEN = set()
+
+
+def note_unpriced_model(conn, model, skill=None):
+    """First time this process BILLS an unpriced slug: log it and stamp the trace.
+    Returns True when it was the first sighting. Nothing used to notice at all."""
+    if not model or model in _UNPRICED_SEEN:
+        return False
+    _UNPRICED_SEEN.add(model)
+    message = (f"model {model} not in pricing table — billed at default "
+               f"${DEFAULT_CHAT_PRICE[0]}/${DEFAULT_CHAT_PRICE[1]} per 1M tokens")
+    log(message)
+    from common import current_trace
+    if current_trace():
+        store.trace_event(conn, current_trace(), "llm.unpriced_model", message,
+                          level="warn", skill=skill, data={"model": model})
+    return True
 
 
 def budget_limits(cfg, conn):
@@ -152,25 +214,46 @@ def _base_url(cfg):
     return base if base.endswith("/v1") else base + "/v1"
 
 
+def _estimate_tokens(text):
+    """Rough token count for when the provider omits a usage block. ~4 chars/token
+    holds for Latin text; Cyrillic costs roughly 2-3 tokens per character on these
+    tokenizers, so a flat //4 undercounts a Russian conversation 2-3x — and this
+    estimate IS the metering backstop that keeps the budget honest."""
+    text = str(text or "")
+    if not text:
+        return 0
+    cyrillic = sum(1 for c in text if "Ѐ" <= c <= "ӿ")
+    return len(text) // (2 if cyrillic * 2 > len(text) else 4)
+
+
 def _estimate_prompt_tokens(messages):
-    """Rough prompt-token estimate (~4 chars/token) for when the provider omits a
-    usage block. Counts only TEXT — a multimodal message's content is a list of
-    parts, and stringifying it would fold the base64 image blob into the count and
-    massively over-bill (the mirror of the $0-undercount this fallback fixes)."""
-    chars = 0
+    """Prompt-token estimate for when the provider omits a usage block. Counts only
+    TEXT — a multimodal message's content is a list of parts, and stringifying it
+    would fold the base64 image blob into the count and massively over-bill (the
+    mirror of the $0-undercount this fallback fixes)."""
+    parts = []
     for m in messages:
         content = m.get("content")
         if isinstance(content, str):
-            chars += len(content)
+            parts.append(content)
         elif isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "text":
-                    chars += len(str(part.get("text") or ""))
-    return chars // 4
+                    parts.append(str(part.get("text") or ""))
+    # Per PART, not on the joined string: Cara's prompts routinely mix an English
+    # system/schema block with Russian content, and one script decision for the
+    # whole thing would score a majority-Latin prompt at //4 and reinstate the
+    # Cyrillic undercount for exactly the mixed case that is most common.
+    return sum(_estimate_tokens(p) for p in parts)
 
 
-def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
+def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
+         timeout=None):
     """Budget-guarded chat completion; logs usage; returns content string."""
+    # The single longest thing this process does is wait on a model. Mark progress
+    # HERE rather than only between updates: with failover a routed turn is
+    # 2 models x 2 attempts x LLM_TIMEOUT, and no watchdog budget can cover that.
+    common.watchdog_ping()
     _check_budget(cfg, conn)
     model = model or cfg.do_model
     payload = {
@@ -192,7 +275,7 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
     )
     started = time.monotonic()
     try:
-        with urlopen(request, timeout=cfg.llm_timeout) as response:
+        with urlopen(request, timeout=timeout or cfg.llm_timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         raise LLMError(_redacted_http_error(exc, cfg.do_key)) from exc
@@ -215,30 +298,88 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
     content = str((choices[0].get("message") or {}).get("content") or "") if choices else ""
     # Meter the call BEFORE the no-choices guard so a billed-but-empty response is still
     # counted. If the provider omits a usage block (some meta-routes do), estimate from
-    # text length (~4 chars/token) instead of logging $0 — an unmetered model silently
-    # under-counts the budget and the real DO bill can then blow past the "enforced" cap.
+    # text length (script-aware, see _estimate_tokens) instead of logging $0 — an
+    # unmetered model silently under-counts the budget and the real DO bill can then
+    # blow past the "enforced" cap.
     usage = data.get("usage") or {}
+    # EITHER side may be missing on its own (providers that report prompt_tokens and
+    # omit completion_tokens are common), and a half-guessed row must not look
+    # provider-reported.
+    guessed = [side for side, key in (("in", "prompt_tokens"), ("out", "completion_tokens"))
+               if not usage.get(key)]
+    estimated = bool(guessed)
     tokens_in = int(usage.get("prompt_tokens") or _estimate_prompt_tokens(messages))
-    tokens_out = int(usage.get("completion_tokens") or (len(content) // 4))
+    tokens_out = int(usage.get("completion_tokens") or _estimate_tokens(content))
+    table = pricing_table(cfg)
     store.usage_add(
         conn, skill, "chat", model, tokens_in, tokens_out,
         seconds=elapsed,
-        cost_usd=chat_cost(model, tokens_in, tokens_out, pricing_table(cfg)),
+        cost_usd=chat_cost(model, tokens_in, tokens_out, table),
     )
+    # Metered first (a billed call is always counted), THEN the two loudness
+    # signals: an unpriced slug is billing at the punitive default, and an
+    # estimated usage row is a guess rather than the provider's own count.
+    if model not in table:
+        note_unpriced_model(conn, model, skill)
+    if estimated:
+        from common import current_trace
+        if current_trace():
+            store.trace_event(
+                conn, current_trace(), "llm.usage_estimated",
+                f"{model}: provider omitted {'/'.join(guessed)} usage — "
+                f"metered from text length",
+                level="warn", skill=skill,
+                data={"model": model, "tokens_in": tokens_in, "tokens_out": tokens_out,
+                      "guessed": guessed})
     if not choices:
         raise LLMError("inference response had no choices")
     return content
 
 
-def model_ok(cfg, conn, model):
+def model_ok(cfg, conn, model, timeout=None):
     """Lightweight reachability check for a chat model: (True, '') if a tiny
-    call succeeds, else (False, short_reason). Used by the model-health monitor."""
+    call succeeds, else (False, short_reason). Used by the model-health monitor.
+
+    The probe timeout is DELIBERATELY short (and independent of LLM_TIMEOUT): the
+    monitor runs inline on the only thread, so a dead provider must cost seconds
+    per model, not a 90 s hang per model during the very outage it is reporting."""
     try:
         chat(cfg, conn, "healthcheck", [{"role": "user", "content": "ping"}],
-             max_tokens=5, model=model, temperature=0)
+             max_tokens=5, model=model, temperature=0,
+             timeout=timeout or HEALTH_PROBE_TIMEOUT_SECONDS)
         return True, ""
     except LLMError as exc:
         return False, model_health_reason(str(exc))
+
+
+def whisper_server_ok(cfg, timeout=None):
+    """Reachability of the warm whisper-server (STT_MODE=local_server). ANY HTTP
+    answer proves the process is up (its root path has no handler), so only a
+    connection-level failure or a timeout counts as down. Without this the STT
+    backend was the one model dependency the health monitor never watched.
+
+    The reason is bounded here rather than through `model_health_reason` — that
+    helper classifies PROVIDER errors and would flatten every on-box failure to
+    "model health check failed", which is exactly the detail the boss needs to
+    know whether to restart the unit."""
+    url = cfg.whisper_server_url.rstrip("/") + "/"
+    try:
+        with urlopen(Request(url, method="GET"),
+                     timeout=timeout or HEALTH_PROBE_TIMEOUT_SECONDS):
+            return True, ""
+    except HTTPError:
+        return True, ""          # answered (404/405) — the server is alive
+    except URLError as exc:
+        return False, f"speech server unreachable ({_short_reason(exc.reason)})"
+    except OSError as exc:
+        return False, f"speech server timed out ({_short_reason(exc)})"
+    except Exception as exc:  # noqa: BLE001 — a probe must never raise into the loop
+        return False, f"speech server check failed ({type(exc).__name__})"
+
+
+def _short_reason(value):
+    """One bounded line — a health reason goes straight to Telegram."""
+    return " ".join(str(value or "").split())[:80]
 
 
 def model_health_reason(error):
@@ -359,18 +500,26 @@ def default_profiles(cfg):
         # Weekly memory consolidation (dedup + contradiction judgment) — infrequent but needs
         # real semantic judgment, so it gets a stronger model than the fast curator.
         "memory_consolidate": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
-        "review_balanced": {"primary": primary, "fallbacks": [], "max_tokens": 900, "json_required": False},
+        # (review_balanced retired 2026-07-25: the weekly review is deterministic,
+        # nothing requested the profile — a dead entry only invites stale config.)
     }
 
 
 def profiles(cfg):
+    """Named model profiles.
+
+    Memoized on the cfg and keyed by the strings it is built from, so the env JSON is
+    parsed — and its warnings logged — once per process rather than on every routed
+    turn (profiles() is called several times per update)."""
+    key = (cfg.llm_profiles_json, cfg.do_model, cfg.router_model)
+    cached = getattr(cfg, "_profiles_cache", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
     table = default_profiles(cfg)
-    overridden = set()
     if cfg.llm_profiles_json:
         try:
             for name, prof in json.loads(cfg.llm_profiles_json).items():
                 table.setdefault(name, {}).update(prof)
-                overridden.add(name)
         except Exception as exc:
             log(f"LLM_PROFILES_JSON ignored (invalid): {exc!r}")
     # A brand-new profile added via LLM_PROFILES_JSON without a "primary" would
@@ -381,6 +530,15 @@ def profiles(cfg):
         if not prof.get("primary"):
             prof["primary"] = cfg.do_model
             log(f"profile {name!r} had no primary; defaulted to {cfg.do_model}")
+    missing = unpriced_models(cfg, table)
+    if missing:
+        log(f"WARNING: model slug(s) missing from the pricing table, so every call "
+            f"bills at the ${DEFAULT_CHAT_PRICE[0]}/${DEFAULT_CHAT_PRICE[1]} default: "
+            f"{', '.join(missing)}")
+    try:
+        cfg._profiles_cache = (key, table)
+    except AttributeError:      # an exotic cfg object — correctness first, cache optional
+        pass
     return table
 
 
@@ -394,6 +552,12 @@ def _is_transient_llm_error(msg):
     if "http 429" in m or "rate_limit" in m or "overload" in m:
         return True
     if "http 500" in m or "http 502" in m or "http 503" in m or "http 504" in m:
+        return True
+    # A body cut mid-flight (IncompleteRead / mid-multibyte decode) or a garbage
+    # body is a CONNECTION accident, not a broken model: retry the preferred model
+    # once and bench it only briefly, instead of stranding every later request on
+    # a weaker fallback for the full cooldown.
+    if "truncated/malformed" in m or "was not valid json" in m:
         return True
     return "timeout" in m or "timed out" in m
 
@@ -486,6 +650,7 @@ def embed(cfg, conn, skill, texts):
     float vectors aligned with `texts`."""
     if not texts:
         return []
+    common.watchdog_ping()      # another bounded network wait — see chat()
     _check_budget(cfg, conn)
     payload = {"model": cfg.embedding_model, "input": list(texts)}
     request = Request(
@@ -521,7 +686,7 @@ def embed(cfg, conn, skill, texts):
     if len(vectors) != len(texts):
         raise LLMError("embeddings response count mismatch")
     tokens = int((data.get("usage") or {}).get("prompt_tokens")
-                 or sum(len(t) for t in texts) // 4)
+                 or sum(_estimate_tokens(t) for t in texts))
     store.usage_add(conn, skill, "embed", cfg.embedding_model, tokens, 0,
                     seconds=elapsed,
                     cost_usd=tokens / 1_000_000 * EMBED_PRICE_PER_1M)
@@ -537,6 +702,9 @@ def transcribe(cfg, conn, skill, audio_path, duration_seconds):
     """Voice -> text. local = cold whisper-cli; local_server = warm
     whisper-server on localhost (no per-call model reload); remote = an
     OpenAI-compatible transcriptions endpoint."""
+    # The longest single bounded step on this thread (ffmpeg + STT_LOCAL_TIMEOUT).
+    # The watchdog budget is sized against exactly this, so mark it started.
+    common.watchdog_ping()
     if cfg.stt_mode == "local":
         return _transcribe_local(cfg, conn, skill, audio_path, duration_seconds)
     if cfg.stt_mode == "local_server":
@@ -544,10 +712,17 @@ def transcribe(cfg, conn, skill, audio_path, duration_seconds):
     return _transcribe_remote(cfg, conn, skill, audio_path, duration_seconds)
 
 
+WHISPER_SERVER_RETRY_SECONDS = 3.0
+
+
 def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
     """POST the audio to the warm whisper-server (/inference). The server is
     launched with --convert, so it ffmpegs the OGG itself; the 190 MB model
-    stays loaded between calls. Free, on-box, no model reload."""
+    stays loaded between calls. Free, on-box, no model reload.
+
+    Its unit restarts in 5 s, so a connection-level outage is almost always a few
+    seconds long — one retry, then the co-installed cold whisper-cli, before the
+    boss's voice note is refused. Which path served is logged."""
     audio_path = Path(audio_path)
     fields = {"response_format": "json", "temperature": "0"}
     if cfg.stt_language and cfg.stt_language != "auto":
@@ -555,24 +730,50 @@ def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
     body, boundary = build_multipart(
         fields, "file", audio_path.name, audio_path.read_bytes(), "audio/ogg",
     )
-    request = Request(
-        cfg.whisper_server_url.rstrip("/") + "/inference",
-        data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
-                 "Accept": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=cfg.stt_local_timeout) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-    except HTTPError as exc:
-        raise LLMError(f"whisper-server HTTP {exc.code}") from exc
-    except URLError as exc:
-        raise LLMError(f"whisper-server unreachable: {exc.reason}") from exc
-    except OSError as exc:
-        raise LLMError(f"whisper-server timed out: {exc}") from exc
-    except http.client.HTTPException as exc:
-        raise LLMError(f"whisper-server response truncated: {exc!r}") from exc
+    url = cfg.whisper_server_url.rstrip("/") + "/inference"
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}",
+               "Accept": "application/json"}
+    raw = None
+    last_exc = None
+    for attempt in range(2):
+        common.watchdog_ping()   # each attempt is its own STT_LOCAL_TIMEOUT wait
+        try:
+            with urlopen(Request(url, data=body, headers=headers, method="POST"),
+                         timeout=cfg.stt_local_timeout) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+            if attempt:
+                log("whisper-server answered on retry")
+            break
+        except HTTPError as exc:      # a subclass of URLError: the server DID answer
+            raise LLMError(f"whisper-server HTTP {exc.code}") from exc
+        except URLError as exc:
+            # Connection-level failure = the process is down/restarting, not
+            # refusing this request. Retry once, then fall back to the CLI.
+            last_exc = LLMError(f"whisper-server unreachable: {exc.reason}")
+            if attempt == 0:
+                log(f"whisper-server unreachable ({exc.reason}); retrying in"
+                    f" {WHISPER_SERVER_RETRY_SECONDS}s")
+                time.sleep(WHISPER_SERVER_RETRY_SECONDS)
+        except OSError as exc:
+            raise LLMError(f"whisper-server timed out: {exc}") from exc
+        except http.client.HTTPException as exc:
+            raise LLMError(f"whisper-server response truncated: {exc!r}") from exc
+    if raw is None:
+        # The CLI needs BOTH halves: with the binary present but the model file
+        # missing/renamed, falling through would answer "local transcription
+        # failed: …" and hide the outage that actually happened.
+        if (cfg.whisper_bin and Path(cfg.whisper_bin).exists()
+                and cfg.whisper_model and Path(cfg.whisper_model).exists()):
+            log("whisper-server still unreachable — transcribing with whisper-cli")
+            common.watchdog_ping()   # a cold CLI run is a fresh long step
+            try:
+                return _transcribe_local(cfg, conn, skill, audio_path, duration_seconds)
+            except LLMError as exc:
+                # Chain the real cause: without it the reply and the log blame the
+                # CLI for an outage that started at the server.
+                raise LLMError(f"{exc} (after {last_exc or 'whisper-server unreachable'})") \
+                    from last_exc
+        raise last_exc or LLMError("whisper-server unreachable")
     try:
         text = str((json.loads(raw) or {}).get("text") or "").strip()
     except (ValueError, AttributeError):

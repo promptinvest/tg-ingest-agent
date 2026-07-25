@@ -423,6 +423,7 @@ CREATE TABLE IF NOT EXISTS files (
   file_name TEXT,
   mime_type TEXT,
   file_size INTEGER,
+  duration INTEGER,
   local_path TEXT,
   created_at TEXT NOT NULL
 );
@@ -1079,6 +1080,12 @@ def _migrate_steps(conn):
     image_columns = {row["name"] for row in conn.execute("PRAGMA table_info(images)")}
     if "object_key" not in image_columns:
         conn.execute("ALTER TABLE images ADD COLUMN object_key TEXT")
+    file_columns = {row["name"] for row in conn.execute("PRAGMA table_info(files)")}
+    if "duration" not in file_columns:
+        # Telegram reports voice/audio/video-note length; without it a stored
+        # recording was metered as 1 second (remote STT is priced per minute).
+        # Old rows stay NULL and fall back to the size-based estimate.
+        conn.execute("ALTER TABLE files ADD COLUMN duration INTEGER")
     usage_columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_usage)")}
     if "trace_id" not in usage_columns:
         conn.execute("ALTER TABLE llm_usage ADD COLUMN trace_id TEXT")
@@ -2107,10 +2114,15 @@ def set_image_object_key(conn, image_id, object_key):
 def insert_file(conn, message_id, tg_message_id, document, local_path=None):
     """Store a non-image document attachment (PDF, doc, sheet, text…). We keep
     its tg_file_id so it can be re-sent later for free, no download needed."""
+    duration = document.get("duration")
+    try:
+        duration = int(duration) if duration is not None else None
+    except (TypeError, ValueError):
+        duration = None
     conn.execute(
         "INSERT INTO files (message_id, tg_message_id, tg_file_id, tg_file_unique_id,"
-        " file_name, mime_type, file_size, local_path, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " file_name, mime_type, file_size, duration, local_path, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             message_id,
             tg_message_id,
@@ -2119,6 +2131,7 @@ def insert_file(conn, message_id, tg_message_id, document, local_path=None):
             document.get("file_name"),
             document.get("mime_type"),
             document.get("file_size"),
+            duration,
             local_path,
             _now(),
         ),
@@ -2801,15 +2814,20 @@ def usage_total(conn, period):
     return float(row["c"])
 
 
-def usage_breakdown(conn, period, by="skill"):
-    assert by in ("skill", "model")
+def usage_period_filter(period):
+    """(sql_predicate, bind_value) selecting the llm_usage rows of `period`. Shared
+    so a report and anything annotating that report describe the same window."""
     ts = _now()
     if period == "day":
-        where, value = "day = ?", ts[:10]
-    elif period == "week":
-        where, value = "day >= ?", _week_start(ts)
-    else:
-        where, value = "month = ?", ts[:7]
+        return "day = ?", ts[:10]
+    if period == "week":
+        return "day >= ?", _week_start(ts)
+    return "month = ?", ts[:7]
+
+
+def usage_breakdown(conn, period, by="skill"):
+    assert by in ("skill", "model")
+    where, value = usage_period_filter(period)
     return conn.execute(
         f"SELECT {by} AS k, COUNT(*) AS calls, SUM(tokens_in) AS tin, SUM(tokens_out) AS tout,"
         f" COALESCE(SUM(cost_usd), 0) AS cost FROM llm_usage WHERE {where}"

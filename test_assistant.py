@@ -11604,5 +11604,911 @@ class IngestMediaFetch20260725Tests(unittest.TestCase):
         self.assertEqual(call.call_args[0][2]["reply_to_message_id"], 42)
 
 
+class LlmStackBudgetAvailability20260725Tests(unittest.TestCase):
+    """WP7 of the 2026-07-24 review — the LLM stack, the budget and availability.
+
+    The theme is *silence*: an unpriced slug billing 3-10x with nothing watching
+    (the 2026-06-19 budget lock), a whisper-server outage with no retry, a health
+    monitor that froze the bot for 4.5 minutes during the outage it reports, and a
+    wedged poll loop that systemd still calls `active (running)`.
+    """
+
+    def setUp(self):
+        import tg_ingest_agent
+        from urllib.error import HTTPError, URLError
+        self.mod = tg_ingest_agent
+        self.HTTPError, self.URLError = HTTPError, URLError
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "wp7.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+        # `_UNPRICED_SEEN` is a process-global "log once" latch. SNAPSHOT it and put
+        # it back in tearDown — clearing it outright would make any future test that
+        # asserts the once-per-process property depend on whether this class ran.
+        # (getattr: keeps a REVERTED-source run failing per test, on its own
+        # assertion, instead of erroring identically in setUp.)
+        self._unpriced_seen = set(getattr(llm, "_UNPRICED_SEEN", set()))
+        getattr(llm, "_UNPRICED_SEEN", set()).clear()
+
+    def tearDown(self):
+        common.set_current_trace(None)
+        seen = getattr(llm, "_UNPRICED_SEEN", None)
+        if seen is not None:
+            seen.clear()
+            seen.update(self._unpriced_seen)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    # -- helpers ---------------------------------------------------------------
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(self._body).encode("utf-8")
+
+    def _chat_body(self, content="ok", usage=None):
+        body = {"choices": [{"message": {"content": content}}]}
+        if usage is not None:
+            body["usage"] = usage
+        return self._Resp(body)
+
+    # -- T7.1 an unpriced slug must be loud, in three places -------------------
+
+    def test_a_configured_slug_missing_from_the_pricing_table_is_named_at_startup(self):
+        """DO_CHAT_MODEL / ROUTER_MODEL / VISION_MODEL / LLM_PROFILES_JSON are
+        free-form env strings. A typo in any of them bills every call at $3/$15 —
+        3-10x the real rate — and NOTHING checked them against the table."""
+        cfg = make_config(DO_CHAT_MODEL="deepseek-4-flahs",   # the typo class
+                          VISION_MODEL="nemotron-3-nano-omni")
+        with mock.patch.object(llm, "log") as logged:
+            llm.profiles(cfg)
+            llm.profiles(cfg)                                  # memoized: warn once
+        warnings = [c[0][0] for c in logged.call_args_list if "pricing table" in c[0][0]]
+        self.assertEqual(len(warnings), 1, logged.call_args_list)
+        self.assertIn("deepseek-4-flahs", warnings[0])
+        self.assertEqual(llm.unpriced_models(cfg), ["deepseek-4-flahs"])
+        # A fully-priced configuration says nothing at all.
+        with mock.patch.object(llm, "log") as quiet:
+            llm.profiles(make_config(DO_CHAT_MODEL="deepseek-4-flash"))
+        self.assertEqual([c for c in quiet.call_args_list if "pricing table" in c[0][0]], [])
+
+    def test_a_typo_inside_llm_profiles_json_is_named_too(self):
+        """The live box configures models through LLM_PROFILES_JSON, not the three
+        cfg slugs — so the warning must walk each profile's primary AND fallbacks,
+        or the place the typo actually happens stays silent."""
+        cfg = make_config(LLM_PROFILES_JSON=json.dumps(
+            {"converse_warm": {"primary": "kimi-k2.6",
+                               "fallbacks": ["openai-gpt-oss-20bb"]}}))
+        with mock.patch.object(llm, "log") as logged:
+            llm.profiles(cfg)
+        warnings = [c[0][0] for c in logged.call_args_list if "pricing table" in c[0][0]]
+        self.assertEqual(len(warnings), 1, logged.call_args_list)
+        self.assertIn("openai-gpt-oss-20bb", warnings[0])
+        self.assertEqual(llm.unpriced_models(cfg), ["openai-gpt-oss-20bb"])
+        self.assertIn("kimi-k2.6", llm.configured_models(cfg))   # priced: walked, not flagged
+
+    def test_billing_an_unpriced_slug_logs_and_traces_once_per_process(self):
+        tid = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(llm, "urlopen", return_value=self._chat_body(
+                usage={"prompt_tokens": 100, "completion_tokens": 10})), \
+                mock.patch.object(llm, "log") as logged:
+            llm.chat(self.cfg, self.conn, "converse", [], model="brand-new-slug")
+            llm.chat(self.cfg, self.conn, "converse", [], model="brand-new-slug")
+        notices = [c[0][0] for c in logged.call_args_list if "not in pricing table" in c[0][0]]
+        self.assertEqual(len(notices), 1)          # once per process, not per call
+        self.assertIn("brand-new-slug", notices[0])
+        events_ = [r["stage"] for r in store.trace_events(self.conn, tid)]
+        self.assertEqual(events_.count("llm.unpriced_model"), 1)
+        # Both calls were still metered — detection never costs accounting.
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM llm_usage WHERE model = 'brand-new-slug'").fetchone()[0], 2)
+
+    def test_a_priced_slug_raises_no_unpriced_signal(self):
+        """FALSE-POSITIVE CONTROL, not a regression test: on pre-fix code both
+        negative assertions hold vacuously (there was no such log line and no such
+        trace stage at all). It earns its place by ALSO pinning that the priced
+        path still meters and that the slug really is in the effective table."""
+        tid = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(llm, "urlopen", return_value=self._chat_body(
+                usage={"prompt_tokens": 10, "completion_tokens": 2})), \
+                mock.patch.object(llm, "log") as logged:
+            llm.chat(self.cfg, self.conn, "converse", [], model="deepseek-4-flash")
+        self.assertEqual([c for c in logged.call_args_list
+                          if "not in pricing table" in c[0][0]], [])
+        self.assertNotIn("llm.unpriced_model",
+                         [r["stage"] for r in store.trace_events(self.conn, tid)])
+        self.assertIn("deepseek-4-flash", llm.pricing_table(self.cfg))
+        row = self.conn.execute(
+            "SELECT model, tokens_in, cost_usd FROM llm_usage").fetchone()
+        self.assertEqual(row["model"], "deepseek-4-flash")
+        self.assertEqual(row["tokens_in"], 10)
+        # …and at the real rate, not the $3/$15 default.
+        self.assertLess(row["cost_usd"],
+                        llm.chat_cost("x", 10, 2, {}) )
+
+    def test_the_spend_report_flags_default_priced_models_only(self):
+        store.usage_add(self.conn, "converse", "chat", "deepseek-4-flash", 100, 50, cost_usd=0.01)
+        store.usage_add(self.conn, "converse", "chat", "mystery-slug", 100, 50, cost_usd=0.30)
+        store.usage_add(self.conn, "stt", "stt", "whisper.cpp-server", seconds=12, cost_usd=0.0)
+        store.usage_add(self.conn, "ask", "embed", "BGE-M3", 400, 0, cost_usd=0.0001)
+        report = spend.format_spend(self.conn, "day", self.cfg, "ru")
+        lines = {line.strip().split(":")[0]: line for line in report.splitlines()
+                 if line.startswith("  ")}
+        self.assertIn("(default-priced!)", lines["mystery-slug"])
+        # STT is priced per audio minute and embeddings have their own rate: their
+        # model names are legitimately absent from the chat table.
+        self.assertNotIn("(default-priced!)", lines["deepseek-4-flash"])
+        self.assertNotIn("(default-priced!)", lines["whisper.cpp-server"])
+        self.assertNotIn("(default-priced!)", lines["BGE-M3"])
+
+    def test_the_default_priced_flag_describes_the_reported_window(self):
+        """The flag is only worth anything if it is trustworthy: a slug whose rows
+        in THIS period are all STT must not be flagged because of a chat row from
+        another month."""
+        old_month = (datetime.now(timezone.utc) - timedelta(days=70))
+        self.conn.execute(
+            "INSERT INTO llm_usage (ts, day, month, skill, kind, model, tokens_in,"
+            " tokens_out, seconds, cost_usd) VALUES (?, ?, ?, 'converse', 'chat',"
+            " 'mystery-slug', 100, 50, 0, 0.3)",
+            (old_month.isoformat(), old_month.date().isoformat(),
+             old_month.strftime("%Y-%m")))
+        self.conn.commit()
+        store.usage_add(self.conn, "stt", "stt", "mystery-slug", seconds=12, cost_usd=0.0)
+        today = spend.format_spend(self.conn, "day", self.cfg, "ru")
+        self.assertNotIn("(default-priced!)", today)
+        # the same slug IS flagged in a window that contains its chat row
+        self.assertEqual(
+            spend.default_priced_models(self.conn, self.cfg, ["mystery-slug"],
+                                        "month"), set())
+        with mock.patch.object(store, "usage_period_filter",
+                               return_value=("month = ?", old_month.strftime("%Y-%m"))):
+            self.assertEqual(
+                spend.default_priced_models(self.conn, self.cfg, ["mystery-slug"],
+                                            "month"), {"mystery-slug"})
+
+    def test_a_disabled_cap_reads_as_no_limit_not_as_a_blown_budget(self):
+        """`Бюджет: день $0.12/0.00` reads as the exact opposite of "cap disabled" —
+        in the one place the boss actually looks at the numbers."""
+        store.usage_add(self.conn, "converse", "chat", "deepseek-4-flash", 100, 50,
+                        cost_usd=0.12)
+        store.pref_set(self.conn, "budget_daily_usd", 0)
+        ru = spend.format_spend(self.conn, "day", self.cfg, "ru")
+        self.assertIn("без лимита", ru)
+        self.assertNotIn("/0.00", ru)
+        en = spend.format_spend(self.conn, "day", self.cfg, "en")
+        self.assertIn("no limit", en)
+        self.assertNotIn("/0.00", en)
+        # a real cap still renders as a cap
+        store.pref_set(self.conn, "budget_daily_usd", 3)
+        self.assertIn("/3.00", spend.format_spend(self.conn, "day", self.cfg, "ru"))
+
+    # -- T7.2 the router few-shot taught the wrong period ----------------------
+
+    def test_the_monthly_budget_example_asks_for_a_monthly_period(self):
+        """One example bundled «поставь месячный бюджет 20» with `"period": "day"`,
+        actively teaching the router to cap the wrong window."""
+        monthly = [line for line in router.ROUTER_EXAMPLES.splitlines()
+                   if "месячный бюджет" in line]
+        self.assertEqual(len(monthly), 1, router.ROUTER_EXAMPLES)
+        self.assertIn('"period": "month"', monthly[0])
+        self.assertNotIn('"period": "day"', monthly[0])
+        daily = [line for line in router.ROUTER_EXAMPLES.splitlines()
+                 if "дневной лимит" in line]
+        self.assertEqual(len(daily), 1)
+        self.assertIn('"period": "day"', daily[0])
+        self.assertNotIn("месячн", daily[0])
+
+    # -- T7.3 the documented way to disable the cap must work ------------------
+
+    def test_budget_zero_disables_the_cap_as_a_number_and_as_a_string(self):
+        """`params.get("amount") or ""` swallowed a numeric 0 — the ONE documented
+        cap-disable value answered "I couldn't read the amount"."""
+        for amount in (0, "0", 0.0):
+            store.pref_set(self.conn, "budget_daily_usd", 5)
+            with mock.patch.object(self.agent, "reply") as r:
+                self.agent.do_budget_set(1, "ru", {"period": "day", "amount": amount})
+            self.assertEqual(store.pref_get(self.conn, "budget_daily_usd"), "0.0", amount)
+            daily, _ = llm.budget_limits(self.agent.cfg, self.conn)
+            self.assertEqual(daily, 0.0)
+            # The wording is the whole point: «лимит AI на день: $0.00» reads as the
+            # OPPOSITE of "no cap", so 0 gets its own template.
+            self.assertEqual(r.call_args[0][1],
+                             texts.T("ru", "budget_set_off", period="день", amount="0.00"))
+            # 0 = no cap, so nothing is budget-stopped by it.
+            store.usage_add(self.conn, "x", "chat", "m", 1, 1, cost_usd=99.0)
+            self.assertNotEqual(llm.budget_state(self.agent.cfg, self.conn)[1], "day")
+            self.conn.execute("DELETE FROM llm_usage")
+            self.conn.commit()
+        # the monthly window disables the same way, in English
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_budget_set(1, "en", {"period": "month", "amount": 0})
+        self.assertEqual(store.pref_get(self.conn, "budget_monthly_usd"), "0.0")
+        self.assertEqual(r.call_args[0][1],
+                         texts.T("en", "budget_set_off", period="month", amount="0.00"))
+        # a NON-zero amount still uses the ordinary confirmation
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_budget_set(1, "ru", {"period": "day", "amount": 3})
+        self.assertEqual(r.call_args[0][1],
+                         texts.T("ru", "budget_set_done", period="день", amount="3.00"))
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_budget_set(1, "ru", {"period": "day"})   # no amount at all
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "budget_set_unclear"))
+
+    # -- T7.4 a whisper-server blip must not lose the boss's voice note --------
+
+    def test_whisper_server_retries_once_before_giving_up(self):
+        cfg = make_config(STT_MODE="local_server")
+        path = Path(self.tmp.name) / "v.oga"
+        path.write_bytes(b"OGG")
+        good = self._Resp({"text": "перезвони Ване"})
+        calls = []
+
+        def flaky(request, timeout=None):
+            calls.append(request.full_url)
+            if len(calls) == 1:
+                raise self.URLError("Connection refused")
+            return good
+
+        with mock.patch.object(llm, "WHISPER_SERVER_RETRY_SECONDS", 0), \
+                mock.patch.object(llm, "urlopen", side_effect=flaky):
+            text = llm.transcribe(cfg, self.conn, "stt", str(path), 4)
+        self.assertEqual(text, "перезвони Ване")     # the retry served it
+        self.assertEqual(len(calls), 2)
+
+    def test_whisper_server_down_falls_back_to_the_cli(self):
+        """whisper-server's unit has RestartSec=5, but a longer outage used to end
+        the turn with "не разобрала" even though the CLI sits next to it."""
+        cfg = make_config(STT_MODE="local_server", **self._cli_paths())
+        path = Path(self.tmp.name) / "v.oga"
+        path.write_bytes(b"OGG")
+        with mock.patch.object(llm, "WHISPER_SERVER_RETRY_SECONDS", 0), \
+                mock.patch.object(llm, "urlopen",
+                                  side_effect=self.URLError("Connection refused")), \
+                mock.patch.object(llm, "_transcribe_local",
+                                  return_value="через cli") as cli:
+            text = llm.transcribe(cfg, self.conn, "stt", str(path), 4)
+        self.assertEqual(text, "через cli")
+        self.assertEqual(cli.call_count, 1)
+
+    def _cli_paths(self):
+        """A whisper-cli install that really exists on disk (binary AND model)."""
+        bin_path = Path(self.tmp.name) / "whisper-cli"
+        bin_path.write_text("#!/bin/sh\n", encoding="utf-8")
+        model_path = Path(self.tmp.name) / "ggml-small.bin"
+        model_path.write_bytes(b"ggml")
+        return {"WHISPER_BIN": str(bin_path), "WHISPER_MODEL": str(model_path)}
+
+    def test_without_a_cli_the_outage_is_still_reported_as_an_llm_error(self):
+        cfg = make_config(STT_MODE="local_server", WHISPER_BIN="/nonexistent/whisper-cli",
+                          WHISPER_MODEL="/nonexistent/model.bin")
+        path = Path(self.tmp.name) / "v.oga"
+        path.write_bytes(b"OGG")
+        with mock.patch.object(llm, "WHISPER_SERVER_RETRY_SECONDS", 0), \
+                mock.patch.object(llm, "urlopen", side_effect=self.URLError("refused")):
+            with self.assertRaises(llm.LLMError) as ctx:
+                llm.transcribe(cfg, self.conn, "stt", str(path), 4)
+        self.assertIn("whisper-server", str(ctx.exception))
+
+    def test_a_present_binary_with_a_missing_model_is_not_a_usable_fallback(self):
+        """The CLI needs BOTH halves. With only the binary, the cold run fails and
+        the boss was told "local transcription tool missing" — blaming the CLI for
+        an outage that started at the server, in the reply AND in the log chain."""
+        paths = self._cli_paths()
+        Path(paths["WHISPER_MODEL"]).unlink()
+        cfg = make_config(STT_MODE="local_server", **paths)
+        path = Path(self.tmp.name) / "v.oga"
+        path.write_bytes(b"OGG")
+        with mock.patch.object(llm, "WHISPER_SERVER_RETRY_SECONDS", 0), \
+                mock.patch.object(llm, "urlopen", side_effect=self.URLError("refused")), \
+                mock.patch.object(llm, "_transcribe_local") as cli:
+            with self.assertRaises(llm.LLMError) as ctx:
+                llm.transcribe(cfg, self.conn, "stt", str(path), 4)
+        self.assertFalse(cli.called)
+        self.assertIn("whisper-server unreachable", str(ctx.exception))
+        # …and when the CLI IS there but fails, the server outage is still named
+        cfg = make_config(STT_MODE="local_server", **self._cli_paths())
+        with mock.patch.object(llm, "WHISPER_SERVER_RETRY_SECONDS", 0), \
+                mock.patch.object(llm, "urlopen", side_effect=self.URLError("refused")), \
+                mock.patch.object(llm, "_transcribe_local",
+                                  side_effect=llm.LLMError("local transcription failed: x")):
+            with self.assertRaises(llm.LLMError) as ctx:
+                llm.transcribe(cfg, self.conn, "stt", str(path), 4)
+        self.assertIn("local transcription failed", str(ctx.exception))
+        self.assertIn("whisper-server unreachable", str(ctx.exception))
+
+    def test_an_http_answer_from_whisper_server_is_not_retried(self):
+        """FIX-INDUCED-DEFECT GUARD, not a regression test: the pre-fix code also
+        short-circuited HTTPError, so this passes on both sides. It exists because
+        the new retry LOOP could have retried a 500 from a LIVE server — HTTPError
+        is a URLError subclass — and spent a cold CLI run on it."""
+        cfg = make_config(STT_MODE="local_server", **self._cli_paths())
+        path = Path(self.tmp.name) / "v.oga"
+        path.write_bytes(b"OGG")
+        err = self.HTTPError("http://x/inference", 500, "boom", {}, None)
+        with mock.patch.object(llm, "urlopen", side_effect=err) as up, \
+                mock.patch.object(llm.time, "sleep") as slept, \
+                mock.patch.object(llm, "log") as logged, \
+                mock.patch.object(llm, "_transcribe_local") as cli:
+            with self.assertRaises(llm.LLMError):
+                llm.transcribe(cfg, self.conn, "stt", str(path), 4)
+        self.assertEqual(up.call_count, 1)
+        self.assertFalse(cli.called)
+        self.assertFalse(slept.called)          # no retry backoff was spent
+        said = " ".join(str(c[0][0]) for c in logged.call_args_list)
+        self.assertNotIn("retrying in", said)
+        self.assertNotIn("whisper-cli", said)
+
+    def _arm_speech_health(self):
+        self.agent.cfg.model_health_interval = 1
+        self.agent.cfg.model_health_confirm = 1
+        self.agent.cfg.do_model = "deepseek-4-flash"
+        self.agent.cfg.vision_model = ""
+        self.agent.cfg.stt_mode = "local_server"
+        self.agent.cfg.stt_enabled = True
+        self.agent.last_model_health = 0
+
+    def test_the_health_sweep_watches_the_speech_server_too(self):
+        self._arm_speech_health()
+        with mock.patch.object(llm, "model_ok", return_value=(True, "")), \
+                mock.patch.object(llm, "whisper_server_ok",
+                                  return_value=(False, "speech server unreachable")) as probe, \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.check_model_health()
+        self.assertTrue(probe.called)
+        self.assertIn("whisper-server", reply.call_args[0][1])
+        # remote STT has no on-box server to watch
+        self.agent.cfg.stt_mode = "remote"
+        self.agent.last_model_health = 0
+        with mock.patch.object(llm, "model_ok", return_value=(True, "")), \
+                mock.patch.object(llm, "whisper_server_ok") as skipped, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.check_model_health()
+        self.assertFalse(skipped.called)
+
+    def test_the_speech_outage_alert_names_the_real_remedy(self):
+        """whisper-server is an ON-BOX unit. Reusing the provider template told the
+        boss «загляни в доступ к моделям» — the wrong remedy — and claimed «держусь
+        на запасной», which is FALSE whenever the CLI is not installed."""
+        self._arm_speech_health()
+        paths = self._cli_paths()
+        self.agent.cfg.whisper_bin = paths["WHISPER_BIN"]
+        self.agent.cfg.whisper_model = paths["WHISPER_MODEL"]
+        with mock.patch.object(llm, "model_ok", return_value=(True, "")), \
+                mock.patch.object(llm, "whisper_server_ok",
+                                  return_value=(False, "speech server unreachable (refused)")), \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.check_model_health()
+        text = reply.call_args[0][1]
+        self.assertIn("systemctl restart whisper-server", text)
+        self.assertNotIn("доступ к моделям", text)
+        self.assertIn("whisper-cli", text)                 # the backup really is on disk
+        # With no CLI installed she must NOT claim a backup she does not have.
+        Path(paths["WHISPER_BIN"]).unlink()
+        store.kv_set(self.conn, "mh:whisper-server", "ok")
+        store.kv_set(self.conn, "mh_fail:whisper-server", "0")
+        self.agent.last_model_health = 0
+        with mock.patch.object(llm, "model_ok", return_value=(True, "")), \
+                mock.patch.object(llm, "whisper_server_ok",
+                                  return_value=(False, "speech server unreachable (refused)")), \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.check_model_health()
+        text = reply.call_args[0][1]
+        self.assertIn("systemctl restart whisper-server", text)
+        self.assertNotIn("whisper-cli — медленнее", text)
+        self.assertIn("запасного whisper-cli на боксе нет", text)
+        # …and recovery uses the speech wording, not the model one
+        self.agent.last_model_health = 0
+        with mock.patch.object(llm, "model_ok", return_value=(True, "")), \
+                mock.patch.object(llm, "whisper_server_ok", return_value=(True, "")), \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.check_model_health()
+        self.assertEqual(reply.call_args[0][1],
+                         texts.T("ru", "speech_back", model="whisper-server"))
+
+    def test_a_budget_stop_does_not_silence_the_free_on_box_speech_probe(self):
+        """The budget-stop early return exists because PAID probes would all fail
+        for a SPEND reason. The on-box server costs nothing — a spend condition is
+        no reason to stop watching it."""
+        self._arm_speech_health()
+        store.pref_set(self.conn, "budget_daily_usd", 0.01)
+        store.usage_add(self.conn, "x", "chat", "deepseek-4-flash", 1, 1, cost_usd=5.0)
+        self.assertEqual(llm.budget_state(self.agent.cfg, self.conn)[0], "stop")
+        with mock.patch.object(llm, "model_ok") as paid, \
+                mock.patch.object(llm, "whisper_server_ok",
+                                  return_value=(False, "speech server unreachable")) as probe, \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.check_model_health()
+        self.assertFalse(paid.called)          # paid probes still skipped
+        self.assertTrue(probe.called)
+        self.assertIn("whisper-server", reply.call_args[0][1])
+        # …and with remote STT there is nothing free to probe, so it still returns early
+        self.agent.cfg.stt_mode = "remote"
+        self.agent.last_model_health = 0
+        with mock.patch.object(llm, "model_ok") as paid, \
+                mock.patch.object(self.agent, "reply") as reply:
+            self.agent.check_model_health()
+        self.assertFalse(paid.called)
+        self.assertFalse(reply.called)
+
+    def test_whisper_server_probe_treats_any_http_answer_as_alive(self):
+        cfg = make_config(STT_MODE="local_server")
+        with mock.patch.object(llm, "urlopen", side_effect=self.HTTPError(
+                "http://127.0.0.1:8089/", 404, "Not Found", {}, None)):
+            self.assertEqual(llm.whisper_server_ok(cfg), (True, ""))
+        with mock.patch.object(llm, "urlopen",
+                               side_effect=self.URLError("Connection refused")):
+            ok, reason = llm.whisper_server_ok(cfg)
+        self.assertFalse(ok)
+        self.assertIn("unreachable", reason)
+
+    # -- T7.5 a cut connection is a hiccup, not a broken model -----------------
+
+    def test_a_truncated_or_unparsable_body_is_classified_transient(self):
+        self.assertTrue(llm._is_transient_llm_error(
+            "inference response truncated/malformed: IncompleteRead(2 bytes read)"))
+        self.assertTrue(llm._is_transient_llm_error("inference response was not valid JSON"))
+        self.assertFalse(llm._is_transient_llm_error("model access denied (HTTP 403)"))
+
+    def test_a_truncated_body_retries_the_same_model_and_benches_it_briefly(self):
+        cfg = make_config(LLM_FALLBACK_COOLDOWN_SECONDS="300")
+        seen = []
+
+        def flaky(c, conn, skill, messages, max_tokens=300, model=None, temperature=0,
+                  timeout=None):
+            seen.append(model)
+            if len(seen) == 1:
+                raise llm.LLMError("inference response truncated/malformed: IncompleteRead(1)")
+            return '{"ok": true}'
+
+        with mock.patch.object(llm, "chat", side_effect=flaky), \
+                mock.patch.object(llm.time, "sleep"):
+            out = llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
+        self.assertEqual(out, '{"ok": true}')
+        self.assertEqual(seen, [cfg.router_model, cfg.router_model])   # SAME model retried
+        self.assertFalse(store.cooldown_active(self.conn, "router_fast", cfg.router_model))
+
+    # -- T7.6 the env JSON must be parsed once, not per turn -------------------
+
+    def test_profiles_and_pricing_are_memoized_per_config(self):
+        cfg = make_config(PRICING_JSON='{"my-model": [2.0, 4.0]}',
+                          LLM_PROFILES_JSON='{"router_fast": {"max_tokens": 99}}')
+        real_loads = json.loads
+        parsed = []
+
+        def counting(text, *a, **kw):
+            parsed.append(text)
+            return real_loads(text, *a, **kw)
+
+        with mock.patch.object(llm.json, "loads", side_effect=counting):
+            self.assertEqual(llm.pricing_table(cfg)["my-model"], (2.0, 4.0))
+            llm.pricing_table(cfg)
+            self.assertEqual(llm.profiles(cfg)["router_fast"]["max_tokens"], 99)
+            llm.profiles(cfg)
+        self.assertEqual(len(parsed), 2, parsed)     # one parse each, not four
+        # A changed model slug invalidates the cache (tests and runtime both mutate cfg).
+        cfg.do_model = "kimi-k2.6"
+        self.assertEqual(llm.profiles(cfg)["converse_warm"]["primary"], "kimi-k2.6")
+
+    # -- T7.7 the metering backstop undercounted Russian 2x --------------------
+
+    def test_the_token_estimate_is_script_aware(self):
+        russian = "привет как дела сегодня вечером" * 4
+        latin = "hello how are you doing this evening" * 4
+        self.assertAlmostEqual(llm._estimate_tokens(russian), len(russian) // 2)
+        self.assertAlmostEqual(llm._estimate_tokens(latin), len(latin) // 4)
+        self.assertEqual(llm._estimate_tokens(""), 0)
+        # …and the prompt estimate uses it (a multimodal blob still ignored).
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": russian},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + "A" * 5000}}]}]
+        self.assertEqual(llm._estimate_prompt_tokens(messages), len(russian) // 2)
+
+    def test_the_script_rule_holds_at_the_boundary_and_on_mixed_text(self):
+        """The rule is a strict majority: `cyrillic * 2 > len(text)`. Pin both sides
+        of 50% so a later tweak cannot silently move it."""
+        self.assertEqual(llm._estimate_tokens("абвг" + "abcd"), 8 // 4)   # exactly 50% -> //4
+        self.assertEqual(llm._estimate_tokens("абвгд" + "abcd"), 9 // 2)  # over 50% -> //2
+        mixed = "когда у нас performance review?"                         # 9 of 30 Cyrillic
+        self.assertEqual(llm._estimate_tokens(mixed), len(mixed) // 4)
+
+    def test_a_mixed_prompt_scores_each_block_on_its_own_script(self):
+        """Cara's prompts are an ENGLISH system/schema block plus RUSSIAN content.
+        Joining them first makes one script decision for the whole thing, so a
+        majority-Latin prompt reverts to //4 and reinstates the Cyrillic undercount
+        for exactly the mixed case that is most common."""
+        english = "You are a strict JSON router. Reply with one object only." * 3
+        russian = "напомни мне позвонить Ване завтра в десять утра"
+        messages = [{"role": "system", "content": english},
+                    {"role": "user", "content": russian}]
+        self.assertEqual(llm._estimate_prompt_tokens(messages),
+                         len(english) // 4 + len(russian) // 2)
+        # (joined, the Cyrillic block would have been scored at //4)
+        self.assertGreater(llm._estimate_prompt_tokens(messages),
+                           len(english + russian) // 4)
+
+    def test_an_estimated_usage_row_is_traced(self):
+        tid = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(llm, "urlopen",
+                               return_value=self._chat_body(content="да, конечно")):
+            llm.chat(self.cfg, self.conn, "converse",
+                     [{"role": "user", "content": "как дела"}], model="deepseek-4-flash")
+        stages = [r["stage"] for r in store.trace_events(self.conn, tid)]
+        self.assertIn("llm.usage_estimated", stages)
+        row = self.conn.execute("SELECT tokens_in, tokens_out FROM llm_usage").fetchone()
+        self.assertEqual(row["tokens_in"], len("как дела") // 2)
+        self.assertEqual(row["tokens_out"], len("да, конечно") // 2)
+
+    def test_a_half_reported_usage_block_is_still_traced_as_estimated(self):
+        """Providers that report prompt_tokens and omit completion_tokens are common
+        (the fixtures elsewhere in this suite show that shape). Keying the signal on
+        the prompt side alone writes a half-guessed row that LOOKS provider-reported."""
+        tid = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(llm, "urlopen", return_value=self._chat_body(
+                content="да, конечно", usage={"prompt_tokens": 10})):
+            llm.chat(self.cfg, self.conn, "converse",
+                     [{"role": "user", "content": "как дела"}], model="deepseek-4-flash")
+        events_ = [r for r in store.trace_events(self.conn, tid)
+                   if r["stage"] == "llm.usage_estimated"]
+        self.assertEqual(len(events_), 1)
+        self.assertIn("out", json.loads(events_[0]["data"])["guessed"])
+        self.assertNotIn("in", json.loads(events_[0]["data"])["guessed"])
+        row = self.conn.execute("SELECT tokens_in, tokens_out FROM llm_usage").fetchone()
+        self.assertEqual(row["tokens_in"], 10)                       # provider's own
+        self.assertEqual(row["tokens_out"], len("да, конечно") // 2)  # guessed
+        # a FULLY reported block stays silent
+        tid2 = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(llm, "urlopen", return_value=self._chat_body(
+                content="ok", usage={"prompt_tokens": 10, "completion_tokens": 3})):
+            llm.chat(self.cfg, self.conn, "converse", [], model="deepseek-4-flash")
+        self.assertNotIn("llm.usage_estimated",
+                         [r["stage"] for r in store.trace_events(self.conn, tid2)])
+
+    # -- T7.8 a dead profile is stale config waiting to happen -----------------
+
+    def test_the_dead_review_profile_is_gone(self):
+        # (The CARA.md/SOLUTION.md sweep is verified in the repo, not here: the
+        # test host is a stage dir that only receives *.py + the installer.)
+        self.assertNotIn("review_balanced", llm.default_profiles(self.cfg))
+        self.assertNotIn("review_balanced", llm.profiles(self.cfg))
+        for prof in llm.profiles(self.cfg).values():
+            self.assertTrue(prof.get("primary"), prof)
+
+    # -- T7.9 a typo must not ship private audio off the box -------------------
+
+    def test_an_unknown_stt_mode_is_rejected_at_startup(self):
+        with self.assertRaises(SystemExit) as ctx:
+            make_config(STT_MODE="local-server")      # a hyphen instead of «_»
+        self.assertIn("STT_MODE", str(ctx.exception))
+        for mode in common.STT_MODES:
+            self.assertEqual(make_config(STT_MODE=mode).stt_mode, mode)
+        self.assertEqual(make_config().stt_mode, "remote")   # documented default
+
+    # -- T7.10 a stored recording was billed as one second ---------------------
+
+    def test_a_stored_recording_is_metered_with_its_real_length(self):
+        mid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": 41, "received_at": store._now(),
+            "raw_text": ""})
+        store.insert_file(self.conn, mid, 41, {
+            "file_id": "F", "file_unique_id": "u", "file_name": "voice.oga",
+            "mime_type": "audio/ogg", "file_size": 70000, "duration": 92})
+        row = store.message_files(self.conn, mid)[0]
+        self.assertEqual(row["duration"], 92)
+        captured = {}
+
+        def fake_transcribe(cfg, conn, skill, path, duration_seconds):
+            captured["seconds"] = duration_seconds
+            return "текст записи"
+
+        with mock.patch.object(self.agent, "download_file",
+                               return_value=str(Path(self.tmp.name) / "v.oga")), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(llm, "transcribe", side_effect=fake_transcribe), \
+                mock.patch.object(self.agent, "reply_chunks"):
+            self.agent.do_read_media(1, "ru", {})
+        self.assertEqual(captured["seconds"], 92)       # was hard-coded 0
+
+    def test_an_old_voice_row_without_a_duration_is_estimated_from_its_size(self):
+        voice = {"duration": None, "file_size": 70000,
+                 "mime_type": "audio/ogg", "file_name": "voice.oga"}
+        self.assertEqual(self.mod.Agent._audio_seconds(voice), 20)
+        self.assertEqual(self.mod.Agent._audio_seconds(
+            {"duration": 0, "file_size": 0, "mime_type": "audio/ogg"}), 0)
+        self.assertEqual(self.mod.Agent._audio_seconds(
+            {"duration": 5, "file_size": 0, "mime_type": "audio/ogg"}), 5)
+
+    def test_the_size_estimate_never_over_bills_a_wav_or_an_mp3(self):
+        """3500 B/s is the OGG/Opus VOICE bitrate. A Telegram *document* carries no
+        duration, so any .wav/.mp3 sent with "send as file" stores duration=NULL —
+        and the voice bitrate would claim ~3000 s for a 1-minute 10 MB WAV, i.e.
+        50x over-billing on remote STT: the same phantom-dollar budget lock this
+        work package exists to prevent, with the sign flipped."""
+        wav = {"duration": None, "file_size": 10_000_000,
+               "mime_type": "audio/wav", "file_name": "meeting.wav"}
+        self.assertEqual(self.mod.Agent._audio_seconds(wav), 0)
+        mp3 = {"duration": None, "file_size": 4_800_000,
+               "mime_type": "audio/mpeg", "file_name": "talk.mp3"}
+        self.assertEqual(self.mod.Agent._audio_seconds(mp3), 0)
+        # a REPORTED duration is always honoured, whatever the container
+        self.assertEqual(self.mod.Agent._audio_seconds(dict(wav, duration=61)), 61)
+        # …and an .opus/.ogg name alone is enough to trust the voice bitrate
+        self.assertEqual(self.mod.Agent._audio_seconds(
+            {"duration": None, "file_size": 7000, "mime_type": "",
+             "file_name": "note.opus"}), 2)
+
+    def test_a_forwarded_voice_note_keeps_its_duration(self):
+        part = {"voice": {"file_id": "F", "file_unique_id": "u", "duration": 37,
+                          "mime_type": "audio/ogg", "file_size": 12000}}
+        self.assertEqual(self.agent.other_attachment(part)["duration"], 37)
+
+    # -- T7.11 bounded probes + a watchdog for a wedged loop --------------------
+
+    def test_a_health_probe_may_not_hold_the_thread_for_the_full_llm_timeout(self):
+        """Three models x LLM_TIMEOUT (90 s) is 4.5 minutes of a frozen bot during
+        exactly the outage the monitor exists to report."""
+        seen = {}
+
+        def fake_chat(cfg, conn, skill, messages, max_tokens=300, model=None,
+                      temperature=0, timeout=None):
+            seen["timeout"] = timeout
+            return "pong"
+
+        with mock.patch.object(llm, "chat", side_effect=fake_chat):
+            self.assertEqual(llm.model_ok(self.cfg, self.conn, "deepseek-4-flash"), (True, ""))
+        self.assertEqual(seen["timeout"], llm.HEALTH_PROBE_TIMEOUT_SECONDS)
+        self.assertLessEqual(llm.HEALTH_PROBE_TIMEOUT_SECONDS, 10)
+        self.assertLess(llm.HEALTH_PROBE_TIMEOUT_SECONDS, self.cfg.llm_timeout)
+
+    def test_the_probe_timeout_reaches_the_socket(self):
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["timeout"] = timeout
+            return self._chat_body("pong", usage={"prompt_tokens": 1, "completion_tokens": 1})
+
+        with mock.patch.object(llm, "urlopen", side_effect=fake_urlopen):
+            llm.model_ok(self.cfg, self.conn, "deepseek-4-flash")
+        self.assertEqual(seen["timeout"], llm.HEALTH_PROBE_TIMEOUT_SECONDS)
+        # an ordinary call still gets the full configured budget
+        with mock.patch.object(llm, "urlopen", side_effect=fake_urlopen):
+            llm.chat(self.cfg, self.conn, "converse", [], model="deepseek-4-flash")
+        self.assertEqual(seen["timeout"], self.cfg.llm_timeout)
+
+    def test_sd_notify_is_a_silent_no_op_without_the_socket(self):
+        env = dict(os.environ)
+        env.pop("NOTIFY_SOCKET", None)
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertFalse(common.sd_notify("WATCHDOG=1"))
+        # a configured but DEAD socket must not raise either
+        with mock.patch.dict(os.environ,
+                             {"NOTIFY_SOCKET": str(Path(self.tmp.name) / "gone.sock")}):
+            self.assertFalse(common.sd_notify("WATCHDOG=1"))
+
+    @unittest.skipUnless(hasattr(__import__("socket"), "AF_UNIX"), "AF_UNIX only")
+    def test_sd_notify_sends_the_systemd_datagram(self):
+        import socket
+        sock_path = str(Path(self.tmp.name) / "notify.sock")
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            server.bind(sock_path)
+            server.settimeout(2)
+            with mock.patch.dict(os.environ, {"NOTIFY_SOCKET": sock_path}):
+                self.assertTrue(common.sd_notify("READY=1"))
+                self.assertTrue(common.sd_notify("WATCHDOG=1"))
+                self.assertFalse(common.sd_notify(""))     # nothing to say
+            self.assertEqual(server.recv(64), b"READY=1")
+            self.assertEqual(server.recv(64), b"WATCHDOG=1")
+        finally:
+            server.close()
+            Path(sock_path).unlink(missing_ok=True)
+
+    def test_the_loop_pings_the_watchdog_between_units_of_work(self):
+        """A wedged poll loop reports `active (running)` forever. These coarse
+        pings mark the cheap boundaries; the fine ones inside the long primitives
+        are what make the budget a number (see the tests below)."""
+        with mock.patch.object(self.agent, "watchdog_ping") as ping:
+            self.agent._tick("noop", lambda: None)
+        self.assertEqual(ping.call_count, 1)
+        # a tick that RAISES still counted as progress before it ran
+        with mock.patch.object(self.agent, "watchdog_ping") as ping:
+            self.agent._tick("boom", lambda: (_ for _ in ()).throw(RuntimeError("x")))
+        self.assertEqual(ping.call_count, 1)
+        with mock.patch.object(self.agent, "handle_update", return_value=None), \
+                mock.patch.object(self.agent, "watchdog_ping") as ping:
+            self.agent.process_update_batch([
+                {"update_id": 1, "message": {"chat": {"id": 1}, "from": {"id": 1},
+                                             "message_id": 7, "date": 1781200000, "text": "a"}},
+                {"update_id": 2, "message": {"chat": {"id": 1}, "from": {"id": 1},
+                                             "message_id": 8, "date": 1781200000, "text": "b"}},
+            ])
+        self.assertEqual(ping.call_count, 2)
+
+    def test_an_armed_but_unreachable_watchdog_is_reported_at_startup(self):
+        """If the unit arms WatchdogSec but the process gets no NOTIFY_SOCKET,
+        systemd SIGABRTs a perfectly healthy Cara every WatchdogSec. Say so in the
+        journal on the first second, not after the first kill."""
+        self.assertEqual(common.watchdog_usec(), 0)
+        with mock.patch.dict(os.environ, {"WATCHDOG_USEC": "900000000"}):
+            self.assertEqual(common.watchdog_usec(), 900000000)
+            with mock.patch.object(common, "sd_notify", return_value=False), \
+                    mock.patch.object(self.mod, "log") as logged, \
+                    mock.patch.object(self.mod, "tg_call", return_value={}), \
+                    mock.patch.object(self.agent, "announce_deploy_if_changed"), \
+                    mock.patch.object(self.agent, "replay_pending_updates"):
+                self.agent.stop = True          # one pass through run(), no polling
+                self.agent.run()
+        self.assertTrue(any("WatchdogSec is armed" in c[0][0]
+                            for c in logged.call_args_list), logged.call_args_list)
+        with mock.patch.dict(os.environ, {"WATCHDOG_USEC": "bogus"}):
+            self.assertEqual(common.watchdog_usec(), 0)
+
+    def test_watchdog_ping_uses_sd_notify_and_never_raises(self):
+        with mock.patch.object(common, "sd_notify") as notify:
+            self.agent.watchdog_ping()
+        notify.assert_called_once_with("WATCHDOG=1")
+        with mock.patch.dict(os.environ, {"NOTIFY_SOCKET": "/nonexistent/notify.sock"}):
+            self.agent.watchdog_ping()          # must not raise into the poll loop
+
+    def test_one_pass_of_the_poll_loop_pings_before_it_polls(self):
+        """`stop = True` before run() skips the loop body entirely, so the ping at
+        the top of the while loop was advertised in the docs and never executed by
+        any test — deleting it would have stayed green."""
+        calls = []
+
+        def one_iteration(token, method, params=None, timeout=None):
+            if method == "getUpdates":
+                self.agent.stop = True
+                return []
+            return {}
+
+        with mock.patch.object(common, "sd_notify", return_value=True), \
+                mock.patch.object(self.mod, "tg_call", side_effect=one_iteration), \
+                mock.patch.object(self.agent, "announce_deploy_if_changed"), \
+                mock.patch.object(self.agent, "replay_pending_updates"), \
+                mock.patch.object(self.agent, "_tick") as ticks, \
+                mock.patch.object(self.agent, "watchdog_ping",
+                                  side_effect=lambda: calls.append(1)):
+            self.agent.run()
+        self.assertGreaterEqual(len(calls), 1)
+        self.assertTrue(ticks.called)          # the loop body really ran
+
+    def test_the_voice_path_pings_after_a_transcription_returns(self):
+        """A cold whisper run is minutes long; the ping AFTER it is what keeps the
+        routed turn that follows out of the same watchdog window."""
+        during = {}
+        path = Path(self.tmp.name) / "v.oga"
+        path.write_bytes(b"OGG")
+
+        def fake_transcribe(cfg, conn, skill, audio, seconds):
+            during["before"] = ping.call_count
+            return "перезвони Ване"
+
+        with mock.patch.object(self.agent, "download_file", return_value=str(path)), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(llm, "transcribe", side_effect=fake_transcribe), \
+                mock.patch.object(self.agent, "watchdog_ping") as ping:
+            text = self.agent.transcribe_voice(1, {"file_id": "F", "file_unique_id": "u",
+                                                   "duration": 9})
+        self.assertEqual(text, "перезвони Ване")
+        self.assertGreater(ping.call_count, during["before"])
+
+    def test_every_model_call_marks_progress_so_a_failover_cannot_look_wedged(self):
+        """THE reason the budget can be a number. One routed turn is
+        primary(2 attempts) + fallback(2) x LLM_TIMEOUT — minutes — and the coarse
+        per-update ping would have let systemd SIGABRT a perfectly healthy Cara in
+        the middle of exactly the provider outage the failover exists for."""
+        cfg = make_config(LLM_FALLBACK_COOLDOWN_SECONDS="300",
+                          LLM_PROFILES_JSON=json.dumps(
+                              {"router_fast": {"primary": "deepseek-4-flash",
+                                               "fallbacks": ["kimi-k2.6"]}}))
+        pings = []
+        with mock.patch.object(common, "watchdog_ping",
+                               side_effect=lambda: pings.append(len(pings))), \
+                mock.patch.object(llm, "urlopen",
+                                  side_effect=self.URLError("timed out")), \
+                mock.patch.object(llm.time, "sleep"):
+            with self.assertRaises(llm.LLMError):
+                llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
+        # 2 models x 2 attempts, each of which is its own LLM_TIMEOUT wait
+        self.assertEqual(len(pings), 4)
+
+    def test_an_embedding_and_a_transcription_mark_progress_too(self):
+        pings = []
+        with mock.patch.object(common, "watchdog_ping",
+                               side_effect=lambda: pings.append(1)), \
+                mock.patch.object(llm, "urlopen", return_value=self._Resp(
+                    {"data": [{"index": 0, "embedding": [0.1, 0.2]}],
+                     "usage": {"prompt_tokens": 4}})):
+            llm.embed(self.cfg, self.conn, "ask", ["привет"])
+        self.assertEqual(len(pings), 1)
+        path = Path(self.tmp.name) / "v.oga"
+        path.write_bytes(b"OGG")
+        cfg = make_config(STT_MODE="local_server", **self._cli_paths())
+        pings.clear()
+        with mock.patch.object(common, "watchdog_ping",
+                               side_effect=lambda: pings.append(1)), \
+                mock.patch.object(llm, "WHISPER_SERVER_RETRY_SECONDS", 0), \
+                mock.patch.object(llm, "urlopen",
+                                  side_effect=self.URLError("Connection refused")), \
+                mock.patch.object(llm, "_transcribe_local", return_value="через cli"):
+            llm.transcribe(cfg, self.conn, "stt", str(path), 4)
+        # transcribe() + attempt 1 + attempt 2 + the cold CLI run: each is its own
+        # STT_LOCAL_TIMEOUT-bounded wait, so each gets its own window.
+        self.assertEqual(len(pings), 4)
+
+    def test_a_drain_marks_progress_between_jobs(self):
+        """`runtime.drain` runs up to 5 durable jobs under ONE scheduler tick, and a
+        single job (memory consolidation, the encrypted backup) is minutes long."""
+        order = []
+        runtime.register("wp7", "slow", lambda ctx, conn, payload, job: order.append("job"))
+        try:
+            for _ in range(2):
+                jobs.add_job(self.conn, "wp7", "slow", payload={})
+            with mock.patch.object(common, "watchdog_ping",
+                                   side_effect=lambda: order.append("ping")):
+                self.assertEqual(runtime.drain(self.conn, self.agent, max_jobs=5), 2)
+        finally:
+            runtime._HANDLERS.pop(("wp7", "slow"), None)
+        self.assertEqual(order[:4], ["ping", "job", "ping", "job"])
+
+    def test_the_unit_arms_the_watchdog_with_room_for_the_longest_step(self):
+        import re as remod
+        repo = Path(__file__).resolve().parent
+        installer = repo / "install-tg-ingest-agent-pilot-remote.sh"
+        units = [(installer.name, installer.read_text(encoding="utf-8"))]
+        tracked = repo / "tg-ingest-agent.service"
+        # Only the installer heredoc ships to the stage dir, but the tracked unit is
+        # what a HUMAN reads when reasoning about the live service — so pin both in a
+        # real CHECKOUT, or they drift apart unnoticed. `.git` is the checkout marker:
+        # the stage dir never has one, and it CAN hold a stale .service left by an
+        # older layout, which is not the file this assertion is about.
+        if (repo / ".git").exists() and tracked.exists():
+            units.append((tracked.name, tracked.read_text(encoding="utf-8")))
+        for name, unit in units:
+            match = remod.search(r"^WatchdogSec=(\d+)$", unit, remod.M)
+            self.assertIsNotNone(match, f"{name} must arm the watchdog")
+            self.assertIn("\nNotifyAccess=main\n", unit, name)  # Type=simple needs this
+            # NOT Type=notify: a missing READY=1 there is a startup FAILURE, i.e. a
+            # crash loop on the live box.
+            self.assertIsNotNone(remod.search(r"^Type=simple$", unit, remod.M), name)
+            # The budget must exceed the longest UN-PINGED span. Because every model
+            # call, every whisper-server attempt and every drained job pings, that
+            # span is one bounded wait — and the largest is a cold transcription.
+            self.assertGreater(int(match.group(1)),
+                               make_config().stt_local_timeout
+                               + self.mod.Agent.WATCHDOG_STEP_MARGIN_SECONDS, name)
+
+    def test_a_stt_timeout_raised_above_the_unit_budget_is_called_out_at_startup(self):
+        """STT_LOCAL_TIMEOUT_SECONDS is operator-settable and the unit's number is
+        not: raise the former past the latter and systemd kills her mid-voice-note,
+        with a green suite, because no test knows the deployed env."""
+        with mock.patch.dict(os.environ, {"WATCHDOG_USEC": "900000000"}), \
+                mock.patch.object(self.mod, "log") as logged:
+            self.agent.cfg.stt_local_timeout = 600
+            self.agent._warn_if_watchdog_budget_is_too_tight()
+            self.assertEqual([c for c in logged.call_args_list
+                              if "mid-voice-note" in c[0][0]], [])
+            self.agent.cfg.stt_local_timeout = 1200
+            self.agent._warn_if_watchdog_budget_is_too_tight()
+        said = [c[0][0] for c in logged.call_args_list if "mid-voice-note" in c[0][0]]
+        self.assertEqual(len(said), 1, logged.call_args_list)
+        self.assertIn("1200", said[0])
+        self.assertIn("900", said[0])
+        # off systemd (no WATCHDOG_USEC) there is no budget to compare against
+        with mock.patch.object(self.mod, "log") as quiet:
+            self.agent._warn_if_watchdog_budget_is_too_tight()
+        self.assertEqual(quiet.call_args_list, [])
+
+
 if __name__ == "__main__":
     unittest.main()

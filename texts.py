@@ -737,6 +737,31 @@ TEXTS = {
         "ru": "✓ Модель «{model}» снова на связи, босс.",
         "en": "✓ The «{model}» model is reachable again, boss.",
     },
+    # The speech backend is an ON-BOX systemd unit, not a provider: the remedy is
+    # `systemctl restart whisper-server`, not a look at the model access. Two
+    # variants because the cold whisper-cli fallback exists only when the binary
+    # and the model file are both on disk — claiming a backup that isn't there
+    # would be a fabricated fact.
+    "speech_down": {
+        "ru": ("⚠️ Босс, распознавание речи на сервере ({model}) не отвечает ({reason}). "
+               "Голосовые пока веду через запасной whisper-cli — медленнее, но работает. "
+               "Когда дойдут руки: systemctl restart whisper-server."),
+        "en": ("⚠️ Boss, on-box speech recognition ({model}) is not answering ({reason}). "
+               "I'm running voice notes through the backup whisper-cli meanwhile — slower, "
+               "but it works. When you get a chance: systemctl restart whisper-server."),
+    },
+    "speech_down_no_fallback": {
+        "ru": ("⚠️ Босс, распознавание речи на сервере ({model}) не отвечает ({reason}), "
+               "и запасного whisper-cli на боксе нет — голосовые я сейчас разобрать не могу. "
+               "Нужен systemctl restart whisper-server."),
+        "en": ("⚠️ Boss, on-box speech recognition ({model}) is not answering ({reason}), "
+               "and there is no backup whisper-cli on the box — I can't make out voice notes "
+               "right now. It needs systemctl restart whisper-server."),
+    },
+    "speech_back": {
+        "ru": "✓ Распознавание речи на сервере ({model}) снова работает, босс.",
+        "en": "✓ On-box speech recognition ({model}) is working again, boss.",
+    },
     "disk_low": {
         "ru": ("⚠️ Босс, на диске сервера осталось {free} из {total} ({pct}%). "
                "Когда он забьётся, я перестану записывать вообще всё — "
@@ -848,6 +873,10 @@ TEXTS = {
     "budget_set_done": {
         "ru": "Готово, босс — лимит AI на {period}: ${amount} ✅",
         "en": "Done, boss — AI budget for the {period}: ${amount} ✅",
+    },
+    "budget_set_off": {
+        "ru": "Готово, босс — лимит AI на {period} снят (0 = без ограничения) ✅",
+        "en": "Done, boss — the AI cap for the {period} is off (0 = no limit) ✅",
     },
     "budget_set_unclear": {
         "ru": "Не разобрала сумму. Скажи, например: «дневной лимит $3» или «месячный бюджет 20».",

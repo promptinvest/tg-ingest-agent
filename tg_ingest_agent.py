@@ -508,6 +508,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         for update in updates or []:
             if self.stop:
                 break
+            self.watchdog_ping()   # progress marker: one more update actually started
             try:
                 update_id = int(update["update_id"])
                 chat_id = self._update_chat_id(update)
@@ -606,10 +607,44 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         "check_disk_space",
     )
 
+    def watchdog_ping(self):
+        """Tell systemd the loop is still moving (WatchdogSec in the unit).
+
+        Without it a hung poll loop reports `active (running)` forever and only the
+        boss's silence reveals it. These coarse call sites (loop top, each scheduler
+        tick, each update) are the cheap ones; the invariant that makes the budget a
+        real number is the FINE pings inside the long primitives — `llm.chat`,
+        `llm.embed`, `llm.transcribe`, each `runtime.drain` job — so the longest
+        un-pinged span is one bounded network/subprocess wait rather than a whole
+        update (router + converse + embed, each with failover, is minutes).
+        Outside systemd (tests, a manual run) sd_notify is a silent no-op."""
+        common.watchdog_ping()
+
+    # Room the watchdog budget must leave above the longest bounded step, for the
+    # ffmpeg conversion and the process teardown around it.
+    WATCHDOG_STEP_MARGIN_SECONDS = 120
+
+    def _warn_if_watchdog_budget_is_too_tight(self):
+        """The watchdog budget is a NUMBER in the unit; STT_LOCAL_TIMEOUT_SECONDS is
+        an operator-settable env var. Raise the latter above the former and systemd
+        kills Cara in the middle of every long transcription — with a green test
+        suite, because the unit file knows nothing about the deployed env. Say it
+        once at startup, where the two values finally meet."""
+        budget = common.watchdog_usec() / 1_000_000.0
+        if budget <= 0:
+            return
+        longest = self.cfg.stt_local_timeout + self.WATCHDOG_STEP_MARGIN_SECONDS
+        if longest >= budget:
+            log(f"WARNING: WatchdogSec is {budget:.0f}s but one transcription may take "
+                f"up to {longest}s (STT_LOCAL_TIMEOUT_SECONDS="
+                f"{self.cfg.stt_local_timeout} + margin) — systemd would kill her "
+                f"mid-voice-note; lower STT_LOCAL_TIMEOUT_SECONDS or raise WatchdogSec")
+
     def _tick(self, name, fn):
         """Run one scheduler tick, isolating an UNEXPECTED failure so it can't exit the poll
         loop (a systemd crash-loop if the condition persists). ShutdownInterrupt is re-raised
         so a graceful stop still propagates; everything else is logged and swallowed."""
+        self.watchdog_ping()
         try:
             fn()
         except ShutdownInterrupt:
@@ -622,6 +657,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             tg_call(self.cfg.token, "deleteWebhook", {"drop_pending_updates": False})
         except TelegramError as exc:
             log(f"deleteWebhook failed (continuing): {exc}")
+        # A watchdog that is armed in the unit but unreachable from the process
+        # (no NOTIFY_SOCKET) would SIGABRT a perfectly healthy Cara on the timer.
+        # Say so in the journal on the first second rather than after the first kill.
+        if not common.sd_notify("READY=1") and common.watchdog_usec():
+            log("WARNING: WatchdogSec is armed but NOTIFY_SOCKET is unavailable — "
+                "the loop cannot ping systemd; drop WatchdogSec from the unit or set "
+                "NotifyAccess=main")
+        self._warn_if_watchdog_budget_is_too_tight()
         self.announce_deploy_if_changed()
         self.replay_pending_updates()
         offset = int(store.kv_get(self.conn, "offset", "0") or 0)
@@ -633,6 +676,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         )
         while not self.stop:
             now = time.time()
+            self.watchdog_ping()
             self.turn_lang = None  # scheduler replies use the stored preference
             # Each scheduler tick runs under a uniform guard: an UNEXPECTED failure in one tick
             # (e.g. a sqlite3.OperationalError from disk-full/IO) must NOT propagate out of run()
@@ -758,6 +802,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     "file_name": a.get("file_name") or default_name,
                     "mime_type": a.get("mime_type") or default_mime,
                     "file_size": a.get("file_size"),
+                    # Voice/audio/video-note length, so a later transcription is
+                    # metered in real seconds instead of billing as one.
+                    "duration": a.get("duration"),
                 }
         return None
 
@@ -1008,6 +1055,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             transcript = llm.transcribe(
                 self.cfg, self.conn, "stt", path, int(voice.get("duration") or 0)
             )
+            # llm.transcribe pings on the way IN; ping again on the way out so the
+            # routed turn that follows a minutes-long cold whisper run starts its own
+            # watchdog window instead of sharing that one.
+            self.watchdog_ping()
         except (TelegramError, llm.LLMError) as exc:
             if self.stop:
                 # A deploy/shutdown killed the transcription mid-run: say
@@ -2664,6 +2715,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return True
         return False
 
+    def _whisper_cli_available(self):
+        """True when the cold whisper-cli fallback can actually run — llm's
+        local_server fallback needs the binary AND the model file."""
+        try:
+            return bool(self.cfg.whisper_bin and Path(self.cfg.whisper_bin).exists()
+                        and self.cfg.whisper_model and Path(self.cfg.whisper_model).exists())
+        except OSError:
+            return False
+
     def check_model_health(self):
         """Periodically verify Cara's models are reachable and tell the boss the
         moment one becomes inaccessible (or recovers) — e.g. a provider/tier 403
@@ -2675,23 +2735,37 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if now - self.last_model_health < self.cfg.model_health_interval:
             return
         self.last_model_health = now
-        # A budget stop blocks every model call before it leaves the box, so the
-        # probes below would all "fail" — but that's a SPEND condition, not a
-        # model outage. Don't masquerade it as "model down" (the budget guard has
-        # its own warn/stop notice). Skip the health sweep while budget-stopped.
-        if llm.budget_state(self.cfg, self.conn)[0] == "stop":
+        probes = []
+        # A budget stop blocks every PAID model call before it leaves the box, so
+        # those probes would all "fail" — but that's a SPEND condition, not a model
+        # outage. Don't masquerade it as "model down" (the budget guard has its own
+        # warn/stop notice). The on-box speech server costs nothing, so a spend
+        # condition is no reason to stop watching it.
+        if llm.budget_state(self.cfg, self.conn)[0] != "stop":
+            prof = llm.profiles(self.cfg)
+            models = []
+            for m in (self.cfg.do_model, (prof.get("converse_warm") or {}).get("primary"),
+                      self.cfg.vision_model):
+                if m and not str(m).startswith("router:") and m not in models:
+                    models.append(m)
+            # Each probe is capped at llm.HEALTH_PROBE_TIMEOUT_SECONDS: this sweep runs
+            # inline on the only thread, so an outage must cost seconds, not 90 s per model.
+            probes = [("model", m, (lambda m=m: llm.model_ok(self.cfg, self.conn, m)))
+                      for m in models]
+        # The warm speech server is a dependency too — and the one that goes down
+        # most often (a systemd restart, an OOM). Watch it in the same sweep, under
+        # its OWN alert wording: it is an on-box unit, so the remedy is a restart,
+        # not a look at the provider's model access.
+        if self.cfg.stt_enabled and self.cfg.stt_mode == "local_server":
+            probes.append(("speech", "whisper-server",
+                           lambda: llm.whisper_server_ok(self.cfg)))
+        if not probes:
             return
-        prof = llm.profiles(self.cfg)
-        models = []
-        for m in (self.cfg.do_model, (prof.get("converse_warm") or {}).get("primary"),
-                  self.cfg.vision_model):
-            if m and not str(m).startswith("router:") and m not in models:
-                models.append(m)
         self.turn_lang = None
         lang = self.lang()
-        for model in models:
+        for kind, model, probe in probes:
             try:
-                ok, reason = llm.model_ok(self.cfg, self.conn, model)
+                ok, reason = probe()
             except Exception as exc:  # never crash the loop on a health check
                 log(f"model health check error for {model}: {exc}")
                 continue
@@ -2702,7 +2776,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if ok:
                 store.kv_set(self.conn, f"mh_fail:{model}", "0")
                 if prev == "down":
-                    if self._send_all(T(lang, "model_back", model=model)):
+                    back = "speech_back" if kind == "speech" else "model_back"
+                    if self._send_all(T(lang, back, model=model)):
                         store.kv_set(self.conn, f"mh:{model}", "ok")
                         log(f"model health: {model} down -> ok ({reason})")
                 elif prev is None:
@@ -2721,7 +2796,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                          else self.cfg.model_health_confirm)
             if prev == "down" or fails < threshold:
                 continue  # already announced, or not yet confirmed (likely transient)
-            key = "model_down_transient" if transient else "model_down"
+            if kind == "speech":
+                # Only promise the CLI backup when it is really on disk: llm's
+                # fallback needs BOTH the binary and the model file, and a claim of
+                # "I'm holding on a backup" that isn't true is a fabricated fact.
+                key = ("speech_down" if self._whisper_cli_available()
+                       else "speech_down_no_fallback")
+            else:
+                key = "model_down_transient" if transient else "model_down"
             if self._send_all(T(lang, key, model=model, reason=reason)):
                 store.kv_set(self.conn, f"mh:{model}", "down")
                 log(f"model health: {model} ok -> down ({reason}) after {fails} checks")
@@ -3393,6 +3475,45 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         return None, None
 
     _AUDIO_EXTS = (".oga", ".ogg", ".mp3", ".m4a", ".wav", ".opus")
+    # OGG/Opus voice at Telegram's bitrate ≈ 3.5 KB per second of speech. Only used
+    # for rows stored before `files.duration` existed.
+    VOICE_BYTES_PER_SECOND = 3500
+    _VOICE_EXTS = (".oga", ".ogg", ".opus")
+
+    @staticmethod
+    def _audio_seconds(row):
+        """Real length of a stored recording, for METERING. Passing 0 (as this used
+        to) makes remote STT bill any recording as a single second — the pricing is
+        per audio minute. Telegram's own `duration` first.
+
+        The size estimate is deliberately narrow: 3.5 KB/s is the OGG/Opus VOICE
+        bitrate, and a Telegram *document* carries no duration, so a .wav or .mp3
+        sent with "send as file" stores duration=NULL today. Applying the voice
+        bitrate to a 10 MB WAV would claim ~3000 s (50x) and OVER-bill remote STT —
+        the same phantom-dollar budget lock, with the sign flipped. Anything that
+        is not voice/Opus therefore falls back to the previous behaviour (0)."""
+        def _col(name):
+            try:
+                return row[name]
+            except (IndexError, KeyError):
+                return None
+        try:
+            seconds = int(_col("duration") or 0)
+        except (TypeError, ValueError):
+            seconds = 0
+        if seconds > 0:
+            return seconds
+        mime = str(_col("mime_type") or "").lower()
+        name = str(_col("file_name") or "").lower()
+        is_voice = ("ogg" in mime or "opus" in mime
+                    or name.endswith(Agent._VOICE_EXTS))
+        if not is_voice:
+            return 0
+        try:
+            size = int(_col("file_size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        return max(1, round(size / Agent.VOICE_BYTES_PER_SECOND)) if size > 0 else 0
 
     def do_read_media(self, chat_id, lang, params):
         """Open a FORWARDED voice/file the boss asked about and show its CONTENT — transcribe a
@@ -3439,7 +3560,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         try:
             path = self.download_file(f["tg_file_id"], f["tg_file_unique_id"], ext)
             if is_audio:
-                content = llm.transcribe(self.cfg, self.conn, "stt", path, 0) or ""
+                content = llm.transcribe(self.cfg, self.conn, "stt", path,
+                                         self._audio_seconds(f)) or ""
             elif is_pdf:
                 import pdftext
                 content = pdftext.extract_text(Path(path).read_bytes(), self.MAX_DOC_CHARS)
