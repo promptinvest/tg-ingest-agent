@@ -1247,6 +1247,51 @@ The md is documentation-only; the operative persona is `converse.CHARACTER` +
 5. The deploy flow's fleet notice covers deployment notification — send nothing
    extra.
 
+## 16a. Session checkpoints
+
+### Session A — WP1–WP4 — COMPLETE, DEPLOYED 2026-07-25
+
+Commits (all pushed to `origin/main`), suite **607 → 690 tests**:
+
+| Commit | What |
+|---|---|
+| `e51dfdf` | WP1 backup hardening + disk alerting (T1.1–T1.6) |
+| `3fc2346` | WP2 ENOSPC containment + atomic migrations (T2.1–T2.4) |
+| `6edd307` | WP2 follow-up: zero-write startup + persistent DB-stall alert |
+| `f6abe59` | WP3 note_no/vector-cache/rowid integrity + turn-state hygiene (T3.1–T3.6) |
+| `16fbee2` | WP4 purge semantics (T4.1–T4.3) |
+| `e95c975` | WP2 minors: dead-letter allowlist, alert breadth, tea marker |
+| `2eefa19` | fix: stray-snapshot sweep must not delete hand-made backups |
+
+**Deployed at `2eefa19`**: 690 tests green on the box, service `active`, 0 restarts,
+journal clean, `integrity_check` ok, migrations applied. PD-VPS KB updated
+(`dataplatform@b55c627`).
+
+New/changed operator-facing surface: env knob **`DISK_ALERT_MIN_FREE_PCT`** (default 10,
+0 disables); `Agent.SCHEDULER_TICKS` is now a class-level table; kv keys
+`note_no_next:{chat}`, `vec_gen`, `life_tea_rebalance_v1`; `conversation.update_id`
+column + partial unique index.
+
+**Three lessons that change how the remaining sessions run:**
+1. **A work package is not verified until its reviews actually return.** WP2's spec
+   reviewer and finalizer both died on API errors *after* the commit landed. Re-running
+   that review found TWO major defects in the just-shipped fix: the zero-write-startup
+   task hadn't achieved its purpose (`self_model.seed` still wrote on every start, so a
+   full disk still blocked startup), and the new containment guard could wedge silently
+   on a persistent non-disk-full DB error while systemd reported `active (running)`.
+   Both were introduced BY the fix. Always confirm reviews returned; re-run the ones that
+   didn't, even post-commit.
+2. **Do not filter reviewer findings by severity.** The first workflow forwarded only
+   blockers/majors to the fixer, silently dropping 3 minors — one of which
+   (`_notify_dead_letter` with no allowlist check) let a stranger's failed update draw a
+   reply in Cara's voice. Forward everything; let the judging agent reject what's wrong.
+3. **Verify against production reality, not just the test suite.** `sweep_stray` passed
+   every test and would still have deleted a 16 MB hand-made backup on the live box,
+   because no test knew such files exist. Post-deploy inspection of real state caught it.
+
+### Session B — WP5–WP9 — pending
+### Session C — WP10–WP14 — pending
+
 ## 17. Traceability
 
 Every confirmed review finding maps to exactly one task above. Index:
