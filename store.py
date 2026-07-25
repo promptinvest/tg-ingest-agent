@@ -923,8 +923,35 @@ def open_db(path):
 
 
 def _migrate(conn):
+    """Run the additive migrations as ONE all-or-nothing transaction.
+
+    Python's legacy transaction control autocommits DDL while the paired backfill
+    UPDATEs wait for the end-of-open commit, so a crash (disk full, power loss)
+    between an `ALTER TABLE` and its backfill left a column that exists but was
+    never filled — and the `if "x" not in columns` guard then skips that backfill
+    forever, or the schema stays half-ALTERed and crash-loops the next start.
+    SQLite DDL IS transactional, so `BEGIN IMMEDIATE` (write lock taken up front,
+    before the first ALTER) plus a single commit makes the whole step atomic:
+    either every migration and backfill lands, or the DB is untouched and the
+    next start retries from the same point.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _migrate_steps(conn)
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+
+
+def _migrate_steps(conn):
     """Additive migrations for databases created by older versions
-    (CREATE IF NOT EXISTS does not alter existing tables)."""
+    (CREATE IF NOT EXISTS does not alter existing tables).
+
+    Runs inside `_migrate`'s transaction — nothing here (or in the helpers it
+    calls) may commit, or the atomicity above is lost. A steady-state start must
+    also perform ZERO writes: every backfill is WHERE-guarded so a full disk
+    cannot block STARTUP too (that is what made the crash loop unrecoverable)."""
     # categories.kind FIRST: the note_no backfill below calls journal_categories(),
     # which selects on kind — on a DB predating both migrations that read would
     # crash open_db (and crash-loop the service) if kind were added later.
@@ -1063,10 +1090,14 @@ def _migrate(conn):
         conn.execute("ALTER TABLE memory_candidates ADD COLUMN first_seen_at TEXT")
     if "last_seen_at" not in candidate_columns:
         conn.execute("ALTER TABLE memory_candidates ADD COLUMN last_seen_at TEXT")
+    # WHERE-guarded: without it this rewrote every candidate row on EVERY start,
+    # so a full disk failed here and startup could never limp back up.
     conn.execute(
         "UPDATE memory_candidates SET first_seen_at=COALESCE(first_seen_at, created_at),"
         " last_seen_at=COALESCE(last_seen_at, created_at),"
         " recurrence_count=COALESCE(recurrence_count, 1)"
+        " WHERE first_seen_at IS NULL OR last_seen_at IS NULL"
+        " OR recurrence_count IS NULL"
     )
     convo_columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversation)")}
     if convo_columns and "source" not in convo_columns:
@@ -1150,7 +1181,7 @@ def note_outcome_record(conn, message_id, event, *, occurred_at=None,
         return False
     note_no = row["note_no"]
     if note_no is None:
-        note_no = ensure_note_no(conn, message_id)
+        note_no = ensure_note_no(conn, message_id, commit=commit)
     if note_no is None:
         return False
     cur = conn.execute(
@@ -1249,7 +1280,8 @@ def _migrate_note_outcomes(conn):
         "INSERT OR REPLACE INTO kv (key, value) VALUES"
         " ('note_outcomes_backfill_v1', 'done')"
     )
-    conn.commit()
+    # No commit: this runs inside _migrate's single transaction, so the backfill
+    # and its marker land together or not at all.
 
 
 def _category_confirmed_count(conn, name):
@@ -1312,10 +1344,17 @@ def _migrate_gratitude_builtin(conn):
         return
     cat = gdef["category"] or gdef["display_name"]
     now = _now()
-    conn.execute("INSERT OR IGNORE INTO categories (name, norm_key, created_at)"
-                 " VALUES (?, ?, ?)", (cat, cat.casefold(), now))
-    conn.execute("UPDATE categories SET kind = 'journal' WHERE norm_key = ?",
-                 (cat.casefold(),))
+    # Self-heal only when the row is actually wrong. The old unconditional
+    # INSERT OR IGNORE + UPDATE rewrote the category row on every single start,
+    # which meant a full disk blocked startup itself (see _migrate_steps).
+    existing = conn.execute("SELECT kind FROM categories WHERE norm_key = ?",
+                            (cat.casefold(),)).fetchone()
+    if existing is None:
+        conn.execute("INSERT OR IGNORE INTO categories (name, norm_key, kind, created_at)"
+                     " VALUES (?, ?, 'journal', ?)", (cat, cat.casefold(), now))
+    elif existing["kind"] != "journal":
+        conn.execute("UPDATE categories SET kind = 'journal' WHERE norm_key = ?",
+                     (cat.casefold(),))
     have = {r["message_id"] for r in conn.execute(
         "SELECT message_id FROM journal_entries WHERE journal_id = ?", (gdef["id"],))}
     target = cat.casefold()
@@ -2286,10 +2325,11 @@ def display_ids(conn):
     return out
 
 
-def ensure_note_no(conn, message_id):
+def ensure_note_no(conn, message_id, *, commit=True):
     """The note's STABLE number (`note_no`): assigned once, monotonic per chat, never reused —
     so a captured number can't go stale (gaps on delete are intentional, like issue numbers).
-    Assigns one on first need. Returns the note_no, or None if no such message."""
+    Assigns one on first need. Returns the note_no, or None if no such message.
+    `commit=False` for callers inside a wider transaction (the open_db migration)."""
     row = conn.execute("SELECT chat_id, note_no FROM messages WHERE id = ?",
                        (message_id,)).fetchone()
     if row is None:
@@ -2300,7 +2340,8 @@ def ensure_note_no(conn, message_id):
         "SELECT COALESCE(MAX(note_no), 0) + 1 AS n FROM messages WHERE chat_id = ?",
         (row["chat_id"],)).fetchone()["n"]
     conn.execute("UPDATE messages SET note_no = ? WHERE id = ?", (nxt, message_id))
-    conn.commit()
+    if commit:
+        conn.commit()
     return nxt
 
 

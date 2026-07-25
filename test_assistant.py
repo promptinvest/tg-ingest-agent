@@ -2,6 +2,7 @@
 """Offline unit tests: router, LLM gateway, reminders, spend, texts, memory."""
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import time
@@ -8804,6 +8805,530 @@ class ReplyBoundReminderTests(unittest.TestCase):
             handled = self.agent.resolve_fired_followup(
                 1, "ru", "В благодарность — сложный разговор с Костей", None)
         self.assertFalse(handled)                            # content -> router/ingest
+
+
+class CrashLoopContainment20260725Tests(unittest.TestCase):
+    """WP2 of the 2026-07-24 review (the 'disk-full death spiral', second half).
+
+    A `sqlite3.OperationalError` in the durable-inbox bookkeeping, in the
+    dead-letter ledger, or at the offset write used to leave `run()`; systemd
+    restarted every 10 s, the same write failed again, and Cara was permanently
+    and silently dead — while a surviving process could still have sent a
+    Telegram alert (a send needs no disk). Startup was equally stuck because
+    `open_db` rewrote rows unconditionally, and `_migrate`'s DDL autocommitted
+    while its paired backfills waited for the end-of-open commit.
+    """
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="111",
+                               DB_PATH=str(Path(self.tmp.name) / "wp2.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    # -- helpers ---------------------------------------------------------------
+
+    @staticmethod
+    def _update(update_id, text="привет"):
+        return {"update_id": update_id,
+                "message": {"chat": {"id": 111}, "text": text}}
+
+    @staticmethod
+    def _disk_full(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database or disk is full")
+
+    def _batch_with_broken(self, module, name, update_id):
+        """Drive one batch while `module.name` is out of disk. Returns
+        (processed_max, recorded backoff sleeps)."""
+        naps = []
+        with mock.patch.object(module, name, side_effect=self._disk_full), \
+                mock.patch.object(self.agent, "_sleep", side_effect=naps.append), \
+                mock.patch.object(self.agent, "handle_update", return_value=None):
+            processed = self.agent.process_update_batch([self._update(update_id)])
+        return processed, naps
+
+    # -- T2.1 ENOSPC during update handling must not kill the process ----------
+
+    def test_disk_full_receiving_an_update_pauses_without_advancing_offset(self):
+        processed, naps = self._batch_with_broken(store, "telegram_update_receive", 930)
+        self.assertIsNone(processed)                      # offset stays put
+        self.assertEqual(naps, [self.agent.DB_STALL_BACKOFF_SECONDS])
+        with mock.patch.object(self.agent, "handle_update", return_value=None):
+            self.assertEqual(self.agent.process_update_batch([self._update(930)]), 930)
+
+    def test_disk_full_counting_an_attempt_pauses_without_advancing_offset(self):
+        processed, naps = self._batch_with_broken(store, "telegram_update_attempt", 931)
+        self.assertIsNone(processed)
+        self.assertEqual(naps, [self.agent.DB_STALL_BACKOFF_SECONDS])
+        with mock.patch.object(self.agent, "handle_update", return_value=None):
+            self.assertEqual(self.agent.process_update_batch([self._update(931)]), 931)
+
+    def test_disk_full_starting_the_trace_pauses_without_advancing_offset(self):
+        processed, naps = self._batch_with_broken(tracing, "start", 932)
+        self.assertIsNone(processed)
+        self.assertEqual(naps, [self.agent.DB_STALL_BACKOFF_SECONDS])
+        with mock.patch.object(self.agent, "handle_update", return_value=None):
+            self.assertEqual(self.agent.process_update_batch([self._update(932)]), 932)
+
+    def test_disk_full_writing_the_dead_letter_ledger_is_contained(self):
+        # The except block itself did five DB writes, outside any guard: on a
+        # full disk the very act of recording a failure killed the process.
+        naps = []
+        with mock.patch.object(self.agent, "handle_update",
+                               side_effect=RuntimeError("bad update")), \
+                mock.patch.object(store, "telegram_update_fail", side_effect=self._disk_full), \
+                mock.patch.object(self.agent, "_sleep", side_effect=naps.append):
+            processed = self.agent.process_update_batch([self._update(933)])
+        self.assertIsNone(processed)
+        self.assertEqual(naps, [self.agent.DB_STALL_BACKOFF_SECONDS])
+        row = store.telegram_update_get(self.agent.conn, 933)
+        self.assertEqual(row["status"], "pending")        # not dead-lettered unrecorded
+
+    def test_disk_full_acknowledging_an_update_is_contained(self):
+        # The success path writes too (done marker, trace finish, done event) and
+        # goes through the same guard: a wall there must not kill the process.
+        processed, naps = self._batch_with_broken(store, "telegram_update_done", 934)
+        self.assertIsNone(processed)
+        self.assertEqual(naps, [self.agent.DB_STALL_BACKOFF_SECONDS])
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 934)["status"], "pending")
+
+    def test_disk_full_inside_handle_update_does_not_spend_the_retry_budget(self):
+        # A full disk is an infrastructure stall, not a poison message: three
+        # redeliveries inside one disk-full window must NOT dead-letter the boss's
+        # message and tell him to resend it onto a disk that is still full.
+        sent = []
+        naps = []
+        calls = []
+
+        def handler(_update):
+            calls.append(1)
+            if len(calls) <= self.cfg.update_max_attempts:
+                raise sqlite3.OperationalError("database or disk is full")
+            return None
+
+        with mock.patch.object(self.agent, "handle_update", side_effect=handler), \
+                mock.patch.object(self.agent, "_sleep", side_effect=naps.append), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, text, *a, **k: sent.append(text)):
+            for _ in range(self.cfg.update_max_attempts):
+                self.assertIsNone(self.agent.process_update_batch([self._update(935)]))
+            self.assertEqual(self.agent.process_update_batch([self._update(935)]), 935)
+        self.assertEqual(naps, [self.agent.DB_STALL_BACKOFF_SECONDS] * 3)
+        self.assertEqual(sent, [])                        # no "resend it, please" notice
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 935)["status"], "done")
+
+    def test_a_non_disk_sqlite_error_still_dead_letters_the_update(self):
+        # The carve-out above is narrow on purpose: a deterministically poisonous
+        # update that always raises a sqlite error must still stop wedging her.
+        sent = []
+        with mock.patch.object(self.agent, "handle_update",
+                               side_effect=sqlite3.IntegrityError("UNIQUE constraint failed")), \
+                mock.patch.object(self.agent, "_sleep"), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, text, *a, **k: sent.append(text)):
+            for _ in range(self.cfg.update_max_attempts - 1):
+                self.assertIsNone(self.agent.process_update_batch([self._update(936)]))
+            self.assertEqual(self.agent.process_update_batch([self._update(936)]), 936)
+        self.assertEqual(sent, [texts.T("ru", "update_dead_letter")])
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 936)["status"], "failed")
+
+    def test_sleep_returns_at_once_when_a_stop_was_already_requested(self):
+        self.agent.stop = True
+        with mock.patch.object(self.mod.time, "sleep") as slept:
+            self.agent._sleep(self.agent.DB_STALL_BACKOFF_SECONDS)
+        slept.assert_not_called()                         # SIGTERM is not delayed
+
+    def test_sleep_backs_off_in_short_slices(self):
+        slices = []
+
+        def fake_sleep(seconds):
+            slices.append(seconds)
+            if len(slices) == 2:
+                self.agent.stop = True                    # SIGTERM mid-backoff
+        with mock.patch.object(self.mod.time, "sleep", side_effect=fake_sleep):
+            self.agent._sleep(300)
+        self.assertEqual(len(slices), 2)                  # stopped, not slept out
+        self.assertTrue(all(s <= 1.0 for s in slices), slices)
+
+    def test_containment_stops_at_the_failing_update_not_before_it(self):
+        # At-least-once semantics: updates already handled in this batch keep
+        # their offset; the one that hit the wall is left for redelivery.
+        real_attempt = store.telegram_update_attempt
+
+        def attempt(conn, update_id):
+            if int(update_id) == 941:
+                raise sqlite3.OperationalError("database or disk is full")
+            return real_attempt(conn, update_id)
+
+        with mock.patch.object(store, "telegram_update_attempt", side_effect=attempt), \
+                mock.patch.object(self.agent, "_sleep"), \
+                mock.patch.object(self.agent, "handle_update", return_value=None):
+            self.assertEqual(
+                self.agent.process_update_batch([self._update(940), self._update(941)]), 940)
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 940)["status"], "done")
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 941)["status"], "pending")
+
+    def test_offset_persist_failure_does_not_restart_the_process(self):
+        agent = self.agent
+        polls = []
+
+        def fake_tg_call(token, method, payload=None, **kwargs):
+            if method != "getUpdates":
+                return {"message_id": 1}
+            polls.append((payload or {}).get("offset"))
+            if len(polls) > 1:
+                agent.stop = True
+                return []
+            return [self._update(920)]
+
+        real_kv_set = store.kv_set
+
+        def refuse_offset(conn, key, value):
+            if key == "offset":
+                raise sqlite3.OperationalError("database or disk is full")
+            return real_kv_set(conn, key, value)
+
+        agent.last_sweep = time.time()
+        with mock.patch.object(type(agent), "SCHEDULER_TICKS", ()), \
+                mock.patch.object(self.mod, "tg_call", side_effect=fake_tg_call), \
+                mock.patch.object(store, "kv_set", side_effect=refuse_offset), \
+                mock.patch.object(agent, "announce_deploy_if_changed"), \
+                mock.patch.object(agent, "flush_albums"), \
+                mock.patch.object(agent, "handle_update", return_value=None):
+            agent.run()                                   # must return, not raise
+        self.assertEqual(polls, [0, 921])                 # in-memory offset still moved
+
+    def _two_chat_cfg(self):
+        """Two allowed chats — 'once' has to mean ONE message, not one per chat."""
+        return make_config(ALLOWED_CHAT_IDS="111,222",
+                           DB_PATH=str(Path(self.tmp.name) / "wp2_two.db"),
+                           MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+
+    def _main_out_of_space(self, cfg, tg_call):
+        with mock.patch.object(self.mod, "load_config", return_value=cfg), \
+                mock.patch.object(self.mod, "Agent",
+                                  side_effect=sqlite3.OperationalError(
+                                      "database or disk is full")), \
+                mock.patch.object(self.mod.time, "sleep") as slept, \
+                mock.patch.object(self.mod, "tg_call", side_effect=tg_call):
+            with self.assertRaises(SystemExit):
+                self.mod.main()
+        return slept
+
+    def test_main_tells_the_boss_once_before_a_disk_full_exit(self):
+        sent = []
+        cfg = self._two_chat_cfg()
+        slept = self._main_out_of_space(
+            cfg, lambda t, m, p=None, **k: sent.append((m, p)))
+        self.assertEqual([m for m, _ in sent], ["sendMessage"])   # exactly one, not per-chat
+        self.assertIn(sent[0][1]["chat_id"], cfg.allowed_chat_ids)
+        self.assertEqual(sent[0][1]["text"], texts.T("ru", "db_full_fatal"))
+        slept.assert_called_once_with(self.mod.DB_FULL_PAUSE_SECONDS)
+
+    def test_disk_full_alert_falls_through_to_the_next_allowed_chat(self):
+        cfg = self._two_chat_cfg()
+        first, second = list(cfg.allowed_chat_ids)[:2]
+        sent = []
+
+        def tg_call(token, method, payload=None, **kwargs):
+            if (payload or {}).get("chat_id") == first:
+                raise tg_api.TelegramError("chat unavailable")
+            sent.append((method, payload))
+
+        self._main_out_of_space(cfg, tg_call)
+        self.assertEqual([p["chat_id"] for _, p in sent], [second])
+
+    def test_main_reraises_sqlite_errors_that_are_not_disk_full(self):
+        sent = []
+        with mock.patch.object(self.mod, "load_config", return_value=self.cfg), \
+                mock.patch.object(self.mod, "Agent",
+                                  side_effect=sqlite3.OperationalError("no such table: kv")), \
+                mock.patch.object(self.mod, "tg_call",
+                                  side_effect=lambda t, m, p=None, **k: sent.append((m, p))):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.mod.main()
+        self.assertEqual(sent, [])
+
+    # -- T2.4 the boss hears about a dead-lettered message ---------------------
+
+    def test_dead_lettered_update_is_announced_to_the_boss(self):
+        sent = []
+        with mock.patch.object(self.agent, "handle_update",
+                               side_effect=RuntimeError("bad update")), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, text, *a, **k: sent.append((cid, text))):
+            self.assertIsNone(self.agent.process_update_batch([self._update(950)]))
+            self.assertIsNone(self.agent.process_update_batch([self._update(950)]))
+            self.assertEqual(sent, [])                    # silent while it still retries
+            self.assertEqual(self.agent.process_update_batch([self._update(950)]), 950)
+        self.assertEqual(sent, [(111, texts.T("ru", "update_dead_letter"))])
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 950)["status"], "failed")
+
+    def test_dead_letter_notice_failure_does_not_undo_the_dead_letter(self):
+        with mock.patch.object(self.agent, "handle_update",
+                               side_effect=RuntimeError("bad update")), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=tg_api.TelegramError("network down")):
+            for _ in range(2):
+                self.agent.process_update_batch([self._update(951)])
+            self.assertEqual(self.agent.process_update_batch([self._update(951)]), 951)
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 951)["status"], "failed")
+
+    # -- T2.2 a steady-state start must write nothing --------------------------
+
+    def _steady_state_db(self):
+        """A DB whose migrations have all already run once — and populated the way a
+        real one is, so the branches production actually takes are the measured ones:
+        cara_life seeded (the one-time tea rebalance block runs), a gratitude note
+        that already has its journal entry, a closed reminder that already carries
+        closed_at. An empty fixture would skip all three."""
+        path = Path(self.tmp.name) / "steady.db"
+        conn = store.open_db(path)
+        store.candidate_add(conn, "fact", "босс любит утренние созвоны")
+        converse.seed_life(conn)
+        conn.execute("INSERT INTO categories (name, norm_key, kind, created_at)"
+                     " VALUES ('Благодарность', 'благодарность', 'inbox', ?)",
+                     (store._now(),))
+        conn.execute("INSERT INTO messages (chat_id, tg_message_id, received_at, raw_text,"
+                     " category, status) VALUES (111, 7001, ?, 'спасибо за спокойный день',"
+                     " 'Благодарность', 'confirmed')", (store._now(),))
+        conn.execute("INSERT INTO reminders (chat_id, title, due_utc, status, created_at,"
+                     " closed_at, close_reason)"
+                     " VALUES (111, 'позвонить', ?, 'done', ?, ?, 'done')",
+                     (store._now(), store._now(), store._now()))
+        conn.commit()
+        conn.close()
+        store.open_db(path).close()          # binds the gratitude journal, backfills
+        return path
+
+    def test_second_open_db_performs_no_writes(self):
+        path = self._steady_state_db()
+        conn = store.open_db(path)
+        try:
+            # Before the fix: the no-WHERE memory_candidates backfill plus the
+            # unconditional gratitude category rewrite fired on EVERY start, so a
+            # full disk blocked startup itself and the crash loop never recovered.
+            # Zero writes covers the whole start, seeded life and journal loop
+            # included — not just the two statements that used to misbehave.
+            self.assertEqual(conn.total_changes, 0)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0], 1)
+            self.assertEqual(
+                conn.execute("SELECT kind FROM categories WHERE norm_key='благодарность'")
+                .fetchone()["kind"], "journal")
+            row = conn.execute("SELECT first_seen_at, recurrence_count"
+                               " FROM memory_candidates").fetchone()
+            self.assertIsNotNone(row["first_seen_at"])
+            self.assertEqual(row["recurrence_count"], 1)
+        finally:
+            conn.close()
+
+    def test_candidate_backfill_still_runs_for_rows_that_need_it(self):
+        path = self._steady_state_db()
+        conn = store.open_db(path)
+        conn.execute("UPDATE memory_candidates SET first_seen_at=NULL, last_seen_at=NULL")
+        conn.commit()
+        conn.close()
+        conn = store.open_db(path)
+        try:
+            row = conn.execute("SELECT first_seen_at, last_seen_at, created_at"
+                               " FROM memory_candidates").fetchone()
+            self.assertEqual(row["first_seen_at"], row["created_at"])
+            self.assertEqual(row["last_seen_at"], row["created_at"])
+        finally:
+            conn.close()
+
+    def test_gratitude_self_heal_still_repairs_a_broken_category_row(self):
+        path = self._steady_state_db()
+        conn = store.open_db(path)
+        conn.execute("UPDATE categories SET kind='inbox' WHERE norm_key='благодарность'")
+        conn.commit()
+        conn.close()
+        conn = store.open_db(path)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT kind FROM categories WHERE norm_key='благодарность'")
+                .fetchone()["kind"], "journal")
+        finally:
+            conn.close()
+
+    # -- T2.3 _migrate is all-or-nothing --------------------------------------
+
+    @staticmethod
+    def _old_schema_db(path):
+        """A DB predating the note_no/knowledge-lifecycle columns on `messages` and
+        the evidence/recurrence/seen-at columns on `memory_candidates`. open_db must
+        ALTER both and backfill in ONE transaction.
+
+        The `messages` half is the one that matters most: its ALTERs run BEFORE the
+        first DML in `_migrate_steps`, so pre-fix they autocommitted on their own —
+        exactly the 'column exists, so the backfill guard never re-runs' corruption.
+        """
+        raw = sqlite3.connect(str(path))
+        raw.execute(
+            "CREATE TABLE messages ("
+            " id INTEGER PRIMARY KEY,"
+            " chat_id INTEGER NOT NULL,"
+            " tg_message_id INTEGER NOT NULL,"
+            " forward_origin_chat_id INTEGER,"
+            " forward_origin_message_id INTEGER,"
+            " suggestion_message_id INTEGER,"
+            " received_at TEXT NOT NULL,"
+            " raw_text TEXT,"
+            " suggested_category TEXT,"
+            " category TEXT,"
+            " status TEXT NOT NULL DEFAULT 'pending',"
+            " UNIQUE (chat_id, tg_message_id))")
+        for tg_id, text in ((11, 'первая заметка'), (12, 'вторая заметка')):
+            raw.execute(
+                "INSERT INTO messages (chat_id, tg_message_id, received_at, raw_text,"
+                " category, status) VALUES (111, ?, '2026-01-01T00:00:00+00:00', ?,"
+                " 'Идеи', 'confirmed')", (tg_id, text))
+        raw.execute(
+            "CREATE TABLE memory_candidates ("
+            " id INTEGER PRIMARY KEY,"
+            " target TEXT NOT NULL DEFAULT 'boss_profile',"
+            " kind TEXT NOT NULL,"
+            " proposed_text TEXT NOT NULL,"
+            " reason TEXT,"
+            " sensitivity TEXT NOT NULL DEFAULT 'normal',"
+            " confidence REAL NOT NULL DEFAULT 0.5,"
+            " source_table TEXT,"
+            " source_id INTEGER,"
+            " status TEXT NOT NULL DEFAULT 'pending',"
+            " created_at TEXT NOT NULL,"
+            " decided_at TEXT)")
+        raw.execute("INSERT INTO memory_candidates (kind, proposed_text, created_at)"
+                    " VALUES ('fact', 'старый кандидат', '2026-01-01T00:00:00+00:00')")
+        raw.commit()
+        raw.close()
+
+    def test_a_crash_mid_migration_rolls_the_whole_step_back(self):
+        path = Path(self.tmp.name) / "old.db"
+        self._old_schema_db(path)
+        with mock.patch.object(store, "_migrate_note_outcomes", side_effect=self._disk_full):
+            with self.assertRaises(sqlite3.OperationalError):
+                store.open_db(path)
+        raw = sqlite3.connect(str(path))
+        msg_cols = {r[1] for r in raw.execute("PRAGMA table_info(messages)")}
+        cols = {r[1] for r in raw.execute("PRAGMA table_info(memory_candidates)")}
+        raw.close()
+        # Python's legacy transaction control autocommitted the ALTERs while the
+        # paired backfill waited for the end-of-open commit — the column then
+        # existed unfilled and its `if not in columns` guard never ran again.
+        # `messages` is where that really bit: those ALTERs precede every DML in
+        # the step, so pre-fix note_no existed here, empty and never re-backfilled.
+        self.assertNotIn("note_no", msg_cols)
+        self.assertNotIn("knowledge_state", msg_cols)
+        self.assertNotIn("forward_origin_username", msg_cols)
+        self.assertNotIn("first_seen_at", cols)           # secondary: same guarantee
+        self.assertNotIn("evidence", cols)
+
+    def test_a_clean_retry_completes_the_migration_with_its_backfill(self):
+        path = Path(self.tmp.name) / "old.db"
+        self._old_schema_db(path)
+        with mock.patch.object(store, "_migrate_note_outcomes", side_effect=self._disk_full):
+            with self.assertRaises(sqlite3.OperationalError):
+                store.open_db(path)
+        conn = store.open_db(path)
+        try:
+            row = conn.execute("SELECT first_seen_at, last_seen_at, recurrence_count"
+                               " FROM memory_candidates").fetchone()
+            self.assertEqual(row["first_seen_at"], "2026-01-01T00:00:00+00:00")
+            self.assertEqual(row["last_seen_at"], "2026-01-01T00:00:00+00:00")
+            self.assertEqual(row["recurrence_count"], 1)
+            self.assertEqual(store.kv_get(conn, "note_outcomes_backfill_v1"), "done")
+            # …and the ALTER+backfill pair that pre-fix could split apart:
+            self.assertEqual(
+                [r["note_no"] for r in conn.execute(
+                    "SELECT note_no FROM messages ORDER BY id")], [1, 2])
+            self.assertEqual(
+                {r["knowledge_state"] for r in conn.execute(
+                    "SELECT knowledge_state FROM messages")}, {"active"})
+        finally:
+            conn.close()
+
+    def test_an_earlier_helpers_writes_roll_back_with_the_rest(self):
+        # Atomicity is only real while every helper inside _migrate leaves the
+        # commit to the wrapper: _migrate_gratitude_builtin runs BEFORE
+        # _migrate_note_outcomes, so its journal binding must disappear too.
+        path = Path(self.tmp.name) / "old_journal.db"
+        self._old_schema_db(path)
+        raw = sqlite3.connect(str(path))
+        raw.execute("CREATE TABLE categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL,"
+                    " norm_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)")
+        raw.execute("INSERT INTO categories (name, norm_key, created_at)"
+                    " VALUES ('Благодарность', 'благодарность', '2026-01-01T00:00:00+00:00')")
+        raw.commit()
+        raw.close()
+        with mock.patch.object(store, "_migrate_note_outcomes", side_effect=self._disk_full):
+            with self.assertRaises(sqlite3.OperationalError):
+                store.open_db(path)
+        raw = sqlite3.connect(str(path))
+        defs = raw.execute("SELECT COUNT(*) FROM journal_definitions").fetchone()[0]
+        cat_cols = {r[1] for r in raw.execute("PRAGMA table_info(categories)")}
+        raw.close()
+        self.assertEqual(defs, 0)             # the gratitude binding rolled back
+        self.assertNotIn("kind", cat_cols)    # …and so did its ALTER
+        conn = store.open_db(path)            # a clean retry binds it for real
+        try:
+            self.assertEqual(
+                conn.execute("SELECT kind FROM categories WHERE norm_key='благодарность'")
+                .fetchone()["kind"], "journal")
+        finally:
+            conn.close()
+
+    def test_no_migration_helper_may_commit_on_its_own(self):
+        # The tests above mock `_migrate_note_outcomes` out, so its own writes never
+        # run. They are the ones that used to commit mid-migration: the ledger
+        # backfill + its done marker, and `ensure_note_no` (reached through
+        # note_outcome_record) which commits for every other caller. Let the REAL
+        # helper run and then fail: nothing of it may have survived.
+        path = Path(self.tmp.name) / "backfill.db"
+        conn = store.open_db(path)
+        conn.execute("INSERT INTO messages (chat_id, tg_message_id, received_at, raw_text,"
+                     " category, status, knowledge_state)"
+                     " VALUES (111, 8100, ?, 'заметка', 'Идеи', 'confirmed', 'active')",
+                     (store._now(),))
+        conn.execute("DELETE FROM kv WHERE key = 'note_outcomes_backfill_v1'")
+        conn.commit()
+        conn.close()
+        real_steps = store._migrate_steps
+
+        def steps_then_disk_full(migrating):
+            real_steps(migrating)             # the real backfill, then the disk fills
+            self._disk_full()
+
+        with mock.patch.object(store, "_migrate_steps", side_effect=steps_then_disk_full):
+            with self.assertRaises(sqlite3.OperationalError):
+                store.open_db(path)
+        raw = sqlite3.connect(str(path))
+        raw.row_factory = sqlite3.Row
+        try:
+            self.assertEqual(
+                raw.execute("SELECT COUNT(*) FROM note_outcomes").fetchone()[0], 0)
+            self.assertIsNone(
+                raw.execute("SELECT note_no FROM messages").fetchone()["note_no"])
+            self.assertIsNone(raw.execute(
+                "SELECT value FROM kv WHERE key = 'note_outcomes_backfill_v1'").fetchone())
+        finally:
+            raw.close()
+        conn = store.open_db(path)            # a clean retry lands all of it together
+        try:
+            self.assertEqual(store.kv_get(conn, "note_outcomes_backfill_v1"), "done")
+            self.assertEqual(
+                conn.execute("SELECT note_no FROM messages").fetchone()["note_no"], 1)
+            self.assertEqual(
+                [r["event"] for r in conn.execute("SELECT event FROM note_outcomes")],
+                ["captured"])
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

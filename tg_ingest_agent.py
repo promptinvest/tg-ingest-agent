@@ -14,6 +14,7 @@ import ast
 import json
 import re
 import signal
+import sqlite3
 import time
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
@@ -392,56 +393,124 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if updates:
             self.process_update_batch(updates)
 
+    # A SQLite failure (a full disk is the realistic case) anywhere in the inbound
+    # path used to leave run(): systemd restarted every RestartSec, the same write
+    # failed again, and Cara was permanently and silently dead. Contain it instead —
+    # pause the loop this long and poll again; Telegram redelivers what was not
+    # acknowledged, and the surviving process can still SEND (a send needs no disk).
+    DB_STALL_BACKOFF_SECONDS = 5
+
+    def _sleep(self, seconds):
+        """Sleep in short slices so a SIGTERM during a backoff is still prompt."""
+        deadline = time.time() + seconds
+        while not self.stop:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            time.sleep(min(1.0, remaining))
+
+    def _notify_dead_letter(self, chat_id):
+        """Terminal dead letter: say so instead of letting the message vanish.
+
+        Best-effort — the payload is already stored as failed and an issue row
+        written, so a failed notice must not change that outcome.
+        """
+        if not chat_id:
+            return
+        try:
+            self.reply(chat_id, T(self.lang(), "update_dead_letter"))
+        except Exception as exc:  # noqa: BLE001 — a notice must never re-raise
+            log(f"dead-letter notice for chat {chat_id} failed: {exc!r}")
+
     def process_update_batch(self, updates):
         """Dispatch a Telegram batch with durable retry and dead-letter state.
 
         A retryable failure stops before that update so Telegram redelivers it.
         At the configured cap, its raw payload remains stored as failed and the
         offset can advance, preventing one poison update from wedging the bot.
+
+        The WHOLE per-update body runs under a `sqlite3.Error` containment guard —
+        the durable-inbox bookkeeping and the dead-letter ledger writes included.
+        When the database itself is unusable the batch stops WITHOUT advancing the
+        offset (at-least-once redelivery is preserved) and the process survives.
+        A disk-full error raised by the handler takes that same route instead of
+        counting as a failed attempt, so a full disk cannot dead-letter good work.
         """
         processed_max = None
         for update in updates or []:
             if self.stop:
                 break
-            update_id = int(update["update_id"])
-            chat_id = self._update_chat_id(update)
-            inbox = store.telegram_update_receive(self.conn, update, chat_id)
-            if inbox["status"] in ("done", "failed"):
-                processed_max = update_id
-                continue
-            attempts = store.telegram_update_attempt(self.conn, update_id)
-            tid = trace.start(self.conn, "inbound", chat_id)
             try:
-                deferred = self.handle_update(update) == "defer"
-            except ShutdownInterrupt:
-                log(f"update {update_id} left for redelivery (shutdown)")
-                trace.finish(self.conn, tid, "suppressed", "shutdown mid-update")
-                break
-            except Exception as exc:  # never let one bad update kill the poll loop
-                terminal = attempts >= self.cfg.update_max_attempts
-                store.telegram_update_fail(self.conn, update_id, repr(exc), terminal=terminal)
-                log(f"error handling update {update_id} (attempt {attempts}/"
-                    f"{self.cfg.update_max_attempts}): {exc!r}")
-                trace.event(self.conn, tid, trace.ISSUE_LOGGED, repr(exc), level="error")
-                trace.finish(self.conn, tid, "failed", repr(exc)[:200])
-                events.record_done(self.conn, "telegram_message_received", chat_id=chat_id,
-                                   trace_id=tid, status="failed", error=repr(exc)[:200])
-                if not terminal:
+                update_id = int(update["update_id"])
+                chat_id = self._update_chat_id(update)
+                inbox = store.telegram_update_receive(self.conn, update, chat_id)
+                if inbox["status"] in ("done", "failed"):
+                    processed_max = update_id
+                    continue
+                attempts = store.telegram_update_attempt(self.conn, update_id)
+                tid = trace.start(self.conn, "inbound", chat_id)
+                try:
+                    deferred = self.handle_update(update) == "defer"
+                except ShutdownInterrupt:
+                    log(f"update {update_id} left for redelivery (shutdown)")
+                    trace.finish(self.conn, tid, "suppressed", "shutdown mid-update")
                     break
-                store.issue_add(self.conn, chat_id, "telegram_update_failed",
-                                f"update_id={update_id}; {repr(exc)[:220]}")
+                except Exception as exc:  # never let one bad update kill the poll loop
+                    terminal = attempts >= self.cfg.update_max_attempts
+                    # Log BEFORE the ledger writes: journald needs no disk, and the
+                    # writes below can fail on the very condition that caused `exc`.
+                    log(f"error handling update {update_id} (attempt {attempts}/"
+                        f"{self.cfg.update_max_attempts}): {exc!r}")
+                    if isinstance(exc, sqlite3.Error) and "disk is full" in str(exc).lower():
+                        # A full disk is not a poison update. Hand it to the
+                        # containment guard instead of spending the retry budget:
+                        # three redeliveries inside one disk-full window would
+                        # otherwise dead-letter a perfectly good message and ask the
+                        # boss to resend it — onto a disk that is still full. Any
+                        # OTHER sqlite error stays on the dead-letter path, so a
+                        # deterministically poisonous update still can't wedge her.
+                        raise
+                    try:
+                        store.telegram_update_fail(self.conn, update_id, repr(exc),
+                                                   terminal=terminal)
+                        trace.event(self.conn, tid, trace.ISSUE_LOGGED, repr(exc),
+                                    level="error")
+                        trace.finish(self.conn, tid, "failed", repr(exc)[:200])
+                        events.record_done(self.conn, "telegram_message_received",
+                                           chat_id=chat_id, trace_id=tid, status="failed",
+                                           error=repr(exc)[:200])
+                        if terminal:
+                            store.issue_add(self.conn, chat_id, "telegram_update_failed",
+                                            f"update_id={update_id}; {repr(exc)[:220]}")
+                    except sqlite3.Error as ledger_exc:
+                        # The ledger itself is unwritable. Don't let it mask `exc`
+                        # (already logged above) and don't dead-letter an update whose
+                        # failure was never recorded — hand it to the containment
+                        # guard, which pauses and leaves the offset where it is.
+                        log(f"could not record failure of update {update_id}:"
+                            f" {ledger_exc!r}")
+                        raise
+                    if not terminal:
+                        break
+                    self._notify_dead_letter(chat_id)
+                    processed_max = update_id
+                    continue
+                if not deferred:
+                    # A buffered forwarded-album part stays 'pending' in the durable
+                    # inbox until flush_albums files the whole album — a crash inside
+                    # the settle window is then recovered by the startup replay
+                    # instead of silently losing the album (the offset moves on).
+                    store.telegram_update_done(self.conn, update_id)
+                trace.finish(self.conn, tid, "ok")
+                events.record_done(self.conn, "telegram_message_received",
+                                   chat_id=chat_id, trace_id=tid)
                 processed_max = update_id
-                continue
-            if not deferred:
-                # A buffered forwarded-album part stays 'pending' in the durable
-                # inbox until flush_albums files the whole album — a crash inside
-                # the settle window is then recovered by the startup replay
-                # instead of silently losing the album (the offset moves on).
-                store.telegram_update_done(self.conn, update_id)
-            trace.finish(self.conn, tid, "ok")
-            events.record_done(self.conn, "telegram_message_received",
-                               chat_id=chat_id, trace_id=tid)
-            processed_max = update_id
+            except sqlite3.Error as exc:
+                log(f"database unavailable handling update {update.get('update_id')}:"
+                    f" {exc!r} — pausing {self.DB_STALL_BACKOFF_SECONDS}s,"
+                    f" offset not advanced (Telegram redelivers)")
+                self._sleep(self.DB_STALL_BACKOFF_SECONDS)
+                break
         return processed_max
 
     # Every-iteration scheduler tick, in order. A class-level table (rather than a
@@ -537,7 +606,13 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             processed_max = self.process_update_batch(updates)
             if processed_max is not None:
                 offset = processed_max + 1
-                store.kv_set(self.conn, "offset", offset)
+                try:
+                    store.kv_set(self.conn, "offset", offset)
+                except sqlite3.Error as exc:
+                    # An unpersisted offset costs at most one redelivery — the
+                    # durable inbox dedupes updates already marked done/failed.
+                    # Crashing here would restart the whole process instead.
+                    log(f"could not persist poll offset {offset}: {exc!r}")
         self.flush_albums(time.time(), force=True)
         log("stopped")
 
@@ -3589,12 +3664,48 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             store.pending_set(self.conn, chat_id, "category", {"row_id": row_id})
 
 
+# systemd restarts this unit after RestartSec (10 s). When the box is out of
+# disk that restart can only fail the same way, so the dying process waits this
+# long first — the restarts stay paced instead of hammering a full disk.
+DB_FULL_PAUSE_SECONDS = 300
+
+
+def db_full_alert(cfg, exc):
+    """Last honest word when SQLite reports a full disk.
+
+    Every write fails in that state — no issue row, no trace, not even the reply
+    history — but SENDING a Telegram message needs no disk at all. So tell the
+    boss once (no DB access on this path), pace the restart, and let the process
+    exit. Best-effort throughout: a failed send must not hide the original error.
+    """
+    try:
+        text = T(getattr(cfg, "language", "ru"), "db_full_fatal")
+    except Exception:  # noqa: BLE001 — never fail while reporting a failure
+        text = "Boss, the server is out of disk space — I have to stop."
+    for chat_id in cfg.allowed_chat_ids:
+        try:
+            tg_call(cfg.token, "sendMessage", {"chat_id": chat_id, "text": text})
+            break
+        except TelegramError as send_exc:
+            log(f"disk-full alert to {chat_id} failed: {send_exc}")
+    log(f"database out of space ({exc}); pausing {DB_FULL_PAUSE_SECONDS}s before exit")
+    time.sleep(DB_FULL_PAUSE_SECONDS)
+
+
 def main():
     cfg = load_config()
-    agent = Agent(cfg)
-    signal.signal(signal.SIGTERM, agent.request_stop)
-    signal.signal(signal.SIGINT, agent.request_stop)
-    agent.run()
+    try:
+        agent = Agent(cfg)
+        signal.signal(signal.SIGTERM, agent.request_stop)
+        signal.signal(signal.SIGINT, agent.request_stop)
+        agent.run()
+    except sqlite3.OperationalError as exc:
+        # Backstop for anything the per-update/per-tick guards can't cover —
+        # notably open_db itself, which runs before there is any loop to contain.
+        if "disk is full" not in str(exc).lower():
+            raise
+        db_full_alert(cfg, exc)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,8 @@ the exhaustive feature + architecture map.
 Telegram update (owner-only: chat AND sender must be on the allowlist)
    │
    ├─ durable inbox → retry unexpected failures 3x; retain terminal payload as a dead letter
+   │                  (and tell the boss it was dead-lettered; a DB failure pauses the
+   │                   batch without advancing the offset instead of exiting — 2026-07-25)
    │
    ├─ message_reaction → note the boss's reaction (log, learn, surface next chat)
    ├─ callback_query   → inline-button confirmations
@@ -775,6 +777,35 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   2026‑07‑02) — requeued while retry budget remains, else terminally failed — so a
   crash can never wedge a job kind forever. The live request→reply path stays
   synchronous by design (single‑user, low volume).
+- **Crash‑loop containment (2026‑07‑25):** a SQLite failure — a full disk is the
+  realistic case — anywhere in the inbound path used to leave the poll loop, and
+  systemd's 10 s restart hit the same failing write forever: Cara was permanently
+  and *silently* dead. Now the whole per‑update body (durable‑inbox bookkeeping,
+  trace start, AND the dead‑letter ledger writes) runs under a `sqlite3.Error`
+  guard that logs, pauses 5 s, and stops the batch **without advancing the offset**
+  — at‑least‑once redelivery is preserved and the process survives. The offset
+  write is guarded the same way (a lost offset costs one redelivery; the durable
+  inbox dedupes). As a last resort `main()` catches a "disk is full" error, sends
+  ONE Telegram alert (`db_full_fatal` — sending needs no disk, so a dying process
+  can still be honest), waits 5 min so restarts stay paced, and exits. A disk‑full
+  error raised by the *handler* takes the containment route as well, so a full disk
+  cannot burn an update's retry budget and dead‑letter a perfectly good message;
+  every other SQLite error still dead‑letters, so a poison update can't wedge her.
+- **Startup writes nothing at steady state (2026‑07‑25):** `open_db` used to rewrite
+  every `memory_candidates` row and the gratitude category row on EVERY start, so a
+  full disk blocked STARTUP too and the crash loop could never limp back up. Both
+  backfills are now condition‑guarded (`WHERE …IS NULL`; the journal self‑heal reads
+  before writing), and a repeat start performs zero writes.
+- **Atomic migrations (2026‑07‑25):** `_migrate` runs inside one
+  `BEGIN IMMEDIATE`/`commit`. Python's legacy transaction control autocommitted DDL
+  while paired backfills waited for the end‑of‑open commit, so a crash between an
+  `ALTER TABLE` and its backfill left a column that existed but was never filled —
+  and its `if "x" not in columns` guard then skipped that backfill forever. Now the
+  step is all‑or‑nothing and the next start retries it cleanly.
+- **A dead‑lettered message is announced (2026‑07‑25):** when an update exhausts
+  `UPDATE_MAX_ATTEMPTS` its payload is kept and an issue logged — and Cara now also
+  says so (`update_dead_letter`), instead of the message just vanishing from the
+  boss's side. Best‑effort: a failed notice never changes the dead‑letter outcome.
 
 ---
 

@@ -116,6 +116,13 @@ TEXTS = {
         "ru": "Не получилось сохранить этот альбом 😔 Перешли его ещё раз, пожалуйста.",
         "en": "I couldn't save that album 😔 Please forward it again.",
     },
+    # NB: no final verbs — the update dead-lettered, nothing was processed.
+    "update_dead_letter": {
+        "ru": "Не смогла обработать это сообщение 😔 Оно лежит во входящих сбоях — "
+              "пришли его ещё раз, пожалуйста.",
+        "en": "I couldn't process that message 😔 It's sitting in the failed inbox — "
+              "please send it again.",
+    },
     # NB: no final verbs here (action_truth catalogue guard) — it's a decline,
     # nothing was stored.
     "own_photo_not_stored": {
@@ -726,6 +733,16 @@ TEXTS = {
                "Копия вне сервера не обновилась — посмотри, когда сможешь."),
         "en": ("⚠️ Boss, today's database backup did not go through ({reason}). "
                "The off-box copy is stale — please check when you can."),
+    },
+    # Sent from the disk-full backstop in main(): no DB is reachable at that
+    # point, so this is the only thing the process can still say.
+    "db_full_fatal": {
+        "ru": ("🛑 Босс, на сервере кончилось место — база больше ничего не принимает, "
+               "и мне придётся остановиться. Освободи, пожалуйста, диск: пока он полный, "
+               "я не смогу ни отвечать, ни вести записи."),
+        "en": ("🛑 Boss, the server is out of disk space — the database can't accept "
+               "anything and I have to stop. Please free some room: while it's full "
+               "I can neither reply nor keep records."),
     },
     "problem_logged": {
         "ru": "Записала в проблемы, босс — разберёмся 📝",
