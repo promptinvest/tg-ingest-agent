@@ -568,6 +568,25 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   A missing key or failed transfer makes the durable job retry; plaintext is refused.
   With no target, the snapshot stays local and logs a WARNING. The passphrase recovery
   copy must live outside the VPS and repo. `BACKUP_ENABLED=false` disables.
+  **No-leak / no-silence hardening (2026‑07‑25):** the raw `.db` snapshot and the
+  half‑written archive are always removed (a failed gzip used to leave a full DB copy
+  rotation could not see), the archive gets its rotation‑visible name only after a
+  complete write (`.gz.tmp` → `os.replace`), and `rotate()` sweeps stray `.db`/`.tmp`
+  files. **Rotation now runs before encryption**, so a missing key file can no longer
+  skip local retention forever. An off‑box copy blocked by the Telegram 45 MB cap logs a
+  `backup_offbox_blocked` issue and reports the blocked state in the job result instead
+  of looking green (plus a one‑time `backup_offbox_near_limit` warning past ~35 MB), and
+  a **terminally failed backup tells the boss** once a day, then holds the retry for an
+  hour (only TODAY's failures count — failed job rows live 90 days — and the "told him"
+  stamp lands only after Telegram confirms delivery, so a blip doesn't swallow the notice
+  and a permanent cause doesn't repeat it hourly). The UTC day is stamped only after a
+  **successful** run — a failed morning is retried the same day instead of being marked done.
+- **Low‑disk alert (2026‑07‑25):** a `check_disk_space` scheduler tick (every 30 min)
+  reads free space on the DB filesystem and tells the boss ONCE when it drops below
+  `DISK_ALERT_MIN_FREE_PCT` (default 10%), with a `disk_low` issue row, and once again
+  when it recovers past threshold + 2 pct. Same debounced state‑change shape as the
+  model‑health monitor — a full disk breaks every write at once, so the warning has to
+  arrive while there is still room to act. `DISK_ALERT_MIN_FREE_PCT=0` disables.
 - **Proactive heartbeat:** gentle, suggestion‑only nudges — overdue reminders, memory
   candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
   quiet‑hours‑aware (22:00–08:00), fully audited; never acts. **A "sent" is recorded only
@@ -851,7 +870,8 @@ Schedules & proactivity: `REVIEW_WEEKDAY=0` (Mon) / `REVIEW_HOUR=10` ·
 
 Backup: `BACKUP_ENABLED=true` · `BACKUP_KEEP=7` ·
 `BACKUP_ENCRYPTION_KEY_FILE=/etc/tg-ingest-agent-backup.key` (local gzip plus encrypted
-off‑box copy; recovery key retained separately from the VPS/repo).
+off‑box copy; recovery key retained separately from the VPS/repo) ·
+`DISK_ALERT_MIN_FREE_PCT=10` (low‑disk alert, 0 disables; added 2026‑07‑25).
 
 Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 `GCAL_SA_KEY_FILE` (Calendar) · `STORAGE_BACKEND=spaces` + `SPACES_*` (DO Spaces) ·
@@ -881,7 +901,10 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 - **Observability:** journald (routing decisions with risk + confidence, per‑row
   lifecycle), `traces`/`trace_events`, `llm_usage` (spend), `issues` + `proactive_log`
   (behavior), weekly digest + trace‑summary export.
-- **Footprint:** tens of MB RSS; disk a small fraction of the 48 GB volume.
+- **Footprint:** tens of MB RSS; disk a small fraction of the 48 GB volume. Free space is
+  now monitored (2026‑07‑25): below `DISK_ALERT_MIN_FREE_PCT` Cara says so once and
+  logs a `disk_low` issue; install‑time backups under `/root/codex-hardening-backups`
+  are pruned to the newest 10 (each holds an env/secrets copy) and the root is `chmod 700`.
 
 ---
 

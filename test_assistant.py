@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -5803,6 +5804,302 @@ class ReviewBatch2026_07_06Tests(unittest.TestCase):
         self.assertNotIn("модел", texts.T("ru", "llm_error").lower())
         self.assertNotIn("model", texts.T("en", "llm_error").lower())
         self.assertNotIn("модель", texts.T("ru", "stored_retry", row_id=1).lower())
+
+
+class BackupAndDiskHardeningTests(unittest.TestCase):
+    """WP1 of the 2026-07-24 review (the 'disk-full death spiral', first half):
+    a failed backup no longer leaks a raw .db snapshot or a partial archive,
+    rotation runs even when encryption fails, an off-box copy blocked by the
+    Telegram size cap is loud instead of green, low disk space is announced
+    before it kills every write, a terminally failed backup reaches the boss,
+    and a job retry waits instead of burning both attempts in one drain pass."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "pd.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    # -- T1.1 no raw-snapshot leak, no partial archives ------------------------
+
+    def test_failed_snapshot_leaves_no_raw_db_and_no_partial_archive(self):
+        # A failure mid-gzip used to leave `ingest-<stamp>.db` behind — invisible
+        # to rotate() (it globs `*.db.gz`), so every failed day leaked a full DB
+        # copy until the disk filled.
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        with mock.patch.object(backup.gzip, "GzipFile",
+                               side_effect=OSError("no space left on device")):
+            with self.assertRaises(OSError):
+                backup.snapshot(cfg, conn)
+        left = sorted(p.name for p in backup.backups_dir(cfg).iterdir())
+        self.assertEqual(left, [])            # no .db, no .gz, no .tmp
+        gz = backup.snapshot(cfg, conn)       # success leaves ONLY the archive
+        self.assertEqual(sorted(p.name for p in backup.backups_dir(cfg).iterdir()),
+                         [gz.name])
+
+    def test_rotate_sweeps_stray_raw_snapshots_and_tmp_files(self):
+        import backup
+        cfg = self.agent.cfg
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "ingest-20200101T000000Z.db").write_bytes(b"leaked raw snapshot")
+        (d / "ingest-20200101T000000Z.db.gz.tmp").write_bytes(b"half written")
+        for i in range(3):
+            (d / f"ingest-2026010{i}T000000Z.db.gz").write_bytes(b"x")
+        cfg.backup_keep = 2
+        removed = backup.rotate(cfg)
+        left = sorted(p.name for p in d.iterdir())
+        self.assertEqual(removed, 1)          # one stale ARCHIVE pruned
+        self.assertEqual(left, ["ingest-20260101T000000Z.db.gz",
+                                "ingest-20260102T000000Z.db.gz"])
+
+    # -- T1.2 retention runs even when encryption fails ------------------------
+
+    def test_rotation_still_prunes_when_encryption_fails(self):
+        # run() ordered snapshot -> encrypt -> rotate, so a raised
+        # BackupEncryptionError (e.g. a missing key file) skipped retention
+        # forever and snapshots accumulated unboundedly.
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        cfg.backup_keep = 2
+        cfg.fleet_notify_token, cfg.fleet_notify_chat_id = "t", "5"
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        for i in range(3):
+            (d / f"ingest-2020010{i}T000000Z.db.gz").write_bytes(b"x")
+        with mock.patch.object(backup, "encrypt_snapshot",
+                               side_effect=backup.BackupEncryptionError("no key file")):
+            with self.assertRaises(backup.BackupEncryptionError):
+                backup.run(cfg, conn)
+        self.assertEqual(len(list(d.glob("ingest-*.db.gz"))), cfg.backup_keep)
+
+    # -- T1.3 an off-box copy blocked by size must be loud ---------------------
+
+    @staticmethod
+    def _fake_encrypt(cfg, gz_path, payload=b"ciphertext-payload"):
+        enc = Path(str(gz_path) + ".enc")
+        enc.write_bytes(payload)
+        return enc
+
+    def test_offbox_blocked_by_size_logs_an_issue_and_reports_it(self):
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        cfg.fleet_notify_token, cfg.fleet_notify_chat_id = "t", "5"
+        with mock.patch.object(backup, "encrypt_snapshot", side_effect=self._fake_encrypt), \
+                mock.patch.object(backup, "TG_UPLOAD_LIMIT", 4), \
+                mock.patch.object(backup, "tg_send_document") as send:
+            result = backup.run(cfg, conn)
+        self.assertFalse(send.called)                       # never even attempted
+        self.assertTrue(result["offbox_blocked"])
+        self.assertEqual(result["offsite"], backup.OFFBOX_BLOCKED)
+        kinds = [r["kind"] for r in conn.execute("SELECT kind FROM issues")]
+        self.assertEqual(kinds, ["backup_offbox_blocked"])
+
+    def test_offbox_near_the_size_limit_warns_once(self):
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        cfg.fleet_notify_token, cfg.fleet_notify_chat_id = "t", "5"
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        enc = d / "ingest-20260101T000000Z.db.gz.enc"
+        enc.write_bytes(b"x" * 40)
+        with mock.patch.object(backup, "TG_UPLOAD_WARN", 10), \
+                mock.patch.object(backup, "TG_UPLOAD_LIMIT", 1000), \
+                mock.patch.object(backup, "tg_send_document"):
+            self.assertEqual(backup.offsite(cfg, enc, conn), "telegram:fleet")
+            backup.offsite(cfg, enc, conn)                  # next day, still big
+            self.assertEqual(store.kv_get(conn, "backup_size_warned"), "1")
+            kinds = [r["kind"] for r in conn.execute("SELECT kind FROM issues")]
+            self.assertEqual(kinds, ["backup_offbox_near_limit"])   # one row, not daily spam
+            enc.write_bytes(b"x" * 5)                       # shrank back below the warn line
+            backup.offsite(cfg, enc, conn)
+        self.assertEqual(store.kv_get(conn, "backup_size_warned"), "0")
+
+    # -- T1.4 proactive low-disk alert ----------------------------------------
+
+    def _disk_tick(self, free_gb, total_gb=10):
+        gb = 1024 ** 3
+        self.agent.last_disk_check = 0           # force the interval gate open
+        with mock.patch.object(sysinfo, "collect",
+                               return_value={"disk_total": int(total_gb * gb),
+                                             "disk_free": int(free_gb * gb)}), \
+                mock.patch.object(self.agent, "reply",
+                                  return_value={"message_id": 1}) as r:
+            self.agent.check_disk_space()
+        return r
+
+    def test_disk_alert_fires_once_and_reports_recovery(self):
+        conn = self.agent.conn
+        self.assertFalse(self._disk_tick(5).called)         # 50% free -> quiet
+        self.assertEqual(store.kv_get(conn, "disk_space"), "ok")
+        r = self._disk_tick(0.5)                            # 5% free -> alert
+        self.assertTrue(r.called)
+        self.assertIn("5.0%", r.call_args[0][1])
+        self.assertEqual(store.kv_get(conn, "disk_space"), "low")
+        self.assertEqual([row["kind"] for row in conn.execute("SELECT kind FROM issues")],
+                         ["disk_low"])
+        self.assertFalse(self._disk_tick(0.4).called)       # still low -> no repeat
+        self.assertFalse(self._disk_tick(1.1).called)       # 11% — inside the margin
+        self.assertEqual(store.kv_get(conn, "disk_space"), "low")
+        r = self._disk_tick(1.5)                            # 15% -> recovered, one notice
+        self.assertTrue(r.called)
+        self.assertIn("15.0%", r.call_args[0][1])
+        self.assertEqual(store.kv_get(conn, "disk_space"), "ok")
+
+    def test_disk_check_respects_the_interval_and_the_disable_knob(self):
+        # Both gates are user-visible contracts, not just "the probe wasn't called":
+        # nothing is said to the boss and the durable state is left alone.
+        conn = self.agent.conn
+        with mock.patch.object(sysinfo, "collect") as c, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.last_disk_check = time.time()
+            self.agent.check_disk_space()
+            self.assertFalse(c.called)                      # interval gate closed
+            self.agent.last_disk_check = 0
+            self.agent.cfg.disk_alert_min_free_pct = 0      # knob disables the monitor
+            self.agent.check_disk_space()
+            self.assertFalse(c.called)
+            self.assertEqual(self.agent.last_disk_check, 0)  # disabled: not even stamped
+            self.assertFalse(r.called)
+        self.assertIsNone(store.kv_get(conn, "disk_space"))
+
+    def test_disk_check_is_wired_into_the_scheduler_loop(self):
+        # The disk tests call check_disk_space() directly, so dropping it from the
+        # poll loop would kill the whole feature with the suite still green.
+        import tg_ingest_agent
+        self.assertIn("check_disk_space", tg_ingest_agent.Agent.SCHEDULER_TICKS)
+        for name in tg_ingest_agent.Agent.SCHEDULER_TICKS:
+            self.assertTrue(callable(getattr(self.agent, name, None)), name)
+
+    def _fail_backup_job(self, error="disk full", finished_at=None):
+        """Terminally fail the newest live db_backup job, the way jobs.fail() does
+        (status + error + finished_at)."""
+        conn = self.agent.conn
+        jid = conn.execute(
+            "SELECT id FROM jobs WHERE action = 'db_backup' AND status IN ('pending', 'claimed')"
+            " ORDER BY id DESC LIMIT 1").fetchone()["id"]
+        conn.execute("UPDATE jobs SET status = 'failed', error = ?, finished_at = ? WHERE id = ?",
+                     (error, finished_at or datetime.now(timezone.utc).isoformat(), jid))
+        conn.commit()
+        return jid
+
+    def test_terminal_backup_failure_alerts_the_boss_once(self):
+        # A terminally failed backup left only an issues row nobody reads; the DB
+        # is the one thing that cannot be recreated, so it has to be said out loud.
+        conn = self.agent.conn
+        jobs.add_job(conn, "maintenance", "db_backup")
+        self._fail_backup_job("disk full")
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 1}) as r:
+            self.agent.check_daily_backup()
+        self.assertTrue(r.called)
+        self.assertIn("disk full", r.call_args[0][1])
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'pending'").fetchone()[0], 0)
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 2}) as r2:
+            self.agent.check_daily_backup()                 # same failed job -> silent
+        self.assertFalse(r2.called)
+        store.kv_set(conn, "backup_retry_at", "")           # the hold expires
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 3}):
+            self.agent.check_daily_backup()
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'pending'").fetchone()[0], 1)
+
+    def test_a_stale_failed_backup_is_not_announced_as_todays(self):
+        # Failed job rows survive TELEMETRY_RETENTION_DAYS (90), so an unscoped
+        # query would open with «сегодняшний бэкап не сделался» quoting a
+        # three-week-old error — and park today's real backup behind an hour of
+        # backoff for nothing.
+        conn = self.agent.conn
+        jobs.add_job(conn, "maintenance", "db_backup")
+        self._fail_backup_job("ancient",
+                              (datetime.now(timezone.utc) - timedelta(days=3)).isoformat())
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 1}) as r:
+            self.agent.check_daily_backup()
+        self.assertFalse(r.called)
+        self.assertIsNone(store.kv_get(conn, "backup_retry_at"))
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'pending'").fetchone()[0], 1)
+
+    def test_persistent_backup_failure_is_announced_once_a_day(self):
+        # A permanent cause (missing key file) produces a NEW job — and a new id —
+        # every BACKUP_RETRY_MINUTES, so id-keyed dedup meant ~20 identical alerts
+        # a day, each preceded by a full snapshot+gzip of the DB.
+        conn = self.agent.conn
+        self.agent.check_daily_backup()                     # job A
+        self._fail_backup_job("no key file")
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 1}) as r:
+            self.agent.check_daily_backup()
+        self.assertTrue(r.called)
+        store.kv_set(conn, "backup_retry_at", "")           # the hour passes
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 2}) as r2:
+            self.agent.check_daily_backup()                 # job B enqueued
+            self._fail_backup_job("no key file")            # ... and fails identically
+            self.agent.check_daily_backup()
+        self.assertFalse(r2.called)                         # new id, same day -> silent
+        self.assertTrue(store.kv_get(conn, "backup_retry_at"))   # retry still held
+
+    def test_undelivered_backup_notice_is_retried(self):
+        # The announced-state stamp used to land BEFORE the send, so a Telegram
+        # blip swallowed the only proactive notice for that failure permanently.
+        conn = self.agent.conn
+        self.agent.check_daily_backup()
+        self._fail_backup_job("disk full")
+        with mock.patch.object(self.agent, "reply", return_value=None) as r:
+            self.agent.check_daily_backup()
+        self.assertTrue(r.called)                           # attempted...
+        self.assertIsNone(store.kv_get(conn, "backup_failed_day"))   # ...not announced
+        store.kv_set(conn, "backup_notice_retry_at", "")    # the send backoff passes
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 1}) as r2:
+            self.agent.check_daily_backup()
+        self.assertTrue(r2.called)
+        self.assertIn("disk full", r2.call_args[0][1])
+        self.assertEqual(store.kv_get(conn, "backup_failed_day"),
+                         datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+
+    # -- T1.5 retry backoff + backup_day stamped on success --------------------
+
+    def test_job_retry_waits_instead_of_burning_both_attempts_at_once(self):
+        conn = self.agent.conn
+        jid = jobs.add_job(conn, "maintenance", "db_backup", max_attempts=2)
+        job = jobs.claim_next(conn)
+        self.assertFalse(jobs.fail(conn, job["id"], "network blip"))   # retry, not terminal
+        row = conn.execute("SELECT status, available_at FROM jobs WHERE id = ?",
+                           (jid,)).fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertGreater(row["available_at"], datetime.now(timezone.utc).isoformat())
+        self.assertIsNone(jobs.claim_next(conn))            # not re-claimed in this pass
+        conn.execute("UPDATE jobs SET available_at = ? WHERE id = ?", (store._now(), jid))
+        again = jobs.claim_next(conn)
+        self.assertEqual(again["id"], jid)
+        self.assertTrue(jobs.fail(conn, jid, "still down"))  # budget spent -> terminal
+
+    def test_backup_day_is_stamped_only_after_a_successful_run(self):
+        # The kv stamp used to happen at ENQUEUE time, so a failed backup was
+        # never retried until the next UTC day.
+        import backup
+        conn = self.agent.conn
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self.agent.check_daily_backup()
+        self.assertIsNone(store.kv_get(conn, "backup_day"))
+        with mock.patch.object(backup, "run", side_effect=RuntimeError("boom")):
+            runtime.drain(conn, self.agent)
+        self.assertIsNone(store.kv_get(conn, "backup_day"))
+        self.assertEqual(runtime.drain(conn, self.agent), 0)   # backoff holds the retry
+        conn.execute("UPDATE jobs SET available_at = ?", (store._now(),))
+        conn.commit()
+        with mock.patch.object(backup, "run", return_value={"file": "f"}) as ok:
+            runtime.drain(conn, self.agent)
+        self.assertTrue(ok.called)
+        self.assertEqual(store.kv_get(conn, "backup_day"), today)
+        self.agent.check_daily_backup()                     # done for today
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'pending'").fetchone()[0], 0)
 
 
 class NotesHandlingTests(unittest.TestCase):

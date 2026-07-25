@@ -23,7 +23,16 @@ for required in tg_ingest_agent.py $MODULES; do
   fi
 done
 
-BACKUP_DIR="/root/codex-hardening-backups/$(date -u +%Y%m%dT%H%M%SZ)-tg-ingest-agent"
+# Pre-install backups: each one holds a copy of the env file (secrets), and they
+# used to accumulate forever — disk growth plus a widening secrets footprint.
+# Keep the newest 10 dirs, and keep the root private.
+BACKUP_ROOT=/root/codex-hardening-backups
+mkdir -p "$BACKUP_ROOT"
+chmod 700 "$BACKUP_ROOT"
+find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
+  | sort -rn | tail -n +11 | cut -d' ' -f2- | xargs -r rm -rf -- || true
+
+BACKUP_DIR="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-tg-ingest-agent"
 mkdir -p "$BACKUP_DIR"
 for existing in "$ENV_FILE" "$UNIT_FILE"; do
   if [ -f "$existing" ]; then

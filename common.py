@@ -367,6 +367,10 @@ def load_config(env=None):
     cfg.backup_keep = max(1, int(env.get("BACKUP_KEEP") or "7"))
     cfg.backup_encryption_key_file = Path(
         env.get("BACKUP_ENCRYPTION_KEY_FILE") or "/etc/tg-ingest-agent-backup.key")
+    # Low-disk alert: warn the boss while there is still room to act. A full disk
+    # kills every SQLite write at once (crash loop), and the first symptom used to
+    # be the crash itself. Percent of the DB filesystem still free (0 disables).
+    cfg.disk_alert_min_free_pct = float(env.get("DISK_ALERT_MIN_FREE_PCT") or "10")
     # Binary storage backend: 'local' (default) or 'spaces' (DO Spaces, S3).
     # Built now, dormant until a Space + keys are configured.
     cfg.storage_backend = (env.get("STORAGE_BACKEND") or "local").strip().lower()

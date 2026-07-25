@@ -709,6 +709,24 @@ TEXTS = {
         "ru": "✓ Модель «{model}» снова на связи, босс.",
         "en": "✓ The «{model}» model is reachable again, boss.",
     },
+    "disk_low": {
+        "ru": ("⚠️ Босс, на диске сервера осталось {free} из {total} ({pct}%). "
+               "Когда он забьётся, я перестану записывать вообще всё — "
+               "посмотри, пожалуйста, что можно почистить."),
+        "en": ("⚠️ Boss, the server disk is down to {free} of {total} ({pct}%). "
+               "Once it fills I stop being able to save anything at all — "
+               "please take a look at what can be cleared."),
+    },
+    "disk_ok": {
+        "ru": "✓ С диском снова порядок, босс — свободно {free} ({pct}%).",
+        "en": "✓ Disk space is healthy again, boss — {free} free ({pct}%).",
+    },
+    "backup_failed": {
+        "ru": ("⚠️ Босс, сегодняшний бэкап базы не сделался ({reason}). "
+               "Копия вне сервера не обновилась — посмотри, когда сможешь."),
+        "en": ("⚠️ Boss, today's database backup did not go through ({reason}). "
+               "The off-box copy is stale — please check when you can."),
+    },
     "problem_logged": {
         "ru": "Записала в проблемы, босс — разберёмся 📝",
         "en": "Logged it as a problem, boss — we'll sort it out 📝",

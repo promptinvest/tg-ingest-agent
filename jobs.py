@@ -8,9 +8,14 @@ is inert until handlers are registered, so this ships without changing live
 behavior.
 """
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import store
+
+# A retry waits this long before the job is claimable again. Without it both
+# attempts burned inside the SAME drain pass (available_at never moved), so one
+# network blip spent the whole retry budget in a second — and cost the day's job.
+RETRY_DELAY_SECONDS = 600
 
 # Known durable background jobs (skill, action). Documentation + a test guard
 # that every one has a registered handler. The live request/response path is
@@ -95,13 +100,16 @@ def complete(conn, job_id, result=None):
     conn.commit()
 
 
-def fail(conn, job_id, error):
-    """Retry if attempts remain, else terminal 'failed'."""
+def fail(conn, job_id, error, retry_delay_seconds=RETRY_DELAY_SECONDS):
+    """Retry if attempts remain (after a backoff), else terminal 'failed'."""
     row = conn.execute("SELECT attempts, max_attempts FROM jobs WHERE id = ?",
                        (job_id,)).fetchone()
     if row and row["attempts"] < row["max_attempts"]:
-        conn.execute("UPDATE jobs SET status = 'pending', error = ? WHERE id = ?",
-                     (str(error)[:300], job_id))
+        retry_at = (datetime.now(timezone.utc)
+                    + timedelta(seconds=retry_delay_seconds)).isoformat()
+        conn.execute(
+            "UPDATE jobs SET status = 'pending', error = ?, available_at = ? WHERE id = ?",
+            (str(error)[:300], retry_at, job_id))
         terminal = False
     else:
         conn.execute("UPDATE jobs SET status = 'failed', finished_at = ?, error = ? WHERE id = ?",

@@ -167,7 +167,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                          lambda ctx, conn, payload, job: {"expired": store.pending_expire(conn)})
         # Daily off-box DB backup — the single file everything Cara is lives in.
         runtime.register("maintenance", "db_backup",
-                         lambda ctx, conn, payload, job: backup.run(ctx.cfg, conn))
+                         lambda ctx, conn, payload, job: ctx.run_db_backup(conn))
         # A crash mid-job leaves the row 'claimed' with no owner; reclaim so the
         # job kind isn't wedged forever (has_pending would block re-enqueue).
         requeued, dead = jobs.reclaim_stale(self.conn)
@@ -177,6 +177,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         self.stop = False
         self.last_sweep = 0.0
         self.last_model_health = 0.0  # check model reachability soon after start
+        self.last_disk_check = 0.0    # and free disk space soon after start
         # Don't nudge the instant the service (re)starts — wait one interval.
         self.last_proactive = time.time()
         # Reply language for the current turn: set from the incoming message so
@@ -443,6 +444,22 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             processed_max = update_id
         return processed_max
 
+    # Every-iteration scheduler tick, in order. A class-level table (rather than a
+    # tuple built inline in run()) so that dropping a monitor from the loop is a
+    # visible, testable change instead of a silent feature death in production.
+    SCHEDULER_TICKS = (
+        "fire_due_reminders",
+        "check_budget_notice",
+        "check_weekly_review",
+        "check_morning_brief",
+        "check_daily_curator",
+        "check_daily_backup",
+        "check_memory_consolidation",
+        "check_proactive",
+        "check_model_health",
+        "check_disk_space",
+    )
+
     def _tick(self, name, fn):
         """Run one scheduler tick, isolating an UNEXPECTED failure so it can't exit the poll
         loop (a systemd crash-loop if the condition persists). ShutdownInterrupt is re-raised
@@ -476,20 +493,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             # and crash the poll loop. Ticks already handle their own domain errors; this is the
             # backstop. Order preserved; sweep-gated ticks run on the retry interval.
             self._tick("flush_albums", lambda: self.flush_albums(now))
-            for name, fn in (
-                ("fire_due_reminders", self.fire_due_reminders),
-                ("check_budget_notice", self.check_budget_notice),
-                ("check_weekly_review", self.check_weekly_review),
-                ("check_morning_brief", self.check_morning_brief),
-                ("check_daily_curator", self.check_daily_curator),
-                ("check_daily_backup", self.check_daily_backup),
-                ("check_memory_consolidation", self.check_memory_consolidation),
-                ("check_proactive", self.check_proactive),
-                ("check_model_health", self.check_model_health),
-            ):
+            for name in self.SCHEDULER_TICKS:
                 if self.stop:
                     break
-                self._tick(name, fn)
+                self._tick(name, getattr(self, name))
             if not self.stop and now - self.last_sweep >= self.cfg.retry_interval:
                 self.last_sweep = now
                 for name, fn in (
@@ -2223,17 +2230,75 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                          trace_id=current_trace())
         store.kv_set(self.conn, "curator_day", today)
 
+    # After a terminally failed backup, wait this long before trying the day
+    # again — a permanent failure (missing key file) must not re-snapshot the DB
+    # on every sweep, but a transient one still gets several shots the same day.
+    BACKUP_RETRY_MINUTES = 60
+
     def check_daily_backup(self):
         """Enqueue the daily DB backup job once per UTC day (durable — the job
-        runner retries a failed snapshot/off-box copy)."""
+        runner retries a failed snapshot/off-box copy). The day is stamped by the
+        job's SUCCESS path, not here: stamping at enqueue time marked a failed day
+        done until the next UTC day, so one bad morning cost the whole backup."""
         if not self.cfg.backup_enabled:
             return
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if store.kv_get(self.conn, "backup_day") == today:
+        now = datetime.now(timezone.utc)
+        self.check_backup_failure(now)
+        if store.kv_get(self.conn, "backup_day") == now.strftime("%Y-%m-%d"):
+            return
+        if self._sched_backing_off("backup", now):
             return
         if not jobs.has_pending(self.conn, "maintenance", "db_backup"):
             jobs.add_job(self.conn, "maintenance", "db_backup", trace_id=current_trace())
-        store.kv_set(self.conn, "backup_day", today)
+
+    def check_backup_failure(self, now):
+        """A terminally failed backup is otherwise near-invisible (one issues row
+        nobody reads). Tell the boss ONCE A DAY — the DB is the one thing that
+        cannot be recreated — and hold the retry for a while.
+
+        Scoped to TODAY's failures: failed job rows live for
+        `TELEMETRY_RETENTION_DAYS` (90), so an unscoped query would announce a
+        three-week-old error as «сегодняшний бэкап» on the first tick after this
+        ships, and park today's real backup behind an hour of backoff.
+        Deduped per UTC day, not per job id: a permanent cause (missing key file)
+        produces a NEW job — and so a new id — every `BACKUP_RETRY_MINUTES`, which
+        used to mean ~20 identical alerts a day."""
+        today = now.strftime("%Y-%m-%d")
+        row = self.conn.execute(
+            "SELECT id, error FROM jobs WHERE skill = 'maintenance' AND action = 'db_backup'"
+            " AND status = 'failed' AND finished_at >= ? ORDER BY id DESC LIMIT 1",
+            (today,)).fetchone()
+        if not row:
+            return
+        if store.kv_get(self.conn, "backup_failed_job") != str(row["id"]):
+            # New terminal failure: hold the retry. Stamped before the send so an
+            # undeliverable notice can't re-arm the backoff on every tick.
+            store.kv_set(self.conn, "backup_failed_job", str(row["id"]))
+            store.kv_set(self.conn, "backup_retry_at",
+                         (now + timedelta(minutes=self.BACKUP_RETRY_MINUTES)).isoformat())
+        if store.kv_get(self.conn, "backup_failed_day") == today:
+            return  # he already knows; the rest of today's attempts retry quietly
+        if self._sched_backing_off("backup_notice", now):
+            return
+        self.turn_lang = None
+        reason = str(row["error"] or "")[:200]
+        # Mark the day announced only on a real delivery (same rule as the model-health
+        # and disk alerts) — a Telegram blip must not swallow the one proactive notice.
+        if self._send_all(T(self.lang(), "backup_failed", reason=reason)):
+            store.kv_set(self.conn, "backup_notice_fails", "0")
+            store.kv_set(self.conn, "backup_failed_day", today)
+        elif self._sched_send_gave_up("backup_notice"):
+            store.kv_set(self.conn, "backup_failed_day", today)  # dead Telegram: stop trying today
+        else:
+            log(f"backup failure notice could not be delivered: {reason}")
+
+    def run_db_backup(self, conn):
+        """The db_backup job body. Stamps the UTC day only after the backup really
+        succeeded (and clears the failure backoff), so a failed day retries."""
+        result = backup.run(self.cfg, conn)
+        store.kv_set(conn, "backup_day", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        store.kv_set(conn, "backup_retry_at", "")
+        return result
 
     def check_memory_consolidation(self):
         """Weekly: fold duplicate boss-memory items (the curator accumulates near-dupes
@@ -2437,6 +2502,54 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if self._send_all(T(lang, key, model=model, reason=reason)):
                 store.kv_set(self.conn, f"mh:{model}", "down")
                 log(f"model health: {model} ok -> down ({reason}) after {fails} checks")
+
+    # Low-disk monitor. A full disk breaks EVERY SQLite write at once (and the
+    # backup that would have freed space), so the first symptom used to be the
+    # crash loop itself. Same debounced state-change shape as check_model_health:
+    # one alert on the way down, one when it recovers, with a margin above the
+    # threshold so a wobble around the line can't flap.
+    DISK_CHECK_INTERVAL_SECONDS = 1800
+    DISK_RECOVER_MARGIN_PCT = 2.0
+
+    def check_disk_space(self):
+        """Tell the boss BEFORE the disk fills, while there is still room to act."""
+        threshold = float(getattr(self.cfg, "disk_alert_min_free_pct", 0) or 0)
+        if threshold <= 0:
+            return
+        now = time.time()
+        if now - self.last_disk_check < self.DISK_CHECK_INTERVAL_SECONDS:
+            return
+        self.last_disk_check = now
+        data = sysinfo.collect(str(self.cfg.db_path.parent))
+        total = data.get("disk_total") or 0
+        if total <= 0:
+            return  # statvfs unavailable — nothing trustworthy to judge
+        free = data.get("disk_free") or 0
+        free_pct = free / total * 100
+        # `disk_space` holds the last ANNOUNCED state ("low"/"ok"), not the raw
+        # reading — so a healthy box stays quiet and a low one is reported once.
+        prev = store.kv_get(self.conn, "disk_space")
+        self.turn_lang = None
+        lang = self.lang()
+        args = {"pct": f"{free_pct:.1f}", "free": sysinfo.fmt_bytes(free),
+                "total": sysinfo.fmt_bytes(total)}
+        if free_pct < threshold:
+            if prev == "low":
+                return  # already announced; don't repeat every half hour
+            if self._send_all(T(lang, "disk_low", **args)):
+                store.kv_set(self.conn, "disk_space", "low")
+                store.issue_add(self.conn, self._owner_chat(), "disk_low",
+                                f"{free_pct:.1f}% free ({free} of {total} bytes)")
+                log(f"disk space low: {free_pct:.1f}% free")
+            return
+        if prev == "low":
+            if free_pct < threshold + self.DISK_RECOVER_MARGIN_PCT:
+                return  # back above the line but not clearly — wait for real room
+            if self._send_all(T(lang, "disk_ok", **args)):
+                store.kv_set(self.conn, "disk_space", "ok")
+                log(f"disk space recovered: {free_pct:.1f}% free")
+        elif prev is None:
+            store.kv_set(self.conn, "disk_space", "ok")  # first sighting, healthy: quiet
 
     # Scheduled sends (morning brief / weekly review) mark their slot done only
     # AFTER a successful delivery — a transient Telegram failure used to silently
