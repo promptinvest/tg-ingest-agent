@@ -620,6 +620,21 @@ def latest_trace(conn, chat_id, kind="inbound"):
 # -- self facts (Cara's self-knowledge) --------------------------------------
 
 def self_fact_set(conn, key, value, scope="core", source="seed"):
+    """Store one self fact — writing NOTHING when it is already stored like this.
+
+    `self_model.seed` calls this for every SEED_FACTS entry on EVERY start. The
+    plain UPSERT stamped a fresh `updated_at` each time, so all of them were
+    genuinely dirtied and committed: startup still needed a writable disk
+    even after `open_db` was made zero-write (see `_migrate_steps`), and the
+    crash loop stayed unrecoverable. Read first, write only on a real change —
+    the seeding contract is unchanged (an edited SEED_FACTS entry still
+    overwrites) and `updated_at` now means "when the fact actually changed".
+    """
+    row = conn.execute("SELECT value, scope, status FROM self_facts WHERE key = ?",
+                       (key,)).fetchone()
+    if (row is not None and row["value"] == value and row["scope"] == scope
+            and row["status"] == "active"):
+        return
     now = _now()
     conn.execute(
         "INSERT INTO self_facts (key, value, scope, source, status, created_at, updated_at)"

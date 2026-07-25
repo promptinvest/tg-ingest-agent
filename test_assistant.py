@@ -8938,6 +8938,66 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
         self.assertEqual(sent, [texts.T("ru", "update_dead_letter")])
         self.assertEqual(store.telegram_update_get(self.agent.conn, 936)["status"], "failed")
 
+    # -- WP2 follow-up: a PERSISTENT db failure must not be a silent wedge -----
+
+    @staticmethod
+    def _readonly_db(*_args, **_kwargs):
+        # Deliberately NOT "disk is full": a volume remounted read-only after an
+        # I/O error, a database file that lost write permission, a malformed
+        # image. None of those clear on their own, none reach the dead-letter
+        # path (the ledger is what is broken), and containment alone would retry
+        # them every 5 s forever — `active (running)` while Cara is stone deaf.
+        raise sqlite3.OperationalError("attempt to write a readonly database")
+
+    def _stall_batches(self, count, first_update_id=960):
+        """Drive `count` batches against an unwritable database; return the sends."""
+        sent = []
+
+        def fake_tg_call(token, method, payload=None, **kwargs):
+            sent.append((method, payload))
+            return {"message_id": 1}
+
+        with mock.patch.object(store, "telegram_update_receive",
+                               side_effect=self._readonly_db), \
+                mock.patch.object(self.mod, "tg_call", side_effect=fake_tg_call), \
+                mock.patch.object(self.agent, "_sleep"), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=AssertionError("reply() writes conversation")):
+            for offset in range(count):
+                self.assertIsNone(
+                    self.agent.process_update_batch([self._update(first_update_id + offset)]))
+        return sent
+
+    def test_a_short_db_stall_stays_quiet(self):
+        # A seconds-long blip is what containment is FOR; it must not page him.
+        self.assertEqual(self._stall_batches(self.agent.DB_STALL_ALERT_AFTER - 1), [])
+
+    def test_a_persistent_db_failure_alerts_the_boss_exactly_once(self):
+        sent = self._stall_batches(self.agent.DB_STALL_ALERT_AFTER * 3)
+        self.assertEqual([m for m, _ in sent], ["sendMessage"])   # latched, not per break
+        self.assertEqual(sent[0][1]["chat_id"], 111)
+        self.assertEqual(sent[0][1]["text"], texts.T("ru", "db_stalled"))
+
+    def test_a_recovered_database_re_arms_the_stall_alert(self):
+        self.assertEqual(len(self._stall_batches(self.agent.DB_STALL_ALERT_AFTER)), 1)
+        with mock.patch.object(self.agent, "handle_update", return_value=None):
+            self.assertEqual(self.agent.process_update_batch([self._update(970)]), 970)
+        self.assertEqual(self.agent._db_stall_streak, 0)          # the stall is over
+        self.assertEqual(
+            len(self._stall_batches(self.agent.DB_STALL_ALERT_AFTER, first_update_id=980)), 1)
+
+    def test_a_failed_stall_alert_does_not_escape_the_containment_guard(self):
+        # The alert runs INSIDE the except handler: a raise there would leave
+        # run() — exactly the crash loop the guard exists to prevent.
+        with mock.patch.object(store, "telegram_update_receive",
+                               side_effect=self._readonly_db), \
+                mock.patch.object(self.mod, "tg_call",
+                                  side_effect=tg_api.TelegramError("network down")), \
+                mock.patch.object(self.agent, "_sleep"):
+            for offset in range(self.agent.DB_STALL_ALERT_AFTER):
+                self.assertIsNone(
+                    self.agent.process_update_batch([self._update(990 + offset)]))
+
     def test_sleep_returns_at_once_when_a_stop_was_already_requested(self):
         self.agent.stop = True
         with mock.patch.object(self.mod.time, "sleep") as slept:
@@ -9157,6 +9217,51 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
                 .fetchone()["kind"], "journal")
         finally:
             conn.close()
+
+    def test_a_repeat_agent_start_performs_no_writes(self):
+        """`open_db` is only half of a start.
+
+        `Agent.__init__` seeds Cara's self-facts right after it, and that UPSERT
+        stamped a fresh `updated_at` every time — every seeded row genuinely
+        dirtied, one commit each, on EVERY start. So a full disk still failed the
+        start, `main()`'s backstop exited, systemd restarted, and the crash loop
+        T2.2 was written to break could never limp back up.
+        """
+        cfg = make_config(ALLOWED_CHAT_IDS="111",
+                          DB_PATH=str(Path(self.tmp.name) / "restart.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        first = self.mod.Agent(cfg)
+        first.conn.close()
+        again = self.mod.Agent(cfg)
+        try:
+            self.assertEqual(again.conn.total_changes, 0)
+            self.assertEqual({row["key"] for row in store.self_facts(again.conn)},
+                             set(self_model.SEED_FACTS))
+        finally:
+            again.conn.close()
+
+    def test_an_edited_seed_fact_is_still_written_through(self):
+        # Zero-write must not mean read-only: the seeding contract is unchanged.
+        conn = self.agent.conn
+        stamped = conn.execute(
+            "SELECT updated_at FROM self_facts WHERE key='name'").fetchone()["updated_at"]
+        before = conn.total_changes
+        store.self_fact_set(conn, "name", self_model.SEED_FACTS["name"])
+        self.assertEqual(conn.total_changes, before)          # unchanged -> untouched
+        self.assertEqual(conn.execute(
+            "SELECT updated_at FROM self_facts WHERE key='name'").fetchone()["updated_at"],
+            stamped)                                          # ...updated_at means something
+        store.self_fact_set(conn, "name", "Кара")
+        self.assertGreater(conn.total_changes, before)
+        self.assertEqual(conn.execute(
+            "SELECT value FROM self_facts WHERE key='name'").fetchone()["value"], "Кара")
+
+    def test_a_retired_self_fact_is_revived_by_reseeding(self):
+        conn = self.agent.conn
+        conn.execute("UPDATE self_facts SET status='retired' WHERE key='name'")
+        conn.commit()
+        store.self_fact_set(conn, "name", self_model.SEED_FACTS["name"])
+        self.assertIn("name", {row["key"] for row in store.self_facts(conn)})
 
     # -- T2.3 _migrate is all-or-nothing --------------------------------------
 

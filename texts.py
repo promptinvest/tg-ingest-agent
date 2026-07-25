@@ -744,6 +744,21 @@ TEXTS = {
                "anything and I have to stop. Please free some room: while it's full "
                "I can neither reply nor keep records."),
     },
+    # Sent from the inbound-path containment guard when the database keeps
+    # refusing writes for a reason that is NOT a full disk (read-only remount,
+    # lost permissions, a corrupted file). The process is alive and can still
+    # send — but it can neither record nor answer, so it says so instead of
+    # looking healthy to systemd while being deaf.
+    "db_stalled": {
+        "ru": ("🛑 Босс, база перестала принимать записи — твои сообщения доходят, "
+               "но я не могу их обработать и не починю это сама. Посмотри, "
+               "пожалуйста, сервер: диск и файл базы. Всё, что ты пишешь, "
+               "подхвачу, как только она снова заработает."),
+        "en": ("🛑 Boss, the database stopped accepting writes — your messages keep "
+               "arriving but I can't process any of them, and I can't fix this "
+               "myself. Please check the server: the disk and the database file. "
+               "Everything you write gets picked up as soon as it works again."),
+    },
     "problem_logged": {
         "ru": "Записала в проблемы, босс — разберёмся 📝",
         "en": "Logged it as a problem, boss — we'll sort it out 📝",

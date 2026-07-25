@@ -175,6 +175,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if requeued or dead:
             log(f"reclaimed stale jobs after restart: {requeued} requeued, {dead} failed")
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
+        # Consecutive sqlite containment breaks in the inbound path, and whether
+        # the boss has already been told about THIS stall (see _db_stall).
+        self._db_stall_streak = 0
+        self._db_stall_alerted = False
         self.stop = False
         self.last_sweep = 0.0
         self.last_model_health = 0.0  # check model reachability soon after start
@@ -400,6 +404,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     # acknowledged, and the surviving process can still SEND (a send needs no disk).
     DB_STALL_BACKOFF_SECONDS = 5
 
+    # Containment alone turns a PERSISTENT failure into a silent wedge: a volume
+    # remounted read-only after an I/O error, a database file that lost write
+    # permission, a malformed image — none of those are "disk is full", none clear
+    # on their own, and every retry breaks the batch again without advancing the
+    # offset. The process stays up, so `systemctl is-active` reports
+    # `active (running)` while Cara is permanently deaf and completely silent
+    # (before containment she at least crash-looped into a `failed` unit). After
+    # this many consecutive breaks — about a minute of retries — say it out loud.
+    DB_STALL_ALERT_AFTER = 12
+
     def _sleep(self, seconds):
         """Sleep in short slices so a SIGTERM during a backoff is still prompt."""
         deadline = time.time() + seconds
@@ -408,6 +422,29 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if remaining <= 0:
                 break
             time.sleep(min(1.0, remaining))
+
+    def _db_stall(self, exc):
+        """Count one containment break and, once the streak says the database is
+        not coming back on its own, tell the boss — exactly once per stall.
+
+        Nothing here may touch SQLite: `reply()` records the turn in
+        `conversation` and `lang()` reads `preferences`, and both fail on the very
+        condition being reported. A direct send needs no disk at all, which is the
+        whole reason keeping the process alive was worth it.
+        """
+        self._db_stall_streak += 1
+        if self._db_stall_streak < self.DB_STALL_ALERT_AFTER or self._db_stall_alerted:
+            return
+        self._db_stall_alerted = True  # latched until an update goes through again
+        log(f"database still unusable after {self._db_stall_streak} attempts"
+            f" ({exc!r}) — alerting the boss")
+        text = T(getattr(self.cfg, "language", "ru"), "db_stalled")
+        for chat_id in self.cfg.allowed_chat_ids:
+            try:
+                tg_call(self.cfg.token, "sendMessage", {"chat_id": chat_id, "text": text})
+                break
+            except Exception as send_exc:  # noqa: BLE001 — never re-raise into the guard
+                log(f"db-stall alert to {chat_id} failed: {send_exc!r}")
 
     def _notify_dead_letter(self, chat_id):
         """Terminal dead letter: say so instead of letting the message vanish.
@@ -434,7 +471,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         When the database itself is unusable the batch stops WITHOUT advancing the
         offset (at-least-once redelivery is preserved) and the process survives.
         A disk-full error raised by the handler takes that same route instead of
-        counting as a failed attempt, so a full disk cannot dead-letter good work.
+        counting as a failed attempt, so a full disk cannot dead-letter good work;
+        every other handler-raised sqlite error still dead-letters, so a
+        deterministically poisonous update can't wedge her either. A sqlite error
+        from the bookkeeping itself has no dead-letter route by definition — the
+        ledger is what is broken — so a streak of those alerts the boss
+        (`_db_stall`) rather than staying an `active (running)` zombie.
         """
         processed_max = None
         for update in updates or []:
@@ -467,8 +509,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                         # three redeliveries inside one disk-full window would
                         # otherwise dead-letter a perfectly good message and ask the
                         # boss to resend it — onto a disk that is still full. Any
-                        # OTHER sqlite error stays on the dead-letter path, so a
-                        # deterministically poisonous update still can't wedge her.
+                        # OTHER sqlite error RAISED BY THE HANDLER stays on the
+                        # dead-letter path, so a deterministically poisonous update
+                        # still can't wedge her. (Errors raised by the bookkeeping
+                        # around this block have no dead-letter route — they are the
+                        # ledger failing — and go to the containment guard, which
+                        # alerts once the streak proves it is not transient.)
                         raise
                     try:
                         store.telegram_update_fail(self.conn, update_id, repr(exc),
@@ -505,10 +551,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 events.record_done(self.conn, "telegram_message_received",
                                    chat_id=chat_id, trace_id=tid)
                 processed_max = update_id
+                # An update handled end to end proves the database takes writes
+                # again: the stall is over and a later one may alert afresh.
+                self._db_stall_streak = 0
+                self._db_stall_alerted = False
             except sqlite3.Error as exc:
                 log(f"database unavailable handling update {update.get('update_id')}:"
                     f" {exc!r} — pausing {self.DB_STALL_BACKOFF_SECONDS}s,"
                     f" offset not advanced (Telegram redelivers)")
+                self._db_stall(exc)
                 self._sleep(self.DB_STALL_BACKOFF_SECONDS)
                 break
         return processed_max

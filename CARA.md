@@ -790,12 +790,23 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   can still be honest), waits 5 min so restarts stay paced, and exits. A disk‑full
   error raised by the *handler* takes the containment route as well, so a full disk
   cannot burn an update's retry budget and dead‑letter a perfectly good message;
-  every other SQLite error still dead‑letters, so a poison update can't wedge her.
+  every other SQLite error **raised by the handler** still dead‑letters, so a poison
+  update can't wedge her. An error raised by the *bookkeeping* has no dead‑letter
+  route by definition — the ledger is what broke — so after 12 consecutive
+  containment breaks (≈1 min, `DB_STALL_ALERT_AFTER`) Cara sends ONE direct
+  `db_stalled` alert (no `reply()`, no `lang()` — both touch the DB) and latches it
+  until an update goes through again. Without that, a *persistent* non‑disk‑full
+  failure — a read‑only remount, lost file permissions, a corrupted image — left
+  `systemctl is-active` reporting `active (running)` while she was permanently deaf
+  and completely silent.
 - **Startup writes nothing at steady state (2026‑07‑25):** `open_db` used to rewrite
-  every `memory_candidates` row and the gratitude category row on EVERY start, so a
-  full disk blocked STARTUP too and the crash loop could never limp back up. Both
-  backfills are now condition‑guarded (`WHERE …IS NULL`; the journal self‑heal reads
-  before writing), and a repeat start performs zero writes.
+  every `memory_candidates` row and the gratitude category row on EVERY start, and
+  `Agent.__init__` then re‑stamped every seeded self‑fact — so a full disk blocked
+  STARTUP too and the crash loop could never limp back up. Both backfills are now
+  condition‑guarded (`WHERE …IS NULL`; the journal self‑heal reads before writing)
+  and `self_fact_set` reads before writing, so a repeat start performs zero writes.
+  Editing `SEED_FACTS` still overwrites, and `self_facts.updated_at` now means "when
+  the fact actually changed".
 - **Atomic migrations (2026‑07‑25):** `_migrate` runs inside one
   `BEGIN IMMEDIATE`/`commit`. Python's legacy transaction control autocommitted DDL
   while paired backfills waited for the end‑of‑open commit, so a crash between an
