@@ -15,6 +15,7 @@ survives restarts, never blocks the live request path.
 """
 import gzip
 import os
+import re
 import sqlite3
 import stat
 import subprocess
@@ -82,15 +83,28 @@ def snapshot(cfg, conn):
     return gz
 
 
+# Exactly what snapshot() names its own files: ingest-<UTC stamp>.db[.gz[.tmp]].
+# Deliberately NOT `ingest-*.db` — the backups dir also holds hand-made
+# pre-change copies like `ingest-pre-july15-corrections-<stamp>.db`, and this
+# sweep must never mistake an operator's deliberate backup for our garbage.
+_OWN_SNAPSHOT = re.compile(r"^ingest-\d{8}T\d{6}Z\.db(?:\.gz\.tmp)?$")
+
+
 def sweep_stray(cfg):
     """Remove backup-dir garbage rotation can't see: raw `.db` snapshots and
-    half-written `.tmp` archives left by an interrupted run. Both are always
-    garbage — the live DB lives one level up."""
+    half-written `.tmp` archives left by an interrupted run of OUR snapshot().
+
+    Scoped to the machine-generated stamp form on purpose. Anything else in the
+    directory — a manually named pre-change copy, its -wal/-shm companions —
+    belongs to whoever put it there and is left alone. The live DB lives one
+    level up and is never in scope either way.
+    """
     out_dir = backups_dir(cfg)
     removed = 0
-    for stray in sorted(out_dir.glob("ingest-*.db")) + sorted(out_dir.glob("*.tmp")):
-        stray.unlink(missing_ok=True)
-        removed += 1
+    for stray in sorted(out_dir.iterdir()):
+        if stray.is_file() and _OWN_SNAPSHOT.match(stray.name):
+            stray.unlink(missing_ok=True)
+            removed += 1
     return removed
 
 

@@ -5867,6 +5867,31 @@ class BackupAndDiskHardeningTests(unittest.TestCase):
         self.assertEqual(left, ["ingest-20260101T000000Z.db.gz",
                                 "ingest-20260102T000000Z.db.gz"])
 
+    def test_sweep_spares_hand_made_backups(self):
+        # Caught on the live box: the backups dir also holds deliberate
+        # pre-change copies (ingest-pre-july15-corrections-<stamp>.db, 16 MB,
+        # plus -wal/-shm companions). The first sweep matched `ingest-*.db` and
+        # would have deleted that operator backup on the next rotation.
+        import backup
+        cfg = self.agent.cfg
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        keep = [
+            "ingest-pre-july15-corrections-20260715T153357Z.db",
+            "ingest-pre-july15-corrections-20260715T153357Z.db-wal",
+            "ingest-pre-july15-corrections-20260715T153357Z.db-shm",
+            "ingest-pre-review-fix-20260713T104530Z.db.gz",
+            "notes.tmp",                       # not ours either
+        ]
+        for name in keep:
+            (d / name).write_bytes(b"operator's, not ours")
+        (d / "ingest-20200101T000000Z.db").write_bytes(b"our leaked raw snapshot")
+        (d / "ingest-20200101T000000Z.db.gz.tmp").write_bytes(b"our half-written archive")
+
+        self.assertEqual(backup.sweep_stray(cfg), 2)      # only our two
+        left = sorted(p.name for p in d.iterdir())
+        self.assertEqual(left, sorted(keep))
+
     # -- T1.2 retention runs even when encryption fails ------------------------
 
     def test_rotation_still_prunes_when_encryption_fails(self):
