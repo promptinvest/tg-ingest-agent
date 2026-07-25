@@ -202,6 +202,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # The reminder whose FIRED NOTIFICATION he's replying to this turn (or
         # None) — the strongest binding for a close/snooze follow-up.
         self.turn_reply_reminder_id = None
+        # The SUGGESTION CARD he's replying to this turn when that reply was not
+        # itself a category (or None) — a category resolved later in the turn
+        # belongs to THAT card, not to whichever card happens to be pending.
+        self.turn_reply_suggestion_id = None
         # update_id of the update currently in handle_update — buffered album
         # parts record it so flush_albums can mark their inbox rows done.
         self._current_update_id = None
@@ -797,6 +801,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         self.turn_extra = []
         self.turn_reply_quote = ""
         self.turn_reply_reminder_id = None
+        self.turn_reply_suggestion_id = None
         self._own_photo_turn = False
 
     def handle_update(self, update):
@@ -899,8 +904,13 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             row = store.find_by_suggestion_message(
                 self.conn, chat_id, reply_to_msg.get("message_id"))
             if row and text and not (auto_store or own_media):
-                self.handle_correction(row, chat_id, text, msg.get("message_id"))
-                return
+                if self.handle_correction(row, chat_id, text, msg.get("message_id")):
+                    return
+                # Not a category — the message routes on. But it still NAMES that
+                # card: only one pending row exists per chat, so without this a
+                # later card's pending would swallow the correction (forward two
+                # posts, answer the FIRST card -> the second note was confirmed).
+                self.turn_reply_suggestion_id = row["id"]
             # Replying to a FIRED-REMINDER notification names that exact
             # reminder — the follow-up (готово/отложи/…) binds to IT, never to
             # whatever happened to fire last (the 2026-07-23 incident: «Отложи
@@ -1069,10 +1079,23 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if any(w in t for w in ("через", "отлож", "позже", "потом", "напомни", "snooze",
                                 "later", "remind", "минут", "завтра", "час")):
             return True   # snooze
-        acks = ("готов", "сделал", "сделано", "выполн", "done", "ок", "okay", "okey",
-                "ok", "окей", "да", "yes", "yep", "ага", "+", "✅", "👍", "закры",
-                "пропуст", "skip")  # "сегодня пропустим" closes today's instance
-        return len(t) <= 25 and any(w in t for w in acks)
+        if t in ("+", "✅", "👍"):
+            return True   # exact-match specials (never a substring of a word)
+        # WORD-BOUNDARY matching: «пока» contains «ок» and «когда» contains «да»,
+        # and the old substring test read both as acks — a goodbye closed the
+        # alarm. (`\b` is unreliable next to Cyrillic in some builds; an explicit
+        # non-word delimiter is not.) VERB STEMS keep an open suffix so
+        # «готово»/«сделала»/«сегодня пропустим» (closes today's instance) still
+        # ack; the SHORT PARTICLES need a RIGHT boundary as well, or «давай» — and
+        # any «да…»/«ок…» word of the bound reminder's own title, which the
+        # extra-words guard lets through — still reads as an ack.
+        if len(t) > 25:
+            return False
+        if re.search(r"(?:^|[^\w])(?:готов|сделал|сделано|выполн|done|закры|"
+                     r"пропуст|skip|\+|✅|👍)", t):
+            return True
+        return re.search(r"(?:^|[^\w])(?:окей|ок|okay|okey|ok|да|yes|yep|ага)"
+                         r"(?:[^\w]|$)", t) is not None
 
     @staticmethod
     def _explicit_numbered_delete(text):
@@ -1350,14 +1373,19 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             self.reply(chat_id, T(lang, "cancelled"))
             return
         if kind == "category":
-            row = store.get_message(self.conn, payload.get("row_id"))
+            # A REPLY to a specific suggestion card names THAT card, even when a
+            # NEWER card is the one pending (pending_set keeps one row per chat).
+            target_id = getattr(self, "turn_reply_suggestion_id", None)
+            row = store.get_message(self.conn, target_id if target_id is not None
+                                    else payload.get("row_id"))
             if not row:
                 store.pending_clear(self.conn, chat_id)
                 return
             category = (llm.normalize_category(params.get("category"))
                         if action == "amend" else None)
             category = category or row["suggested_category"] or self.cfg.fallback_category
-            store.pending_clear(self.conn, chat_id)
+            if payload.get("row_id") == row["id"]:
+                store.pending_clear(self.conn, chat_id)   # the OTHER card stays pending
             self.apply_category_confirm(chat_id, row, category, reply_to=None)
         elif kind == "reminder":
             if action == "amend":
@@ -2994,18 +3022,50 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         self.edit_message(chat_id, msg.get("message_id"), text, reply_markup=keyboard)
         self.answer_callback(callback_id, "")
 
+    # A reply to a suggestion card is only a CATEGORY when it plausibly IS one:
+    # short, not a question, and either explicitly phrased («категория: планы») or
+    # a near-variant of a category that already exists. Anything else («а зачем
+    # это сохранять?») used to be normalized wholesale into a brand-new category
+    # and the note was confirmed into it.
+    CORRECTION_CATEGORY_MAX_CHARS = 40
+
+    def correction_category(self, text):
+        """The category a reply to a suggestion card names, or None."""
+        raw = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not raw:
+            return None
+        # An EXPLICIT «категория: …» phrase is unambiguous whatever its length —
+        # and it is handled deterministically in dispatch anyway, so gating it
+        # here only moved the same confirmation onto whichever card is pending.
+        explicit = self.explicit_category(raw)
+        if explicit:
+            return explicit
+        if len(raw) > self.CORRECTION_CATEGORY_MAX_CHARS or "?" in raw:
+            return None
+        category = llm.normalize_category(raw)
+        if not category:
+            return None
+        return llm.match_category_fuzzy(category, store.known_categories(self.conn))
+
     def handle_correction(self, row, chat_id, text, reply_to):
+        """Apply a category correction sent as a REPLY to a suggestion card.
+
+        Returns True when the reply was handled; False when it isn't a category
+        at all — the card then stays pending and the message routes normally
+        (as conversation), instead of becoming a category made from his sentence.
+        """
         lang = self.lang()
         if row["status"] == "confirmed":
             self.reply(chat_id, T(lang, "already_confirmed", row_id=self.note_no(row["id"]), category=row["category"]))
-            return
-        category = llm.normalize_category(text)
+            return True
+        category = self.correction_category(text)
         if not category:
-            return
+            return False
         pending = store.pending_get(self.conn, chat_id)
         if pending and pending["kind"] == "category" and pending["payload"].get("row_id") == row["id"]:
             store.pending_clear(self.conn, chat_id)
         self.apply_category_confirm(chat_id, row, category, reply_to=reply_to)
+        return True
 
     _JOURNAL_EDIT_CANCEL = ("отмена", "не надо", "нет", "cancel", "no", "стоп", "stop")
 
@@ -3284,14 +3344,29 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         voice/audio note, or extract a document's text. (His OWN voice notes are transcribed on
         arrival; forwarded ones are stored unparsed until he asks for the content.) Targets the
         most recent stored file, or the one on note #id if given."""
-        rows = store.files_recent_full(self.conn, chat_id, limit=5)
-        if params.get("id"):
-            row = self.resolve_item(params)                        # the note he points at
-            mfiles = store.message_files(self.conn, row["id"]) if row else []
-            rows = mfiles or rows
-        if not rows:
-            self.reply(chat_id, T(lang, "read_media_none"))
-            return
+        try:
+            # Router params are passed through untyped, so normalize first: a
+            # falsy-but-present id («» / «первая») is NOT a note number, and
+            # interpolating it raw produced «У # нет голосового…».
+            note_no = int(params["id"]) if params.get("id") is not None else None
+        except (TypeError, ValueError):
+            note_no = None
+        if note_no is not None:
+            # An EXPLICIT note number is a target, not a hint: if it doesn't
+            # resolve, or that note carries no file, say so. Falling back to the
+            # recent-files list read an UNRELATED file as if it were the answer.
+            row = store.message_by_note_no(self.conn, note_no)
+            rows = store.message_files(self.conn, row["id"]) if row is not None else []
+            if not rows:
+                self.reply(chat_id, T(lang, "read_media_none_note",
+                                      row_id=self.note_no(row["id"]) if row is not None
+                                      else note_no))
+                return
+        else:
+            rows = store.files_recent_full(self.conn, chat_id, limit=5)
+            if not rows:
+                self.reply(chat_id, T(lang, "read_media_none"))
+                return
         f = rows[0]
         name = f["file_name"] or "файл"
         mime = (f["mime_type"] or "").lower()

@@ -243,6 +243,10 @@ TEXTS = {
         "ru": "Хм, не нашла такого напоминания 🤔",
         "en": "Hmm, I couldn't find that reminder 🤔",
     },
+    "reminder_already_closed": {
+        "ru": "Это напоминание уже закрыто — трогать его не буду. Скажи, если нужно новое 🙂",
+        "en": "That reminder is already closed — I won't touch it. Say the word if you want a new one 🙂",
+    },
     "recurrence_none": {"ru": "разово", "en": "once"},
     "recurrence_daily": {"ru": "ежедневно", "en": "daily"},
     "recurrence_weekly": {"ru": "еженедельно", "en": "weekly"},
@@ -413,6 +417,10 @@ TEXTS = {
     "read_media_none": {
         "ru": "Не вижу пересланного голосового или файла, чтобы разобрать. Перешли — и я гляну, что внутри.",
         "en": "I don't see a forwarded voice note or file to open. Forward one and I'll tell you what's inside.",
+    },
+    "read_media_none_note": {
+        "ru": "У #{row_id} нет голосового или файла, который я могу открыть.",
+        "en": "#{row_id} has no voice note or file I can open.",
     },
     "read_media_fail": {
         "ru": "Не получилось открыть это — что-то пошло не так при загрузке. Попробуй ещё раз?",

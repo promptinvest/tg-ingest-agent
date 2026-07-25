@@ -41,6 +41,7 @@ _FOLLOWUP_SCAFFOLD = frozenset({
     "remind", "reminder", "me", "it", "the", "this", "that", "a", "an", "at",
     "in", "on", "to", "until", "till", "for", "of", "later", "again",
     "tomorrow", "today", "tonight", "morning", "evening", "noon", "night",
+    "day", "after",  # "day after tomorrow" — the EN twin of «послезавтра»
     "snooze", "move", "push", "postpone", "delay", "please", "ok", "okay",
     "yes", "yep", "half", "hour", "hours", "hr", "hrs", "minute", "minutes",
     "min", "mins", "am", "pm", "oclock", "skip", "done", "close", "closed",

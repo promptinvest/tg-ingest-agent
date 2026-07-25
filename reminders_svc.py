@@ -229,6 +229,18 @@ class ReminderMixin:
         'это напоминание' (reschedule/rename) binds to it instead of guessing (B3)."""
         store.kv_set(self.conn, "last_reminder_id", str(rid))
 
+    def _followup_day_due(self, t, days):
+        """UTC ISO for «(после)завтра [в] HH[:MM]» — `days` ahead in LOCAL time,
+        defaulting to 09:00 when the boss named no clock time."""
+        tm = re.search(r"(?:в|на|at)?\s*(\d{1,2})(?::(\d{2}))?\b", t)
+        hour = max(0, min(23, int(tm.group(1)))) if tm else 9
+        minute = max(0, min(59, int(tm.group(2) or 0))) if tm else 0
+        local_now = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
+        local_due = datetime.combine(local_now.date() + timedelta(days=days),
+                                     datetime.min.time(), tzinfo=timezone.utc)
+        local_due = local_due.replace(hour=hour, minute=minute)
+        return (local_due - timedelta(hours=self.tz_offset())).isoformat()
+
     def _parse_fired_followup(self, text, *, allow_bare_ack=False, title=""):
         """Deterministic common acknowledgements/snoozes for a fired reminder.
 
@@ -259,35 +271,39 @@ class ReminderMixin:
         # «давай завтра в 10 часов» the hours pattern would otherwise eat «10
         # часов» first and silently re-arm the alarm 10 hours from now (~06:00)
         # instead of tomorrow 10:00.
+        # «послезавтра» CONTAINS «завтра» — it must be tested FIRST, or the
+        # substring match re-arms the alarm a full day EARLY (the scaffold
+        # whitelist in reminders.py already admits «послезавтра» as follow-up
+        # language, so it reaches this point).
+        if "послезавтра" in t or "day after tomorrow" in t:
+            return "amend", {"due_utc": self._followup_day_due(t, 2)}
         if "завтра" in t or "tomorrow" in t:
-            tm = re.search(r"(?:в|на|at)?\s*(\d{1,2})(?::(\d{2}))?\b", t)
-            hour = max(0, min(23, int(tm.group(1)))) if tm else 9
-            minute = max(0, min(59, int(tm.group(2) or 0))) if tm else 0
-            local_now = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
-            local_due = datetime.combine(local_now.date() + timedelta(days=1),
-                                         datetime.min.time(), tzinfo=timezone.utc)
-            local_due = local_due.replace(hour=hour, minute=minute)
-            due = local_due - timedelta(hours=self.tz_offset())
-            return "amend", {"due_utc": due.isoformat()}
+            return "amend", {"due_utc": self._followup_day_due(t, 1)}
         # A bare absolute-clock snooze is common boss language: «отложи на 12»
         # means 12:00 LOCAL TODAY, not 12 minutes/hours from now and not a trip
         # through the probabilistic router. If today's clock time already passed,
         # fail closed with a clarification instead of silently rolling tomorrow.
         absolute = re.fullmatch(
             r"(?:отложи|перенеси|напомни)(?:\s+(?:это|напоминание|его))?\s+"
-            r"(?:на|до)\s+(\d{1,2})(?::(\d{2}))?"
-            r"(?:\s*(?:час(?:а|ов)?|ч))?[.! ]*",
+            r"(?P<prep>на|до)\s+(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?"
+            r"(?:\s*(?P<unit>час(?:а|ов)?|ч))?[.! ]*",
             t,
         )
+        if absolute is not None and absolute.group("prep") == "на" \
+                and absolute.group("unit") and not absolute.group("minute"):
+            # «отложи на 2 часа» is the DURATION idiom — postpone BY two hours,
+            # not to 02:00 (which read as 'already passed' and asked to clarify).
+            # «до 2 часов» and a unit-less «на 2» stay absolute-clock.
+            return "amend", {"snooze_minutes": max(1, int(absolute.group("hour"))) * 60}
         if absolute is None:
             absolute = re.fullmatch(
                 r"(?:snooze|remind me|move it)(?:\s+(?:until|to|at))\s+"
-                r"(\d{1,2})(?::(\d{2}))?[.! ]*",
+                r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?[.! ]*",
                 t,
             )
         if absolute is not None:
-            hour = int(absolute.group(1))
-            minute = int(absolute.group(2) or 0)
+            hour = int(absolute.group("hour"))
+            minute = int(absolute.group("minute") or 0)
             if not (0 <= hour <= 23 and 0 <= minute <= 59):
                 return None
             local_now = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
@@ -368,12 +384,27 @@ class ReminderMixin:
         # may be about a different, later reminder) and the last-fired recency
         # rule (no window: replying IS explicit, however old the alarm).
         context = None
+        closed_reply = False
         reply_rid = getattr(self, "turn_reply_reminder_id", None)
         if reply_rid is not None:
             row = store.reminder_get(self.conn, reply_rid)
             if row is not None and row["status"] == "active":
                 context = {"kind": "reminder_fired",
                            "payload": {"reminder_id": row["id"], "title": row["title"]}}
+            else:
+                closed_reply = True
+        if closed_reply:
+            # He replied to a notification whose reminder is already closed (or
+            # gone). That reply NAMES that reminder — falling through to the live
+            # pending / last-touched one is exactly the 2026-07-23 incident class.
+            # A follow-up gets the honest refusal; anything substantive still
+            # routes normally (a closed alarm doesn't swallow real content).
+            if self._parse_fired_followup(
+                    text, allow_bare_ack=True,
+                    title=str((row["title"] if row is not None else "") or "")) is None:
+                return False
+            self.reply(chat_id, T(lang, "reminder_already_closed"))
+            return True
         if context is None:
             context = live_pending
         if context is None:
@@ -421,9 +452,24 @@ class ReminderMixin:
         t = (text or "").strip().casefold()
         if not t or not rows:
             return None
-        m = re.search(r"#?\s*(\d{1,3})", t)
-        if m:
-            n = int(m.group(1))
+        # Only a BARE or #-prefixed number is a PICK. «давай лучше в 2 часа» is a
+        # fresh TIME during the disambiguation, not a choice of reminder #2 — a
+        # number preceded by «в/на/до/через/at» or followed by ANY time unit /
+        # «:» belongs to a new reschedule, so we return None and the message
+        # re-routes. (Units beyond hours/minutes matter: «через 2 дня» slipped
+        # through both guards and picked #2 with the stale time.)
+        for m in re.finditer(r"(#\s*)?(\d{1,3})(?!\d)", t):
+            if not m.group(1):
+                before = t[:m.start()]
+                if before and before[-1] in ":.,-/":
+                    continue                       # inside a time/date («12:15»)
+                if re.search(r"(?:^|\s)(?:в|во|на|к|до|через|спустя|at|to|in|after)\s*$",
+                             before):
+                    continue                       # «в 2 часа» / «через 2 дня» — a time
+                if re.match(r"\s*(?::|час|ч\b|мин|м\b|h\b|hour|hr\b|day|week"
+                            r"|дн|недел|нед\b|сутк)", t[m.end():]):
+                    continue                       # «2 часа», «2 дня», «2:30»
+            n = int(m.group(2))
             if 1 <= n <= len(rows):
                 return rows[n - 1]
         for stem, n in self._ORDINALS.items():
@@ -480,8 +526,18 @@ class ReminderMixin:
         if not rows:
             self.reply(chat_id, T(lang, "reminder_not_found"))
             return None
-        has_target = params.get("id") is not None or (params.get("title_query")
-                                                       or params.get("title"))
+        # A ONE-element ids list («перенеси #2» arriving as {"ids": [2]}) is just as
+        # explicit as `id`: fold it in, or it is discarded and the op silently lands
+        # on the last-touched reminder instead of the one he named.
+        ids = params.get("ids")
+        if params.get("id") is None and isinstance(ids, list) and len(ids) == 1:
+            params = dict(params, id=ids[0])
+        # A LONGER ids list is explicit too: when only some of its entries exist
+        # («перенеси #1 и #99») do_reschedule's multi path doesn't fire, and an
+        # ids list that never counted as a target dropped the op onto the
+        # last-touched reminder. Any non-empty ids list is a named target.
+        has_target = (params.get("id") is not None or bool(params.get("ids"))
+                      or params.get("title_query") or params.get("title"))
         row = reminders.find_by_query(rows, params)
         if row is None and has_target:
             # Explicit id/title given but nothing active matched — do NOT move an

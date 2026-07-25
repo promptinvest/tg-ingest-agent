@@ -10280,5 +10280,624 @@ class PurgeSemantics20260725Tests(unittest.TestCase):
                                   (per_nos[1], "deleted_unused")})
 
 
+class DeterministicPrecision20260725Tests(unittest.TestCase):
+    """WP5 of the 2026-07-24 review: the deterministic reminder/note paths exist
+    BECAUSE they are meant to be more reliable than the router — and every one of
+    them failed OPEN, acting on a different object instead of saying «не нашла».
+
+    One rule, applied everywhere here: when an EXPLICIT target was given and it
+    cannot be resolved, reply not-found — never fall back to the newest note, the
+    last-touched reminder, or the most recent file.
+    """
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "wp5.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        store.invalidate_vector_cache(self.conn)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    # -- helpers ---------------------------------------------------------------
+
+    def _note(self, tg_id, text, category="Разное"):
+        """A confirmed note (knowledge_state 'active', stable #N assigned)."""
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        canonical = store.ensure_category(self.conn, category)
+        store.set_suggestion(self.conn, rid, canonical, text, "m")
+        store.confirm_category(self.conn, rid, canonical)
+        return rid
+
+    def _fired_oneshot(self, title, minutes_ago=10, *, bind_last=True):
+        now = datetime.now(timezone.utc)
+        fired = (now - timedelta(minutes=minutes_ago)).isoformat()
+        rid = store.reminder_add(self.conn, 1, title, fired)
+        store.reminder_touch_fired(self.conn, rid, fired)
+        if bind_last:
+            store.kv_set(self.conn, "last_reminder_id", str(rid))
+        return rid
+
+    def _local(self, iso):
+        return (reminders.parse_iso_utc(iso)
+                + timedelta(hours=self.agent.tz_offset()))
+
+    # -- T5.1 «послезавтра» is TWO days, not one -------------------------------
+
+    def test_poslezavtra_snoozes_two_days_not_one(self):
+        rid = self._fired_oneshot("оплатить хостинг")
+        with mock.patch.object(self.agent, "reply") as rep:
+            handled = self.agent.resolve_fired_followup(
+                1, "ru", "отложи на послезавтра", None)
+        self.assertTrue(handled)
+        self.assertTrue(rep.called)
+        local_today = (datetime.now(timezone.utc)
+                       + timedelta(hours=self.agent.tz_offset())).date()
+        due = self._local(store.reminder_get(self.conn, rid)["due_utc"])
+        self.assertEqual(due.date(), local_today + timedelta(days=2))  # NOT +1
+        self.assertEqual((due.hour, due.minute), (9, 0))
+
+    def test_day_after_tomorrow_snoozes_two_days_in_english_too(self):
+        """The EN twin was dead code: «day»/«after» weren't follow-up scaffold, so
+        `followup_extra_words` rejected the phrase as substantive long before the
+        branch could run."""
+        rid = self._fired_oneshot("pay the hosting bill")
+        with mock.patch.object(self.agent, "reply") as rep:
+            handled = self.agent.resolve_fired_followup(
+                1, "en", "snooze it day after tomorrow", None)
+        self.assertTrue(handled)
+        self.assertTrue(rep.called)
+        local_today = (datetime.now(timezone.utc)
+                       + timedelta(hours=self.agent.tz_offset())).date()
+        due = self._local(store.reminder_get(self.conn, rid)["due_utc"])
+        self.assertEqual(due.date(), local_today + timedelta(days=2))
+
+    def test_zavtra_still_means_one_day(self):
+        rid = self._fired_oneshot("позвонить Диме")
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_fired_followup(1, "ru", "отложи на завтра в 10", None)
+        local_today = (datetime.now(timezone.utc)
+                       + timedelta(hours=self.agent.tz_offset())).date()
+        due = self._local(store.reminder_get(self.conn, rid)["due_utc"])
+        self.assertEqual(due.date(), local_today + timedelta(days=1))
+        self.assertEqual((due.hour, due.minute), (10, 0))
+
+    # -- T5.2 «отложи на 2 часа» is a DURATION, not 02:00 ----------------------
+
+    def test_na_n_chasa_is_a_duration_not_an_absolute_clock(self):
+        parsed = self.agent._parse_fired_followup("отложи на 2 часа")
+        self.assertEqual(parsed, ("amend", {"snooze_minutes": 120}))
+        rid = self._fired_oneshot("забрать посылку")
+        before = datetime.now(timezone.utc)
+        with mock.patch.object(self.agent, "reply"):
+            self.assertTrue(self.agent.resolve_fired_followup(
+                1, "ru", "отложи на 2 часа", None))
+        due = reminders.parse_iso_utc(store.reminder_get(self.conn, rid)["due_utc"])
+        delta = (due - before).total_seconds()
+        self.assertGreater(delta, 119 * 60)      # ~ +2 hours from now …
+        self.assertLess(delta, 121 * 60)         # … not 02:00 / a clarification
+
+    def test_larger_hour_durations_flip_from_absolute_to_relative(self):
+        """The carve-out DECIDES a live ambiguity: «отложи на 12 часов» used to
+        mean 12:00 today and now means +12 h. Pinned so the flip is on record
+        (and visible if the operator ever wants it back)."""
+        self.assertEqual(self.agent._parse_fired_followup("отложи на 12 часов"),
+                         ("amend", {"snooze_minutes": 720}))
+        self.assertEqual(self.agent._parse_fired_followup("отложи на 2 ч"),
+                         ("amend", {"snooze_minutes": 120}))
+
+    def test_absolute_clock_snoozes_are_unchanged(self):
+        for phrase in ("отложи на 2", "отложи до 2", "отложи до 2 часов",
+                       "перенеси на 14:30"):
+            parsed = self.agent._parse_fired_followup(phrase)
+            self.assertIsNotNone(parsed, phrase)
+            self.assertIsNone(parsed[1].get("snooze_minutes"), phrase)
+        # the generic relative idiom (no defer verb) keeps its duration reading
+        self.assertEqual(self.agent._parse_fired_followup("давай на 2 часа"),
+                         ("amend", {"snooze_minutes": 120}))
+
+    # -- T5.3 a one-element ids list IS an explicit target ---------------------
+
+    def test_single_element_ids_list_targets_that_reminder(self):
+        now = datetime.now(timezone.utc)
+        # Insertion order is deliberately NOT the display order (which is by due
+        # time): b is rowid 1 but display #2, c is rowid 2 but display #3. So a
+        # regression that read ids[0] as a rowid instead of a DISPLAY POSITION
+        # fails here, and «#2» means what the boss saw in the list.
+        b = store.reminder_add(self.conn, 1, "второе", (now + timedelta(hours=2)).isoformat())
+        c = store.reminder_add(self.conn, 1, "третье", (now + timedelta(hours=3)).isoformat())
+        a = store.reminder_add(self.conn, 1, "первое", (now + timedelta(hours=1)).isoformat())
+        store.kv_set(self.conn, "last_reminder_id", str(c))   # the last-touched one
+        a_due, c_due = (store.reminder_get(self.conn, r)["due_utc"] for r in (a, c))
+        new_due = (now + timedelta(hours=9)).isoformat()
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reschedule(1, "ru", {"ids": [2], "due_utc": new_due})
+        self.assertEqual(store.reminder_get(self.conn, b)["due_utc"], new_due)  # #2 moved
+        self.assertEqual(store.reminder_get(self.conn, c)["due_utc"], c_due)    # not the
+        self.assertEqual(store.reminder_get(self.conn, a)["due_utc"], a_due)    # last-touched
+
+    def test_partly_stale_reminder_ids_are_not_found_not_the_last_touched(self):
+        """«перенеси #1 и #99» — one number exists, one doesn't. The multi path
+        needs TWO resolved targets, so this fell through with `ids` still 2 long:
+        an ids list never counted as a target, and the move landed on the
+        last-touched reminder the boss never named."""
+        now = datetime.now(timezone.utc)
+        rids = [store.reminder_add(self.conn, 1, t, (now + timedelta(hours=h)).isoformat())
+                for t, h in (("первое", 1), ("второе", 2), ("третье", 3))]
+        store.kv_set(self.conn, "last_reminder_id", str(rids[2]))
+        dues = {r: store.reminder_get(self.conn, r)["due_utc"] for r in rids}
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_reschedule(1, "ru", {"ids": [1, 99],
+                                               "due_utc": (now + timedelta(hours=9)).isoformat()})
+        self.assertIn(texts.T("ru", "reminder_not_found"), rep.call_args[0][1])
+        for rid, due in dues.items():
+            self.assertEqual(store.reminder_get(self.conn, rid)["due_utc"], due)
+
+    def test_single_element_ids_list_that_matches_nothing_is_not_found(self):
+        now = datetime.now(timezone.utc)
+        a = store.reminder_add(self.conn, 1, "единственное",
+                               (now + timedelta(hours=1)).isoformat())
+        store.kv_set(self.conn, "last_reminder_id", str(a))
+        a_due = store.reminder_get(self.conn, a)["due_utc"]
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_reschedule(1, "ru", {"ids": [7],
+                                               "due_utc": (now + timedelta(hours=9)).isoformat()})
+        self.assertEqual(store.reminder_get(self.conn, a)["due_utc"], a_due)
+        self.assertIn(texts.T("ru", "reminder_not_found"), rep.call_args[0][1])
+
+    # -- T5.4 a reply to a CLOSED reminder never retargets ---------------------
+
+    def test_reply_to_closed_reminder_refuses_instead_of_retargeting(self):
+        closed = self._fired_oneshot("заметка #9", minutes_ago=180, bind_last=False)
+        store.reminder_close(self.conn, closed, "done", "acked")
+        fresh = self._fired_oneshot("благодарности", minutes_ago=10)
+        fresh_due = store.reminder_get(self.conn, fresh)["due_utc"]
+        self.agent._remember_fired_message(910, closed)
+        self.agent.turn_reply_reminder_id = self.agent.fired_reminder_for_message(910)
+        with mock.patch.object(self.agent, "reply") as rep:
+            handled = self.agent.resolve_fired_followup(1, "ru", "отложи на завтра", None)
+        self.assertTrue(handled)
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "reminder_already_closed"))
+        # the OTHER (live) reminder is untouched — the 2026-07-23 incident class
+        self.assertEqual(store.reminder_get(self.conn, fresh)["due_utc"], fresh_due)
+        self.assertEqual(store.reminder_get(self.conn, fresh)["status"], "active")
+        self.assertEqual(store.reminder_get(self.conn, closed)["status"], "done")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM reminders").fetchone()[0], 2)   # no echo row
+
+    def test_bare_ack_reply_to_closed_reminder_does_not_close_another(self):
+        closed = self._fired_oneshot("старое", minutes_ago=300, bind_last=False)
+        store.reminder_close(self.conn, closed, "done", "acked")
+        fresh = self._fired_oneshot("свежее", minutes_ago=5)
+        self.agent._remember_fired_message(800, closed)
+        self.agent.turn_reply_reminder_id = self.agent.fired_reminder_for_message(800)
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.assertTrue(self.agent.resolve_fired_followup(1, "ru", "готово", None))
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "reminder_already_closed"))
+        self.assertEqual(store.reminder_get(self.conn, fresh)["status"], "active")
+
+    def test_closed_reply_wins_over_a_live_fired_pending(self):
+        """The production shape of the 2026-07-23 incident, one status later:
+        alarm A fired minutes ago and is awaiting «готово» (a LIVE pending) while
+        he replies «готово» to alarm B's older, already-closed notification. The
+        refusal must come first — A must not be closed by that reply, and A's
+        pending must survive. Driven through `handle_update` with `chat_profile`
+        armed to blow up, so only the deterministic path can have handled it."""
+        closed = self._fired_oneshot("заметка #9", minutes_ago=180, bind_last=False)
+        store.reminder_close(self.conn, closed, "done", "acked")
+        fresh = self._fired_oneshot("благодарности", minutes_ago=5)
+        store.pending_set(self.conn, 1, "reminder_fired",
+                          {"reminder_id": fresh, "title": "благодарности"})
+        self.agent._remember_fired_message(910, closed)
+        update = {"message": {
+            "chat": {"id": 1}, "from": {"id": 1}, "message_id": 55, "text": "готово",
+            "reply_to_message": {"message_id": 910, "from": {"id": 9, "is_bot": True},
+                                 "text": "⏰ Олег, напоминаю: заметка #9"}}}
+        with mock.patch.object(self.mod, "tg_call", return_value={"message_id": 56}) as call, \
+                mock.patch.object(self.mod, "tg_set_reaction"), \
+                mock.patch.object(llm, "chat_profile",
+                                  side_effect=AssertionError("deterministic path expected")):
+            self.agent.handle_update(update)
+        sent = [c[0][2]["text"] for c in call.call_args_list if c[0][1] == "sendMessage"]
+        self.assertIn(texts.T("ru", "reminder_already_closed"), sent)
+        self.assertEqual(store.reminder_get(self.conn, fresh)["status"], "active")
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "reminder_fired")
+        self.assertEqual(store.reminder_get(self.conn, closed)["status"], "done")
+
+    def test_substantive_reply_to_a_closed_reminder_still_routes(self):
+        closed = self._fired_oneshot("старое", minutes_ago=300, bind_last=False)
+        store.reminder_close(self.conn, closed, "done", "acked")
+        self.agent.turn_reply_reminder_id = closed
+        with mock.patch.object(self.agent, "reply") as rep:
+            handled = self.agent.resolve_fired_followup(
+                1, "ru", "в благодарность — разговор с Костей", None)
+        self.assertFalse(handled)          # real content still reaches the router
+        self.assertFalse(rep.called)
+
+    # -- T5.5 a disambiguation answer must not eat a time correction -----------
+
+    def test_time_correction_during_disambiguation_is_not_a_pick(self):
+        rows = [{"id": 10, "title": "позвонить в банк"}, {"id": 11, "title": "купить хлеб"}]
+        p = self.agent._parse_reminder_selector
+        self.assertIsNone(p("давай лучше в 2 часа", rows))
+        self.assertIsNone(p("перенеси на 12:15", rows))
+        # a fresh time in ANY unit, not just hours/minutes
+        self.assertIsNone(p("через 2 дня", rows))
+        self.assertIsNone(p("через 3 недели", rows))
+        self.assertEqual(p("#2", rows)["id"], 11)          # explicit picks still work
+        self.assertEqual(p("2", rows)["id"], 11)
+        self.assertEqual(p("второе", rows)["id"], 11)
+        self.assertEqual(p("про банк", rows)["id"], 10)
+
+    def test_time_correction_abandons_the_pending_and_reroutes(self):
+        now = datetime.now(timezone.utc)
+        a = store.reminder_add(self.conn, 1, "позвонить в банк",
+                               (now + timedelta(hours=1)).isoformat())
+        b = store.reminder_add(self.conn, 1, "купить хлеб",
+                               (now + timedelta(hours=2)).isoformat())
+        dues = {r: store.reminder_get(self.conn, r)["due_utc"] for r in (a, b)}
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reschedule(1, "ru", {"due_utc": (now + timedelta(hours=5)).isoformat()})
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "reminder_op")
+        with mock.patch.object(router, "route", return_value={
+                "action": "converse", "params": {}, "confidence": 0.9}) as rt, \
+                mock.patch.object(self.agent, "do_converse"), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 7}, "давай лучше в 2 часа")
+        self.assertTrue(rt.called)                       # routed as a fresh request
+        for rid, due in dues.items():
+            self.assertEqual(store.reminder_get(self.conn, rid)["due_utc"], due)
+
+    # -- T5.6 ack matching on word boundaries ---------------------------------
+
+    def test_goodbye_and_question_words_are_not_acks(self):
+        f = self.mod.Agent._is_reminder_ack
+        self.assertFalse(f("пока"))            # «пока» CONTAINS «ок»
+        self.assertFalse(f("ну пока"))
+        self.assertFalse(f("давай"))           # «давай» STARTS with «да»
+        # «когда» reaches the matcher only when it is a word of the bound
+        # reminder's own title (otherwise the extra-words guard stops it first) —
+        # that is where the substring matcher used to read «да» inside it.
+        self.assertFalse(f("когда", "когда позвонить Диме"))
+        self.assertTrue(f("ок"))
+        self.assertTrue(f("да, спасибо"))
+        self.assertTrue(f("+"))
+        self.assertTrue(f("+ спасибо"))
+        self.assertTrue(f("готово"))
+        self.assertTrue(f("сегодня пропустим"))
+
+    def test_goodbye_no_longer_closes_a_fired_reminder(self):
+        rid = self._fired_oneshot("позвонить Диме")
+        store.pending_set(self.conn, 1, "reminder_fired",
+                          {"reminder_id": rid, "title": "позвонить Диме"})
+        with mock.patch.object(router, "route", return_value={
+                "action": "confirm", "params": {}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "do_converse"), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 3}, "пока")
+        self.assertEqual(store.reminder_get(self.conn, rid)["status"], "active")
+        self.assertIsNone(store.pending_get(self.conn, 1))   # ack-pending dropped
+
+    # -- T5.7 explicit note ids fail CLOSED -----------------------------------
+
+    def test_archive_by_stale_ids_touches_nothing(self):
+        keep = self._note(1, "старая заметка")
+        newest = self._note(2, "самая свежая заметка")
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive",
+                                                   "ids": [7, 9]}, text="в архив #7 и #9")
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "items_empty"))
+        for rid in (keep, newest):
+            self.assertEqual(store.get_message(self.conn, rid)["knowledge_state"], "active")
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    def test_delete_by_stale_ids_stages_nothing(self):
+        newest = self._note(1, "самая свежая заметка")
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_item_delete(1, "ru", {"ids": [7, 9]})
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "items_empty"))
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertIsNotNone(store.get_message(self.conn, newest))
+
+    def test_partly_stale_ids_still_resolve_what_exists(self):
+        first = self._note(1, "первая")
+        self._note(2, "вторая")
+        no = store.get_message(self.conn, first)["note_no"]
+        rows = self.agent.resolve_items({"ids": [no, 999]})
+        self.assertEqual([r["id"] for r in rows], [first])
+
+    def test_unusable_count_is_not_the_newest_note(self):
+        self._note(1, "единственная")
+        self.assertEqual(self.agent.resolve_items({"count": "много"}), [])
+
+    def test_archive_by_a_stale_SINGLE_id_touches_nothing(self):
+        """«убери #7 в архив» is the router's canonical single-target form
+        ({"operation": "archive", "id": 7}) and the FAR more common phrasing —
+        it fell through to resolve_item, whose miss path is the NEWEST note, and
+        a single archive skips the confirmation."""
+        keep = self._note(1, "старая заметка")
+        newest = self._note(2, "самая свежая заметка")
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive", "id": 7},
+                                         text="убери #7 в архив")
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "items_empty"))
+        for rid in (keep, newest):
+            self.assertEqual(store.get_message(self.conn, rid)["knowledge_state"], "active")
+
+    def test_recategorize_by_a_stale_id_touches_nothing(self):
+        newest = self._note(1, "самая свежая заметка")
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_recategorize(1, "ru", {"id": 404, "category": "Крипта"})
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "items_empty"))
+        self.assertEqual(store.get_message(self.conn, newest)["category"], "Разное")
+
+    # -- T5.8 review-snapshot ordinals stay POSITIONAL -------------------------
+
+    def _snapshot_of_three(self):
+        a, b, c = (self._note(1, "первая"), self._note(2, "вторая"),
+                   self._note(3, "третья"))
+        d = self._note(4, "не показанная, но самая свежая")
+        self.agent._review_snapshot_set([a, b, c], ttl_seconds=3600)
+        store.delete_message(self.conn, b)          # the 2nd shown item is gone
+        return a, b, c, d
+
+    def test_third_shown_item_stays_the_third(self):
+        a, _b, c, d = self._snapshot_of_three()
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive"},
+                                         text="третье в архив")
+        self.assertEqual(store.get_message(self.conn, c)["knowledge_state"], "archived")
+        for rid in (a, d):
+            self.assertEqual(store.get_message(self.conn, rid)["knowledge_state"], "active")
+
+    def test_deleted_shown_item_is_not_found_not_a_substitute(self):
+        a, _b, c, d = self._snapshot_of_three()
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive"},
+                                         text="второе в архив")
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "items_empty"))
+        for rid in (a, c, d):
+            self.assertEqual(store.get_message(self.conn, rid)["knowledge_state"], "active")
+
+    def test_out_of_range_ordinal_after_a_review_is_not_found(self):
+        """«четвёртое» after a THREE-item review: he named a shown position that
+        doesn't exist. That claimed nothing, so resolution fell through to the
+        newest note — which the archive then took, silently."""
+        a, _b, c, d = self._snapshot_of_three()
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive"},
+                                         text="четвёртое в архив")
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "items_empty"))
+        for rid in (a, c, d):
+            self.assertEqual(store.get_message(self.conn, rid)["knowledge_state"], "active")
+
+    def test_ordinal_when_every_shown_item_is_gone_is_not_found(self):
+        """A snapshot all of whose rows were deleted still made no claim, so
+        «третье в архив» archived the newest note that was never even shown."""
+        a, b, c = (self._note(1, "первая"), self._note(2, "вторая"), self._note(3, "третья"))
+        d = self._note(4, "не показанная, но самая свежая")
+        self.agent._review_snapshot_set([a, b, c], ttl_seconds=3600)
+        for rid in (a, b, c):
+            store.delete_message(self.conn, rid)
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive"},
+                                         text="третье в архив")
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "items_empty"))
+        self.assertEqual(store.get_message(self.conn, d)["knowledge_state"], "active")
+
+    def test_a_bare_op_after_a_dead_snapshot_still_means_the_newest(self):
+        """Control for the two above: with NO ordinal claim in the text, «в архив»
+        keeps its old meaning (the most recent note), snapshot or not."""
+        a = self._note(1, "показанная")
+        newest = self._note(2, "самая свежая")
+        self.agent._review_snapshot_set([a], ttl_seconds=3600)
+        store.delete_message(self.conn, a)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive"}, text="в архив")
+        self.assertEqual(store.get_message(self.conn, newest)["knowledge_state"], "archived")
+
+    # -- T5.9 read_media must not substitute another file ---------------------
+
+    def test_read_media_on_a_text_only_note_reads_nothing_else(self):
+        text_only = self._note(1, "заметка без вложений")
+        other = self._note(2, "чужая заметка с файлом")
+        store.insert_file(self.conn, other, 2, {
+            "file_id": "F1", "file_unique_id": "U1", "file_name": "чужой.txt",
+            "mime_type": "text/plain", "file_size": 42})
+        decoy = Path(self.tmp.name) / "чужой.txt"
+        decoy.write_text("СЕКРЕТ ЧУЖОГО ФАЙЛА", encoding="utf-8")
+        no = store.get_message(self.conn, text_only)["note_no"]
+        with mock.patch.object(self.agent, "download_file", return_value=str(decoy)), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply_chunks"), \
+                mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_read_media(1, "ru", {"id": no})
+        said = rep.call_args[0][1]
+        self.assertNotIn("СЕКРЕТ", said)
+        self.assertEqual(said, texts.T("ru", "read_media_none_note", row_id=no))
+
+    def test_read_media_on_an_unknown_note_is_not_found(self):
+        other = self._note(1, "чужая заметка с файлом")
+        store.insert_file(self.conn, other, 1, {
+            "file_id": "F1", "file_unique_id": "U1", "file_name": "чужой.txt",
+            "mime_type": "text/plain", "file_size": 42})
+        with mock.patch.object(self.agent, "download_file",
+                               side_effect=AssertionError("must not fetch a file")), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply_chunks"), \
+                mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_read_media(1, "ru", {"id": 404})
+        self.assertEqual(rep.call_args[0][1],
+                         texts.T("ru", "read_media_none_note", row_id=404))
+
+    def test_read_media_with_an_unusable_id_is_treated_as_id_less(self):
+        """Router params are passed through untyped. A falsy-but-present id («»)
+        used to enter the strict branch and interpolate raw into the template —
+        «У # нет голосового или файла…»."""
+        other = self._note(1, "заметка с файлом")
+        store.insert_file(self.conn, other, 1, {
+            "file_id": "F1", "file_unique_id": "U1", "file_name": "письмо.txt",
+            "mime_type": "text/plain", "file_size": 42})
+        doc = Path(self.tmp.name) / "письмо.txt"
+        doc.write_text("содержимое письма", encoding="utf-8")
+        with mock.patch.object(self.agent, "download_file", return_value=str(doc)), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply") as rep, \
+                mock.patch.object(self.agent, "reply_chunks") as chunks:
+            self.agent.do_read_media(1, "ru", {"id": ""})
+        self.assertFalse(rep.called)                     # no malformed «У # нет…»
+        self.assertIn("содержимое письма", chunks.call_args[0][1])
+
+    def test_read_media_without_an_id_still_uses_recent_files(self):
+        other = self._note(1, "заметка с файлом")
+        store.insert_file(self.conn, other, 1, {
+            "file_id": "F1", "file_unique_id": "U1", "file_name": "письмо.txt",
+            "mime_type": "text/plain", "file_size": 42})
+        doc = Path(self.tmp.name) / "письмо.txt"
+        doc.write_text("содержимое письма", encoding="utf-8")
+        with mock.patch.object(self.agent, "download_file", return_value=str(doc)), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply_chunks") as rep:
+            self.agent.do_read_media(1, "ru", {})
+        self.assertIn("содержимое письма", rep.call_args[0][1])
+
+    # -- T5.10 a reply to a suggestion card is not automatically a category ----
+
+    def _card(self, tg_id=11, card_msg_id=77):
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": "статья про ставки ЦБ"})
+        store.set_suggestion(self.conn, rid, "Разное", "статья про ставки ЦБ", "m")
+        store.set_suggestion_message(self.conn, rid, card_msg_id)
+        store.pending_set(self.conn, 1, "category", {"row_id": rid})
+        return rid
+
+    def _reply_to_card(self, text, card_msg_id=77):
+        update = {"message": {
+            "chat": {"id": 1}, "from": {"id": 1}, "message_id": 90, "text": text,
+            "reply_to_message": {"message_id": card_msg_id,
+                                 "from": {"id": 9, "is_bot": True},
+                                 "text": "Сохранить в «Разное»?"}}}
+        routed = mock.MagicMock(return_value={"action": "converse", "params": {},
+                                              "confidence": 0.9})
+        with mock.patch.object(router, "route", routed), \
+                mock.patch.object(self.agent, "do_converse"), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 91}), \
+                mock.patch.object(self.mod, "tg_set_reaction"), \
+                mock.patch.object(self.agent, "edit_suggestion_message"):
+            self.agent.handle_update(update)
+        return routed
+
+    def test_question_reply_to_a_card_stays_pending_and_routes(self):
+        rid = self._card()
+        routed = self._reply_to_card("а зачем это сохранять?")
+        row = store.get_message(self.conn, rid)
+        self.assertEqual(row["status"], "suggested")     # NOT confirmed
+        self.assertIsNone(row["category"])               # no invented category
+        self.assertTrue(routed.called)                   # went on as conversation
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "category")
+
+    def test_existing_category_reply_still_recategorizes(self):
+        store.ensure_category(self.conn, "Финансы")
+        rid = self._card()
+        routed = self._reply_to_card("финансы")
+        row = store.get_message(self.conn, rid)
+        self.assertEqual(row["status"], "confirmed")
+        self.assertEqual(row["category"], "Финансы")     # snapped to the existing name
+        self.assertFalse(routed.called)
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    def test_explicit_category_phrase_reply_still_works(self):
+        rid = self._card()
+        self._reply_to_card("категория: планы")
+        row = store.get_message(self.conn, rid)
+        self.assertEqual(row["status"], "confirmed")
+        self.assertEqual(row["category"], "планы")
+
+    def test_rejection_reply_no_longer_becomes_a_category(self):
+        rid = self._card()
+        self._reply_to_card("неправильно")
+        row = store.get_message(self.conn, rid)
+        self.assertEqual(row["status"], "suggested")
+        self.assertIsNone(row["category"])
+
+    def test_a_brand_new_category_name_is_no_longer_coined_from_a_reply(self):
+        """The ACCEPTED LOSS of the gate, documented so a later reader can tell
+        it from a bug: replying «Крипта» to a card while no such category exists
+        no longer creates and confirms it — the card stays pending and the
+        message routes on. An EXISTING category (or «категория: Крипта») works."""
+        rid = self._card()
+        routed = self._reply_to_card("Крипта")
+        row = store.get_message(self.conn, rid)
+        self.assertEqual(row["status"], "suggested")
+        self.assertIsNone(row["category"])
+        self.assertNotIn("Крипта", store.known_categories(self.conn))
+        self.assertTrue(routed.called)
+
+    def test_a_long_declarative_reply_is_not_a_category(self):
+        rid = self._card()
+        routed = self._reply_to_card("нет, это скорее про подготовку к отпуску в сентябре")
+        row = store.get_message(self.conn, rid)
+        self.assertEqual(row["status"], "suggested")
+        self.assertIsNone(row["category"])
+        self.assertTrue(routed.called)
+
+    def test_a_long_explicit_category_phrase_still_works(self):
+        """Length gates a GUESS, never an explicit «категория: …» phrase (control:
+        with a live pending, dispatch's deterministic branch also catches it)."""
+        rid = self._card()
+        self._reply_to_card("Нет, не так — категория: Планы на сентябрь")  # 42 chars
+        row = store.get_message(self.conn, rid)
+        self.assertEqual(row["status"], "confirmed")
+        self.assertEqual(row["category"], "Планы на сентябрь")
+
+    def test_explicit_category_phrase_works_with_no_pending_left(self):
+        """The pending is one row with a TTL; the card outlives it. With no
+        pending, dispatch's explicit branch never runs, so the reply path has to
+        honour the phrase itself — otherwise «смени категорию на …» reached the
+        router, where a `recategorize` targets the NEWEST note instead."""
+        rid = self._card()
+        store.pending_clear(self.conn, 1)
+        self._reply_to_card("Нет, не так — категория: Планы на сентябрь")  # 42 chars
+        row = store.get_message(self.conn, rid)
+        self.assertEqual(row["status"], "confirmed")
+        self.assertEqual(row["category"], "Планы на сентябрь")
+
+    def test_reply_to_an_older_card_never_confirms_the_newer_one(self):
+        """`pending_actions` keeps ONE row per chat while the reply names a
+        specific card. After the T5.10 fall-through, a category resolved later in
+        the turn (router `amend`, or dispatch's explicit branch) was applied to
+        the LATEST card: forward two posts, answer the FIRST card, and the SECOND
+        note was confirmed while the one he answered stayed pending."""
+        first = self._card(tg_id=11, card_msg_id=77)
+        second = self._card(tg_id=12, card_msg_id=78)      # now the pending one
+        self.assertEqual(store.pending_get(self.conn, 1)["payload"]["row_id"], second)
+        update = {"message": {
+            "chat": {"id": 1}, "from": {"id": 1}, "message_id": 95, "text": "крипта",
+            "reply_to_message": {"message_id": 77, "from": {"id": 9, "is_bot": True},
+                                 "text": "Сохранить в «Разное»?"}}}
+        with mock.patch.object(router, "route", return_value={
+                "action": "amend", "params": {"category": "Крипта"}, "confidence": 0.9}), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 96}), \
+                mock.patch.object(self.mod, "tg_set_reaction"), \
+                mock.patch.object(self.agent, "edit_suggestion_message"):
+            self.agent.handle_update(update)
+        row1 = store.get_message(self.conn, first)
+        self.assertEqual(row1["status"], "confirmed")
+        self.assertEqual(row1["category"], "Крипта")       # the card he REPLIED to
+        row2 = store.get_message(self.conn, second)
+        self.assertEqual(row2["status"], "suggested")      # the newer card untouched
+        self.assertIsNone(row2["category"])
+        self.assertEqual(store.pending_get(self.conn, 1)["payload"]["row_id"], second)
+
+
 if __name__ == "__main__":
     unittest.main()

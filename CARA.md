@@ -291,6 +291,17 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   Generic rejection while a category suggestion is pending (for example
   «Неправильно!» / “wrong category”) never becomes an LLM-invented category: the
   suggestion stays unconfirmed and Cara asks for an explicit «Категория — …».
+  **A REPLY to a suggestion card is only read as a category when it plausibly is
+  one (2026‑07‑25):** an explicit phrase («категория: планы», «смени категорию на
+  …») always counts, whatever its length; a bare word counts when it is short, not
+  a question, and a near‑variant of a category that already exists («финансы» →
+  «Финансы»). Anything else — «а зачем это сохранять?» — routes on as ordinary
+  conversation and the card stays pending; it used to be taken wholesale as the
+  note's new category and confirmed into it. **Narrowed on purpose:** a bare reply
+  naming a category that does NOT exist yet («Крипта» when there is no such
+  category) no longer creates it — say «категория: Крипта» and it does. And a reply
+  always acts on the card you replied to: only one confirmation is pending at a
+  time, so answering an OLDER card used to file the newest one instead.
   Merging categories **never strips journal protection** (2026‑07‑17): folding a
   journal into another name carries the journal kind to the destination.
 - **Edit a note's summary** (`note_edit`): "исправь заметку #11 на …", "поменяй краткое
@@ -329,7 +340,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   fixed priority order, never re‑shown the same day. The shown batch is
   **snapshotted**, so a follow‑up «второе в архив» / «оставь первое» / «все в
   архив» acts on exactly what you saw (24 h window; 15 min after a proactive
-  invitation) — never a recomputed list. State views: «покажи архив» /
+  invitation) — never a recomputed list. **Ordinals stay positional
+  (2026‑07‑25):** if one of the shown items was deleted meanwhile, «третье»
+  still means the third item you were shown, and naming the deleted one gets a
+  not‑found — the list is no longer compacted, which used to shift every ordinal
+  after the gap. Naming a position that was never shown («четвёртое» after a
+  three‑item review), or one whose item is gone, is likewise a not‑found instead
+  of the newest note. State views: «покажи архив» /
   «покажи входящие» open the exact lifecycle view with pagination, and «что у
   тебя есть?» now leads with the notes overview (активные · входящие · на
   пересмотр · архив).
@@ -347,7 +364,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   «восстанови #5»; «оставь #3 в активных»; «пометь #3 как идею»; «поставь #4 на
   пересмотр через месяц» (no alarm fires — it will surface in the notes review);
   «сделай #4 временной на 30 дней» (advisory expiry — nothing is EVER deleted
-  automatically). A **bulk** archive asks for confirmation first. New notes enter
+  automatically). **Explicit `#N` targets fail CLOSED (2026‑07‑25):** «убери #7 в
+  архив» or «в архив #7 и #9» when those numbers no longer exist replies not‑found
+  and touches nothing — it no longer falls back to the newest note (lifecycle ops
+  skip confirmation, so that archived an unrelated note instantly); the same holds
+  for delete‑by‑ids, for a single stale `#N` on re‑categorize, and for an unusable
+  count. A **bulk** archive asks for confirmation first. New notes enter
   as `inbox` on suggestion and become `active`/`reference` on confirm; journal
   entries stay outside note lifecycle. **Real‑use accounting:** opening a note's
   detail card or having it cited in a *delivered* KB answer bumps its use count
@@ -388,6 +410,26 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     «заметка #9» alarm used to snooze the just‑fired gratitude daily instead.
     Acting on a replied‑to/last‑fired alarm also **never wipes an unrelated
     open confirmation** any more (his journal capture card survived intact).
+    **A reply to an ALREADY‑CLOSED alarm is refused, never redirected
+    (2026‑07‑25):** if that reminder is closed/expired/gone Cara says so plainly
+    and touches nothing — she no longer falls through to the live pending or the
+    last‑touched reminder (the same incident class as above). Substantive content
+    replied to a closed alarm still routes normally.
+    **Deterministic follow‑up parsing fixes (2026‑07‑25):** «отложи на
+    послезавтра» now moves it **two** days (a substring test read «завтра» inside
+    it and re‑armed the alarm a full day early; "day after tomorrow" works too),
+    and «отложи на 2 часа» is read as
+    the duration idiom **+2 hours** (it used to full‑match the absolute‑clock
+    branch and try to snooze to 02:00, then ask to clarify); «отложи на 2» / «до 2
+    часов» stay absolute‑clock as before. During a «какое из них?»
+    disambiguation, a message carrying a fresh **time** («давай лучше в 2 часа»,
+    «через 2 дня») is no longer read as picking reminder #2 — only a bare or
+    `#`‑prefixed number is a pick, and a time re‑routes as a new reschedule. A
+    one‑element `#N` target («перенеси #2») now counts as an explicit target
+    instead of being dropped onto the last‑touched reminder, and a list where only
+    some numbers still exist («#1 и #99») is a not‑found with the active list, not
+    a silent move of something else. And «пока» / «давай» are no longer acks: ack
+    words are matched at word boundaries, so a goodbye can't close a fired alarm.
     «Сегодня пропустим» / "skip today"
     counts as that ack (deterministic — today's instance closes; a recurring one still
     fires tomorrow on schedule). **Snooze** by minutes, hours, or an
@@ -775,7 +817,11 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   forwarded voice/audio/files are stored unparsed — **but on request** ("что в этом голосовом?",
   "разбери файл", "read this file") the **`read_media`** action fetches the most recent
   forwarded voice/file and shows its **content**: a voice/audio note is transcribed (whisper),
-  a PDF/text file's text is extracted — never metadata or trace ids.
+  a PDF/text file's text is extracted — never metadata or trace ids. **Naming a
+  note pins the target (2026‑07‑25):** «что в файле из #12» reads a file on #12 or
+  says that note has none — it no longer falls back to the recent‑files list and
+  read an unrelated file as if it answered the question. Only an id‑less request
+  (or one whose note number is unreadable) uses the most recent file.
 
 ### Durable runtime & observability
 - **Permission manifest** (`skill_manifest`) is enforced live: startup fails fast if a

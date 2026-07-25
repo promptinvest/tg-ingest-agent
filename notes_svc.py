@@ -530,16 +530,25 @@ class NotesMixin:
                 row = store.message_by_note_no(self.conn, i)  # stable #N
                 if row is not None:
                     out.append(row)
-            if out:
-                return out
+            # FAIL CLOSED, like the reminder path: an EXPLICIT ids list resolves to
+            # exactly what it names. Falling through when none matched archived/
+            # deleted the NEWEST unrelated note («в архив #7 и #9» with both gone).
+            return out
         count = params.get("count")
         if count is not None:
             try:
                 n = max(1, min(int(count), 20))
             except (TypeError, ValueError):
-                n = 0
-            if n:
-                return store.list_messages(self.conn, limit=n)
+                return []   # an unusable count is not a licence to take the newest
+            return store.list_messages(self.conn, limit=n)
+        if params.get("id") is not None:
+            # A SINGLE explicit #N is the router's canonical form («убери #5 в
+            # архив» -> {"id": 5}) and is exactly as explicit as the ids list:
+            # resolve it strictly. Falling through to resolve_item took the
+            # NEWEST note on a miss, and lifecycle/recategorize act on it
+            # immediately — no confirmation to catch the substitution.
+            row = store.message_by_note_no(self.conn, params.get("id"))
+            return [row] if row is not None else []
         row = self.resolve_item(params)
         return [row] if row else []
 
@@ -784,9 +793,11 @@ class NotesMixin:
             {"ids": ids, "ts": datetime.now(timezone.utc).isoformat(),
              "ttl": int(ttl_seconds)}, ensure_ascii=False))
 
-    def _review_snapshot_rows(self):
+    def _review_snapshot_rows(self, keep_gaps=False):
         """Live snapshot rows (ordinal follow-ups resolve against WHAT WAS SHOWN,
-        never a recomputed list). Empty when absent/expired."""
+        never a recomputed list). Empty when absent/expired. With `keep_gaps` the
+        list stays POSITIONAL — a since-deleted row keeps its slot as None, so
+        «третье» still means the third item he was shown."""
         raw = store.kv_get(self.conn, "note_review_snapshot")
         try:
             snap = json.loads(raw or "")
@@ -800,20 +811,26 @@ class NotesMixin:
         except (KeyError, TypeError, ValueError):
             return []
         rows = [store.get_message(self.conn, i) for i in ids]
-        return [r for r in rows if r is not None]
+        return rows if keep_gaps else [r for r in rows if r is not None]
 
     def _rows_from_review_snapshot(self, text):
         """Resolve «второе / первую / все» against the live review snapshot.
-        None = no snapshot claim (fall through to normal resolution)."""
-        snap = self._review_snapshot_rows()
-        if not snap:
-            return None
+        None = no snapshot claim (fall through to normal resolution); [] = he
+        named a shown item that no longer exists (not-found, never a substitute)."""
+        slots = self._review_snapshot_rows(keep_gaps=True)
+        if not slots:
+            return None          # no live snapshot at all -> no claim on this text
         t = str(text or "").casefold()
         if re.search(r"\bвсе\b|\ball\b|\bобе\b|\bоба\b", t):
-            return snap
+            return [r for r in slots if r is not None]
         for stem, pos in self._ORDINALS.items():
-            if stem in t and pos <= len(snap):
-                return [snap[pos - 1]]
+            if stem in t:
+                # Ordinals are POSITIONAL against the ORIGINAL snapshot: compacting
+                # deleted rows out shifted them, so «третье» archived the 4th note.
+                # Out of range, or the shown row is gone -> not-found. He NAMED a
+                # shown item; the newest note is not an acceptable substitute.
+                row = slots[pos - 1] if pos <= len(slots) else None
+                return [row] if row is not None else []
         return None
 
     def do_note_review(self, chat_id, lang, params=None, preset_ids=None):
