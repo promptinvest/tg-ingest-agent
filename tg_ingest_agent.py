@@ -457,8 +457,13 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         already over (handle_update clears its state in a `finally`), so the
         language comes from the stashed turn language, not the stored default —
         an English message that dead-letters must not answer in Russian.
+
+        Allowlisted chats only. The owner gate lives INSIDE handle_update, i.e.
+        after process_update_batch captured this chat_id, so a stranger's update
+        that raised before the gate would otherwise get a reply in Cara's voice.
+        Every other outbound path targets allowed_chat_ids; this one must too.
         """
-        if not chat_id:
+        if not chat_id or chat_id not in self.cfg.allowed_chat_ids:
             return
         try:
             self.reply(chat_id, T(self._last_turn_lang or self.lang(), "update_dead_letter"))
@@ -3835,8 +3840,14 @@ def db_full_alert(cfg, exc):
         try:
             tg_call(cfg.token, "sendMessage", {"chat_id": chat_id, "text": text})
             break
-        except TelegramError as send_exc:
-            log(f"disk-full alert to {chat_id} failed: {send_exc}")
+        except Exception as send_exc:  # noqa: BLE001 — see below
+            # Deliberately broader than TelegramError: tg_call wraps the HTTP
+            # layer, but its json.loads of the response body sits outside that
+            # wrapping, so a non-JSON reply (captive portal, proxy error page)
+            # raises a bare ValueError. On this path an escaping exception would
+            # replace the disk-full exit with a confusing traceback and lose the
+            # remaining chats — exactly what "best-effort" must not do.
+            log(f"disk-full alert to {chat_id} failed: {send_exc!r}")
     log(f"database out of space ({exc}); pausing {DB_FULL_PAUSE_SECONDS}s before exit")
     time.sleep(DB_FULL_PAUSE_SECONDS)
 

@@ -1184,12 +1184,18 @@ def _migrate_steps(conn):
     # few varied facts. Skip a fresh/empty DB entirely: seed_life plants the full (already
     # de-tea'd) LIFE_SEED there, and inserting a few facts now would make it think it's
     # seeded and skip the rest. Idempotent: UPDATEs match the old text once, INSERT OR
-    # IGNORE is a no-op when present.
+    # IGNORE is a no-op when present. Marker-guarded like the outcome backfill:
+    # without it the three INSERT OR IGNOREs would resurrect these rows on the
+    # next start if the boss ever legitimately removes one (consolidation's
+    # life_delete, or a purge), silently overruling a deliberate deletion.
+    tea_done = conn.execute(
+        "SELECT value FROM kv WHERE key = 'life_tea_rebalance_v1'"
+    ).fetchone()
     try:
         seeded = conn.execute("SELECT COUNT(*) FROM cara_life").fetchone()[0]
     except sqlite3.OperationalError:
         seeded = 0
-    if seeded:
+    if seeded and tea_done is None:
         conn.execute(
             "UPDATE cara_life SET text = ? WHERE text = ?",
             ("Ты снимаешь маленькую квартиру у реки; на подоконнике — стопка недочитанных "
@@ -1211,6 +1217,17 @@ def _migrate_steps(conn):
             conn.execute(
                 "INSERT OR IGNORE INTO cara_life (kind, text, created_at) VALUES (?, ?, ?)",
                 (kind, txt, _now()))
+    if tea_done is None:
+        # Stamped whenever this block is reached, empty DB included: a DB created
+        # today gets the already-de-tea'd LIFE_SEED from seed_life and never needs
+        # the rebalance, so leaving it unstamped would cost a pointless write on
+        # its second start. A genuinely legacy DB predates this marker and so
+        # still gets its one rebalance. No commit: _migrate is one transaction, so
+        # the rebalance and its marker land together or not at all.
+        conn.execute(
+            "INSERT OR REPLACE INTO kv (key, value) VALUES"
+            " ('life_tea_rebalance_v1', 'done')"
+        )
     # Convert legacy JSON-text embeddings to packed float32 BLOBs (one-time;
     # idempotent — after conversion typeof()='blob' so the scan finds nothing).
     for tbl in ("chunks",):

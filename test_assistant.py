@@ -2440,6 +2440,11 @@ class ConverseModuleTests(unittest.TestCase):
         # D1: an existing DB still holding the emphatic tea seed gets it rewritten.
         store.life_add(self.conn, "habit",
                        "Завариваешь крепкий чёрный чай и почти никогда не пьёшь кофе.")
+        # A real DB old enough to still hold that seed predates the rebalance
+        # marker, so drop the one this fixture picked up when open_db created it
+        # empty — otherwise the guard correctly skips a DB it already handled.
+        self.conn.execute("DELETE FROM kv WHERE key = 'life_tea_rebalance_v1'")
+        self.conn.commit()          # _migrate opens BEGIN IMMEDIATE; leave no txn open
         store._migrate(self.conn)
         facts = " ".join(r["text"] for r in store.life_facts(self.conn, limit=40))
         self.assertNotIn("крепкий чёрный чай", facts)
@@ -9106,6 +9111,25 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
         self._main_out_of_space(cfg, tg_call)
         self.assertEqual([p["chat_id"] for _, p in sent], [second])
 
+    def test_disk_full_alert_survives_a_non_telegram_send_error(self):
+        # tg_call wraps the HTTP layer, but its json.loads of the response body
+        # sits OUTSIDE that wrapping: a non-JSON reply (captive portal, proxy
+        # error page) raises a bare ValueError. Catching only TelegramError let
+        # that escape and replace the honest disk-full exit with a traceback,
+        # losing the remaining chats — on a path documented as best-effort.
+        cfg = self._two_chat_cfg()
+        first, second = list(cfg.allowed_chat_ids)[:2]
+        sent = []
+
+        def tg_call(token, method, payload=None, **kwargs):
+            if (payload or {}).get("chat_id") == first:
+                raise ValueError("Expecting value: line 1 column 1 (char 0)")
+            sent.append((method, payload))
+
+        slept = self._main_out_of_space(cfg, tg_call)
+        self.assertEqual([p["chat_id"] for _, p in sent], [second])
+        slept.assert_called_once_with(self.mod.DB_FULL_PAUSE_SECONDS)
+
     def test_main_reraises_sqlite_errors_that_are_not_disk_full(self):
         sent = []
         with mock.patch.object(self.mod, "load_config", return_value=self.cfg), \
@@ -9131,6 +9155,25 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
             self.assertEqual(self.agent.process_update_batch([self._update(950)]), 950)
         self.assertEqual(sent, [(111, texts.T("ru", "update_dead_letter"))])
         self.assertEqual(store.telegram_update_get(self.agent.conn, 950)["status"], "failed")
+
+    def test_dead_letter_notice_is_not_sent_to_a_stranger(self):
+        # The owner gate lives inside handle_update, i.e. AFTER
+        # process_update_batch captured chat_id — so without an allowlist check
+        # here a stranger's update that raised before the gate got a reply in
+        # Cara's voice. Every other outbound path targets allowed_chat_ids.
+        stranger = self._update(952)
+        stranger["message"]["chat"]["id"] = 999999
+        sent = []
+        with mock.patch.object(self.agent, "handle_update",
+                               side_effect=RuntimeError("bad update")), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, text, *a, **k: sent.append((cid, text))):
+            for _ in range(2):
+                self.agent.process_update_batch([stranger])
+            self.assertEqual(self.agent.process_update_batch([stranger]), 952)
+        self.assertEqual(sent, [])            # nothing leaked to the stranger
+        # ...but the update is still dead-lettered, exactly as before.
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 952)["status"], "failed")
 
     def test_dead_letter_notice_failure_does_not_undo_the_dead_letter(self):
         with mock.patch.object(self.agent, "handle_update",
@@ -9188,6 +9231,32 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
                                " FROM memory_candidates").fetchone()
             self.assertIsNotNone(row["first_seen_at"])
             self.assertEqual(row["recurrence_count"], 1)
+        finally:
+            conn.close()
+
+    def test_tea_rebalance_does_not_resurrect_a_deleted_life_fact(self):
+        # The one-time tea rebalance re-ran its three INSERT OR IGNOREs on every
+        # start. Steady state was zero-write (text is UNIQUE), but the moment the
+        # boss legitimately removed one of those rows — consolidation's
+        # life_delete, or a purge — the next start silently put it back,
+        # overruling a deliberate deletion.
+        path = self._steady_state_db()
+        conn = store.open_db(path)
+        try:
+            self.assertIsNotNone(
+                conn.execute("SELECT value FROM kv WHERE key='life_tea_rebalance_v1'")
+                .fetchone())                                  # marker stamped once
+            row = conn.execute("SELECT id, text FROM cara_life WHERE kind='food'").fetchone()
+            self.assertIsNotNone(row)
+            store.life_delete(conn, row["id"])
+        finally:
+            conn.close()
+        conn = store.open_db(path)
+        try:
+            self.assertIsNone(
+                conn.execute("SELECT id FROM cara_life WHERE text = ?",
+                             (row["text"],)).fetchone())      # stays deleted
+            self.assertEqual(conn.total_changes, 0)           # and still zero-write
         finally:
             conn.close()
 
