@@ -11,6 +11,7 @@ messages.status lifecycle:
 import json
 import re
 import sqlite3
+import weakref
 from array import array
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -170,7 +171,13 @@ CREATE TABLE IF NOT EXISTS conversation (
   ts TEXT NOT NULL,
   role TEXT NOT NULL,
   text TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'boss'
+  source TEXT NOT NULL DEFAULT 'boss',
+  -- Telegram update_id of the inbound turn this row came from (NULL for
+  -- Cara's own turns). At-least-once redelivery used to duplicate the boss's
+  -- message here, so retries made him "repeat himself" in every prompt and in
+  -- the verbatim readback; the partial unique index in _migrate makes the
+  -- user-turn write idempotent per update.
+  update_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS facts (
@@ -531,23 +538,64 @@ def unpack_embedding(value):
 # The retrieval hot path (converse grounding, ask) ranks every
 # embedded chunk on each turn. Re-reading + re-decoding all embeddings every
 # time is the part that grows with the corpus, so we cache the DECODED vectors
-# per connection and reuse them until the underlying table changes. The cache
-# key is a cheap (count, max_id, sum_id) fingerprint over the id column — it
-# changes on any insert/delete/re-index, so the cache is never stale. Keyed by
-# id(conn) so multiple test DBs in one process never collide.
-_VEC_CACHE = {}
+# per connection and reuse them until the underlying table changes.
+#
+# The fingerprint used to be a bare (count, max_id, sum_id) tuple over the id
+# column — and `chunks.id` has no AUTOINCREMENT, so SQLite REUSES the rowid of
+# the newest deleted row. Deleting the newest note and saving one with the same
+# chunk count reproduced the SAME fingerprint, and retrieval kept serving the
+# DELETED note's chunks while the new note stayed invisible («удали заметку»
+# followed by a save left deleted content grounding her answers). A durable kv
+# generation counter, bumped by every write to `chunks`, makes the fingerprint
+# collision-proof; every mutating helper ALSO drops the cache outright.
+#
+# Keyed by the connection object itself (weakly, so a closed DB's entry
+# disappears with it) — `id(conn)` aliased RECYCLED connection objects, which
+# in a test process means one temp DB can be handed another's chunks.
+_VEC_CACHE = weakref.WeakKeyDictionary()
+
+
+class _CachedConn(sqlite3.Connection):
+    """The connection type `open_db` hands out.
+
+    A plain `sqlite3.Connection` does NOT support weak references, so the cache
+    above cannot key on it directly (and `weakref.finalize` is unavailable for
+    the same reason). A subclass is a heap type and therefore weakly
+    referenceable; it adds nothing else. A raw `sqlite3.connect()` connection
+    still works everywhere — it simply goes uncached.
+    """
+
+VEC_GEN_KEY = "vec_gen"
+
+
+def _vec_gen(conn):
+    row = conn.execute("SELECT value FROM kv WHERE key = ?", (VEC_GEN_KEY,)).fetchone()
+    try:
+        return int(row["value"]) if row is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def bump_vec_gen(conn):
+    """Advance the chunks generation counter — call from every path that writes
+    or deletes `chunks` rows (rowid reuse makes the id fingerprint alone unsafe)."""
+    conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)",
+                 (VEC_GEN_KEY, str(_vec_gen(conn) + 1)))
 
 
 def _fingerprint(conn, table):
     row = conn.execute(
         f"SELECT COUNT(*), COALESCE(MAX(id),0), COALESCE(SUM(id),0)"
         f" FROM {table} WHERE embedding IS NOT NULL").fetchone()
-    return (table, row[0], row[1], row[2])
+    return (table, row[0], row[1], row[2], _vec_gen(conn))
 
 
 def _cached_vectors(conn, table, load_sql, meta_keys):
     fp = _fingerprint(conn, table)
-    slot = _VEC_CACHE.setdefault(id(conn), {})
+    try:
+        slot = _VEC_CACHE.setdefault(conn, {})
+    except TypeError:  # a raw sqlite3.Connection (test fixture): correct, uncached
+        slot = {}
     cached = slot.get(table)
     if cached is not None and cached[0] == fp:
         return cached[1]
@@ -563,12 +611,16 @@ def _cached_vectors(conn, table, load_sql, meta_keys):
 
 
 def invalidate_vector_cache(conn=None):
-    """Drop cached decoded vectors (all, or one connection). The fingerprint
-    already keeps the cache honest; this is a belt-and-suspenders hook."""
+    """Drop cached decoded vectors (all, or one connection). Called from every
+    helper that mutates `chunks`, so a re-index/delete can never be served from
+    a stale cache."""
     if conn is None:
         _VEC_CACHE.clear()
-    else:
-        _VEC_CACHE.pop(id(conn), None)
+        return
+    try:
+        _VEC_CACHE.pop(conn, None)
+    except TypeError:  # not weakref-able — nothing was ever cached for it
+        pass
 
 
 # -- traces ------------------------------------------------------------------
@@ -927,7 +979,7 @@ def cooldown_active(conn, profile, model):
 def open_db(path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), factory=_CachedConn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -1119,6 +1171,14 @@ def _migrate_steps(conn):
         # Existing rows are the boss's own turns (forwarded content wasn't tracked
         # before); default 'boss' is correct for them.
         conn.execute("ALTER TABLE conversation ADD COLUMN source TEXT NOT NULL DEFAULT 'boss'")
+    if convo_columns and "update_id" not in convo_columns:
+        # Historic rows have no update provenance — NULL, and the partial index
+        # below ignores NULLs, so they neither collide nor get de-duplicated.
+        conn.execute("ALTER TABLE conversation ADD COLUMN update_id INTEGER")
+    # Created here (not in SCHEMA) so executescript can't reference update_id
+    # before the ALTER above adds it to a pre-existing conversation table.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_update"
+                 " ON conversation(chat_id, update_id) WHERE update_id IS NOT NULL")
     # One-time tea de-emphasis (the original seed life over-indexed on tea — 'a bad
     # joke'). Rebalance the two emphatic tea seed rows on an ALREADY-seeded DB and add a
     # few varied facts. Skip a fresh/empty DB entirely: seed_life plants the full (already
@@ -1167,6 +1227,10 @@ def _migrate_steps(conn):
                 continue
             conn.execute(f"UPDATE {tbl} SET embedding = ? WHERE id = ?",
                          (pack_embedding(vec), r["id"]))
+        if legacy:
+            # This rewrite changes no id, so the id fingerprint alone cannot see
+            # it. Guarded so a steady-state start still performs ZERO writes.
+            bump_vec_gen(conn)
     _migrate_gratitude_builtin(conn)
     _migrate_note_outcomes(conn)
 
@@ -1984,6 +2048,18 @@ def get_message(conn, message_id):
     return conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
 
 
+def message_by_tg_id(conn, chat_id, tg_message_id):
+    """The row behind a Telegram message, or None — the UNIQUE (chat_id,
+    tg_message_id) key insert_message conflicts on. Lets a REDELIVERED update
+    adopt and repair the row a crashed pass left half-written."""
+    if tg_message_id is None:
+        return None
+    return conn.execute(
+        "SELECT * FROM messages WHERE chat_id = ? AND tg_message_id = ?",
+        (chat_id, tg_message_id),
+    ).fetchone()
+
+
 def set_facts(conn, message_id, facts):
     """Replace the key facts of a message (idempotent for retries)."""
     conn.execute("DELETE FROM facts WHERE message_id = ?", (message_id,))
@@ -2068,7 +2144,9 @@ def set_chunks(conn, message_id, chunks):
             "INSERT INTO chunks (message_id, chunk_index, text, embedding) VALUES (?, ?, ?, ?)",
             (message_id, i, text, pack_embedding(embedding)),
         )
+    bump_vec_gen(conn)
     conn.commit()
+    invalidate_vector_cache(conn)
 
 
 _NOTE_CHUNK_SQL = (
@@ -2340,6 +2418,51 @@ def display_ids(conn):
     return out
 
 
+def note_no_counter_key(chat_id):
+    return f"note_no_next:{chat_id}"
+
+
+def _claim_note_no(conn, chat_id):
+    """Take the next note number for a chat from a DURABLE kv counter.
+
+    `MAX(note_no) + 1` over the LIVE rows recycled a deleted note's number
+    (save #1, #2 → delete #2 → save → the new note also got #2). That broke the
+    promise the boss is given («номера не переиспользуются») and, worse, the new
+    note's `captured` row was swallowed by the note_outcomes milestone unique
+    index — so every recycled number silently left the saved-to-used KPI, the
+    one metric the ledger exists to keep ungameable.
+
+    The counter is seeded once from the highest number ever handed out for this
+    chat — live rows AND the outcome ledger, which survives deletion — so
+    existing databases continue where they left off. Written in the caller's
+    transaction, so the claim and the assignment land together.
+
+    Seeding is the one place with a residual hole, and it is bounded to the
+    upgrade boundary: a note that was numbered but deleted while still merely
+    `suggested` left NO trace anywhere (the ledger records `captured` at CONFIRM
+    time), so on a database whose numbers pre-date this counter that single
+    number can be issued once more. From the first claim onward nothing is
+    reused — the counter only ever moves forward.
+    """
+    key = note_no_counter_key(chat_id)
+    row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    try:
+        nxt = int(row["value"]) if row is not None else 0
+    except (TypeError, ValueError):
+        nxt = 0
+    if nxt <= 0:
+        live = conn.execute(
+            "SELECT COALESCE(MAX(note_no), 0) FROM messages WHERE chat_id = ?",
+            (chat_id,)).fetchone()[0] or 0
+        ledger = conn.execute(
+            "SELECT COALESCE(MAX(note_no), 0) FROM note_outcomes WHERE chat_id = ?",
+            (chat_id,)).fetchone()[0] or 0
+        nxt = max(live, ledger) + 1
+    conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)",
+                 (key, str(nxt + 1)))
+    return nxt
+
+
 def ensure_note_no(conn, message_id, *, commit=True):
     """The note's STABLE number (`note_no`): assigned once, monotonic per chat, never reused —
     so a captured number can't go stale (gaps on delete are intentional, like issue numbers).
@@ -2351,9 +2474,7 @@ def ensure_note_no(conn, message_id, *, commit=True):
         return None
     if row["note_no"] is not None:
         return row["note_no"]
-    nxt = conn.execute(
-        "SELECT COALESCE(MAX(note_no), 0) + 1 AS n FROM messages WHERE chat_id = ?",
-        (row["chat_id"],)).fetchone()["n"]
+    nxt = _claim_note_no(conn, row["chat_id"])
     conn.execute("UPDATE messages SET note_no = ? WHERE id = ?", (nxt, message_id))
     if commit:
         conn.commit()
@@ -2398,9 +2519,40 @@ def delete_message(conn, message_id):
     conn.execute("UPDATE messages SET duplicate_of = NULL WHERE duplicate_of = ?", (message_id,))
     # MANUAL cascade (plan v1.1 §5.5): journal_entries has no ON DELETE CASCADE.
     conn.execute("DELETE FROM journal_entries WHERE message_id = ?", (message_id,))
+    delete_message_kv(conn, message_id)
     conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+    bump_vec_gen(conn)   # chunks cascaded away; rowid reuse makes ids alone unsafe
     conn.commit()
+    invalidate_vector_cache(conn)
     return paths
+
+
+# Per-message kv keys. messages.id is a plain rowid and SQLite REUSES the
+# highest one after a delete, so anything keyed by it MUST be swept with the
+# row — otherwise the next note silently inherits the deleted note's reminder
+# candidate or journal draft. ANY future per-message kv key must be added here.
+MESSAGE_KV_KEYS = ("capture_action", "journal_draft")
+
+
+def delete_message_kv(conn, message_id):
+    keys = [f"{prefix}:{message_id}" for prefix in MESSAGE_KV_KEYS]
+    marks = ",".join("?" for _ in keys)
+    conn.execute(f"DELETE FROM kv WHERE key IN ({marks})", keys)
+
+
+def _purge_all_message_kv(conn):
+    """Same sweep for the whole-table purge fast paths (which bypass
+    delete_message) — rowids restart at 1 there, so leftovers are certain."""
+    for prefix in MESSAGE_KV_KEYS:
+        conn.execute("DELETE FROM kv WHERE key LIKE ?", (f"{prefix}:%",))
+
+
+def _reset_note_counters(conn):
+    """Only for scope 'all', which also wipes the outcome ledger: with nothing
+    left that a number could collide with, numbering restarts at #1 (what the
+    boss saw before the counter existed). Every other scope keeps the counter —
+    the ledger survives there and its numbers must stay unique."""
+    conn.execute("DELETE FROM kv WHERE key LIKE 'note_no_next:%'")
 
 
 PURGE_SCOPES = ("all", "category", "stats", "reminders", "messages", "issues", "journal")
@@ -2491,6 +2643,8 @@ def purge_execute(conn, scope, category=None):
             conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM reminders WHERE status='active'")
         conn.execute("DELETE FROM pending_actions")
+        _purge_all_message_kv(conn)
+        _reset_note_counters(conn)
     elif scope == "category":
         ids = _messages_in_category(conn, category)
         for mid in ids:
@@ -2512,6 +2666,7 @@ def purge_execute(conn, scope, category=None):
                      conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
             for table in ("facts", "chunks", "urls", "images", "journal_entries", "messages"):
                 conn.execute(f"DELETE FROM {table}")
+            _purge_all_message_kv(conn)
         else:
             for mid in protected:
                 paths.extend(delete_message(conn, mid))
@@ -2523,7 +2678,9 @@ def purge_execute(conn, scope, category=None):
         # the category row and the definition survive — the diary stays, empty.
         for mid in _messages_in_category(conn, category):
             paths.extend(delete_message(conn, mid))
+    bump_vec_gen(conn)   # every scope can drop chunks; rowids are reused
     conn.commit()
+    invalidate_vector_cache(conn)
     return info, [p for p in paths if p]
 
 
@@ -2699,7 +2856,7 @@ def prune_telemetry(conn, cutoff_iso):
     return total
 
 
-def convo_add(conn, chat_id, role, text, source="boss"):
+def convo_add(conn, chat_id, role, text, source="boss", update_id=None):
     # Full verbatim history is kept (no pruning) so the boss can have Cara read back past
     # dialogue on demand (recall_conversation). convo_recent still reads only the latest N
     # for live context, so keeping everything costs nothing at conversation time.
@@ -2707,9 +2864,15 @@ def convo_add(conn, chat_id, role, text, source="boss"):
     # channel content ('forward'): the latter is fenced when replayed into prompts so a
     # forwarded post can't smuggle instructions into the router / converse (prompt-injection
     # defense — the ingest path already fences, the conversation path used not to).
+    # update_id makes an INBOUND turn idempotent: Telegram delivers at least once,
+    # and a retried update used to append the boss's message twice — so he "repeated
+    # himself" in every prompt and in the verbatim readback. Cara's own turns pass
+    # NULL (the unique index is partial) and are unaffected.
     conn.execute(
-        "INSERT INTO conversation (chat_id, ts, role, text, source) VALUES (?, ?, ?, ?, ?)",
-        (chat_id, _now(), role, text[:1000], source),
+        "INSERT OR IGNORE INTO conversation (chat_id, ts, role, text, source, update_id)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (chat_id, _now(), role, text[:1000], source,
+         int(update_id) if update_id is not None else None),
     )
     conn.commit()
 

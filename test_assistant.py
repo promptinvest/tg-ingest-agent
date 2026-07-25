@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline unit tests: router, LLM gateway, reminders, spend, texts, memory."""
+import gc
 import json
 import os
 import sqlite3
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -9434,6 +9436,575 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
                 ["captured"])
         finally:
             conn.close()
+
+
+class IdentityAndAtomicity20260725Tests(unittest.TestCase):
+    """WP3 of the 2026-07-24 review: identity & atomicity integrity.
+
+    Everything here is about state keyed by something that is NOT stable —
+    `MAX(note_no)+1` over live rows, a sqlite rowid SQLite happily reuses, an
+    id-only vector fingerprint — plus the two crash/redelivery windows
+    (`finalize`, `convo_add`) and per-turn context that outlived its turn.
+    """
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "wp3.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        store.invalidate_vector_cache(self.conn)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _note(self, tg_id, text="заметка"):
+        """A confirmed, numbered note — the shape the boss sees as «заметка #N»."""
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        store.set_suggestion(self.conn, rid, "Разное", text, "m")
+        store.confirm_category(self.conn, rid, "Разное")
+        return rid
+
+    # -- T3.1 note_no must never be reused ------------------------------------
+
+    def test_note_number_is_not_recycled_after_deleting_the_newest_note(self):
+        first = self._note(101)
+        second = self._note(102)
+        self.assertEqual(store.get_message(self.conn, first)["note_no"], 1)
+        self.assertEqual(store.get_message(self.conn, second)["note_no"], 2)
+        store.delete_message(self.conn, second)
+        third = self._note(103)
+        # MAX(note_no)+1 over LIVE rows handed #2 straight back out.
+        self.assertEqual(store.get_message(self.conn, third)["note_no"], 3)
+        # …and the recycled number made the milestone unique index swallow the
+        # new note's `captured` row, silently shrinking the saved-to-used KPI.
+        self.assertEqual(
+            [r["event"] for r in self.conn.execute(
+                "SELECT event FROM note_outcomes WHERE note_no = 3")],
+            ["captured"])
+        # the deleted note keeps its own history under its own number
+        self.assertIn("deleted_unused", [r["event"] for r in self.conn.execute(
+            "SELECT event FROM note_outcomes WHERE note_no = 2")])
+
+    def test_note_counter_seeds_from_the_outcome_ledger_too(self):
+        # An existing DB (numbers assigned before the counter existed) must
+        # continue where it left off. The newest note is DELETED before the
+        # counter is dropped, so the LIVE rows only know #1 and only the outcome
+        # ledger remembers that #2 was ever handed out — seeding from `messages`
+        # alone re-issues it, which is the whole defect.
+        self._note(110)
+        second = self._note(111)
+        store.delete_message(self.conn, second)
+        self.conn.execute("DELETE FROM kv WHERE key = ?",
+                          (store.note_no_counter_key(1),))
+        self.conn.commit()
+        self.assertEqual(self.conn.execute(
+            "SELECT COALESCE(MAX(note_no), 0) FROM messages WHERE chat_id = 1"
+        ).fetchone()[0], 1)
+        self.assertEqual(store.get_message(self.conn, self._note(112))["note_no"], 3)
+
+    def test_only_a_full_wipe_restarts_the_numbering(self):
+        # «удали все заметки» keeps the outcome ledger, so its numbers must stay
+        # unique; «удали всё» takes the ledger with it, and the boss who wiped
+        # everything should not be handed «заметка #58» for his first new note.
+        self._note(120)
+        self._note(121)
+        store.purge_execute(self.conn, "messages")
+        self.assertEqual(store.get_message(self.conn, self._note(122))["note_no"], 3)
+        store.purge_execute(self.conn, "all")
+        self.assertEqual(store.get_message(self.conn, self._note(123))["note_no"], 1)
+
+    # -- T3.2 the vector cache must survive rowid reuse ------------------------
+
+    def test_retrieval_never_serves_a_deleted_notes_chunks(self):
+        a = self._note(201, "первая")
+        b = self._note(202, "вторая")
+        store.set_chunks(self.conn, a, [("про поезда", [1.0, 0.0])])
+        store.set_chunks(self.conn, b, [("про самолёты", [0.0, 1.0])])
+        warm = [r["text"] for r in store.all_embedded_chunks(self.conn)]  # cache warms
+        self.assertIn("про самолёты", warm)
+        store.delete_message(self.conn, b)          # frees the newest chunks rowid
+        c = self._note(203, "третья")
+        store.set_chunks(self.conn, c, [("про корабли", [0.0, 1.0])])  # reuses that rowid
+        # (count, max_id, sum_id) is IDENTICAL to the pre-delete state, so the
+        # old fingerprint kept serving the deleted note and hid the new one.
+        served = [r["text"] for r in store.all_embedded_chunks(self.conn)]
+        self.assertIn("про корабли", served)
+        self.assertNotIn("про самолёты", served)
+
+    def test_every_chunks_mutation_bumps_the_generation_counter(self):
+        rid = self._note(210)
+        seen = [store.kv_get(self.conn, store.VEC_GEN_KEY)]
+        store.set_chunks(self.conn, rid, [("текст", [1.0])])
+        seen.append(store.kv_get(self.conn, store.VEC_GEN_KEY))
+        store.delete_message(self.conn, rid)
+        seen.append(store.kv_get(self.conn, store.VEC_GEN_KEY))
+        store.set_chunks(self.conn, self._note(211), [("ещё", [1.0])])
+        seen.append(store.kv_get(self.conn, store.VEC_GEN_KEY))
+        store.purge_execute(self.conn, "category", "Разное")
+        seen.append(store.kv_get(self.conn, store.VEC_GEN_KEY))
+        store.set_chunks(self.conn, self._note(212), [("и ещё", [1.0])])
+        seen.append(store.kv_get(self.conn, store.VEC_GEN_KEY))
+        store.purge_execute(self.conn, "messages")
+        seen.append(store.kv_get(self.conn, store.VEC_GEN_KEY))
+        store.purge_execute(self.conn, "all")
+        seen.append(store.kv_get(self.conn, store.VEC_GEN_KEY))
+        self.assertEqual(len(set(seen)), len(seen), seen)   # strictly monotonic
+
+    def test_the_generation_counter_alone_expires_the_cache(self):
+        # Belt AND suspenders: every mutating helper also calls
+        # invalidate_vector_cache, which alone makes the behavioural tests pass.
+        # This one never invalidates, so only `vec_gen` INSIDE the fingerprint
+        # can make the next read miss — drop that term and this fails.
+        rid = self._note(215)
+        store.set_chunks(self.conn, rid, [("текст", [1.0])])
+        first = store.all_embedded_chunks(self.conn)
+        self.assertIs(store.all_embedded_chunks(self.conn), first)   # warm
+        store.bump_vec_gen(self.conn)          # no invalidate_vector_cache here
+        self.conn.commit()
+        second = store.all_embedded_chunks(self.conn)
+        self.assertIsNot(second, first)
+        self.assertEqual([r["text"] for r in second], ["текст"])
+
+    def test_the_legacy_embedding_conversion_also_bumps_the_generation(self):
+        # `_migrate` rewrites chunks.embedding IN PLACE (legacy JSON text ->
+        # packed blob), changing no id at all — so the id fingerprint cannot see
+        # it. The invariant written on bump_vec_gen ("call from every path that
+        # writes or deletes chunks rows") has to hold on that path too.
+        rid = self._note(230)
+        store.set_chunks(self.conn, rid, [("текст", [1.0, 0.0])])
+        self.conn.execute("UPDATE chunks SET embedding = ? WHERE message_id = ?",
+                          (json.dumps([1.0, 0.0]), rid))
+        self.conn.commit()
+        before = store.kv_get(self.conn, store.VEC_GEN_KEY)
+        store._migrate(self.conn)
+        self.assertEqual(self.conn.execute(
+            "SELECT typeof(embedding) FROM chunks WHERE message_id = ?",
+            (rid,)).fetchone()[0], "blob")
+        self.assertNotEqual(store.kv_get(self.conn, store.VEC_GEN_KEY), before)
+
+    def test_a_steady_state_migrate_leaves_the_generation_alone(self):
+        # …and the bump is guarded, so a normal start still writes nothing (WP2).
+        rid = self._note(231)
+        store.set_chunks(self.conn, rid, [("текст", [1.0, 0.0])])
+        before = store.kv_get(self.conn, store.VEC_GEN_KEY)
+        store._migrate(self.conn)
+        self.assertEqual(store.kv_get(self.conn, store.VEC_GEN_KEY), before)
+
+    def test_vector_cache_is_keyed_weakly_by_the_connection_object(self):
+        # id(conn) aliased recycled connection objects (one temp DB served
+        # another's chunks); a weak key cannot. A plain sqlite3.Connection is
+        # NOT weakly referenceable, which is why open_db hands out a subclass.
+        self.assertIsInstance(store._VEC_CACHE, weakref.WeakKeyDictionary)
+        self.assertIsNotNone(weakref.ref(self.conn))
+        rid = self._note(220)
+        store.set_chunks(self.conn, rid, [("текст", [1.0])])
+        first = store.all_embedded_chunks(self.conn)
+        self.assertIn(self.conn, store._VEC_CACHE)               # cached, weakly
+        self.assertIs(first, store.all_embedded_chunks(self.conn))   # and reused
+
+    def test_a_dropped_connections_vectors_leave_the_cache_with_it(self):
+        # The aliasing itself: an id(conn) key kept a dead connection's slot
+        # FOREVER, and CPython hands the same id to the next connection object —
+        # so one temp DB was served another DB's chunks. A weak key evicts the
+        # slot with the connection, which is what makes that impossible.
+        gc.collect()
+        baseline = len(store._VEC_CACHE)
+        other = store.open_db(Path(self.tmp.name) / "second.db")
+        rid = store.insert_message(other, {
+            "chat_id": 1, "tg_message_id": 1,
+            "received_at": store._now(), "raw_text": "вторая база"})
+        store.set_chunks(other, rid, [("вторая база", [1.0])])
+        self.assertEqual([r["text"] for r in store.all_embedded_chunks(other)],
+                         ["вторая база"])
+        self.assertEqual(len(store._VEC_CACHE), baseline + 1)
+        other.close()
+        del other
+        gc.collect()
+        self.assertEqual(len(store._VEC_CACHE), baseline)
+
+    # -- T3.3 per-message kv rows must die with the message --------------------
+
+    def test_deleting_a_note_clears_its_message_keyed_kv_state(self):
+        rid = self._note(301)
+        store.kv_set(self.conn, f"capture_action:{rid}",
+                     json.dumps({"title": "позвонить в банк",
+                                 "due_utc": "2026-08-01T09:00:00+00:00"}))
+        store.kv_set(self.conn, f"journal_draft:{rid}",
+                     json.dumps({"payload": {"person": "мама"}, "status": "complete"}))
+        store.delete_message(self.conn, rid)
+        self.assertIsNone(store.kv_get(self.conn, f"capture_action:{rid}"))
+        self.assertIsNone(store.kv_get(self.conn, f"journal_draft:{rid}"))
+        reused = self._note(302)
+        self.assertEqual(reused, rid, "expected the rowid to be recycled")
+        self.assertIsNone(self.agent._capture_action(reused))   # no inherited reminder
+        self.assertIsNone(self.agent._journal_draft(reused))    # no inherited journal
+
+    def test_a_whole_table_purge_also_sweeps_message_keyed_kv_state(self):
+        rid = self._note(310)
+        store.kv_set(self.conn, f"capture_action:{rid}", json.dumps({"title": "x"}))
+        store.purge_execute(self.conn, "messages")
+        self.assertIsNone(store.kv_get(self.conn, f"capture_action:{rid}"))
+
+    # -- T3.4 the finalize() crash window --------------------------------------
+
+    def _forward_with_photo(self, mid=401):
+        return {"chat": {"id": 1}, "from": {"id": 1}, "message_id": mid,
+                "caption": "разбор https://example.com/post",
+                "forward_origin": {"type": "channel", "title": "Chan"},
+                "photo": [{"file_id": "F1", "file_unique_id": "U1",
+                           "width": 90, "height": 90}]}
+
+    def _forward_with_document(self, mid=410, unique_id="U-doc",
+                               mime="application/zip", name="архив.zip"):
+        # deliberately NOT a pdf/text mime: read_text_document must not try to
+        # download and parse it, the attachment path is what's under test.
+        doc = {"file_id": "FD", "file_name": name, "mime_type": mime}
+        if unique_id is not None:
+            doc["file_unique_id"] = unique_id
+        return {"chat": {"id": 1}, "from": {"id": 1}, "message_id": mid,
+                "caption": "смотри", "document": doc,
+                "forward_origin": {"type": "channel", "title": "Chan"}}
+
+    def _finalize_quietly(self, msg):
+        """finalize() with every network boundary mocked and no LLM suggestion."""
+        with mock.patch.object(self.agent, "download_file", return_value="/tmp/x.jpg"), \
+                mock.patch.object(self.agent, "suggest_row", return_value=None), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 5}):
+            self.agent.finalize([msg])
+
+    def _crash_once(self, name):
+        """Patch store.<name> so its FIRST call raises — the crash window."""
+        real = getattr(store, name)
+        crashed = []
+
+        def flaky(conn, *args, **kwargs):
+            if not crashed:
+                crashed.append(1)
+                raise RuntimeError(f"power loss inside {name}")
+            return real(conn, *args, **kwargs)
+
+        return mock.patch.object(store, name, side_effect=flaky)
+
+    def _row_id(self, tg_message_id):
+        return self.conn.execute(
+            "SELECT id FROM messages WHERE tg_message_id = ?",
+            (tg_message_id,)).fetchone()["id"]
+
+    def _count(self, table, row_id):
+        return self.conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE message_id = ?", (row_id,)).fetchone()[0]
+
+    def test_a_crash_mid_finalize_does_not_lose_media_on_redelivery(self):
+        msg = self._forward_with_photo()
+        real_insert_image = store.insert_image
+        crashed = []
+
+        def flaky(conn, *args, **kwargs):
+            if not crashed:
+                crashed.append(1)
+                raise RuntimeError("power loss between the download and the row")
+            return real_insert_image(conn, *args, **kwargs)
+
+        with mock.patch.object(self.agent, "download_file", return_value="/tmp/x.jpg"), \
+                mock.patch.object(store, "insert_image", side_effect=flaky):
+            with self.assertRaises(RuntimeError):
+                self.agent.finalize([msg])
+        row = self.conn.execute(
+            "SELECT id, status FROM messages WHERE tg_message_id = 401").fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "pending")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM images WHERE message_id = ?", (row["id"],)).fetchone()[0], 0)
+        # Redelivery: `insert_message` conflicts, and returning early here is what
+        # silently lost every attachment. The row must be adopted and repaired.
+        with mock.patch.object(self.agent, "download_file", return_value="/tmp/x.jpg"), \
+                mock.patch.object(self.agent, "suggest_row", return_value=None), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 5}):
+            self.agent.finalize([msg])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM images WHERE message_id = ?", (row["id"],)).fetchone()[0], 1)
+        self.assertEqual(self.conn.execute(          # and the url is not duplicated
+            "SELECT COUNT(*) FROM urls WHERE message_id = ?", (row["id"],)).fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 1)
+
+    def test_a_redelivery_of_a_still_pending_note_repairs_without_duplicating(self):
+        # The RESUME branch (status still 'pending'): the second pass re-enters
+        # the pipeline, so nothing it stored the first time may be stored twice.
+        msg = self._forward_with_photo(402)
+        self._finalize_quietly(msg)
+        self._finalize_quietly(msg)
+        rid = self._row_id(402)
+        for table in ("images", "urls"):
+            self.assertEqual(self._count(table, rid), 1, table)
+
+    def test_a_redelivery_of_a_confirmed_note_does_not_re_suggest_it(self):
+        # The 'already processed' branch: media is backfilled, but a finished
+        # note must not re-enter the suggestion pipeline — no new card, no
+        # status/category/number churn.
+        msg = self._forward_with_photo(403)
+        self._finalize_quietly(msg)
+        rid = self._row_id(403)
+        store.set_suggestion(self.conn, rid, "Разное", "сводка", "m")
+        store.set_suggestion_message(self.conn, rid, 77)
+        store.confirm_category(self.conn, rid, "Разное")
+        before = dict(store.get_message(self.conn, rid))
+        calls = []
+        with mock.patch.object(self.agent, "download_file", return_value="/tmp/x.jpg"), \
+                mock.patch.object(self.agent, "suggest_row", return_value=None), \
+                mock.patch.object(self.mod, "tg_call",
+                                  side_effect=lambda *a, **k: calls.append(a[1])):
+            self.agent.finalize([msg])
+        after = dict(store.get_message(self.conn, rid))
+        self.assertEqual(calls, [])                        # no card re-sent
+        for field in ("status", "category", "note_no", "suggestion_message_id"):
+            self.assertEqual(after[field], before[field], field)
+        for table in ("images", "urls"):
+            self.assertEqual(self._count(table, rid), 1, table)
+
+    def test_a_resumed_note_does_not_log_the_document_event_twice(self):
+        # The first pass stored the file AND logged the relationship event, then
+        # died presenting the card. The resume must repair (nothing to repair
+        # here) without writing a second identical «kept a document» event.
+        msg = self._forward_with_document(411)
+        with mock.patch.object(self.agent, "suggest_row",
+                               side_effect=RuntimeError("LLM died after the file was stored")), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 5}):
+            with self.assertRaises(RuntimeError):
+                self.agent.finalize([msg])
+        rid = self._row_id(411)
+        self.assertEqual(self._count("files", rid), 1)
+        self._finalize_quietly(msg)
+        self.assertEqual(self._count("files", rid), 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM relationship_events WHERE kind = 'document_saved'"
+            " AND source_id = ?", (rid,)).fetchone()[0], 1)
+
+    def test_a_crash_storing_a_document_does_not_lose_it_on_redelivery(self):
+        msg = self._forward_with_document(412)
+        with self._crash_once("insert_file"):
+            with self.assertRaises(RuntimeError):
+                self.agent.finalize([msg])
+        rid = self._row_id(412)
+        self.assertEqual(self._count("files", rid), 0)
+        self._finalize_quietly(msg)
+        self.assertEqual([r["file_name"] for r in store.message_files(self.conn, rid)],
+                         ["архив.zip"])
+
+    def test_a_crash_storing_a_forwarded_voice_clip_does_not_lose_it(self):
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 413,
+               "forward_origin": {"type": "channel", "title": "Chan"},
+               "voice": {"file_id": "FV", "file_unique_id": "U-voice", "duration": 7}}
+        with self._crash_once("insert_file"):
+            with self.assertRaises(RuntimeError):
+                self.agent.finalize([msg])
+        rid = self._row_id(413)
+        self.assertEqual(self._count("files", rid), 0)
+        self._finalize_quietly(msg)
+        self.assertEqual(self._count("files", rid), 1)
+        self._finalize_quietly(msg)                        # and stays at one
+        self.assertEqual(self._count("files", rid), 1)
+
+    def test_an_attachment_without_a_unique_id_is_not_re_stored_every_time(self):
+        # `files.tg_file_unique_id` is NULLABLE. Dropping NULL from the repair's
+        # skip set made the stored row unmatchable, so every redelivery inserted
+        # the same attachment again — unbounded growth on the one path whose
+        # whole contract is idempotence.
+        msg = self._forward_with_document(414, unique_id=None)
+        self._finalize_quietly(msg)
+        rid = self._row_id(414)
+        self.assertEqual(self._count("files", rid), 1)
+        self._finalize_quietly(msg)
+        self._finalize_quietly(msg)
+        self.assertEqual(self._count("files", rid), 1)
+
+    def test_a_crash_storing_the_urls_backfills_them_on_redelivery(self):
+        # urls are written BEFORE the media, so this is the only way to reach
+        # the repair path's URL backfill.
+        msg = self._forward_with_photo(415)
+        with self._crash_once("insert_url"):
+            with self.assertRaises(RuntimeError):
+                self.agent.finalize([msg])
+        rid = self._row_id(415)
+        self.assertEqual(self._count("urls", rid), 0)
+        self._finalize_quietly(msg)
+        self.assertEqual([r["url"] for r in store.message_urls(self.conn, rid)],
+                         ["https://example.com/post"])
+        self.assertEqual(self._count("images", rid), 1)
+
+    def test_an_image_sent_as_a_document_is_reported_in_the_counts(self):
+        # It is stored as an image row, but the old counters incremented neither
+        # side, so the card said «изображений: 0 · файлов: 0» for a forward that
+        # did save something. The counts now describe the note.
+        msg = self._forward_with_document(416, unique_id="U-img",
+                                          mime="image/png", name="скрин.png")
+        shown = {}
+        with mock.patch.object(self.agent, "suggest_row",
+                               return_value=("Разное", [], "сводка")), \
+                mock.patch.object(self.agent, "present_suggestion",
+                                  side_effect=lambda *a, **k: shown.update(counts=a[6])), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 5}):
+            self.agent.finalize([msg])
+        rid = self._row_id(416)
+        self.assertEqual(self._count("images", rid), 1)
+        self.assertEqual(shown["counts"],
+                         texts.T("ru", "counts", row_id=1, images=1, files=0, urls=0))
+
+    # -- T3.5 convo_add must be idempotent per update ---------------------------
+
+    def test_a_redelivered_update_does_not_duplicate_the_boss_message(self):
+        update = {"update_id": 555, "message": {
+            "chat": {"id": 1}, "from": {"id": 1}, "message_id": 501,
+            "text": "напомни завтра позвонить в банк"}}
+        with mock.patch.object(self.agent, "dispatch"):
+            self.agent.handle_update(update)
+            self.agent.handle_update(update)     # at-least-once redelivery
+        rows = self.conn.execute(
+            "SELECT text FROM conversation WHERE role = 'user'").fetchall()
+        self.assertEqual([r["text"] for r in rows],
+                         ["напомни завтра позвонить в банк"])
+
+    def test_two_updates_with_the_same_text_are_both_recorded(self):
+        # The index keys on update_id, NOT on the text: the boss saying «ок»
+        # twice in a row is two turns, and widening the index would eat one.
+        with mock.patch.object(self.agent, "dispatch"):
+            self.agent.handle_update({"update_id": 700, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 701, "text": "ок"}})
+            self.agent.handle_update({"update_id": 701, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 702, "text": "ок"}})
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM conversation WHERE role = 'user'").fetchone()[0], 2)
+
+    def test_caras_own_turns_are_not_deduplicated(self):
+        # Assistant turns carry no update_id (the unique index is partial), so
+        # two identical replies stay two rows.
+        store.convo_add(self.conn, 1, "bot", "ага")
+        store.convo_add(self.conn, 1, "bot", "ага")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM conversation WHERE role = 'bot'").fetchone()[0], 2)
+
+    # -- T3.6 per-turn state must not outlive its turn --------------------------
+
+    def test_a_reply_quote_does_not_leak_into_a_background_retry(self):
+        quoted = "Рецепт тыквенного супа от мамы"
+        with mock.patch.object(self.agent, "dispatch"):
+            self.agent.handle_update({"update_id": 601, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 601,
+                "text": "что думаешь?",
+                "reply_to_message": {"message_id": 600, "from": {"id": 1},
+                                     "text": quoted}}})
+        self.assertEqual(self.agent.turn_reply_quote, "")
+        self.assertEqual(self.agent.turn_extra, [])
+        self.assertIsNone(self.agent.turn_reply_reminder_id)
+        # a note left pending by a failed ingest, retried later by the sweep
+        store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": 602,
+            "received_at": store._now(), "raw_text": "сохрани это"})
+        seen = {}
+
+        def cp(cfg, conn, skill, messages, **kw):
+            seen[skill] = json.dumps(messages, ensure_ascii=False)
+            return '{"category":"Разное","alternatives":[],"summary":"с","facts":[]}'
+
+        with mock.patch.object(llm, "chat_profile", side_effect=cp), \
+                mock.patch.object(self.agent, "index_message"), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 9}):
+            self.agent.retry_sweep()
+        self.assertIn("ingest", seen)
+        self.assertNotIn(quoted, seen["ingest"])          # never his quote from before
+
+    def test_a_deferred_album_is_filed_without_the_previous_turns_quote(self):
+        # An album is filed by the SCHEDULER tick, i.e. LONG after handle_update
+        # ran its `finally`. T3.6 required proving the clear does not starve that
+        # path (it reads nothing the wrapper wipes): both parts must still land,
+        # and the ingest prompt must carry no quote from the turn before.
+        quoted = "Рецепт тыквенного супа от мамы"
+        with mock.patch.object(self.agent, "dispatch"):
+            self.agent.handle_update({"update_id": 630, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 630,
+                "text": "что думаешь?",
+                "reply_to_message": {"message_id": 629, "from": {"id": 1},
+                                     "text": quoted}}})
+        for n, uid in ((631, "A1"), (632, "A2")):
+            update = {"update_id": n, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": n,
+                "media_group_id": "G1", "caption": "подборка" if n == 631 else "",
+                "forward_origin": {"type": "channel", "title": "Chan"},
+                "photo": [{"file_id": f"F{n}", "file_unique_id": uid,
+                           "width": 90, "height": 90}]}}
+            self.assertEqual(self.agent.handle_update(update), "defer")
+        seen = {}
+
+        def cp(cfg, conn, skill, messages, **kw):
+            seen[skill] = json.dumps(messages, ensure_ascii=False)
+            return '{"category":"Разное","alternatives":[],"summary":"с","facts":[]}'
+
+        with mock.patch.object(self.agent, "download_file", return_value="/tmp/x.jpg"), \
+                mock.patch.object(llm, "chat_profile", side_effect=cp), \
+                mock.patch.object(self.agent, "index_message"), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 9}):
+            self.agent.flush_albums(time.time(), force=True)
+        rid = self._row_id(631)
+        self.assertEqual(self._count("images", rid), 2)     # the whole album filed
+        self.assertNotIn(quoted, seen["ingest"])            # not his quote from before
+
+    def test_voice_quote_echo_speaks_the_transcripts_language(self):
+        # The echo used to be written in whatever language the PREVIOUS turn
+        # left behind, so an English voice note came back with «ты сказал».
+        transcript = "please remind me to call the bank tomorrow"
+        sent = []
+        with mock.patch.object(self.agent, "dispatch"):
+            self.agent.handle_update({"update_id": 609, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 609,
+                "text": "напомни завтра позвонить в банк"}})     # a RUSSIAN turn first
+        with mock.patch.object(self.agent, "transcribe_voice", return_value=transcript), \
+                mock.patch.object(self.agent, "dispatch"), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, text, *a, **k: sent.append(text)):
+            self.agent.handle_update({"update_id": 610, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 610,
+                "voice": {"file_id": "V", "file_unique_id": "vu", "duration": 3}}})
+        self.assertEqual(sent[0], texts.T("en", "voice_quote", transcript=transcript))
+
+    def test_a_dead_lettered_update_is_answered_in_its_own_language(self):
+        # The notice is sent AFTER handle_update's `finally` wiped turn_lang, so
+        # it has to read the language of the turn that just failed — otherwise an
+        # English message that dead-letters answers «не смогла обработать».
+        update = {"update_id": 640, "message": {
+            "chat": {"id": 1}, "from": {"id": 1}, "message_id": 640,
+            "text": "please save this article for me"}}
+        sent = []
+        with mock.patch.object(self.agent, "dispatch",
+                               side_effect=RuntimeError("poison update")), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, text, *a, **k: sent.append(text)):
+            for _ in range(self.cfg.update_max_attempts):
+                self.agent.process_update_batch([update])
+        self.assertEqual(sent, [texts.T("en", "update_dead_letter")])
+        self.assertEqual(
+            store.telegram_update_get(self.conn, 640)["status"], "failed")
+
+    def test_turn_language_does_not_carry_into_the_next_update(self):
+        # The reset used to happen once per POLL CYCLE, so any update that
+        # returns before the language line (a button press, a reaction) answered
+        # in the previous message's language.
+        langs = []
+        with mock.patch.object(self.agent, "dispatch",
+                               side_effect=lambda *a, **k: langs.append(self.agent.lang())), \
+                mock.patch.object(self.agent, "handle_callback",
+                                  side_effect=lambda cb: langs.append(self.agent.lang())):
+            self.agent.handle_update({"update_id": 620, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 620,
+                "text": "what is the weather today"}})
+            self.agent.handle_update({"update_id": 621,
+                                      "callback_query": {"id": "c1"}})
+        self.assertEqual(langs, ["en", "ru"])
 
 
 if __name__ == "__main__":

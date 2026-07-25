@@ -218,7 +218,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **permanent gap** (like a GitHub issue number), so "заметка 11" is the same note
   tomorrow and marking a category a journal renumbers nothing. The number is a display
   position distinct from the internal row id, so attachments/embeddings/memory links
-  never break. (Owner decision, 2026‑06‑29 — gaps accepted for stability.) **Reminder
+  never break. (Owner decision, 2026‑06‑29 — gaps accepted for stability.) Since
+  **2026‑07‑25** that promise is enforced for every number issued from then on: the
+  number comes from a durable per‑chat counter, not `MAX(note_no)+1` over the *live*
+  rows, which handed the newest deleted note's number straight back to the next save
+  (and made the outcome ledger swallow the new note's `captured` row, quietly shrinking
+  the saved‑to‑used KPI). One bounded exception remains on the upgrade boundary: a
+  number issued *before* the counter existed and deleted while the note was still merely
+  «suggested» left no trace at all, so the counter's one‑time seed can hand it out once
+  more. Only «удали всё» — which wipes the ledger too — restarts numbering at #1.
+  **Reminder
   numbers are different** — a contiguous 1…N position in the active list (soonest‑due
   first) that **compacts** as reminders fire/cancel; "#N" in reschedule/cancel/undo
   resolves to that position, and Cara re‑shows the refreshed list after a cancel so a
@@ -816,7 +825,26 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
 - **A dead‑lettered message is announced (2026‑07‑25):** when an update exhausts
   `UPDATE_MAX_ATTEMPTS` its payload is kept and an issue logged — and Cara now also
   says so (`update_dead_letter`), instead of the message just vanishing from the
-  boss's side. Best‑effort: a failed notice never changes the dead‑letter outcome.
+  boss's side. Best‑effort: a failed notice never changes the dead‑letter outcome. It
+  is sent after the turn is already over, so it speaks the language of the message that
+  failed, not the stored default.
+- **A redelivered save repairs itself (2026‑07‑25):** filing a forward writes the
+  message row first and downloads its media afterwards, so a crash in between left a
+  text‑only note — and the redelivery hit `ON CONFLICT DO NOTHING`, was logged as
+  "skipping redelivered message", and lost every attachment and URL while the boss saw
+  a normal confirmation. The redelivery now **adopts** the existing row and backfills
+  whatever is missing (idempotent on Telegram's `file_unique_id` / the URL), then
+  resumes the suggestion pipeline if the note never got that far — without re‑logging
+  what the crashed pass already recorded. A note that already reached a
+  suggestion/confirmation only gets its missing media back; it is never re‑suggested.
+  The saved counts also describe the note itself now, so an uncompressed image sent as a
+  **document** is finally reported («фото: 1») instead of as nothing at all.
+- **Per‑turn context dies with its turn (2026‑07‑25):** the quoted/replied‑to message,
+  the reply‑bound reminder and the reply language are cleared in a `finally` at the end
+  of every update. They used to survive until the *next* inbound message, so a
+  background retry sweep re‑ingested an old note against a quote the boss never attached
+  to it, and the language of one update leaked into the next one's replies (a voice note
+  was even echoed back with the previous turn's language header).
 
 ---
 
@@ -860,6 +888,21 @@ display position** in the active list (due order, from the stable `reminders.id`
 compacts on fire/cancel.
 Normal note/category/message deletion preserves `note_outcomes` so historical KPIs
 cannot be gamed by deletion; explicit `stats` and `all` purge preview and clear it.
+
+**Nothing identity‑bearing is recycled (2026‑07‑25).** `note_no` comes from a durable
+per‑chat kv counter (`note_no_next:{chat}`), seeded once from live rows *and* the outcome
+ledger, so from the first claim onward a deleted number is never handed out again (the
+single residual hole is the seed itself, on a database whose numbers pre‑date the
+counter — see §2). `delete_message` also drops that
+message's id‑keyed kv state (`capture_action:{id}`, `journal_draft:{id}`) — SQLite reuses
+the highest rowid, so a new note used to inherit a deleted note's reminder draft or
+journal payload. Every write to `chunks` bumps a `vec_gen` counter and drops the decoded
+vector cache: the old `(count, max_id, sum_id)` fingerprint collided under rowid reuse,
+and retrieval kept grounding answers in a DELETED note's chunks while the new note stayed
+invisible. (The legacy JSON→blob embedding conversion in `_migrate` bumps it too — it
+rewrites rows without changing an id.) Inbound `conversation` rows carry their Telegram
+`update_id` under a partial unique index, so an at‑least‑once redelivery cannot make the
+boss repeat himself in the history or in prompts.
 
 ---
 

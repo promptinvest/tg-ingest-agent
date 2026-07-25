@@ -189,6 +189,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # Cara answers in the language the boss just wrote in. None outside a
         # turn (e.g. scheduler ticks) -> lang() falls back to the stored pref.
         self.turn_lang = None
+        # The language of the turn that just ended — the dead-letter notice is
+        # sent AFTER handle_update cleared its state and still has to speak it.
+        self._last_turn_lang = None
         # Extra context for THIS turn only (a described own-photo he's showing her,
         # or the message he's replying to/quoting) — folded into the converse AND
         # router prompts so she understands what he sent. Reset each inbound turn.
@@ -450,12 +453,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         """Terminal dead letter: say so instead of letting the message vanish.
 
         Best-effort — the payload is already stored as failed and an issue row
-        written, so a failed notice must not change that outcome.
+        written, so a failed notice must not change that outcome. The turn is
+        already over (handle_update clears its state in a `finally`), so the
+        language comes from the stashed turn language, not the stored default —
+        an English message that dead-letters must not answer in Russian.
         """
         if not chat_id:
             return
         try:
-            self.reply(chat_id, T(self.lang(), "update_dead_letter"))
+            self.reply(chat_id, T(self._last_turn_lang or self.lang(), "update_dead_letter"))
         except Exception as exc:  # noqa: BLE001 — a notice must never re-raise
             log(f"dead-letter notice for chat {chat_id} failed: {exc!r}")
 
@@ -767,7 +773,35 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             store.issue_add(self.conn, chat_id, "negative_reaction", emoji)
         log(f"boss reacted {emoji} ({sentiment}) on message {mr.get('message_id')}")
 
+    def _reset_turn_state(self):
+        """Wipe everything that is true only for ONE inbound update.
+
+        These used to be reset just before dispatch — i.e. only when the NEXT
+        inbound message arrived — so anything running in between read a previous
+        turn's context: a background `retry_sweep` (→ `suggest_row` →
+        `_is_referential_save`) grounded an old note against a quote the boss
+        never attached to it, an album flush inherited the same quote, and
+        `turn_lang` (reset per POLL CYCLE, not per update) made the second
+        update of a batch answer in the first one's language.
+        """
+        # Kept for the ONE thing that speaks after the turn is over: the terminal
+        # dead-letter notice, raised out of handle_update and sent by
+        # process_update_batch. It must still be in the language he wrote in.
+        self._last_turn_lang = self.turn_lang
+        self.turn_lang = None
+        self.turn_extra = []
+        self.turn_reply_quote = ""
+        self.turn_reply_reminder_id = None
+        self._own_photo_turn = False
+
     def handle_update(self, update):
+        self._reset_turn_state()
+        try:
+            return self._handle_update(update)
+        finally:
+            self._reset_turn_state()
+
+    def _handle_update(self, update):
         self._current_update_id = update.get("update_id")
         callback = update.get("callback_query")
         if callback:
@@ -806,6 +840,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 return
             msg = dict(msg)
             msg["text"] = transcript
+            # Detect the language BEFORE the echo: the quote header used to be
+            # written in whatever language the PREVIOUS turn set, so an English
+            # voice note came back with a Russian «ты сказал».
+            self.turn_lang = common.detect_lang(transcript)
             self.reply(chat_id, T(self.lang(), "voice_quote", transcript=transcript[:300]),
                        record=False)
 
@@ -813,9 +851,6 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # Reply in the language he wrote in (voice transcript counts); RU fallback.
         # Slash-commands carry no language signal — keep the stored preference.
         self.turn_lang = None if text.startswith("/") else common.detect_lang(text)
-        self.turn_extra = []  # fresh per-turn context (own media / replied-to message)
-        self.turn_reply_quote = ""
-        self.turn_reply_reminder_id = None
         sticker = msg.get("sticker")
         if sticker and not own_voice and not is_forward:
             self.handle_sticker(chat_id, msg, sticker)
@@ -836,8 +871,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             # A forward's text is UNTRUSTED channel content, not the boss's own words:
             # tag it so it's fenced when replayed into the router/converse prompts
             # (prompt-injection defense). His own text/captions stay source='boss'.
+            # update_id makes this write idempotent: Telegram redelivers, and a
+            # retried update used to duplicate his message in the history.
             store.convo_add(self.conn, chat_id, "user", text,
-                            source="forward" if auto_store else "boss")
+                            source="forward" if auto_store else "boss",
+                            update_id=self._current_update_id)
 
         # A forward is normally untrusted inbox content and never reaches the
         # router.  The one safe exception is an owner-created partial reminder
@@ -3300,6 +3338,73 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return
         self.finalize([msg])
 
+    def _store_attachments(self, row_id, parts, skip=None):
+        """Download and store a message's media. `skip` holds the
+        tg_file_unique_ids an earlier (crashed) pass already stored, so a repair
+        pass re-runs safely instead of duplicating rows.
+
+        Returns `(images_stored, files_stored)` for THIS pass — a redelivery
+        that stored nothing new must not re-fire the events the first pass
+        already logged.
+        """
+        skip = skip or set()
+        images = files = 0
+        for part in parts:
+            photo_sizes = part.get("photo") or []
+            if photo_sizes:
+                largest = photo_sizes[-1]  # Telegram orders PhotoSize ascending
+                if largest.get("file_unique_id") in skip:
+                    continue
+                try:
+                    local_path = self.download_file(
+                        largest.get("file_id"), largest.get("file_unique_id"), ".jpg"
+                    )
+                except TelegramError as exc:
+                    log(f"photo download failed for message #{row_id}: {exc}")
+                    local_path = None
+                store.insert_image(self.conn, row_id, part.get("message_id"), largest, local_path)
+                images += 1
+                continue
+            document = part.get("document") or {}
+            if document.get("file_id"):
+                if document.get("file_unique_id") in skip:
+                    continue
+                if str(document.get("mime_type") or "").startswith("image/"):
+                    # uncompressed image sent as a document: keep it as an image
+                    # (metadata only — not sent to the vision LLM).
+                    log(f"image document stored metadata-only for message #{row_id}")
+                    store.insert_image(self.conn, row_id, part.get("message_id"), document, None)
+                    images += 1
+                else:
+                    # any other document (PDF, doc, sheet, text…): keep its file_id
+                    # so it can be re-sent on demand.
+                    store.insert_file(self.conn, row_id, part.get("message_id"), document)
+                    files += 1
+                continue
+            # voice / audio / video etc. — stored (fetchable), never parsed.
+            other = self.other_attachment(part)
+            if other and other.get("file_unique_id") not in skip:
+                store.insert_file(self.conn, row_id, part.get("message_id"), other)
+                files += 1
+        return images, files
+
+    def _repair_attachments(self, row_id, parts, urls):
+        """Backfill the urls/media a crashed finalize pass never reached.
+        Idempotent on the attachments' natural key (Telegram's file_unique_id).
+        Returns what THIS pass had to add, as `_store_attachments` does."""
+        have_urls = {r["url"] for r in store.message_urls(self.conn, row_id)}
+        for url in urls:
+            if url not in have_urls:
+                store.insert_url(self.conn, row_id, url)
+        have = {r["tg_file_unique_id"] for r in store.message_images(self.conn, row_id)}
+        have |= {r["tg_file_unique_id"] for r in store.message_files(self.conn, row_id)}
+        # NULL is deliberately KEPT in the skip set: `files.tg_file_unique_id` is
+        # nullable, and a stored row without one would otherwise never match the
+        # incoming part (whose file_unique_id is None too), so every redelivery
+        # would insert it again — unbounded duplicates on the one path whose
+        # whole contract is idempotence. Missing one repair beats that.
+        return self._store_attachments(row_id, parts, skip=have)
+
     def finalize(self, parts):
         lang = self.lang()
         first = parts[0]
@@ -3345,47 +3450,40 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             },
         )
         if row_id is None:
-            log(f"skipping redelivered message chat_id={chat_id} message_id={first.get('message_id')}")
-            return
-        for url in urls:
-            store.insert_url(self.conn, row_id, url)
-        image_count = 0
-        file_count = 0
-        for part in parts:
-            photo_sizes = part.get("photo") or []
-            if photo_sizes:
-                largest = photo_sizes[-1]  # Telegram orders PhotoSize ascending
-                try:
-                    local_path = self.download_file(
-                        largest.get("file_id"), largest.get("file_unique_id"), ".jpg"
-                    )
-                except TelegramError as exc:
-                    log(f"photo download failed for message #{row_id}: {exc}")
-                    local_path = None
-                store.insert_image(self.conn, row_id, part.get("message_id"), largest, local_path)
-                image_count += 1
-                continue
-            document = part.get("document") or {}
-            if document.get("file_id"):
-                if str(document.get("mime_type") or "").startswith("image/"):
-                    # uncompressed image sent as a document: keep it as an image
-                    # (metadata only — not sent to the vision LLM).
-                    log(f"image document stored metadata-only for message #{row_id}")
-                    store.insert_image(self.conn, row_id, part.get("message_id"), document, None)
-                else:
-                    # any other document (PDF, doc, sheet, text…): keep its file_id
-                    # so it can be re-sent on demand.
-                    store.insert_file(self.conn, row_id, part.get("message_id"), document)
-                    file_count += 1
-                continue
-            # voice / audio / video etc. — stored (fetchable), never parsed.
-            other = self.other_attachment(part)
-            if other:
-                store.insert_file(self.conn, row_id, part.get("message_id"), other)
-                file_count += 1
+            # `insert_message` commits BEFORE the media downloads below, so a
+            # crash (or a raising download) mid-finalize left a text-only note —
+            # and the ON CONFLICT DO NOTHING turned the redelivery into a silent
+            # no-op, losing every attachment/URL while the boss saw a normal
+            # confirmation. Adopt the existing row and REPAIR it instead; the
+            # writes below skip whatever the crashed pass already stored.
+            existing = store.message_by_tg_id(self.conn, chat_id, first.get("message_id"))
+            if existing is None:
+                log("skipping redelivered message "
+                    f"chat_id={chat_id} message_id={first.get('message_id')}")
+                return
+            row_id = existing["id"]
+            done = existing["status"] not in (None, "pending")
+            _images, new_files = self._repair_attachments(row_id, parts, urls)
+            if done:
+                # Already carried through to a suggestion/confirmation: only the
+                # missing media was backfilled, the finished note is left alone.
+                log(f"redelivered message #{row_id} already processed;"
+                    " attachments repaired")
+                return
+            log(f"resuming redelivered message #{row_id} (crash mid-finalize)")
+        else:
+            for url in urls:
+                store.insert_url(self.conn, row_id, url)
+            _images, new_files = self._store_attachments(row_id, parts)
+        # Counts describe the NOTE (so a resumed save reports what it actually
+        # holds, including an uncompressed image sent as a document — which used
+        # to be reported as nothing at all); `new_files` is what THIS pass added,
+        # so a resume cannot log the relationship event a second time.
+        image_count = len(store.message_images(self.conn, row_id))
+        file_count = len(store.message_files(self.conn, row_id))
         if image_count:
             storage.offload(self.cfg, self.conn, row_id)  # durable copy (dormant on local backend)
-        if file_count:
+        if new_files:
             kept = ", ".join(f["file_name"] or "файл"
                              for f in store.message_files(self.conn, row_id)[:5])
             relationship.log_event(self.conn, "document_saved",
