@@ -58,6 +58,14 @@ _STT_NOISE_PHRASES = (
     "подписывайтесь на канал", "субтитры подготовил", "субтитры сделал",
     "редактор субтитров", "dimatorzok",
 )
+# How much text may remain around the matched noise phrase(s) and still count as
+# "the phrase IS the transcript" — punctuation, a stray filler word, the glue of
+# a multi-phrase credit line ("Subtitles by the Amara.org community" leaves
+# "the  community", 14 chars). Anything longer is real speech that merely
+# mentions it. 15 is the approved budget: at 20 a short genuine dictation like
+# «Спасибо за просмотр, перезвони Ване» (16 chars of remainder) was still thrown
+# away — the very failure this rule exists to stop, just narrowed.
+STT_NOISE_REMAINDER = 15
 
 
 # Emoji Cara may react with (a safe subset of Telegram's allowed reactions). If
@@ -154,8 +162,18 @@ def is_stt_noise(text):
     # the whole transcript is a single bracketed tag: [Subscribe], (applause)
     if re.fullmatch(r"[\[(<][^\])>]{0,40}[\])>]", t):
         return True
+    # A noise phrase ANYWHERE used to condemn the whole transcript, so a genuine
+    # dictation or forwarded talk that merely CONTAINED «спасибо за просмотр» /
+    # «продолжение следует» (real outros — which is exactly why Whisper
+    # hallucinates them) was thrown away, deterministically, on every retry.
+    # Noise only when the phrases are essentially the ENTIRE transcript: strip
+    # every phrase that matched and see whether anything of substance is left.
     low = t.casefold()
-    return any(p in low for p in _STT_NOISE_PHRASES)
+    rest = low
+    for phrase in _STT_NOISE_PHRASES:
+        if phrase in rest:
+            rest = rest.replace(phrase, " ")
+    return rest != low and len(rest.strip()) <= STT_NOISE_REMAINDER
 
 
 # Current trace id for the in-flight unit of work (single-threaded poll loop,

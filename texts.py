@@ -116,6 +116,13 @@ TEXTS = {
         "ru": "Не получилось сохранить этот альбом 😔 Перешли его ещё раз, пожалуйста.",
         "en": "I couldn't save that album 😔 Please forward it again.",
     },
+    # His OWN album — «перешли ещё раз» would be wrong copy for something he sent
+    # himself. Same honesty: the parts are dead-lettered, so silence would mean he
+    # never learns they were dropped.
+    "own_album_failed": {
+        "ru": "Не получилось разобрать твой альбом 😔 Отправь его ещё раз, пожалуйста.",
+        "en": "I couldn't handle your album 😔 Please send it again.",
+    },
     # NB: no final verbs — the update dead-lettered, nothing was processed.
     "update_dead_letter": {
         "ru": "Не смогла обработать это сообщение 😔 Оно лежит во входящих сбоях — "
@@ -453,6 +460,12 @@ TEXTS = {
     "fetch_private": {
         "ru": "Эта ссылка ведёт в приватную/внутреннюю сеть — из соображений безопасности не открываю.",
         "en": "That link points to a private/internal address — I won't open it, for safety.",
+    },
+    # NB: no final verbs (action_truth catalogue guard) — the page was read but
+    # nothing landed in the inbox.
+    "fetch_store_failed": {
+        "ru": "Страницу прочитала, но во входящие она не легла 😔 Попробуй ещё раз, пожалуйста.",
+        "en": "I read the page, but it didn't make it into the inbox 😔 Please try again.",
     },
     "fetch_disabled": {
         "ru": "Чтение ссылок сейчас отключено.",

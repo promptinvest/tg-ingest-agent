@@ -21,7 +21,13 @@ def extract_urls(text, entities):
     for entity in entities or []:
         etype = entity.get("type")
         if etype == "url":
-            urls.append(utf16_slice(text, entity.get("offset", 0), entity.get("length", 0)))
+            url = utf16_slice(text, entity.get("offset", 0),
+                              entity.get("length", 0)).rstrip(".,;")
+            # Telegram marks a bare domain ("example.com/x") as a url entity with
+            # no scheme; fetch would later reject it as "unsupported scheme".
+            if url and not re.match(r"https?://", url, re.IGNORECASE):
+                url = "https://" + url
+            urls.append(url)
         elif etype == "text_link" and entity.get("url"):
             urls.append(entity["url"])
     for match in URL_RE.findall(text):
@@ -119,6 +125,24 @@ def build_text_block(raw_text, forward_type, forward_title, urls):
 MAX_LLM_IMAGE_BYTES = 5 * 1024 * 1024
 
 
+# The ONE definition of the ingest reply shape — the system prompt and the
+# malformed-JSON retry both render it, so a retry can never silently ask for a
+# narrower object (it used to list 4 keys, dropping note_purpose/saved_reason/
+# review_policy/action_candidate: every capture-metadata feature quietly
+# disappeared on the retry path).
+JSON_SCHEMA = (
+    '{"category": "<best category>", '
+    '"alternatives": ["<up to 2 other plausible categories>"], '
+    '"summary": "<2-3 sentences with the concrete specifics>", '
+    '"facts": ["<up to 5 short key facts worth remembering, one line each;'
+    ' include amounts, dates, names; empty list if none>"], '
+    '"note_purpose": "<reference|source|idea|decision|temporary|actionable>", '
+    '"saved_reason": "<one short sentence>", '
+    '"review_policy": "<none|review_7d|review_30d|temporary_30d|temporary_90d>", '
+    '"action_candidate": null | {"title": "<short imperative>", "due_utc": "<UTC ISO>"}}'
+)
+
+
 def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, lang="ru",
                        journals=None):
     import base64
@@ -176,16 +200,7 @@ def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, la
         " clearly expires (temporary_30d / temporary_90d) or deserves a revisit"
         " (review_7d / review_30d); action_candidate is null unless the content ITSELF"
         " states a concrete dated deadline/action.\n"
-        "Reply with ONLY a JSON object: "
-        '{"category": "<best category>", '
-        '"alternatives": ["<up to 2 other plausible categories>"], '
-        '"summary": "<2-3 sentences with the concrete specifics>", '
-        '"facts": ["<up to 5 short key facts worth remembering, one line each;'
-        ' include amounts, dates, names; empty list if none>"], '
-        '"note_purpose": "<reference|source|idea|decision|temporary|actionable>", '
-        '"saved_reason": "<one short sentence>", '
-        '"review_policy": "<none|review_7d|review_30d|temporary_30d|temporary_90d>", '
-        '"action_candidate": null | {"title": "<short imperative>", "due_utc": "<UTC ISO>"}}'
+        "Reply with ONLY a JSON object: " + JSON_SCHEMA
     )
     content = [{"type": "text", "text": f"<message>\n{text_block}\n</message>"}]
     used = 0
@@ -264,11 +279,20 @@ _CATEGORY_RE = re.compile(r'"category"\s*:\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
 _SUMMARY_RE = re.compile(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
 
 
+_JSON_ESCAPE_MAP = {"n": " ", "t": " "}
+# Exactly the escapes the chained .replace() version handled — no more. A
+# catch-all `\\(.)` would ALSO swallow the marker of every escape it doesn't
+# map (`\uXXXX` -> literal "u0416", `\r`, `\b`, `\f`), and a model that answers
+# in ensure_ascii JSON on this malformed-reply path emits exactly those.
+_JSON_ESCAPE_RE = re.compile(r'\\(["\\/nt])')
+
+
 def _unescape_json_str(s):
     # literal Cyrillic is fine as-is; only undo JSON escapes (never unicode_escape,
-    # which would mangle UTF-8 Cyrillic).
-    return (s.replace('\\"', '"').replace('\\n', ' ').replace('\\t', ' ')
-            .replace('\\/', '/').replace('\\\\', '\\'))
+    # which would mangle UTF-8 Cyrillic). ONE pass, so each escape is consumed
+    # exactly once — chained .replace() rewrote the output of the previous
+    # replacement and mangled escaped backslashes (`C:\\new` -> `C:\ ew`).
+    return _JSON_ESCAPE_RE.sub(lambda m: _JSON_ESCAPE_MAP.get(m.group(1), m.group(1)), s)
 
 
 def _salvage_reply(reply, known):
@@ -333,10 +357,8 @@ def suggest(cfg, conn, known, text_block, image_paths, lang="ru", meta_out=None)
         messages.append({"role": "assistant", "content": reply})
         messages.append({
             "role": "user",
-            "content": (
-                'Reply with ONLY the JSON object '
-                '{"category": ..., "alternatives": [...], "summary": ..., "facts": [...]}.'
-            ),
+            "content": ("Reply with ONLY the JSON object specified above, ALL fields: "
+                        + JSON_SCHEMA),
         })
         reply = llm.chat_profile(cfg, conn, "ingest", messages, profile="ingest_balanced")
         parsed = llm.parse_llm_json(reply)

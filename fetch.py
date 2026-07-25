@@ -18,6 +18,7 @@ import http.client
 import ipaddress
 import re
 import socket
+import time
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -27,6 +28,15 @@ from urllib.request import (HTTPRedirectHandler, HTTPHandler, HTTPSHandler, Prox
 METADATA_IPS = {"169.254.169.254", "100.100.100.200", "fd00:ec2::254"}
 MAX_TEXT_CHARS = 8000
 MAX_REDIRECTS = 5
+READ_CHUNK = 64 * 1024
+# `timeout` bounds a SINGLE socket operation, not the whole transfer: a server
+# that drips a few bytes every few seconds holds the connection for hours or
+# days. fetch() runs INLINE in the single-threaded poll loop (and a forwarded
+# link post auto-fetches its first URL), so one such server freezes the entire
+# bot — reminders included. Every fetch therefore also gets a total wall-clock
+# budget of DEADLINE_FACTOR × timeout, measured from the start and shared by
+# every redirect hop.
+DEADLINE_FACTOR = 2
 
 
 class FetchError(Exception):
@@ -40,8 +50,13 @@ def _ip_blocked(ip_text):
         ip = ipaddress.ip_address(ip_text)
     except ValueError:
         return True
+    # `not is_global` is the catch-all (it also covers the carrier-grade-NAT /
+    # Tailscale range 100.64.0.0/10, which is neither private nor reserved and
+    # used to pass every explicit check); the explicit ones stay for clarity and
+    # because the metadata set is an address list, not a network property.
     return (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-            or ip.is_multicast or ip.is_unspecified or ip_text in METADATA_IPS)
+            or ip.is_multicast or ip.is_unspecified or not ip.is_global
+            or ip_text in METADATA_IPS)
 
 
 def validate_url(url):
@@ -206,9 +221,53 @@ class _CaptureRedirect(HTTPRedirectHandler):
         raise _Redirect(newurl)
 
 
-def _fetch_one(url, timeout, max_bytes):
+def _read_bounded(response, max_bytes, deadline):
+    """Read the body ONE socket read at a time, giving up as soon as the total
+    budget is gone.
+
+    `response.read(n)` blocks until it has n bytes or the server closes — a drip
+    feed satisfies the per-read timeout forever, so the loop would not regain
+    control (and would not reach the deadline check below) for days: checking the
+    deadline between reads is worth nothing if a single read can span them all.
+    `http.client.HTTPResponse.read1` is documented as "read with at most one
+    underlying system call", so every chunk hands control back here and the
+    wall-clock deadline actually bounds the transfer."""
+    read = getattr(response, "read1", None) or response.read
+    chunks = []
+    total = 0
+    while total <= max_bytes:
+        if deadline is not None and time.monotonic() > deadline:
+            raise FetchError("fetch deadline exceeded", "fetch_failed")
+        chunk = read(min(READ_CHUNK, max_bytes + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks)
+
+
+def _decode_body(raw, ctype):
+    """Decode with the declared charset; an unknown/quoted one must not lose the
+    whole page (a bogus `charset=` raised LookupError and aborted the fetch)."""
+    charset = "utf-8"
+    if "charset=" in ctype:
+        charset = ctype.split("charset=")[-1].split(";")[0].strip().strip('"\'') or "utf-8"
+    try:
+        return raw.decode(charset, errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _fetch_one(url, timeout, max_bytes, deadline=None):
     """Fetch a single hop with the connection pinned to a validated IP. Returns
-    (kind, value): ('ok', (final_url, html)) or ('redirect', newurl)."""
+    (kind, value): ('ok', (final_url, html)) or ('redirect', newurl). `deadline`
+    is a `time.monotonic()` stamp shared by every hop of one fetch."""
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise FetchError("fetch deadline exceeded", "fetch_failed")
+        # DNS + connect + first byte can't outlive the budget either.
+        timeout = min(timeout, remaining)
     validate_url(url)
     parsed = urlparse(url)
     pin = _pinned_ip(parsed.hostname, parsed.port, parsed.scheme)
@@ -223,13 +282,10 @@ def _fetch_one(url, timeout, max_bytes):
             ctype = response.headers.get("Content-Type", "")
             if not any(t in ctype for t in ("text/html", "text/plain", "application/xhtml")):
                 raise FetchError(f"unsupported content type: {ctype or 'unknown'}", "fetch_failed")
-            raw = response.read(max_bytes + 1)
+            raw = _read_bounded(response, max_bytes, deadline)
             if len(raw) > max_bytes:
                 raw = raw[:max_bytes]
-            charset = "utf-8"
-            if "charset=" in ctype:
-                charset = ctype.split("charset=")[-1].split(";")[0].strip() or "utf-8"
-            return "ok", (response.geturl(), raw.decode(charset, errors="replace"))
+            return "ok", (response.geturl(), _decode_body(raw, ctype))
     except _Redirect as r:
         return "redirect", r.url
     except FetchError:
@@ -245,10 +301,13 @@ def _fetch_one(url, timeout, max_bytes):
 def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
     """Fetch and extract text from a public HTTP(S) page. Returns
     (final_url, title, text). Raises FetchError on any problem. Redirects are
-    followed manually so every hop is independently validated AND pinned."""
+    followed manually so every hop is independently validated AND pinned.
+    The whole call (DNS, connect and body, across every hop) is capped at
+    DEADLINE_FACTOR × `timeout` seconds — see the module note."""
     url = normalize_tme(url)
+    deadline = time.monotonic() + DEADLINE_FACTOR * max(1, int(timeout or 1))
     for _ in range(MAX_REDIRECTS + 1):
-        kind, value = _fetch_one(url, timeout, max_bytes)
+        kind, value = _fetch_one(url, timeout, max_bytes, deadline)
         if kind == "ok":
             final_url, html = value
             title, text = extract_text(html)

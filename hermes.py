@@ -17,6 +17,7 @@ handlers, personal -> the companion).
 """
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -110,13 +111,22 @@ class HermesMixin:
         source = title or urlparse(url).hostname or "web"
         row_id = store.insert_message(self.conn, {
             "chat_id": chat_id,
-            "tg_message_id": -int(datetime.now(timezone.utc).timestamp()),  # synthetic, unique
+            # Synthetic negative id (no real Telegram message behind a fetch).
+            # Nanoseconds, not whole seconds: two fetches inside one second
+            # collided on (chat_id, tg_message_id) and the ON CONFLICT DO NOTHING
+            # made the second one store NOTHING, silently.
+            "tg_message_id": -time.time_ns(),
             "forward_origin_type": "web",
             "forward_origin_title": source[:200],
             "received_at": datetime.now(timezone.utc).isoformat(),
             "raw_text": text,
         })
         if row_id is None:
+            # Nothing was stored — say so instead of falling silent after
+            # «Читаю ссылку…» (he'd believe the page was filed).
+            log(f"fetched page not stored (id collision) for {url}")
+            store.issue_add(self.conn, chat_id, "fetch_not_stored", url[:200])
+            self.reply(chat_id, T(lang, "fetch_store_failed"))
             return
         store.insert_url(self.conn, row_id, url)
         suggestion = self.suggest_row(store.get_message(self.conn, row_id))

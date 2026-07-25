@@ -153,6 +153,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   Forwarded albums are **crash-safe** (2026‑07‑17): buffered parts stay pending in
   the durable update inbox until the album is filed, a restart replays them, and a
   filing error gets an honest «перешли ещё раз» instead of a silent loss.
+  **2026‑07‑25:** your OWN album saved with a caption («сохрани») now stores **every
+  document part** — it used to keep part 1 and lose 2..N unrecoverably behind a normal
+  confirmation card. A **mixed** album (photos + a real file) still files only the
+  files: own photos stay unstored (retired 2026‑07‑16), and the counts line says so
+  («фото: 0»). Own‑media album parts are durable/deferred like forwarded ones (a crash
+  in the settle window no longer drops the album), and if their filing fails you get
+  an honest «отправь ещё раз» + an incident row — before, only a forwarded album's
+  failure was ever mentioned. A **shutdown** leaves a half‑arrived album to the startup
+  replay instead of filing the half it holds (the late parts used to become a second
+  note); and a **forwarded sticker** is a sticker, not a "(no analyzable content)" note.
   A vision LLM suggests a **category** (from your taxonomy), a **summary**, and up to
   5 **key facts** — strictly in the source language. Duplicates are detected.
   A **referential save** ("сохрани заметку про этот фильм") with no subject of its
@@ -170,7 +180,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   ACTUAL page (no more "вероятно, содержит…") and the page text is **indexed**, so `ask`
   answers from what the link really says. Rich forwarded posts aren't delayed by a fetch
   (only raw text < 400 chars triggers it); a failed fetch degrades to today's behavior.
-  Toggle: `INGEST_READ_LINKS` (on), prompt cap `INGEST_FETCH_CHARS` (3500). A
+  Toggle: `INGEST_READ_LINKS` (on), prompt cap `INGEST_FETCH_CHARS` (3500).
+  **2026‑07‑25:** every fetch has a **total wall‑clock budget** (2 × `FETCH_TIMEOUT_SECONDS`,
+  shared across redirect hops, and the per‑hop socket timeout is clamped to what's left)
+  — a server that drips bytes used to hold the single thread for hours and freeze the
+  whole bot, reminders included, from one forwarded link. The body is read one socket
+  read at a time so the budget is actually reachable; an unknown/quoted page charset no
+  longer loses the page; the SSRF filter also
+  blocks 100.64.0.0/10 (CGN/Tailscale); a bare‑domain link entity («example.com/x») is
+  fetchable; and two fetches in the same second are two notes (the second used to store
+  nothing, silently — now it's stored, or she says it didn't land). A
   **meta‑summary** ("Пользователь просит записать…") is dropped in code, not just
   forbidden in the prompt — the note falls back to its real text. **Category near‑
   variants are snapped** to the canonical existing name at suggestion time ("AI tools"
@@ -1069,7 +1088,23 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 - **PDF text** uses pdfminer.six (apt `python3-pdfminer`, kept current by the nightly
   updater) with a stdlib regex fallback. **Scanned / no‑ToUnicode (glyph‑coded) PDFs**
   still yield no text layer — reading them needs **OCR**, out of scope here; such files
-  are stored and re‑sendable.
+  are stored and re‑sendable. **Decompression bombs (2026‑07‑25):** a forwarded PDF is
+  attacker‑supplied, and a few KB of crafted FlateDecode inflating to gigabytes would
+  OOM‑kill this single‑process service (systemd then restarts it straight back into the
+  retry). Two guards: the stdlib fallback inflates each stream to at most 4 × the char
+  cap and reads at most 200 streams, and — because **pdfminer runs FIRST and inflates
+  unbounded** — a pre‑scan refuses the whole document before pdfminer sees it if its
+  streams inflate past **128 MB** in total (the scan only counts bytes, never keeps
+  them). Honest limits: the pre‑scan reads the streams the stdlib regex can find, so a
+  PDF that hides them from it still reaches pdfminer unbounded; and a genuinely huge PDF
+  may be refused («не смогла прочитать») or read only up to the cap.
+- **Voice transcripts** are discarded as Whisper noise only when the known hallucination
+  phrases are essentially the WHOLE transcript (2026‑07‑25) — strip every phrase that
+  matched and ≤ 15 characters may remain — so a real dictation that just mentions
+  «спасибо за просмотр» is kept. Two trades, both deliberate: a long hallucinated credit
+  line with extra words around it can now pass through as text, and a very SHORT genuine
+  dictation wrapped in a hallucinated outro («спасибо за просмотр, купи молоко») is still
+  discarded, because 13 characters of remainder are indistinguishable from credit‑line glue.
 - **Compound commands** (two+ distinct actions in one message) are recognised but not
   executed as a batch — she asks to take them one at a time.
 - A Telegram bot can't read arbitrary chat history or private‑channel links by URL —

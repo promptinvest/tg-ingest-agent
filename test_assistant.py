@@ -1330,11 +1330,12 @@ class FetchTests(unittest.TestCase):
         original = fetch._fetch_one
         calls = {"n": 0}
 
-        def fake_fetch_one(url, timeout, max_bytes):
+        def fake_fetch_one(url, timeout, max_bytes, deadline=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 return "redirect", "http://169.254.169.254/latest/meta-data/"
-            return original(url, timeout, max_bytes)   # 2nd hop runs the real validator
+            # 2nd hop runs the real validator (same shared deadline)
+            return original(url, timeout, max_bytes, deadline)
 
         with mock.patch.object(fetch, "_fetch_one", side_effect=fake_fetch_one):
             with self.assertRaises(fetch.FetchError) as ctx:
@@ -1352,8 +1353,9 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(ctx.exception.url, "https://elsewhere.example/x")
 
     def test_too_many_redirects_raises(self):
-        with mock.patch.object(fetch, "_fetch_one",
-                               side_effect=lambda u, t, m: ("redirect", "https://a.example/next")):
+        with mock.patch.object(
+                fetch, "_fetch_one",
+                side_effect=lambda u, t, m, d=None: ("redirect", "https://a.example/next")):
             with self.assertRaises(fetch.FetchError) as ctx:
                 fetch.fetch("https://a.example/start")
         self.assertIn("redirect", str(ctx.exception).lower())
@@ -2601,6 +2603,43 @@ class SttNoiseTests(unittest.TestCase):
         for real in ("привет, как дела?", "позвони в банк завтра",
                      "[важно] перезвони мне", "напомни про встречу"):
             self.assertFalse(common.is_stt_noise(real), real)
+
+    def test_a_real_transcript_containing_a_noise_phrase_survives(self):
+        """The phrases were matched as SUBSTRINGS, so a genuine dictation that
+        merely mentioned «спасибо за просмотр» (a real outro — which is exactly
+        why Whisper hallucinates it) was thrown away, deterministically, on every
+        retry: he re-recorded and got «не расслышала» again."""
+        for real in (
+            "Смотрел ролик про подрядчика, в конце он говорит спасибо за просмотр, "
+            "но главное — счёт надо оплатить до пятницы",
+            "Продолжение следует в следующей серии, а мне напомни оплатить хостинг в среду",
+            "He signed off with thanks for watching, but book the flights for Tuesday please",
+        ):
+            self.assertFalse(common.is_stt_noise(real), real)
+
+    def test_the_phrase_alone_is_still_noise(self):
+        for noise in ("Спасибо за просмотр", "спасибо за просмотр!!!",
+                      "Продолжение следует.", "Thanks for watching!",
+                      "Subtitles by the Amara.org community", "Субтитры сделал DimaTorzok"):
+            self.assertTrue(common.is_stt_noise(noise), noise)
+
+    def test_the_remainder_boundary_is_pinned(self):
+        """Nothing else in the suite sits near STT_NOISE_REMAINDER, so raising it
+        would silently start eating real dictation with everything still green.
+        These two straddle it: 16 characters of remainder is speech, 15 is the
+        glue of a multi-phrase credit line."""
+        self.assertEqual(common.STT_NOISE_REMAINDER, 15)
+        # remainder ", перезвони ване" == 16 -> a real instruction, kept
+        self.assertFalse(common.is_stt_noise("Спасибо за просмотр, перезвони Ване"))
+        # remainder "the   community" == 15 -> still the hallucinated credit line
+        self.assertTrue(common.is_stt_noise("Subtitles by the Amara.org community"))
+
+    def test_a_very_short_dictation_inside_a_noise_phrase_is_an_accepted_loss(self):
+        """An explicit decision, not an accident: 13 characters of remainder is
+        indistinguishable from credit-line glue, so «спасибо за просмотр, купи
+        молоко» IS discarded. Anything past the cap survives."""
+        self.assertTrue(common.is_stt_noise("Спасибо за просмотр, купи молоко"))
+        self.assertFalse(common.is_stt_noise("Спасибо за просмотр, купи молоко и хлеб"))
 
     def test_transcribe_voice_rejects_hallucination(self):
         import tg_ingest_agent
@@ -10897,6 +10936,672 @@ class DeterministicPrecision20260725Tests(unittest.TestCase):
         self.assertEqual(row2["status"], "suggested")      # the newer card untouched
         self.assertIsNone(row2["category"])
         self.assertEqual(store.pending_get(self.conn, 1)["payload"]["row_id"], second)
+
+
+class _FakeClock:
+    """A monotonic clock that moves only when a BLOCKING operation does — a
+    socket read, a DNS+connect. That's what makes the drip-feed tests honest:
+    `clock.now` at the end is how long the fetch would really have held the
+    single poll thread."""
+
+    def __init__(self, per_read=0.0):
+        self.now = 0.0
+        self.per_read = per_read
+
+    def monotonic(self):
+        return self.now
+
+    def tick(self, seconds=None):
+        self.now += self.per_read if seconds is None else seconds
+
+
+class _FakeHTTPResponse:
+    """Stand-in for the object `urlopen` hands back, with `http.client`'s ACTUAL
+    semantics — which is the whole point of the T6.1 regression:
+
+    * `read(n)` BLOCKS until it holds n bytes or the server closes, draining as
+      many underlying socket reads as that takes (a drip feed therefore stays
+      inside ONE call for hours);
+    * `read1(n)` is "at most one underlying system call" and returns whatever
+      that one read produced.
+    """
+
+    def __init__(self, chunks, ctype="text/html; charset=utf-8",
+                 url="https://drip.example/x", clock=None):
+        self.chunks = list(chunks)
+        self.headers = {"Content-Type": ctype}
+        self._url = url
+        self.clock = clock
+        self.socket_reads = 0
+
+    def _socket_read(self, n):
+        self.socket_reads += 1
+        if self.clock is not None:
+            self.clock.tick()
+        if not self.chunks:
+            return b""
+        chunk = self.chunks[0]
+        if n is None or n < 0 or n >= len(chunk):
+            return self.chunks.pop(0)
+        self.chunks[0] = chunk[n:]
+        return chunk[:n]
+
+    def read1(self, n=-1):
+        return self._socket_read(n)
+
+    def read(self, n=-1):
+        out = b""
+        while n is None or n < 0 or len(out) < n:
+            piece = self._socket_read(-1 if (n is None or n < 0) else n - len(out))
+            if not piece:
+                break
+            out += piece
+        return out
+
+    def geturl(self):
+        return self._url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+
+class _FakeOpener:
+    """`redirects` are (seconds_spent, url) pairs consumed one per hop — a hop
+    that burns wall-clock time before handing back a redirect."""
+
+    def __init__(self, response, clock=None, redirects=()):
+        self.response = response
+        self.clock = clock
+        self.redirects = list(redirects)
+        self.timeouts = []
+
+    def open(self, _request, timeout=None):
+        self.timeouts.append(timeout)
+        if self.redirects:
+            seconds, url = self.redirects.pop(0)
+            if self.clock is not None:
+                self.clock.tick(seconds)
+            raise fetch._Redirect(url)
+        return self.response
+
+
+class IngestMediaFetch20260725Tests(unittest.TestCase):
+    """WP6 of the 2026-07-24 review — ingest, media and fetch.
+
+    The theme is *inline work on the one thread*: a fetch with no wall-clock
+    budget, a PDF that inflates without a bound, and album/own-media paths that
+    confirmed more than they actually stored.
+    """
+
+    PUBLIC_ADDRINFO = [(2, 1, 6, "", ("93.184.216.34", 443))]
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "wp6.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    # -- helpers ---------------------------------------------------------------
+
+    def _doc_part(self, message_id, name, group="ga", caption=None, forward=False):
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": message_id,
+               "date": 1781200000,
+               "document": {"file_id": f"F{message_id}", "file_unique_id": f"u{message_id}",
+                            "file_name": name, "mime_type": "application/zip"}}
+        if group:
+            msg["media_group_id"] = group
+        if caption:
+            msg["caption"] = caption
+        if forward:
+            msg["forward_origin"] = {"type": "channel",
+                                     "chat": {"id": -100, "title": "Chan"}}
+        return msg
+
+    def _photo_part(self, message_id, group="ga", caption=None):
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": message_id,
+               "date": 1781200000,
+               "photo": [{"file_id": f"P{message_id}", "file_unique_id": f"p{message_id}",
+                          "width": 1280, "height": 960, "file_size": 4096}]}
+        if group:
+            msg["media_group_id"] = group
+        if caption:
+            msg["caption"] = caption
+        return msg
+
+    # -- T6.1 a fetch may not hold the single thread for hours -----------------
+
+    def test_fetch_aborts_when_the_total_wall_clock_budget_is_gone(self):
+        """`timeout` bounds ONE socket read. A server that drips a few bytes every
+        few seconds satisfies it forever and — because fetch runs inline in the
+        poll loop, auto-triggered by a forwarded link post — freezes the whole
+        bot, reminders included.
+
+        Checking the deadline BETWEEN reads is worth nothing if a single read can
+        span them all: `read(65536)` blocks until it holds 65 536 bytes, so at one
+        drip per socket timeout the loop does not look at the clock again for
+        days. Hence the clock here advances per SOCKET read, and the assertion is
+        how much wall-clock the fetch actually consumed."""
+        clock = _FakeClock(per_read=15.0)          # every read costs ~a timeout
+        response = _FakeHTTPResponse([b"<p>drip</p>"] * 4000, clock=clock)
+        opener = _FakeOpener(response, clock)
+        with mock.patch.object(fetch.socket, "getaddrinfo", return_value=self.PUBLIC_ADDRINFO), \
+                mock.patch.object(fetch, "build_opener", return_value=opener), \
+                mock.patch.object(fetch.time, "monotonic", side_effect=clock.monotonic):
+            with self.assertRaises(fetch.FetchError) as ctx:
+                fetch.fetch("https://drip.example/x", timeout=20)
+        self.assertIn("deadline", str(ctx.exception))
+        self.assertEqual(ctx.exception.reason, "fetch_failed")
+        budget = fetch.DEADLINE_FACTOR * 20
+        # She let go at the budget, not 4000 drips (≈16 hours) later.
+        self.assertLess(clock.now, 2 * budget)
+        self.assertLess(response.socket_reads, 10)
+        self.assertTrue(response.chunks)           # gave up mid-body
+
+    def test_fast_body_under_the_budget_still_succeeds(self):
+        body = (b"<html><head><title>Cheap Flights</title></head>"
+                b"<body><p>Ufa 9800</p></body></html>")
+        clock = _FakeClock(per_read=0.05)
+        opener = _FakeOpener(_FakeHTTPResponse([body], url="https://ok.example/x",
+                                               clock=clock), clock)
+        with mock.patch.object(fetch.socket, "getaddrinfo", return_value=self.PUBLIC_ADDRINFO), \
+                mock.patch.object(fetch, "build_opener", return_value=opener), \
+                mock.patch.object(fetch.time, "monotonic", side_effect=clock.monotonic):
+            final_url, title, text = fetch.fetch("https://ok.example/x", timeout=20)
+        self.assertEqual(title, "Cheap Flights")
+        self.assertIn("9800", text)
+        self.assertEqual(final_url, "https://ok.example/x")
+
+    def test_the_deadline_is_shared_across_redirect_hops(self):
+        """Hop 1 spends 45 s of the 40 s budget. A PER-HOP deadline would hand
+        hop 2 a fresh 40 s — up to 6 × the budget of held thread across
+        MAX_REDIRECTS+1 hops — so hop 2 must not even open a socket."""
+        clock = _FakeClock()
+        opener = _FakeOpener(
+            _FakeHTTPResponse([b"<html><body><p>never reached at all</p></body></html>"],
+                              clock=clock),
+            clock, redirects=[(45.0, "https://second.example/x")])
+        with mock.patch.object(fetch.socket, "getaddrinfo", return_value=self.PUBLIC_ADDRINFO), \
+                mock.patch.object(fetch, "build_opener", return_value=opener), \
+                mock.patch.object(fetch.time, "monotonic", side_effect=clock.monotonic):
+            with self.assertRaises(fetch.FetchError) as ctx:
+                fetch.fetch("https://first.example/x", timeout=20)
+        self.assertIn("deadline", str(ctx.exception))
+        self.assertEqual(len(opener.timeouts), 1)   # hop 2 never reached the network
+
+    def test_the_socket_timeout_is_clamped_to_what_is_left_of_the_budget(self):
+        """Without the clamp a late hop opens a socket with the full 20 s timeout
+        while 3 s of the total budget remain, and the budget is advisory again."""
+        clock = _FakeClock()
+        body = b"<html><head><title>Late</title></head><body><p>Ufa 9800</p></body></html>"
+        opener = _FakeOpener(
+            _FakeHTTPResponse([body], url="https://second.example/x", clock=clock),
+            clock, redirects=[(37.0, "https://second.example/x")])
+        with mock.patch.object(fetch.socket, "getaddrinfo", return_value=self.PUBLIC_ADDRINFO), \
+                mock.patch.object(fetch, "build_opener", return_value=opener), \
+                mock.patch.object(fetch.time, "monotonic", side_effect=clock.monotonic):
+            _final, title, _text = fetch.fetch("https://first.example/x", timeout=20)
+        self.assertEqual(title, "Late")
+        self.assertEqual(opener.timeouts[0], 20)     # hop 1 had the whole budget
+        self.assertLess(opener.timeouts[1], 20)      # hop 2 only what was left
+        self.assertAlmostEqual(opener.timeouts[1], 3.0, places=6)
+
+    # -- T6.9 an unknown charset must not lose the page ------------------------
+
+    def test_quoted_and_bogus_charsets_both_decode(self):
+        opener = _FakeOpener(_FakeHTTPResponse(
+            ["<html><body>Привет мир</body></html>".encode("utf-8"), b""],
+            ctype='text/html; charset="totally-bogus-1"'))
+        with mock.patch.object(fetch.socket, "getaddrinfo", return_value=self.PUBLIC_ADDRINFO), \
+                mock.patch.object(fetch, "build_opener", return_value=opener):
+            _final, _title, text = fetch.fetch("https://ru.example/x")
+        self.assertIn("Привет мир", text)
+        self.assertIn("Привет", fetch._decode_body("Привет".encode("utf-8"),
+                                                   'text/html; charset="utf-8"'))
+
+    # -- T6.10 the SSRF filter must cover carrier-grade NAT --------------------
+
+    def test_cgnat_range_is_blocked(self):
+        # 100.64.0.0/10 (CGN / Tailscale) is neither private nor reserved.
+        self.assertTrue(fetch._ip_blocked("100.64.0.1"))
+        self.assertTrue(fetch._ip_blocked("100.127.255.254"))
+        self.assertTrue(fetch._ip_blocked("192.0.0.170"))
+        self.assertFalse(fetch._ip_blocked("93.184.216.34"))
+        self.assertFalse(fetch._ip_blocked("8.8.8.8"))
+
+    # -- T6.6 a forwarded PDF may not be a decompression bomb ------------------
+
+    _BOMB_BLOB = None
+    # Hard-coded, NOT derived from pdftext.MAX_INFLATED_BYTES: reading the
+    # constant here would make this test die with AttributeError against an
+    # unguarded extract_text instead of failing on the behaviour it names.
+    _BOMB_INFLATES_TO = 136 * 1024 * 1024
+
+    @classmethod
+    def _bomb_pdf(cls):
+        """A few hundred KB on the wire that inflates past pdftext's ceiling.
+        Built once; nothing about the module is patched, so this measures the
+        shipped behaviour."""
+        import zlib
+        if cls._BOMB_BLOB is None:
+            megabyte = b"\0" * (1 << 20)
+            compressor = zlib.compressobj(1)
+            cls._BOMB_BLOB = b"".join(
+                compressor.compress(megabyte)
+                for _ in range(cls._BOMB_INFLATES_TO >> 20)) + compressor.flush()
+        return b"%PDF-1.4\n7 0 obj\nstream\n" + cls._BOMB_BLOB + b"\nendstream\nendobj\n"
+
+    def test_a_decompression_bomb_never_reaches_pdfminer(self):
+        """The bound has to sit in FRONT of the path production actually takes.
+        pdfminer.six is installed on the box (apt python3-pdfminer) and
+        `extract_text` hands it the bytes FIRST — decoding FlateDecode with an
+        unbounded `zlib.decompress` — so bounding only the stdlib fallback (which
+        runs afterwards, i.e. after the OOM would already have happened) left the
+        kill-and-systemd-restart-into-the-retry loop fully live."""
+        import pdftext
+        bomb = self._bomb_pdf()
+        spy = mock.Mock(return_value="")
+        with mock.patch.object(pdftext, "_pdfminer_extract", spy):
+            text = pdftext.extract_text(bomb, 20000)
+        spy.assert_not_called()
+        self.assertEqual(text, "")
+        self.assertLess(len(bomb), 4 * 1024 * 1024)   # KBs on the wire
+        # ...and it is the ceiling that makes this particular file a bomb.
+        self.assertLess(pdftext.MAX_INFLATED_BYTES, self._BOMB_INFLATES_TO)
+
+    def test_an_ordinary_pdf_still_goes_to_pdfminer(self):
+        """The guard must not cost her the primary extractor on real documents."""
+        import zlib
+
+        import pdftext
+        payload = b"BT (Hello from the text layer of a genuine document) Tj ET"
+        pdf = b"%PDF-1.4\n7 0 obj\nstream\n" + zlib.compress(payload) + b"\nendstream\n"
+        spy = mock.Mock(return_value="Обычный договор на поставку, подписан в пятницу.")
+        with mock.patch.object(pdftext, "_pdfminer_extract", spy):
+            text = pdftext.extract_text(pdf, 20000)
+        spy.assert_called_once()
+        self.assertIn("Обычный договор", text)
+
+    def test_pdf_stream_inflation_is_bounded(self):
+        import zlib
+
+        import pdftext
+        compressor = zlib.compressobj(1)
+        bomb = b"".join(compressor.compress(b"A" * 100_000)
+                        for _ in range(200)) + compressor.flush()
+        self.assertLess(len(bomb), 100_000)          # ~20 MB of payload, KBs on the wire
+        self.assertEqual(len(pdftext._inflate_bounded(bomb, 4096)), 4096)
+
+    def test_extract_derives_the_per_stream_limit_from_the_char_cap(self):
+        """Nothing else observes the LIMIT that `_extract` passes down: swapping
+        `4 * max_chars` for a huge constant would leave every other bomb test
+        green while each stream inflated effectively without a bound again."""
+        import zlib
+
+        import pdftext
+        real = pdftext._inflate_bounded
+        seen = []
+
+        def recording(raw, limit):
+            seen.append(limit)
+            return real(raw, limit)
+
+        payload = b"BT (Hello from the text layer of a genuine document) Tj ET"
+        pdf = b"stream\n" + zlib.compress(payload) + b"\nendstream\n"
+        with mock.patch.object(pdftext, "_inflate_bounded", recording):
+            text = pdftext._extract(pdf, 1000)
+        self.assertEqual(seen, [4000])
+        self.assertIn("Hello from the text layer", text)
+
+    def test_extract_never_uses_the_unbounded_decompressor(self):
+        import zlib
+
+        import pdftext
+        payload = b"BT (Hello from the text layer of a genuine document) Tj ET"
+        pdf = b"7 0 obj\nstream\n" + zlib.compress(payload) + b"\nendstream\nendobj\n"
+        with mock.patch.object(pdftext.zlib, "decompress",
+                               side_effect=AssertionError("unbounded zlib.decompress")):
+            text = pdftext._extract(pdf, 20000)
+        self.assertIn("Hello from the text layer", text)
+
+    def test_extract_caps_the_number_of_streams(self):
+        import zlib
+
+        import pdftext
+        blobs = []
+        for i in range(pdftext.MAX_STREAMS + 40):
+            body = f"BT (marker{i:04d} readable words follow here) Tj ET".encode("latin-1")
+            blobs.append(b"stream\n" + zlib.compress(body) + b"\nendstream\n")
+        text = pdftext._extract(b"".join(blobs), 10_000_000)
+        self.assertIn("marker0000", text)
+        self.assertIn(f"marker{pdftext.MAX_STREAMS - 1:04d}", text)
+        self.assertNotIn(f"marker{pdftext.MAX_STREAMS:04d}", text)
+        self.assertNotIn(f"marker{pdftext.MAX_STREAMS + 30:04d}", text)
+
+    # -- T6.7 a forwarded sticker is not inbox content -------------------------
+
+    def test_forwarded_sticker_does_not_become_a_junk_note(self):
+        """`finalize` is deliberately NOT mocked: the contract is "no junk note in
+        the inbox", and mocking it out is what would make the DB assertion pass
+        against the old code too."""
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 55,
+               "forward_origin": {"type": "channel", "chat": {"id": -100, "title": "Chan"}},
+               "sticker": {"file_id": "S", "file_unique_id": "su", "emoji": "🔥",
+                           "set_name": "pack"}}
+        with mock.patch.object(self.agent, "do_converse") as conv, \
+                mock.patch.object(self.agent, "suggest_row",
+                                  return_value=("Разное", [], "стикер")), \
+                mock.patch.object(self.agent, "present_suggestion"), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.handle_update({"update_id": 1, "message": msg})
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
+        conv.assert_called_once()
+
+    # -- T6.2 an own-media album saves EVERY part ------------------------------
+
+    def test_own_document_album_with_save_caption_stores_all_parts(self):
+        """«сохрани» on a 3-document album stored part 1 and silently dropped
+        2..N — their updates were already marked done, so nothing could recover
+        them, and the boss got an ordinary confirmation card."""
+        parts = [self._doc_part(60, "отчёт-1.zip", caption="сохрани"),
+                 self._doc_part(61, "отчёт-2.zip"),
+                 self._doc_part(62, "отчёт-3.zip")]
+        route = {"action": "ingest", "params": {}, "confidence": 0.95}
+        with mock.patch.object(router, "route", return_value=route), \
+                mock.patch.object(self.agent, "suggest_row",
+                                  return_value=("Документы", [], "три архива")), \
+                mock.patch.object(self.agent, "present_suggestion"), \
+                mock.patch.object(self.agent, "reply"):
+            for i, part in enumerate(parts):
+                self.agent.handle_update({"update_id": 600 + i, "message": part})
+            self.agent.flush_albums(0, force=True)
+        rows = self.conn.execute("SELECT id FROM messages").fetchall()
+        self.assertEqual(len(rows), 1)
+        files = store.message_files(self.conn, rows[0]["id"])
+        self.assertEqual(sorted(f["file_name"] for f in files),
+                         ["отчёт-1.zip", "отчёт-2.zip", "отчёт-3.zip"])
+
+    def test_a_mixed_own_album_files_the_documents_and_never_the_photos(self):
+        """`_pictures_only` is all-or-nothing: ONE real document makes the whole
+        album storable. Filing every part therefore re-enabled own-photo storage
+        (retired 2026-07-16) N photos at a time, behind an ordinary confirmation
+        card — before the album fix at most one photo could leak."""
+        parts = [self._photo_part(64, group="gm", caption="сохрани"),
+                 self._photo_part(65, group="gm"),
+                 self._doc_part(66, "отчёт.zip", group="gm")]
+        route = {"action": "ingest", "params": {}, "confidence": 0.95}
+        with mock.patch.object(router, "route", return_value=route), \
+                mock.patch.object(self.agent, "suggest_row",
+                                  return_value=("Документы", [], "отчёт")), \
+                mock.patch.object(self.agent, "present_suggestion"), \
+                mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(self.agent, "download_file") as dl:
+            for i, part in enumerate(parts):
+                self.agent.handle_update({"update_id": 640 + i, "message": part})
+            self.agent.flush_albums(0, force=True)
+        rows = self.conn.execute("SELECT id FROM messages").fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM images").fetchone()[0], 0)
+        dl.assert_not_called()          # his own photos aren't even downloaded
+        self.assertEqual([f["file_name"] for f in store.message_files(
+            self.conn, rows[0]["id"])], ["отчёт.zip"])
+
+    def test_a_plain_text_save_still_files_only_that_message(self):
+        # The album stash must not leak into an ordinary turn.
+        self.assertIsNone(self.agent._own_media_parts)
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 70,
+               "date": 1781200000, "text": "запиши: счёт на 9800 до пятницы"}
+        route = {"action": "ingest", "params": {}, "confidence": 0.9}
+        with mock.patch.object(router, "route", return_value=route), \
+                mock.patch.object(self.agent, "suggest_row",
+                                  return_value=("Разное", [], "счёт")), \
+                mock.patch.object(self.agent, "present_suggestion"), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.handle_update({"update_id": 70, "message": msg})
+        rows = self.conn.execute("SELECT tg_message_id FROM messages").fetchall()
+        self.assertEqual([r["tg_message_id"] for r in rows], [70])
+
+    def test_the_own_media_stash_never_leaks_out_of_a_failed_turn(self):
+        """Mirrors the `_own_photo_turn` guard: a stash surviving an EXCEPTIONAL
+        turn would file a previous album's parts onto the next «сохрани»."""
+        album = [self._doc_part(76, "смета-1.zip", group="gs", caption="сохрани"),
+                 self._doc_part(77, "смета-2.zip", group="gs")]
+        with mock.patch.object(self.agent, "dispatch", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.agent.handle_own_media(album, 1, "сохрани")
+        self.assertIsNone(self.agent._own_media_parts)   # cleared in the same `finally`
+        self.assertFalse(self.agent._own_photo_turn)
+        # ...and the next ordinary save carries none of it.
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 78,
+               "date": 1781200000, "text": "запиши: счёт на 9800 до пятницы"}
+        route = {"action": "ingest", "params": {}, "confidence": 0.9}
+        with mock.patch.object(router, "route", return_value=route), \
+                mock.patch.object(self.agent, "suggest_row",
+                                  return_value=("Разное", [], "счёт")), \
+                mock.patch.object(self.agent, "present_suggestion"), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.handle_update({"update_id": 78, "message": msg})
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM files").fetchone()[0], 0)
+
+    # -- T6.3 own-media album parts are durable too ----------------------------
+
+    def test_own_media_album_parts_defer_and_survive_a_restart(self):
+        parts = [self._doc_part(80, "a.zip", group="gb", caption="сохрани"),
+                 self._doc_part(81, "b.zip", group="gb")]
+        for i, part in enumerate(parts):
+            self.agent.process_update_batch([{"update_id": 800 + i, "message": part}])
+        statuses = [r["status"] for r in self.conn.execute(
+            "SELECT status FROM telegram_updates ORDER BY update_id")]
+        self.assertEqual(statuses, ["pending", "pending"])   # not consumed at buffer time
+        self.assertEqual(self.agent.albums["gb"]["update_ids"], [800, 801])
+        # "crash" inside the settle window: a fresh Agent over the same DB
+        other = self.mod.Agent(self.cfg)
+        try:
+            route = {"action": "ingest", "params": {}, "confidence": 0.95}
+            with mock.patch.object(router, "route", return_value=route), \
+                    mock.patch.object(other, "suggest_row",
+                                      return_value=("Документы", [], "архивы")), \
+                    mock.patch.object(other, "present_suggestion"), \
+                    mock.patch.object(other, "reply"):
+                other.replay_pending_updates()
+                other.flush_albums(0, force=True)
+            rows = other.conn.execute("SELECT id FROM messages").fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(len(store.message_files(other.conn, rows[0]["id"])), 2)
+            self.assertEqual({r["status"] for r in other.conn.execute(
+                "SELECT status FROM telegram_updates")}, {"done"})
+        finally:
+            other.conn.close()
+
+    def test_a_failing_own_media_album_is_dead_lettered_and_answered(self):
+        """Deferring own-media parts means a flush error now consumes them
+        TERMINALLY. Doing that silently — no reply, no issue row — made the one
+        permanently-lost album the one invisible in both the chat and the weekly
+        digest. Different copy from a forward: «перешли ещё раз» would be wrong
+        for something he sent himself."""
+        parts = [self._doc_part(95, "a.zip", group="ge", caption="сохрани"),
+                 self._doc_part(96, "b.zip", group="ge")]
+        for i, part in enumerate(parts):
+            self.agent.process_update_batch([{"update_id": 950 + i, "message": part}])
+        with mock.patch.object(self.agent, "handle_own_media",
+                               side_effect=RuntimeError("boom")), \
+                mock.patch.object(self.agent, "reply") as rep:
+            self.agent.flush_albums(0, force=True)
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "own_album_failed"))
+        self.assertIsNotNone(self.conn.execute(
+            "SELECT 1 FROM issues WHERE kind = 'album_failed'").fetchone())
+        self.assertEqual({r["status"] for r in self.conn.execute(
+            "SELECT status FROM telegram_updates")}, {"failed"})
+
+    # -- T6.4 shutdown must not file half an album -----------------------------
+
+    def test_shutdown_leaves_a_partial_album_for_the_startup_replay(self):
+        """The SIGTERM force-flush finalized whatever had arrived, so the late
+        parts came back after restart as a SECOND note — and finalize() does LLM
+        and network work, inside systemd's stop window."""
+        first = self._doc_part(90, "часть-1.zip", group="gc", forward=True)
+        second = self._doc_part(91, "часть-2.zip", group="gc", forward=True)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.process_update_batch([{"update_id": 900, "message": first}])
+        self.agent.stop = True
+        with mock.patch.object(self.mod, "tg_call", return_value={}), \
+                mock.patch.object(self.agent, "announce_deploy_if_changed"), \
+                mock.patch.object(self.agent, "finalize") as fin:
+            self.agent.run()          # straight to the shutdown flush
+        fin.assert_not_called()
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT status FROM telegram_updates WHERE update_id = 900").fetchone()["status"],
+            "pending")
+        # restart: the replay re-buffers part 1, the late part 2 joins it
+        other = self.mod.Agent(self.cfg)
+        try:
+            with mock.patch.object(other, "suggest_row",
+                                   return_value=("Документы", [], "архив")), \
+                    mock.patch.object(other, "present_suggestion"), \
+                    mock.patch.object(other, "reply"):
+                other.replay_pending_updates()
+                other.process_update_batch([{"update_id": 901, "message": second}])
+                other.flush_albums(0, force=True)
+            rows = other.conn.execute("SELECT id FROM messages").fetchall()
+            self.assertEqual(len(rows), 1)      # ONE note, not one-per-restart
+            self.assertEqual(len(store.message_files(other.conn, rows[0]["id"])), 2)
+        finally:
+            other.conn.close()
+
+    def test_shutdown_still_files_an_album_no_durable_row_could_recover(self):
+        """The other half of `if shutdown and update_ids`. The skip is safe only
+        BECAUSE the parts have pending inbox rows the startup replay will bring
+        back; with no durable rows behind them, dropping the buffer would lose the
+        album outright, which is worse than doing the work in the stop window."""
+        first = self._doc_part(97, "часть-1.zip", group="gg", forward=True)
+        self.agent.handle_update({"message": first})     # no update_id: nothing durable
+        self.assertEqual(self.agent.albums["gg"]["update_ids"], [])
+        with mock.patch.object(self.agent, "finalize") as fin:
+            self.agent.flush_albums(0, force=True, shutdown=True)
+        fin.assert_called_once()
+        self.assertEqual(self.agent.albums, {})
+
+    # -- T6.8 a scheme-less entity URL must stay fetchable ---------------------
+
+    def test_entity_urls_without_a_scheme_get_https(self):
+        text = "смотри example.com/x и всё"
+        urls = ingest.extract_urls(text, [{"type": "url", "offset": 7, "length": 13}])
+        self.assertEqual(urls, ["https://example.com/x"])
+        # trailing punctuation is stripped like the regex path does
+        text2 = "тут example.com/y."
+        self.assertEqual(
+            ingest.extract_urls(text2, [{"type": "url", "offset": 4, "length": 14}]),
+            ["https://example.com/y"])
+        # an entity that already has a scheme is left alone
+        text3 = "https://example.com/z"
+        self.assertEqual(
+            ingest.extract_urls(text3, [{"type": "url", "offset": 0, "length": 21}]),
+            ["https://example.com/z"])
+
+    # -- T6.11 the JSON salvage must not mangle backslashes --------------------
+
+    def test_salvage_unescapes_in_a_single_pass(self):
+        reply = r'{"category": "Заметки", "summary": "путь C:\\new и строка\nдальше" oops'
+        category, summary = ingest._salvage_reply(reply, [])
+        self.assertEqual(category, "Заметки")
+        self.assertIn("C:\\new", summary)          # was mangled to "C:\ ew"
+        self.assertIn("строка дальше", summary)
+
+    def test_salvage_leaves_escapes_it_does_not_handle_alone(self):
+        """A catch-all `\\\\(.)` consumes the MARKER of every escape it doesn't
+        map, so `\\uXXXX` (what a model answering in ensure_ascii JSON emits — and
+        this function only ever runs on a malformed reply) silently became the
+        literal text "u0416", indistinguishable from real words. `\\r` likewise."""
+        reply = r'{"category": "Заметки", "summary": "\u0416 и возврат\rкаретки" oops'
+        _category, summary = ingest._salvage_reply(reply, [])
+        self.assertIn(r"\u0416", summary)
+        self.assertIn(r"возврат\rкаретки", summary)
+
+    # -- T6.12 the JSON retry must ask for the WHOLE object --------------------
+
+    def test_json_retry_prompt_repeats_the_full_schema(self):
+        good = json.dumps({"category": "Крипта", "alternatives": [], "summary": "s",
+                           "facts": ["f"], "note_purpose": "idea",
+                           "saved_reason": "пригодится для сделки",
+                           "review_policy": "review_7d", "action_candidate": None})
+        seen = []
+
+        def fake_chat_profile(cfg, conn, skill, messages, **kw):
+            seen.append([dict(m) for m in messages])
+            return "sorry, here is the answer: {oops" if len(seen) == 1 else good
+
+        meta = {}
+        with mock.patch.object(ingest.llm, "chat_profile", side_effect=fake_chat_profile):
+            category, _alts, _summary, _facts = ingest.suggest(
+                self.cfg, self.conn, [], "текст поста", [], "ru", meta)
+        self.assertEqual(len(seen), 2)
+        retry_prompt = seen[1][-1]["content"]
+        for field in ("note_purpose", "saved_reason", "review_policy", "action_candidate"):
+            self.assertIn(field, retry_prompt)
+        self.assertEqual(category, "Крипта")
+        self.assertEqual(meta["note_purpose"], "idea")           # metadata survives the retry
+        self.assertEqual(meta["review_policy"], "review_7d")
+        self.assertEqual(meta["saved_reason"], "пригодится для сделки")
+
+    # -- T6.13 two fetches in one second are two notes -------------------------
+
+    def test_two_fetches_in_the_same_second_both_store(self):
+        import hermes
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 7, 25, 12, 0, 0, tzinfo=timezone.utc)
+
+        with mock.patch.object(hermes, "datetime", _FrozenDatetime), \
+                mock.patch.object(self.agent, "suggest_row",
+                                  return_value=("Web", [], "сводка")), \
+                mock.patch.object(self.agent, "present_suggestion"), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.ingest_fetched(1, "ru", "https://a.example/1", "A", "первая страница")
+            self.agent.ingest_fetched(1, "ru", "https://b.example/2", "B", "вторая страница")
+        rows = self.conn.execute(
+            "SELECT id, tg_message_id FROM messages ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 2)                       # the 2nd used to vanish
+        self.assertNotEqual(rows[0]["tg_message_id"], rows[1]["tg_message_id"])
+        self.assertEqual(len(store.message_urls(self.conn, rows[1]["id"])), 1)
+
+    def test_unstorable_fetch_says_so_instead_of_falling_silent(self):
+        import hermes
+        with mock.patch.object(hermes.store, "insert_message", return_value=None), \
+                mock.patch.object(self.agent, "reply") as rep:
+            self.agent.ingest_fetched(1, "ru", "https://x.example/1", "X", "страница")
+        self.assertEqual(rep.call_args[0][1], texts.T("ru", "fetch_store_failed"))
+        self.assertIsNotNone(self.conn.execute(
+            "SELECT 1 FROM issues WHERE kind = 'fetch_not_stored'").fetchone())
+
+    def test_a_synthetic_note_id_is_never_sent_as_a_reply_target(self):
+        """`retry_sweep` re-presents a still-pending fetched page by handing its
+        stored `tg_message_id` straight to `reply(reply_to=...)` — and that id is
+        `-time.time_ns()`, a storage key ~1.8e18 nowhere near Telegram's
+        message-id range. `allow_sending_without_reply` covers a MISSING target,
+        not a rejected parameter: a 400 there means `reply` returns None,
+        `present_suggestion` never records a suggestion message, and the note
+        stays pending forever."""
+        with mock.patch.object(self.mod, "tg_call", return_value={"message_id": 5}) as call:
+            self.agent.reply(1, "текст", reply_to=-time.time_ns())
+        self.assertIsNone(call.call_args[0][2]["reply_to_message_id"])
+        with mock.patch.object(self.mod, "tg_call", return_value={"message_id": 6}) as call:
+            self.agent.reply(1, "текст", reply_to=42)
+        self.assertEqual(call.call_args[0][2]["reply_to_message_id"], 42)
 
 
 if __name__ == "__main__":

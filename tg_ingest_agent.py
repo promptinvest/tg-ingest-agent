@@ -213,6 +213,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # own photos are conversation, never notes — `ingest` declines honestly
         # instead of filing them (own-photo storage retired 2026-07-16).
         self._own_photo_turn = False
+        # ALL parts of the boss's own media (an album is dispatched on its FIRST
+        # part): `ingest` files the whole album from here, otherwise a «сохрани»
+        # on a 3-document album stored part 1 and silently dropped 2..N.
+        self._own_media_parts = None
 
     def request_stop(self, signum, _frame):
         log(f"received signal {signum}, shutting down")
@@ -246,6 +250,13 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     # -- Telegram helpers
 
     def reply(self, chat_id, text, reply_to=None, reply_markup=None, record=True):
+        # A note with no real Telegram message behind it (a fetched page) carries a
+        # SYNTHETIC negative tg_message_id — a storage key, never a message id. It
+        # reaches here through retry_sweep -> present_suggestion, and Telegram would
+        # reject it as out of range (the reply, and with it the suggestion, would
+        # just vanish and leave the note pending forever).
+        if not (reply_to or 0) > 0:
+            reply_to = None
         try:
             result = tg_call(
                 self.cfg.token,
@@ -679,7 +690,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     # durable inbox dedupes updates already marked done/failed.
                     # Crashing here would restart the whole process instead.
                     log(f"could not persist poll offset {offset}: {exc!r}")
-        self.flush_albums(time.time(), force=True)
+        self.flush_albums(time.time(), force=True, shutdown=True)
         log("stopped")
 
     # -- Scheduler ticks
@@ -803,6 +814,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         self.turn_reply_reminder_id = None
         self.turn_reply_suggestion_id = None
         self._own_photo_turn = False
+        self._own_media_parts = None
 
     def handle_update(self, update):
         self._reset_turn_state()
@@ -862,7 +874,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # Slash-commands carry no language signal — keep the stored preference.
         self.turn_lang = None if text.startswith("/") else common.detect_lang(text)
         sticker = msg.get("sticker")
-        if sticker and not own_voice and not is_forward:
+        # A sticker is a sticker whether he sent it or forwarded it: it carries no
+        # text to file. The forwarded one used to fall through to auto_store and
+        # become a junk note ("(no analyzable content)") in the inbox.
+        if sticker and not own_voice:
             self.handle_sticker(chat_id, msg, sticker)
             return
         has_attachment = bool(
@@ -940,25 +955,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if auto_store:
             group_id = msg.get("media_group_id")
             if group_id:
-                buffer = self.albums.setdefault(
-                    str(group_id), {"parts": [], "store": True, "update_ids": []})
-                if not any(p.get("message_id") == msg.get("message_id")
-                           for p in buffer["parts"]):  # replay/redelivery dedupe
-                    buffer["parts"].append(msg)
-                    if self._current_update_id is not None:
-                        buffer.setdefault("update_ids", []).append(self._current_update_id)
-                buffer["deadline"] = time.time() + self.cfg.album_settle
-                return "defer"  # inbox row stays pending until the album is filed
+                return self.buffer_album_part(group_id, msg, store_note=True)
             self.finalize([msg])
             return
 
         if own_media:
             group_id = msg.get("media_group_id")
             if group_id:
-                buffer = self.albums.setdefault(str(group_id), {"parts": [], "store": False})
-                buffer["parts"].append(msg)
-                buffer["deadline"] = time.time() + self.cfg.album_settle
-                return
+                return self.buffer_album_part(group_id, msg, store_note=False)
             self.handle_own_media([msg], chat_id, text)
             return
 
@@ -969,6 +973,28 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return
 
         self.dispatch(chat_id, msg, text)
+
+    def buffer_album_part(self, group_id, msg, store_note):
+        """Hold one album part until the settle window closes, and DEFER its inbox
+        row (it stays 'pending' until `flush_albums` files the whole album, so a
+        crash inside the window is recovered by the startup replay instead of
+        losing the album silently). Own-media albums defer too: their parts used
+        to be marked done at buffer time, so a crash between buffering and the
+        flush dropped the boss's album without a word.
+
+        `store_note`, not `store`: the flag would otherwise shadow the `store`
+        MODULE for this whole method, and the first line here that wants
+        `store.telegram_update_*` (which both call sites in `flush_albums` do)
+        would die on a bool at runtime, in the crash-recovery path."""
+        buffer = self.albums.setdefault(
+            str(group_id), {"parts": [], "store": store_note, "update_ids": []})
+        if not any(p.get("message_id") == msg.get("message_id")
+                   for p in buffer["parts"]):  # replay/redelivery dedupe
+            buffer["parts"].append(msg)
+            if self._current_update_id is not None:
+                buffer.setdefault("update_ids", []).append(self._current_update_id)
+        buffer["deadline"] = time.time() + self.cfg.album_settle
+        return "defer"
 
     def transcribe_voice(self, chat_id, voice):
         lang = self.lang()
@@ -3230,6 +3256,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         self.turn_extra.append(self.describe_own_media(parts))
         self.turn_extra = [x for x in self.turn_extra if x]
         self._own_photo_turn = self._pictures_only(parts)
+        # Dispatch only ever sees the FIRST part; `ingest` needs them all.
+        self._own_media_parts = list(parts)
         try:
             if text:
                 self.dispatch(chat_id, first, text)
@@ -3239,6 +3267,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         finally:
             self.turn_extra = []
             self._own_photo_turn = False
+            self._own_media_parts = None
+
+    def _picture_part(self, part):
+        """True when THIS part is a picture (a photo, or an image sent as a
+        document) — the shape whose own-media storage was retired 2026-07-16."""
+        if part.get("photo"):
+            return True
+        doc = part.get("document") or {}
+        return bool(doc.get("file_id")) and str(doc.get("mime_type") or "").startswith("image/")
 
     def _pictures_only(self, parts):
         """True when the boss's own media is picture-only (photos / images sent as
@@ -3272,13 +3309,23 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         finally:
             self.turn_extra = []
 
-    def flush_albums(self, now, force=False):
+    def flush_albums(self, now, force=False, shutdown=False):
         for group_id in list(self.albums):
             buffer = self.albums[group_id]
             if force or buffer.get("deadline", 0) <= now:
                 del self.albums[group_id]
                 parts = sorted(buffer["parts"], key=lambda m: m.get("message_id", 0))
                 update_ids = buffer.get("update_ids") or []
+                if shutdown and update_ids:
+                    # Stopping mid-album. Every part's inbox row is still 'pending',
+                    # so the startup replay reassembles the WHOLE album — including
+                    # the parts that arrive while we're down. Filing the half we
+                    # hold would turn the late parts into a SECOND note, and
+                    # finalize() does LLM/network work, which must not stretch into
+                    # systemd's SIGKILL window.
+                    log(f"stopping: album {group_id} ({len(parts)} part(s)) left"
+                        " pending for the startup replay")
+                    continue
                 try:
                     if buffer.get("store", True):
                         self.finalize(parts)
@@ -3288,19 +3335,27 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                         self.handle_own_media(parts, parts[0]["chat"]["id"], cap)
                 except Exception as exc:
                     log(f"error finalizing album {group_id}: {exc!r}")
-                    if buffer.get("store", True):
-                        # A forwarded album must never vanish silently: tell the
-                        # boss honestly and dead-letter the part rows (payloads
-                        # preserved for recovery) instead of consuming them.
-                        chat_id = ((parts[0].get("chat") or {}).get("id")
-                                   if parts else None)
-                        if chat_id:
-                            store.issue_add(self.conn, chat_id, "album_failed",
-                                            f"group={group_id}: {exc!r}"[:220])
-                            self.reply(chat_id, T(self.lang(), "album_failed"))
-                        for uid in update_ids:
-                            store.telegram_update_fail(
-                                self.conn, uid, repr(exc), terminal=True)
+                    # NO album may vanish silently — his own media least of all,
+                    # since these rows are now dead-lettered terminally below. It
+                    # used to be forwarded-only: the boss sent a 3-file album, the
+                    # flush raised, and he got no answer, no retry and no incident
+                    # row for the weekly digest. Different copy, though: «перешли
+                    # ещё раз» is wrong for something he sent himself.
+                    chat_id = ((parts[0].get("chat") or {}).get("id")
+                               if parts else None)
+                    if chat_id:
+                        store.issue_add(self.conn, chat_id, "album_failed",
+                                        f"group={group_id}: {exc!r}"[:220])
+                        self.reply(chat_id, T(self.lang(),
+                                              "album_failed" if buffer.get("store", True)
+                                              else "own_album_failed"))
+                    # Dead-letter the part rows (payloads preserved for recovery)
+                    # instead of consuming them. Own-media parts are deferred too
+                    # now, so leaving them pending would replay them into the same
+                    # failure after every single restart.
+                    for uid in update_ids:
+                        store.telegram_update_fail(
+                            self.conn, uid, repr(exc), terminal=True)
                     continue
                 for uid in update_ids:
                     store.telegram_update_done(self.conn, uid)
@@ -3416,7 +3471,20 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if self._own_photo_turn:
             self.reply(chat_id, T(lang, "own_photo_not_stored"))
             return
-        self.finalize([msg])
+        # An own-media ALBUM is dispatched on its first part only: file every part
+        # (a «сохрани» on a 3-document album used to keep #1 and lose 2..N — with a
+        # normal confirmation card, so the loss was invisible and unrecoverable).
+        parts = list(self._own_media_parts or [msg])
+        if self._own_media_parts:
+            # ...but a MIXED album (photos + a real document) is storable only in
+            # its documents: `_pictures_only` is all-or-nothing, so filing every
+            # part would quietly re-enable own-photo storage — retired 2026-07-16 —
+            # N photos at a time, behind a normal confirmation card. The counts
+            # line stays honest about it («фото: 0 · файлов: 3»).
+            kept = [p for p in parts if not self._picture_part(p)]
+            if kept:
+                parts = kept
+        self.finalize(parts)
 
     def _store_attachments(self, row_id, parts, skip=None):
         """Download and store a message's media. `skip` holds the
