@@ -2584,11 +2584,43 @@ def _non_journal_message_ids(conn):
     return ids
 
 
+def _record_bulk_delete_outcomes(conn):
+    """Ledger the deletion of every confirmed lifecycle note, for the fast
+    whole-table path that bypasses `delete_message`.
+
+    The per-id path records `deleted_used`/`deleted_unused` for each note it
+    removes; without this, whether a bulk wipe shows up in the saved-to-used KPI
+    depended on the unrelated fact of whether a journal exists (a journal forces
+    the per-id path). Same predicate as `delete_message`; the handful of notes
+    that never got a number claim one first, exactly as `note_outcome_record`
+    would. Runs inside the caller's transaction.
+    """
+    for row in conn.execute(
+            "SELECT id FROM messages WHERE status = 'confirmed'"
+            " AND knowledge_state IS NOT NULL AND note_no IS NULL ORDER BY id"
+    ).fetchall():
+        ensure_note_no(conn, row["id"], commit=False)
+    conn.execute(
+        "INSERT INTO note_outcomes (chat_id, note_no, event, occurred_at, source)"
+        " SELECT chat_id, note_no, CASE WHEN COALESCE(use_count, 0) > 0"
+        " THEN 'deleted_used' ELSE 'deleted_unused' END, ?, 'delete' FROM messages"
+        " WHERE status = 'confirmed' AND knowledge_state IS NOT NULL"
+        " AND note_no IS NOT NULL",
+        (_now(),),
+    )
+
+
+# Raw inbound copies scope 'all' wipes: everything already handled or dead-lettered
+# (a still-'pending' row is unprocessed work the startup replay must be able to read).
+_SCRUBBABLE_UPDATES = "WHERE status != 'pending' AND payload NOT IN ('', '{}')"
+
+
 def purge_preview(conn, scope, category=None):
     """Count what a purge would remove, without deleting. llm_usage (spend
     history) and preferences (identity/config) are NEVER purged; conversation
     history is deleted ONLY by scope 'all' — and the preview must disclose it,
-    the execute deletes exactly what was previewed."""
+    the execute deletes exactly what was previewed. Scope 'all' also scrubs the
+    raw inbound copies in `telegram_updates` (disclosed as `updates_scrubbed`)."""
     def count(sql, args=()):
         return conn.execute(sql, args).fetchone()[0]
     info = {"scope": scope}
@@ -2599,11 +2631,14 @@ def purge_preview(conn, scope, category=None):
         info["issues"] = count("SELECT COUNT(*) FROM issues")
         info["conversation"] = count("SELECT COUNT(*) FROM conversation")
         info["note_outcomes"] = count("SELECT COUNT(*) FROM note_outcomes")
+        info["updates_scrubbed"] = count(
+            "SELECT COUNT(*) FROM telegram_updates " + _SCRUBBABLE_UPDATES)
     elif scope == "category":
         info["messages"] = len(_messages_in_category(conn, category))
         info["category"] = category
     elif scope == "stats":
-        info["categories"] = count("SELECT COUNT(*) FROM categories")
+        # Journal categories are NOT stats — see purge_execute.
+        info["categories"] = count("SELECT COUNT(*) FROM categories WHERE kind != 'journal'")
         info["issues"] = count("SELECT COUNT(*) FROM issues")
         info["feedback"] = count("SELECT COUNT(*) FROM feedback")
         info["note_outcomes"] = count("SELECT COUNT(*) FROM note_outcomes")
@@ -2643,6 +2678,20 @@ def purge_execute(conn, scope, category=None):
             conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM reminders WHERE status='active'")
         conn.execute("DELETE FROM pending_actions")
+        # The durable inbox keeps a VERBATIM copy of every update — text
+        # included — and only 'done' rows are ever pruned, so a failed one
+        # would outlive «удали всё» and ride along in the off-box backups.
+        # Scrub the payload but KEEP the row: its update_id is the dedupe key
+        # that stops Telegram redelivering an already-handled update. Rows
+        # still 'pending' are the one exception — they are unprocessed work the
+        # startup replay must still read. (`events.payload` and
+        # `trace_events.data` were checked and need no scrubbing: ids, stage
+        # names and counts, never message text. The free-text columns
+        # `trace_events.message` / `traces.summary` are the bounded exception —
+        # they can hold an exception repr that quotes the offending text — but
+        # they are truncated to 500/200 chars and retention-pruned, so they are
+        # accepted residue rather than a second verbatim archive.)
+        conn.execute("UPDATE telegram_updates SET payload = '{}' " + _SCRUBBABLE_UPDATES)
         _purge_all_message_kv(conn)
         _reset_note_counters(conn)
     elif scope == "category":
@@ -2655,7 +2704,14 @@ def purge_execute(conn, scope, category=None):
         # NOT conversation: dialog history is not "stats" — the boss confirming
         # «сбросить всю статистику» was never shown (and never meant) a wipe of
         # everything the two of them ever said. Only 'all' deletes it.
-        for table in ("categories", "issue_patterns", "issues", "feedback", "note_outcomes"):
+        # NOT journal categories either: `categories.kind` is the SINGLE source
+        # of truth for journal protection (list exclusion, purge exemption), so
+        # dropping those rows silently demoted every boss-marked diary to an
+        # ordinary category — its entries then flooded the #N note lists and the
+        # next «удали все заметки» deleted the diary the spec promises to spare.
+        # Only the built-in gratitude journal re-binds itself at the next start.
+        conn.execute("DELETE FROM categories WHERE kind != 'journal'")
+        for table in ("issue_patterns", "issues", "feedback", "note_outcomes"):
             conn.execute(f"DELETE FROM {table}")
     elif scope == "reminders":
         conn.execute("DELETE FROM reminders WHERE status='active'")
@@ -2664,6 +2720,7 @@ def purge_execute(conn, scope, category=None):
         if protected is None:  # no journals -> fast whole-table clear
             paths = [r["local_path"] for r in
                      conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
+            _record_bulk_delete_outcomes(conn)
             for table in ("facts", "chunks", "urls", "images", "journal_entries", "messages"):
                 conn.execute(f"DELETE FROM {table}")
             _purge_all_message_kv(conn)

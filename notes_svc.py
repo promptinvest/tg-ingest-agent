@@ -453,6 +453,10 @@ class NotesMixin:
             "conversation": ("реплик нашей переписки" if ru else "conversation turns"),
             "note_outcomes": ("метрик использования заметок" if ru else
                               "note outcome records"),
+            # Scope 'all' also wipes the verbatim copies Telegram delivery left
+            # in the durable inbox — disclosed, like conversation history.
+            "updates_scrubbed": ("служебных копий входящих сообщений" if ru else
+                                 "raw copies of incoming messages"),
         }
         parts = []
         for key, label in labels.items():
@@ -484,9 +488,14 @@ class NotesMixin:
         elif scope == "journal" and not store.is_journal(self.conn, category):
             scope = "category"
         info = store.purge_preview(self.conn, scope, category)
+        # Every key the preview can DISCLOSE belongs here: this guard decides
+        # whether a disclosed effect happens at all, so a destructive effect it
+        # cannot see (the scope-'all' inbox scrub) would be skipped on exactly
+        # the database that still needs it — «здесь уже пусто» while verbatim
+        # copies of his messages stay on disk and in the off-box backups.
         if not any(info.get(k) for k in ("messages", "reminders", "categories",
                                          "issues", "feedback", "conversation",
-                                         "note_outcomes")):
+                                         "note_outcomes", "updates_scrubbed")):
             self.reply(chat_id, T(lang, "purge_nothing"))
             return
         if scope in ("category", "journal"):

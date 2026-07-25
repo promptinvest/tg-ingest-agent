@@ -304,7 +304,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   only scope that does — discloses the conversation‑turn count before you type the
   phrase (2026‑07‑16). A journal purge has its **own** phrase («да, очистить
   дневник X», 2026‑07‑17) and leaves the diary itself (category + definition) in
-  place.
+  place. **2026‑07‑25:** `stats` keeps journal categories (a stats reset used to
+  strip the journal mark from every diary, so its entries flooded the #N lists and
+  the next notes purge deleted them), and `all` additionally **scrubs the verbatim
+  copies** Telegram delivery left in the durable inbox — disclosed in the preview
+  as «служебных копий входящих сообщений».
 - **One-card capture (2026‑07‑17, NTE‑003):** the suggestion card now carries the
   **why** — a source‑grounded `saved_reason` + proposed purpose (📌 line; the
   meta‑copy guard drops a reason that describes the request instead of the
@@ -903,6 +907,27 @@ invisible. (The legacy JSON→blob embedding conversion in `_migrate` bumps it t
 rewrites rows without changing an id.) Inbound `conversation` rows carry their Telegram
 `update_id` under a partial unique index, so an at‑least‑once redelivery cannot make the
 boss repeat himself in the history or in prompts.
+
+**A purge deletes what it says, and only that (2026‑07‑25).** `categories.kind` is the
+single source of truth for journal protection, so scope `stats` now deletes only
+`kind != 'journal'` rows — «сбросить всю статистику» no longer silently demotes a diary
+to an ordinary category (only the built‑in gratitude journal used to self‑heal at the
+next start; any other diary lost its protection permanently). Scope `all` scrubs
+`telegram_updates.payload` on every non‑pending row (`'{}'`, row and `update_id` kept as
+the redelivery dedupe key): the durable inbox held a verbatim copy of every message, and
+only `done` rows are retention‑pruned, so a dead‑lettered one outlived «удали всё» and
+rode along in the off‑box backups. Still‑`pending` rows are the one exception — they are
+unprocessed work the startup replay must read, and the turn that types the confirmation
+phrase is itself `pending`, so its own copy survives the purge it triggers (a later purge
+scrubs it, once it reaches a terminal state). `events.payload` / `trace_events.data` carry
+ids, stage names and counts, never message text; the free‑text `trace_events.message` /
+`traces.summary` can hold an exception repr that quotes the offending text, but those are
+truncated (500/200 chars) and retention‑pruned — accepted residue, not a second archive.
+And the fast whole‑table note wipe now writes the same `deleted_used`/`deleted_unused`
+ledger rows as the per‑id path, so the saved‑to‑used KPI no longer depends on whether a
+journal happens to exist. The emptiness guard in `do_purge` counts the scrub too: a
+database whose only remaining content is dead‑lettered inbox rows must not answer
+«удалять нечего».
 
 ---
 

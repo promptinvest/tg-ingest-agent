@@ -10007,5 +10007,184 @@ class IdentityAndAtomicity20260725Tests(unittest.TestCase):
         self.assertEqual(langs, ["en", "ru"])
 
 
+class PurgeSemantics20260725Tests(unittest.TestCase):
+    """WP4 of the 2026-07-24 review: what each purge scope is allowed to touch.
+
+    Three defects, one theme — a purge quietly reaching past what the boss was
+    shown: «сбросить всю статистику» stripping journal protection (T4.1), «удали
+    всё» leaving verbatim message copies in the durable inbox (T4.2), and the
+    bulk note wipe skipping the outcome ledger the per-id path writes (T4.3).
+    """
+
+    SECRET = "пароль от сейфа 4815162342"
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "wp4.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        store.invalidate_vector_cache(self.conn)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _note(self, tg_id, text="заметка", category="Разное"):
+        """A confirmed message in `category` — a note, or a diary entry when the
+        category is a journal (the confirm decides, exactly as in production)."""
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        canonical = store.ensure_category(self.conn, category)
+        store.set_suggestion(self.conn, rid, canonical, text, "m")
+        store.confirm_category(self.conn, rid, canonical)
+        return rid
+
+    def _inbox_row(self, update_id, text, status="done"):
+        """One durable-inbox row in a terminal (or still-pending) state."""
+        store.telegram_update_receive(self.conn, {
+            "update_id": update_id,
+            "message": {"chat": {"id": 1}, "from": {"id": 1},
+                        "message_id": update_id, "text": text}}, 1)
+        if status == "done":
+            store.telegram_update_done(self.conn, update_id)
+        elif status == "failed":
+            store.telegram_update_fail(self.conn, update_id, "boom", terminal=True)
+        return update_id
+
+    # -- T4.1 «сбросить всю статистику» must not demote the diaries ------------
+
+    def test_stats_reset_keeps_journal_protection(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        entry = self._note(1, "спасибо Вере", "Благодарности")
+        note = self._note(2, "разовая заметка", "Разное")
+        preview = store.purge_preview(self.conn, "stats")
+        self.assertEqual(preview["categories"], 1)      # the diary is not a stat
+        store.purge_execute(self.conn, "stats")
+        self.assertEqual(store.journal_categories(self.conn), ["Благодарности"])
+        self.assertTrue(store.is_journal(self.conn, "Благодарности"))
+        self.assertNotIn("Разное", store.known_categories(self.conn))  # stats still reset
+        # the two things `kind='journal'` alone protects:
+        self.assertNotIn(entry, store.display_ids(self.conn))   # stays out of the #N lists
+        store.purge_execute(self.conn, "messages")              # «удали все заметки»
+        self.assertIsNotNone(store.get_message(self.conn, entry))
+        self.assertIsNotNone(store.journal_entry_get(self.conn, entry))
+        self.assertIsNone(store.get_message(self.conn, note))
+
+    # -- T4.2 «удали всё» must scrub the raw inbound copies --------------------
+
+    def test_delete_everything_scrubs_the_stored_update_payloads(self):
+        self._inbox_row(801, self.SECRET)                            # handled
+        self._inbox_row(802, self.SECRET + " ещё раз", "failed")     # never pruned
+        self._inbox_row(803, "ещё не обработано", "pending")
+        self._note(11, "заметка")
+        preview = store.purge_preview(self.conn, "all")
+        self.assertEqual(preview["updates_scrubbed"], 2)
+        store.purge_execute(self.conn, "all")
+        rows = self.conn.execute(
+            "SELECT update_id, payload FROM telegram_updates ORDER BY update_id").fetchall()
+        self.assertEqual([r["update_id"] for r in rows], [801, 802, 803])  # dedupe keys kept
+        self.assertNotIn(self.SECRET, "\n".join(r["payload"] for r in rows))
+        self.assertEqual([r["payload"] for r in rows[:2]], ["{}", "{}"])
+        # the still-pending row is unprocessed work the startup replay must read
+        self.assertIn("ещё не обработано", rows[2]["payload"])
+
+    def test_purge_all_preview_discloses_the_raw_copies(self):
+        self._inbox_row(811, self.SECRET)
+        self._note(12, "заметка")
+        with mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_purge(1, "ru", {"scope": "all"})
+        self.assertIn("служебных копий входящих сообщений", reply.call_args[0][1])
+
+    def test_dead_lettered_copies_alone_are_not_nothing(self):
+        # The emptiness guard decides whether a DISCLOSED effect happens at all.
+        # On a database whose only remaining content is dead-lettered inbox rows
+        # it used to answer «здесь уже пусто» and return — no typed phrase, no
+        # execute — leaving the verbatim copies on disk and in the backups.
+        store.purge_execute(self.conn, "all")          # nothing else left at all
+        self._inbox_row(821, self.SECRET, "failed")
+        with mock.patch.object(self.agent, "reply") as reply:
+            self.agent.do_purge(1, "ru", {"scope": "all"})
+        self.assertNotIn("Удалять нечего", reply.call_args[0][1])
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "purge")
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.resolve_purge(1, "ru", pending, pending["payload"]["phrase"])
+        self.assertEqual(store.telegram_update_get(self.conn, 821)["payload"], "{}")
+
+    def test_the_confirming_turn_survives_the_purge_it_triggers(self):
+        """A purge always executes from INSIDE dispatch, so the confirming
+        update's own inbox row is still 'pending': it is neither counted by the
+        preview nor scrubbed. That residue is deliberate — a scrubbed pending row
+        makes `replay_pending_updates` raise `KeyError('update_id')` at startup,
+        outside the sqlite-only containment guard — and it is temporary."""
+        self._inbox_row(901, self.SECRET)          # an earlier, already-handled turn
+        sent = []
+        say = lambda cid, text, *a, **k: sent.append(text)  # noqa: E731
+        with mock.patch.object(router, "route", return_value={
+                "action": "purge", "params": {"scope": "all"}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply", side_effect=say):
+            self.agent.process_update_batch([{"update_id": 902, "message": {
+                "chat": {"id": 1}, "from": {"id": 1},
+                "message_id": 902, "text": "удали всё"}}])
+            phrase = store.pending_get(self.conn, 1)["payload"]["phrase"]
+            self.agent.process_update_batch([{"update_id": 903, "message": {
+                "chat": {"id": 1}, "from": {"id": 1},
+                "message_id": 903, "text": phrase}}])
+        # Both counts are honest about the turn in flight: at PREVIEW time only
+        # 901 is terminal (902 is the asking turn), at EXECUTE time 901 and 902
+        # are (903 is the confirming turn). The residue is always the live turn.
+        self.assertIn("1 служебных копий входящих сообщений", sent[0])
+        self.assertIn("2 служебных копий входящих сообщений", sent[-1])
+        payloads = {r["update_id"]: r["payload"] for r in self.conn.execute(
+            "SELECT update_id, payload FROM telegram_updates").fetchall()}
+        self.assertEqual(payloads[901], "{}")
+        self.assertEqual(payloads[902], "{}")
+        self.assertNotIn(self.SECRET, payloads[901] + payloads[902])
+        # the confirming turn's own copy survives, and stays REPLAYABLE
+        self.assertEqual(json.loads(payloads[903])["update_id"], 903)
+        self.assertIn(phrase, payloads[903])
+        # …until it reaches a terminal state, when the next purge scrubs it
+        store.purge_execute(self.conn, "all")
+        self.assertEqual(store.telegram_update_get(self.conn, 903)["payload"], "{}")
+
+    # -- T4.3 the bulk note wipe must write the same ledger --------------------
+
+    def _wipe_two_notes(self, base):
+        """Two lifecycle notes — one used, one not — plus a merely SUGGESTED one
+        that must stay OUT of the ledger: `set_suggestion` already gave it a #N
+        and a knowledge_state, so only `status='confirmed'` excludes it. Returns
+        ((used_no, unused_no, suggested_no), {(note_no, event)}) after the wipe."""
+        used = self._note(base, "полезная")
+        store.note_mark_used(self.conn, used)
+        unused = self._note(base + 1, "нетронутая")
+        never = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": base + 2,
+            "received_at": store._now(), "raw_text": "ещё не подтверждена"})
+        store.set_suggestion(self.conn, never, store.ensure_category(self.conn, "Разное"),
+                             "ещё не подтверждена", "m")
+        nos = tuple(store.get_message(self.conn, r)["note_no"]
+                    for r in (used, unused, never))
+        store.purge_execute(self.conn, "messages")
+        marks = ",".join("?" for _ in nos)
+        return nos, {(r["note_no"], r["event"]) for r in self.conn.execute(
+            f"SELECT note_no, event FROM note_outcomes WHERE note_no IN ({marks})"
+            " AND event IN ('deleted_used', 'deleted_unused')", nos)}
+
+    def test_bulk_note_wipe_ledgers_outcomes_with_or_without_a_journal(self):
+        # The MAPPING is the contract: the note he actually used must be ledgered
+        # 'deleted_used', or the saved-to-used KPI is corrupted rather than merely
+        # incomplete — and the never-confirmed note must not appear at all.
+        nos, fast = self._wipe_two_notes(21)   # no journals -> fast whole-table path
+        self.assertEqual(fast, {(nos[0], "deleted_used"), (nos[1], "deleted_unused")})
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        per_nos, per_id = self._wipe_two_notes(31)  # a journal forces the per-id path
+        self.assertEqual(per_id, {(per_nos[0], "deleted_used"),
+                                  (per_nos[1], "deleted_unused")})
+
+
 if __name__ == "__main__":
     unittest.main()
