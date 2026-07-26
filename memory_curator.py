@@ -144,8 +144,11 @@ def _supported_item(item, source_texts):
 
 def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
     """One small LLM pass over recent free chat. Returns counts plus the lists of
-    newly-`learned` corrections and `unresolved` ones (a correction raised again
-    despite being learned → likely needs a code fix). Dedup (UNIQUE life text,
+    newly-`learned` corrections (stored and ACTIVE), `proposed` ones (sensitive →
+    a confirm-first candidate, NOT in force yet) and `unresolved` ones (a
+    correction raised again despite being learned → likely needs a code fix).
+    The learned/proposed split is what the caller's wording turns on: only a
+    stored rule may be acknowledged with «Запомнила». Dedup (UNIQUE life text,
     boss substring match, candidate text) makes overlapping windows safe to re-run.
     `correction_mode` (set when the boss just corrected her) enables the
     recurrence → needs-code escalation."""
@@ -226,7 +229,7 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
     # log each new one as an issue, and escalate ones that recur despite being
     # learned (they likely need a code change, not more "trying").
     corrections_added = 0
-    learned, unresolved = [], []
+    learned, proposed, unresolved = [], [], []
     for item in (parsed.get("corrections") or [])[:5]:
         if not isinstance(item, dict) or not _supported_item(item, boss_sources):
             continue
@@ -250,15 +253,26 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
             store.boss_add(conn, kind, text, status="inferred", confidence=0.8,
                            sensitivity=sens, source_table="correction",
                            evidence=str(item.get("evidence") or "").strip())
-        else:
-            store.candidate_add(conn, kind, text, reason="correction",
-                                sensitivity=sens, confidence=0.8, source_table="correction",
-                                evidence=str(item.get("evidence") or "").strip())
-        learned.append(text)
-        corrections_added += 1
+            learned.append(text)   # ACTIVE now — the «Запомнила» claim is true
+            corrections_added += 1
+        # A sensitive correction is confirm-FIRST: the candidate is not a standing
+        # rule until he says yes, so it must not be reported as learned. Claiming
+        # «Запомнила» for a rule Cara is not following is precisely the fabrication
+        # this codebase works hardest to prevent — and announcing a proposal is
+        # only true when one was actually created. `candidate_add` returns None
+        # for a text that already exists in ANY resolved status, including one he
+        # REFUSED ('rejected') or the consolidation folded ('merged'/'superseded'):
+        # there is then nothing pending and nothing to confirm, so the guard mirrors
+        # the boss_facts branch above rather than announcing a phantom question.
+        elif store.candidate_add(conn, kind, text, reason="correction",
+                                 sensitivity=sens, confidence=0.8,
+                                 source_table="correction",
+                                 evidence=str(item.get("evidence") or "").strip()):
+            proposed.append(text)
+            corrections_added += 1
 
     return {"life": life_added, "boss": boss_added, "corrections": corrections_added,
-            "learned": learned, "unresolved": unresolved}
+            "learned": learned, "proposed": proposed, "unresolved": unresolved}
 
 
 def render_review(conn, lang, limit=8):
@@ -310,10 +324,40 @@ _CONSOLIDATE_SYSTEM = (
 )
 
 
-def _merge_groups(conn, cfg, items, max_items=120):
+def _confirmed_wins(keep, drops, status_of):
+    """Force the KEEPER of a duplicate group to be a boss-CONFIRMED item.
+
+    The fast grouping model judges by richness, so it regularly keeps the long
+    INFERRED paraphrase and drops the short fact the boss himself confirmed.
+    Once that fact is 'merged', every "confirmed wins" guard in this module
+    (`_tidy_candidates`, `_tidy_inferred`) stops protecting it — a guess can then
+    quietly replace something he had explicitly told her. So a confirmed item is
+    only ever dropped in favour of another CONFIRMED item: when the model's
+    keeper is unconfirmed but the group holds confirmed items, the
+    highest-confidence one of those takes over (ties to the oldest id, for a
+    stable outcome). When the model already kept a confirmed item its judgment
+    stands — it is the one that read the actual wording.
+
+    `status_of`: {id: (status, confidence)}. Groups of items with no status
+    (her cara_life beats) pass through untouched.
+    """
+    group = list(dict.fromkeys([keep, *drops]))
+    confirmed = [i for i in group if (status_of.get(i) or ("", 0.0))[0] == "confirmed"]
+    if confirmed and keep not in confirmed:
+        keep = max(confirmed, key=lambda i: (status_of[i][1] or 0.0, -i))
+    return keep, [i for i in group if i != keep]
+
+
+def _merge_groups(conn, cfg, items, max_items=120, status_of=None):
     """Ask the model to GROUP duplicate items (a list of (id, text)). Returns a list of
     (keep_id, [drop_ids]) for genuine duplicates only. [] when <8 items or on failure.
-    Never invents — only references the given ids; tolerates int OR string ids."""
+    Never invents — only references the given ids; tolerates int OR string ids.
+
+    The reply is made self-consistent before it can touch the database: the model
+    happily returns `{keep:5,drop:[6]}` and `{keep:6,drop:[7]}` in one answer, and
+    applying both drops 6 while 7 is being folded INTO it — i.e. every richer copy
+    of that fact is gone. Any drop id that some group is keeping is discarded, and
+    a repeated drop is applied once."""
     import llm
     if len(items) < 8:
         return []
@@ -347,15 +391,27 @@ def _merge_groups(conn, cfg, items, max_items=120):
         drops = [d for d in (_id(x) for x in (g.get("drop") or []))
                  if d in valid and d != keep]
         if drops:
-            groups.append((keep, drops))
-    return groups
+            groups.append(_confirmed_wins(keep, drops, status_of or {}))
+    # Cross-group consistency, AFTER the keeper rewrite above (which can move a
+    # keeper). Nothing that another group is keeping may be dropped, and the same
+    # id is folded at most once.
+    keeps = {k for k, _ in groups}
+    out, dropped = [], set()
+    for keep, drops in groups:
+        safe = [d for d in drops if d not in keeps and d not in dropped]
+        if safe:
+            dropped.update(safe)
+            out.append((keep, safe))
+    return out
 
 
 def consolidate(conn, cfg, max_items=120):
     """De-duplicate Cara's memory: an LLM groups genuine duplicate items and we KEEP the
-    richest. Boss facts: the rest are marked 'merged' (reversible). Her life-flavour facts
-    (cara_life, no status column): the redundant copies are deleted, keeping one of each
-    distinct beat — this is what folds the over-grown 'tea' duplicates. Pending memory
+    richest — except that a CONFIRMED boss fact always outranks an inferred paraphrase and
+    is never the one folded. Boss facts: the rest are marked 'merged' (reversible). Her
+    life-flavour facts (cara_life): the redundant copies are demoted to 'merged' too
+    (reversible — they used to be DELETEd), keeping one of each distinct beat — this is
+    what folds the over-grown 'tea' duplicates. Pending memory
     candidates are also tidied: duplicates folded ('merged') and any that CONTRADICT a fact
     he already confirmed dropped ('superseded') — a sensed guess never overrides confirmed
     truth (the кофе-vs-confirmed-чай case). Returns total folded."""
@@ -366,7 +422,7 @@ def consolidate(conn, cfg, max_items=120):
             yield seq[i:i + size]
     merged = 0
     # 1) boss profile items -> demote duplicates to 'merged' (reversible)
-    items, seen = [], set()
+    items, seen, status_of = [], set(), {}
     for status in ("confirmed", "inferred"):
         for row in store.boss_items(conn, status, limit=max_items):
             if row["id"] in seen:
@@ -375,17 +431,23 @@ def consolidate(conn, cfg, max_items=120):
             val = (row["value"] or "").strip()
             if val:
                 items.append((row["id"], val))
+                status_of[row["id"]] = (status, row["confidence"])
     for batch in _batches(items):
-        for _keep, drops in _merge_groups(conn, cfg, batch):
+        for _keep, drops in _merge_groups(conn, cfg, batch, status_of=status_of):
             for d in drops:
+                # Belt and braces for the hard rule: whatever the model said, a
+                # CONFIRMED fact is never folded into an unconfirmed keeper.
+                if status_of.get(d, ("", 0))[0] == "confirmed" \
+                        and status_of.get(_keep, ("", 0))[0] != "confirmed":
+                    continue
                 if store.boss_set_status(conn, d, "merged"):
                     merged += 1
-    # 2) Cara's life flavour -> delete redundant duplicates, keep the richest of each
+    # 2) Cara's life flavour -> demote redundant duplicates, keep the richest of each
     life = [(r["id"], r["text"]) for r in store.life_all(conn) if (r["text"] or "").strip()]
     for batch in _batches(life):
         for _keep, drops in _merge_groups(conn, cfg, batch):
             for d in drops:
-                if store.life_delete(conn, d):
+                if store.life_set_status(conn, d, "merged"):
                     merged += 1
     # 3) Pending candidates: an LLM judges each against the CONFIRMED facts — dropping ones
     #    that CONTRADICT a confirmed fact ('superseded') and ones that merely DUPLICATE another

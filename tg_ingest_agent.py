@@ -224,7 +224,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     @staticmethod
     def _update_chat_id(update):
-        msg = update.get("message") or (update.get("callback_query") or {}).get("message") or {}
+        msg = (update.get("message") or update.get("edited_message")
+               or (update.get("callback_query") or {}).get("message") or {})
         return (msg.get("chat") or {}).get("id")
 
     # -- preferences-backed settings
@@ -722,7 +723,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     {
                         "offset": offset,
                         "timeout": poll_timeout,
-                        "allowed_updates": ["message", "callback_query", "message_reaction"],
+                        # edited_message: without it Telegram never delivers an
+                        # edit at all, so his corrected «16:00» stayed invisible
+                        # while Cara kept answering «15:00» and citing the note.
+                        "allowed_updates": ["message", "edited_message",
+                                            "callback_query", "message_reaction"],
                     },
                     timeout=poll_timeout + 15,
                 )
@@ -772,6 +777,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if self._send_all(text):
             store.kv_set(self.conn, flag, "1")
 
+    # How many un-indexed notes one sweep re-embeds (see reindex_sweep).
+    REINDEX_PER_SWEEP = 3
+
     def retry_sweep(self):
         rows = store.pending_messages(self.conn, self.cfg.llm_max_attempts)
         reprocessed = 0
@@ -786,7 +794,27 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     category, alternatives, summary, "",
                 )
                 reprocessed += 1
+        self.reindex_sweep()   # separate concern, separate count
         return reprocessed
+
+    def reindex_sweep(self):
+        """Put visible notes that hold no vectors back into the semantic index.
+
+        `index_message` is best-effort by design (a note that isn't searchable
+        *yet* is better than a lost turn), and that was survivable while chunks
+        were only ever WRITTEN. Editing changed it: both edit paths delete the old
+        vectors first — they must, or `ask` answers out of text he replaced — and
+        an embedder outage in that window left the note in his lists and out of
+        every semantic answer, silently and for good, because `pending_messages`
+        only revisits status='pending'. This is the way back. Bounded per sweep;
+        a note with nothing chunkable costs no model call at all."""
+        done = 0
+        for row in store.messages_missing_chunks(self.conn, self.REINDEX_PER_SWEEP):
+            if self.stop:
+                break
+            self.index_message(row["id"], row["raw_text"] or row["summary"] or "")
+            done += 1
+        return done
 
     # -- Update handling
 
@@ -857,6 +885,341 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             store.issue_add(self.conn, chat_id, "negative_reaction", emoji)
         log(f"boss reacted {emoji} ({sentiment}) on message {mr.get('message_id')}")
 
+    # -- Edited messages -------------------------------------------------------
+    #
+    # Telegram delivers an edit as its own `edited_message` update carrying the
+    # FINAL text. Until 2026-07-26 those were not even requested, so his screen and
+    # her record diverged in silence: he typed «созвон в 15:00», she saved it, he
+    # corrected it to 16:00 and saw the corrected text with an 'edited' mark — and
+    # she went on confidently answering 15:00 while citing the note as verbatim.
+    #
+    # What is applied and what is only ASKED:
+    #   * the conversation turn is rewritten (the verbatim readback must match his
+    #     chat — that is the whole promise of `recall_conversation`), except from a
+    #     caption that would overwrite a voice TRANSCRIPT and except an emptied
+    #     one, which would blank the turn rather than correct it;
+    #   * a note still in the inbox (pending/suggested/failed) is re-ingested: she
+    #     has promised nothing about it yet, so there is nothing to ask about;
+    #   * a note she already SAVED is never silently rewritten. She says which
+    #     version she is holding and offers to update it; the new text lands only
+    #     after his yes. Any unforeseen status takes this same ask-first branch.
+
+    _EDIT_REINGEST_STATUSES = (None, "pending", "suggested", "failed")
+
+    # Attachments whose stored turn is a TRANSCRIPT, not a caption: his own voice
+    # note is transcribed at dispatch and THAT text is what `convo_add` wrote for
+    # this tg_message_id. An edit can only carry a CAPTION for such a message, and
+    # writing it over the transcript would make the verbatim readback show
+    # something he never said in that turn.
+    _TRANSCRIBED_KINDS = ("voice", "audio", "video_note")
+
+    def handle_edited_message(self, msg):
+        """The boss edited one of his messages (owner-gated, like any message)."""
+        chat_id = (msg.get("chat") or {}).get("id")
+        from_id = (msg.get("from") or {}).get("id")
+        # Owner gate FIRST — before any read, write or reply, exactly as for a
+        # normal message. A stranger's edit is not even looked at.
+        if not self.is_owner(chat_id, from_id):
+            log(f"ignored edited message from chat_id={chat_id} user_id={from_id}")
+            return
+        tg_message_id = msg.get("message_id")
+        text = (msg.get("text") or msg.get("caption") or "").strip()
+        self.turn_lang = common.detect_lang(text) if text else None
+        # The dialogue record is what his chat shows — including a note's caption.
+        # Two things it is deliberately NOT rewritten from:
+        #   * a CAPTION on a voice/audio message, whose turn holds the transcript
+        #     (see _TRANSCRIBED_KINDS) — that would put words he never said into
+        #     the verbatim record;
+        #   * an emptied text/caption, which would leave a BLANK turn where his
+        #     message was while the note kept its text — the same divergence this
+        #     whole path exists to close, pointing the other way. A removal is a
+        #     documented no-op (CARA.md §10), not an erasure.
+        if text and not (not msg.get("text")
+                         and any(msg.get(k) for k in self._TRANSCRIBED_KINDS)):
+            store.convo_set_text(self.conn, chat_id, tg_message_id, text)
+        row = store.message_by_tg_id(self.conn, chat_id, tg_message_id)
+        if row is None or not text:
+            return   # a plain turn (already rewritten), or an edit with no text
+        if text == (row["raw_text"] or "").strip():
+            # Nothing about the note's text actually changed. Telegram emits an
+            # `edited_message` for things he would not call an edit at all (and
+            # `replay_pending_updates` can re-drive a stored one after a crash) —
+            # re-ingesting would spend an ingest call, a fetch and an embed, and
+            # hand him a brand-new card, for text she already holds.
+            log(f"edit of note #{row['id']} carries the same text — nothing to do")
+            return
+        skip = self._edit_not_applicable(msg, row)
+        if skip:
+            log(f"edit not applied to note #{row['id']}: {skip}")
+            self._say_edit_not_applied(row, skip)
+            return
+        if row["status"] in self._EDIT_REINGEST_STATUSES:
+            self.reingest_edited_note(row, msg, text)
+        else:
+            self.offer_note_edit(row, msg, text)
+
+    def _edit_not_applicable(self, msg, row):
+        """Why this note must NOT take the edited text ('' = apply it).
+
+        Both cases are one failure mode: the note's text was probably never
+        derived from THIS message's caption, so writing the caption over it
+        destroys content rather than correcting it.
+          * a readable DOCUMENT — `finalize` stores its text layer and discards
+            the caption, so a whole PDF/markdown body would become one line;
+          * an ALBUM — its note was built from EVERY part (text and URLs) while
+            an edit carries exactly one of them.
+
+        The document test is on the FILE KIND, not on whether a text layer was
+        actually extracted, and that is deliberate: it errs toward refusing. A
+        scanned PDF has no text layer, so its note really does hold the caption
+        and this blocks an edit that could have been applied — but the row keeps
+        no marker that says which of the two happened (`forward_origin_type` is
+        the FORWARD's type for a forwarded document, so it cannot be used for
+        this), and the failure it avoids is silently replacing a contract with
+        one line. He is told, not ignored (`_say_edit_not_applied`), and both
+        limits are declared in CARA.md §10; the conversation row is rewritten
+        either way, so the readback stays truthful.
+        """
+        if msg.get("text"):
+            return ""   # a plain text message: raw_text IS this text
+        if row["media_group_id"]:
+            return "album"
+        if any(self._doc_text_kind(f["file_name"], f["mime_type"])
+               for f in store.message_files(self.conn, row["id"])):
+            return "document"
+        return ""
+
+    def _say_edit_not_applied(self, row, skip):
+        """One honest line: the caption changed, the note did not — and why.
+
+        The codebase's posture everywhere else is to say what she is NOT doing.
+        Silence here would leave him watching an 'edited' mark next to a note
+        that quietly kept its old text, with only §10 to explain it."""
+        key = "note_edit_from_album" if skip == "album" else "note_edit_from_file"
+        self.reply(row["chat_id"], T(self.lang(), key,
+                                     row_id=self.note_no(row["id"])))
+
+    def reingest_edited_note(self, row, msg, text):
+        """Apply an edit to a note that is still in the inbox and re-run the
+        suggestion card.
+
+        Everything derived from the OLD text goes first — vectors, facts and the
+        summary. `set_chunks` replaces only what it is GIVEN, so a failed
+        re-embed would otherwise leave the previous text searchable and `ask`
+        would answer from words he no longer has; a surviving summary would move
+        that same divergence to the line he actually reads in lists. (Each chunk
+        write bumps `vec_gen`, invalidating the decoded-vector cache.)"""
+        lang = self.lang()
+        row_id, chat_id = row["id"], row["chat_id"]
+        store.message_update_raw_text(self.conn, row_id, text)
+        store.set_urls(self.conn, row_id, ingest.collect_urls([msg]))
+        store.set_facts(self.conn, row_id, [])
+        store.set_chunks(self.conn, row_id, [])
+        store.message_update_summary(self.conn, row_id, "")
+        # …and the message-keyed kv the OLD text produced. `suggest_row` only ever
+        # WRITES these keys (a reminder candidate when the new text carries a date,
+        # a journal draft when the new category is an active journal) — it never
+        # clears them. Without this, «созвон завтра в 15:00» edited to «созвон
+        # отменён» kept its 15:00 candidate staged: `present_suggestion` renders it
+        # onto the card built from the NEW text, and [Сохранить + напомнить] would
+        # schedule a reminder out of words he deleted. Same for a journal draft,
+        # which `apply_category_confirm` reads unconditionally at the confirm
+        # boundary. Everything derived from the old text goes; `note_edit` is not
+        # derived from it (it IS a staged edit), so it stays.
+        for key in store.MESSAGE_KV_KEYS:
+            if key != "note_edit":
+                store.kv_set(self.conn, f"{key}:{row_id}", "")
+        # A note that ran out of ingest attempts gets a fresh series: the text is
+        # new, and the «попробую ещё раз» below has to be true (`retry_sweep` only
+        # revisits status='pending' AND llm_attempts < cap).
+        store.reopen_failed_ingest(self.conn, row_id)
+        self._retire_suggestion_card(row)
+        suggestion = self.suggest_row(store.get_message(self.conn, row_id))
+        if suggestion:
+            category, alternatives, summary = suggestion
+        elif row["suggested_category"]:
+            # The model is unavailable, but the note is not lost and must not
+            # disappear from his lists over a typo fix: it keeps the category she
+            # had already suggested and the card shows the note's OWN edited text.
+            # (The empty stored summary makes every renderer fall back to it too.)
+            category, alternatives, summary = row["suggested_category"], [], text
+            # Re-embed from the text in hand. The old vectors are already deleted
+            # (they must be — `ask` must never answer out of text he replaced), and
+            # this row stays 'suggested', which `pending_messages` never revisits:
+            # without this line a chat-model blip would drop the note out of every
+            # semantic answer permanently while he still sees it in his lists.
+            self.index_message(row_id, text)
+        else:
+            # Never carried a suggestion, and reopened above if it had failed — so
+            # it is 'pending' now and retry_sweep really will come back to it.
+            self.reply(chat_id, T(lang, "stored_retry", row_id=self.note_no(row_id)),
+                       msg.get("message_id"))
+            return
+        counts = T(lang, "counts", row_id=self.note_no(row_id),
+                   images=len(store.message_images(self.conn, row_id)),
+                   files=len(store.message_files(self.conn, row_id)),
+                   urls=len(store.message_urls(self.conn, row_id)))
+        self.present_suggestion(row_id, chat_id, msg.get("message_id"),
+                                category, alternatives, summary, counts)
+        log(f"note #{row_id} re-ingested after an edit")
+
+    def _retire_suggestion_card(self, row):
+        """Strip the keyboard from the card that described the OLD text, so the
+        chat never holds two live cards for one note.
+
+        The pointer to it is cleared too, and BEFORE the new card is sent: a send
+        that fails (`present_suggestion` only stores a message_id on success) would
+        otherwise leave the row naming this retired card, and the next
+        `apply_category_confirm` would edit it — rewriting the dead card's body to
+        «✅ confirmed» over the text he replaced."""
+        store.set_suggestion_message(self.conn, row["id"], None)
+        if not row["suggestion_message_id"]:
+            return
+        try:
+            tg_call(self.cfg.token, "editMessageReplyMarkup",
+                    {"chat_id": row["chat_id"],
+                     "message_id": row["suggestion_message_id"]})
+        except TelegramError as exc:
+            log(f"editMessageReplyMarkup (stale card) failed: {exc}")
+
+    # The staged edit expires with the pending slot it was offered alongside.
+    # The ✅ button deliberately works without a pending (so the offer stays
+    # answerable when a confirmation was already in flight) — which also means it
+    # outlives every other timeout in the system: a card tapped days later would
+    # otherwise rewrite a saved note with text staged long ago, with nothing in
+    # the chat to signal its age.
+    NOTE_EDIT_TTL_SECONDS = 3600
+
+    def _stage_note_edit(self, row_id, text, urls):
+        """Park the edited text (+ its links, + when) for the confirm boundary."""
+        store.kv_set(self.conn, f"note_edit:{row_id}", json.dumps(
+            {"text": text, "urls": list(urls or []),
+             "at": datetime.now(timezone.utc).isoformat()}, ensure_ascii=False))
+
+    def _staged_note_edit(self, row_id):
+        """The staged edit as (text, urls, age_seconds); text '' when none."""
+        raw = store.kv_get(self.conn, f"note_edit:{row_id}") or ""
+        try:
+            staged = json.loads(raw) if raw else {}
+        except ValueError:
+            staged = {}
+        if not isinstance(staged, dict):
+            return "", [], 0.0
+        age = 0.0
+        try:
+            staged_at = datetime.fromisoformat(str(staged.get("at")))
+            if staged_at.tzinfo is None:
+                staged_at = staged_at.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - staged_at).total_seconds()
+        except (TypeError, ValueError):
+            age = 0.0
+        return str(staged.get("text") or ""), list(staged.get("urls") or []), age
+
+    def offer_note_edit(self, row, msg, text):
+        """A note she already saved — ask before touching it.
+
+        The new text is staged in `kv` rather than in the pending payload: that
+        payload is rendered into the router's system prompt, and the note text is
+        exactly the untrusted content that has no business being there. The links
+        are staged with it — the edited MESSAGE is not in scope at confirm time,
+        and a note whose body says one URL while `urls` still holds the old one is
+        the same divergence in a second place."""
+        lang = self.lang()
+        chat_id, row_id = row["chat_id"], row["id"]
+        self._stage_note_edit(row_id, text, ingest.collect_urls([msg]))
+        note_no = self.note_no(row_id)
+        self.reply(chat_id, T(lang, "note_edit_offer", row_id=note_no),
+                   reply_markup={"inline_keyboard": [[
+                       {"text": T(lang, "note_edit_yes"),
+                        "callback_data": f"ne|{row_id}|y"},
+                       {"text": T(lang, "note_edit_no"),
+                        "callback_data": f"ne|{row_id}|n"},
+                   ]]})
+        # Single pending slot (PK = chat_id): never clobber a confirmation he is
+        # already mid-way through — his next «да» must not silently switch target.
+        # The buttons work either way, so the offer stays answerable.
+        existing = store.pending_get(self.conn, chat_id)
+        if existing is None or existing.get("kind") == "note_edit":
+            store.pending_set(self.conn, chat_id, "note_edit",
+                              {"row_id": row_id, "note_no": note_no})
+        log(f"note #{row_id} edit awaiting confirmation")
+
+    def apply_note_edit(self, chat_id, row_id, lang):
+        """His yes: the edited text becomes the note's text.
+
+        The summary was written ABOUT the old text, so it is dropped — every
+        renderer falls back to the note's own text (`summary or raw_text`), which
+        is now the edited one. Keeping a stale summary would just move the
+        divergence from the note body to the line he actually reads in lists.
+        The key facts go the same way: they too describe the replaced text, and
+        re-deriving them means an ingest call inside a confirm path (declared as
+        a known limit in CARA.md §10). The LINKS are re-derived — they were staged
+        with the text, so no model is needed.
+        """
+        text, urls, age = self._staged_note_edit(row_id)
+        row = store.get_message(self.conn, row_id)
+        if row is None or not text:
+            self.reply(chat_id, T(lang, "items_empty"))
+            return False
+        note_no = self.note_no(row_id)
+        if age > self.NOTE_EDIT_TTL_SECONDS:
+            # Say what happened instead of quietly applying week-old words: the
+            # card carries no visible age, so «✅» on an old one is not consent to
+            # THIS text — he may not even remember which version it staged.
+            store.kv_set(self.conn, f"note_edit:{row_id}", "")
+            self.reply(chat_id, T(lang, "note_edit_stale", row_id=note_no))
+            log(f"note #{row_id} edit offer expired ({age:.0f}s old)")
+            return False
+        store.message_update_raw_text(self.conn, row_id, text)
+        store.message_update_summary(self.conn, row_id, "")
+        store.set_facts(self.conn, row_id, [])
+        store.set_urls(self.conn, row_id, urls)     # the body's links, re-synced
+        store.set_chunks(self.conn, row_id, [])     # old vectors gone first
+        self.index_message(row_id, text)            # re-embedded from the new text
+        store.kv_set(self.conn, f"note_edit:{row_id}", "")
+        store.note_outcome_record(self.conn, row_id, "note_edited", source="edit")
+        relationship.log_event(
+            self.conn, "note_edited", f"updated note #{note_no} after he edited the message",
+            importance=1, source_table="messages", source_id=row_id,
+            title=f"note #{note_no}")
+        self.reply(chat_id, T(lang, "note_edit_applied", row_id=note_no))
+        log(f"note #{row_id} updated from an edited message")
+        return True
+
+    def decline_note_edit(self, chat_id, row_id, lang, note_no=None):
+        """His no: drop the staged text and keep the saved note as it is."""
+        store.kv_set(self.conn, f"note_edit:{row_id}", "")
+        self.reply(chat_id, T(lang, "note_edit_kept",
+                              row_id=note_no if note_no is not None else self.note_no(row_id)))
+
+    def handle_note_edit_callback(self, callback_id, chat_id, msg, data):
+        """[Обновить] / [Оставить] under the honest "I saved the older version"
+        notice. Handled before the generic card parser, which refuses every
+        callback on an already-confirmed note — and confirmed notes are exactly
+        the ones this offer is about."""
+        lang = self.lang()
+        parts = data.split("|")
+        try:
+            row_id, accept = int(parts[1]), parts[2] == "y"
+        except (IndexError, ValueError):
+            self.answer_callback(callback_id, "?")
+            return
+        pending = store.pending_get(self.conn, chat_id)
+        if pending and pending["kind"] == "note_edit" \
+                and pending["payload"].get("row_id") == row_id:
+            store.pending_clear(self.conn, chat_id)
+        self.answer_callback(callback_id, "✅" if accept else "👌")
+        if accept:
+            self.apply_note_edit(chat_id, row_id, lang)
+        else:
+            self.decline_note_edit(chat_id, row_id, lang)
+        if msg.get("message_id"):   # the decision is made — retire the buttons
+            try:
+                tg_call(self.cfg.token, "editMessageReplyMarkup",
+                        {"chat_id": chat_id, "message_id": msg["message_id"]})
+            except TelegramError as exc:
+                log(f"editMessageReplyMarkup (note edit) failed: {exc}")
+
     def _reset_turn_state(self):
         """Wipe everything that is true only for ONE inbound update.
 
@@ -896,6 +1259,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         reaction = update.get("message_reaction")
         if reaction:
             self.handle_reaction(reaction)
+            return
+        edited = update.get("edited_message")
+        if edited:
+            self.handle_edited_message(edited)
             return
         msg = update.get("message")
         if not msg:
@@ -962,9 +1329,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             # (prompt-injection defense). His own text/captions stay source='boss'.
             # update_id makes this write idempotent: Telegram redelivers, and a
             # retried update used to duplicate his message in the history.
+            # tg_message_id travels with the turn so a later EDIT of this exact
+            # message can rewrite this exact row (handle_edited_message).
             store.convo_add(self.conn, chat_id, "user", text,
                             source="forward" if auto_store else "boss",
-                            update_id=self._current_update_id)
+                            update_id=self._current_update_id,
+                            tg_message_id=msg.get("message_id"))
 
         # A forward is normally untrusted inbox content and never reaches the
         # router.  The one safe exception is an owner-created partial reminder
@@ -1469,6 +1839,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return
         kind, payload = pending["kind"], pending["payload"]
         if action == "cancel":
+            if kind == "note_edit":
+                # The staged text dies with the offer — nothing may still be
+                # holding his words once he has said no.
+                store.kv_set(self.conn, f"note_edit:{payload.get('row_id')}", "")
             store.pending_clear(self.conn, chat_id)
             self.reply(chat_id, T(lang, "cancelled"))
             return
@@ -1627,6 +2001,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 self.reply(chat_id, T(lang, "boss_remembered", value=payload["value"]))
             # cancel handled by the generic branch above; an unrelated message
             # leaves the flagged item unsaved, which is the safe default.
+        elif kind == "note_edit":
+            # Applying his edit to a SAVED note happens only on an explicit yes;
+            # anything else leaves the note exactly as he confirmed it.
+            store.pending_clear(self.conn, chat_id)
+            row_id = payload.get("row_id")
+            if action == "confirm":
+                self.apply_note_edit(chat_id, row_id, lang)
+            else:
+                self.decline_note_edit(chat_id, row_id, lang,
+                                       note_no=payload.get("note_no"))
         elif kind == "journal_prompt":
             # Opt-in journal prompt (plan v1.1 §D-06/JRN-006): enabled ONLY on
             # an explicit yes; anything else leaves prompts off.
@@ -2206,16 +2590,23 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             log(f"conversation curation failed: {exc}")
             return
         learned = result.get("learned") or []
+        proposed = result.get("proposed") or []
         unresolved = result.get("unresolved") or []
         lang = lang or self.lang()
         if learned:
             self.reply(chat_id, T(lang, "correction_learned", items="; ".join(learned)[:300]))
+        if proposed:
+            # Sensitive corrections are candidates awaiting his yes — she asks,
+            # she does NOT say «Запомнила» about a rule that isn't in force.
+            self.reply(chat_id, T(lang, "correction_proposed",
+                                  items="; ".join(proposed)[:300]))
         if unresolved:
             self.reply(chat_id, T(lang, "correction_needs_code",
                                   items="; ".join(unresolved)[:300]))
         if result.get("life") or result.get("boss") or result.get("corrections") or unresolved:
             log(f"conversation curated chat={chat_id}: +{result.get('life', 0)} life, "
-                f"+{result.get('boss', 0)} boss, +{result.get('corrections', 0)} corrections, "
+                f"+{result.get('boss', 0)} boss, +{result.get('corrections', 0)} corrections "
+                f"({len(learned)} active, {len(proposed)} awaiting confirmation), "
                 f"{len(unresolved)} unresolved")
 
     def do_memory_why(self, chat_id, lang, text):
@@ -3038,6 +3429,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if data.startswith("pg|"):
             self.handle_page_callback(callback_id, chat_id, msg, data)
             return
+        if data.startswith("ne|"):
+            self.handle_note_edit_callback(callback_id, chat_id, msg, data)
+            return
         parsed = ingest.parse_callback_data(callback.get("data"))
         if not parsed:
             self.answer_callback(callback_id, "Unknown action.")
@@ -3493,6 +3887,23 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     TEXT_DOC_EXTS = (".md", ".markdown", ".txt", ".text")
     MAX_DOC_CHARS = 100_000
 
+    @classmethod
+    def _doc_text_kind(cls, file_name, mime_type):
+        """'pdf' | 'text' | '' — whether a document has a text layer to read.
+
+        One source of truth: `read_text_document` decides what to extract with it,
+        and the edited-message path uses it to recognise a note whose raw_text is
+        the DOCUMENT's text rather than the caption.
+        """
+        fname = str(file_name or "").lower()
+        mime = str(mime_type or "")
+        if mime == "application/pdf" or fname.endswith(".pdf"):
+            return "pdf"
+        if (mime.startswith("text/") or mime in ("application/markdown",)
+                or fname.endswith(cls.TEXT_DOC_EXTS)):
+            return "text"
+        return ""
+
     def read_text_document(self, parts):
         """Read a document's text: plain text/markdown directly, and a best-effort
         text layer from PDFs. Returns (text, filename) or (None, None) — a scanned
@@ -3500,11 +3911,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         for part in parts:
             doc = part.get("document") or {}
             fname = doc.get("file_name") or ""
-            mime = str(doc.get("mime_type") or "")
-            is_text = (mime.startswith("text/") or mime in ("application/markdown",)
-                       or fname.lower().endswith(self.TEXT_DOC_EXTS))
-            is_pdf = mime == "application/pdf" or fname.lower().endswith(".pdf")
-            if not (doc.get("file_id") and (is_text or is_pdf)):
+            kind = self._doc_text_kind(fname, doc.get("mime_type"))
+            is_pdf = kind == "pdf"
+            if not (doc.get("file_id") and kind):
                 continue
             try:
                 path = self.download_file(doc["file_id"], doc["file_unique_id"],

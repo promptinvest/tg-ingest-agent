@@ -28,8 +28,13 @@ def ongoing_threads(conn, lang):
     if cands:
         out.append(f"{cands} предложений в память" if ru else f"{cands} memory suggestions")
     now = datetime.now(timezone.utc).isoformat()
+    # "Overdue" has ONE definition (spec §: a fired one-shot awaiting «готово» is
+    # not overdue). Without the last_fired_at predicate this line counted every
+    # fired-but-unacked alarm, so the morning brief contradicted the heartbeat's
+    # own «просроченных: 0» about the same reminders.
     overdue = conn.execute(
-        "SELECT COUNT(*) AS n FROM reminders WHERE status = 'active' AND due_utc < ?",
+        "SELECT COUNT(*) AS n FROM reminders WHERE status = 'active' AND due_utc < ?"
+        " AND (last_fired_at IS NULL OR last_fired_at < due_utc)",
         (now,)).fetchone()["n"]
     if overdue:
         out.append(f"{overdue} просроченных напоминаний" if ru

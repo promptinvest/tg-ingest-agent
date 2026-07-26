@@ -284,11 +284,17 @@ def collect(conn, period):
     return data
 
 
+# The CLOSED vocabulary of the outcome ledger: `note_events` filters on it, so a
+# label missing here lands in a durable, purge-surviving table that nothing ever
+# reads. ('note_edited' — he corrected a saved note's source message and
+# confirmed the update — is observable here; it is not a USE, so it stays out of
+# REAL_USE_OUTCOME_KINDS below.)
 NOTE_EVENT_KINDS = ("note_opened", "note_cited", "note_resurfaced",
                     "note_resurface_accepted", "note_archived", "note_restored",
                     "note_kept", "note_review_deferred", "note_triaged",
                     "note_review_shown", "note_reminder_proposed",
-                    "note_reminder_created", "deleted_used", "deleted_unused")
+                    "note_reminder_created", "note_edited",
+                    "deleted_used", "deleted_unused")
 REAL_USE_OUTCOME_KINDS = ("first_used", "note_opened", "note_cited",
                           "note_resurface_accepted")
 
@@ -814,6 +820,7 @@ def markdown(conn, cfg, period="week"):
                  f"reminders from notes {ev.get('note_reminder_created', 0)} "
                  f"(proposed {ev.get('note_reminder_proposed', 0)}) · "
                  f"archived {ev.get('note_archived', 0)} · restored {ev.get('note_restored', 0)} · "
+                 f"edited after a message edit {ev.get('note_edited', 0)} · "
                  f"deleted used/unused {ev.get('deleted_used', 0)}/"
                  f"{ev.get('deleted_unused', 0)}")
     if data["median_first_use_hours"] is not None:

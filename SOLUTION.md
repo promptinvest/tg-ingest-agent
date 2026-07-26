@@ -249,6 +249,7 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Ask (KB Q&A)** | "когда мой рейс?", "что у нас по плану?" → semantic retrieval (BGE-M3) over stored notes, then a **grounded** answer in the question's language citing the stable user-facing `#N` (`note_no`, never the internal row id). Chunks below `ASK_MIN_SCORE` (0.25) are rejected and the first chunk is hard-bounded by the context budget; refuses if nothing relevant is in the notes. | — (read-only) |
 | **Browse notes (paginated, `list_items`)** | "покажи заметки" / "заметки про крипту" opens the notes list **one page at a time (8/page)** with an inline **◀ Back · X/Y · Next ▶** keyboard; a tap **edits the same message in place** (no chat flooding, no 10-item cap). Stateless taps: the filter is stored in `list_views` keyed by a token in the button's `callback_data` (`pg|<token>|<page>`), since a category/query can exceed Telegram's 64-byte limit; `handle_page_callback` recomputes the page and `editMessageText`s it. Each note gets a monotonic per-chat `note_no` once and keeps it permanently (deletes leave gaps); views older than a day are pruned. | — (read-only) |
 | **Edit a note's summary (`note_edit`)** | "исправь заметку #11 на …" / "поменяй краткое #3 на …" → `do_note_edit` resolves the target (stable `#N`/query), takes the corrected text (`params.new_summary`), and `store.message_update_summary` overwrites ONLY the displayed `summary`; **`raw_text` (the KB-search source) is left intact**, so the fix doesn't skew `ask`. Closes the one hole in the inbox: an LLM summary you don't like was previously only deletable, not editable. Router NOTE keeps it distinct from `recategorize` (category) and `reminder_rename` (a reminder's title). (2026-07-01) | — |
+| **Telegram message EDITS (2026-07-26)** | `allowed_updates` never listed `edited_message`, so an edit was NEVER delivered: the boss typed «созвон в 15:00», watched Cara save it, corrected it to 16:00 and saw the corrected text with an 'edited' mark — while she went on answering 15:00 and quoting the note as verbatim. Her record and his screen diverged with nothing to notice it by. Now: the owner gate runs FIRST (an edit from any other chat is not even read); the `conversation` row for that `tg_message_id` is rewritten so the verbatim readback matches his chat; a note still pending/suggested/failed is **re-ingested** (raw_text, re-derived URLs, fresh suggestion + summary, NEW chunks — the old vectors deleted FIRST so `ask` can never answer out of text he no longer has, and the stale card's keyboard retired); a note she already SAVED is never silently rewritten — «я уже сохранила старую версию — обновить заметку #N?» with ✅/✖️ buttons, the new text staged in `kv:note_edit:{id}` (NOT in the pending payload, which is rendered into the router's system prompt), applied only on his yes together with a re-embed, a `note_edited` outcome + relationship event, and the now-wrong summary dropped. The offer takes the single pending slot only when it is free (the `present_suggestion` rule) — the buttons work regardless. **Deliberately not applied** (the caption was probably never that note's text, so writing it over `raw_text` would destroy content): a readable document's text layer, and an album's note. **Review round (same day)** — six ways this could still diverge, closed: (1) the re-ingest now clears the message-keyed kv the OLD text produced (`capture_action:{id}`, `journal_draft:{id}` — `suggest_row` only ever WRITES them), so a 15:00 reminder candidate or a gratitude payload from replaced text can no longer reach the new card or the confirm boundary; (2) the model-down fallback re-embeds from the text in hand, and `retry_sweep` gained a bounded `reindex_sweep` for visible notes left with zero chunks — the delete-first re-embed used to de-index a note permanently and silently on one 429, since `pending_messages` only revisits status='pending' (a 'failed' row is also reopened, so the «попробую ещё раз» it may answer with is true); (3) the confirmed path re-syncs `urls` too (staged with the text, since the message is out of scope at confirm time) and the staged value carries a timestamp — a ✅ tapped after the pending TTL is refused out loud rather than applying days-old words; (4) `_retire_suggestion_card` clears `suggestion_message_id`, so a failed card send cannot leave the row pointing at the retired card for the next confirm to rewrite; (5) an edit whose text is unchanged returns before any model call, and the conversation row is not rewritten from a caption on a voice note (its turn is the TRANSCRIPT) nor blanked by a deleted caption; (6) the two not-applicable cases get one honest line each instead of silence, and `note_edited` was added to `review.NOTE_EVENT_KINDS` so the ledger row it writes is actually readable (it is NOT a "use", so it stays out of `REAL_USE_OUTCOME_KINDS`). | Saved notes: explicit yes. |
 | **Notes cleanup (2026-07-01)** | Removed the dead `items_text` (superseded by the paginated `do_list_items`; its 2 tests re-pointed at the live `_note_line`/`_notes_page`). Bulk `recategorize` by category/query no longer silently caps at 20 — it moves the whole set and the reply reports the real count. `journal_show` now prints each entry's stable `#N` (+ an "open #N in full" hint) so a diary entry can be opened via `item_detail`. **Show-list routing (2026-07-01):** a bare **"покажи благодарности"** now routes to `journal_show` (router few-shot + NOTE), not `converse` — the recorded bug was the router (degraded to a weak fallback under deepseek-4-flash 429s) sending it to `converse`, which **free-texted the real entries with empty `**` bold headers**. `do_journal_show` also **resolves a loosely-typed category** (`_match_journal_category`: exact, then shared-stem) so "благодарности" hits the stored "Благодарность" journal instead of a phantom empty one. Belt-and-suspenders: `converse`'s system prompt now **forbids hand-rendering his saved lists** (notes/journal/reminders/files) — those come from a deterministic command with stable numbers, so the model must never emit a `**`-formatted list itself. | — |
 | **Metering & proactive-integrity batch (2026-07-02)** | From the review. **Metering:** `chat()` now estimates tokens from text length (~4 chars/token) when the provider omits a `usage` block instead of logging $0 (an unmetered model silently under-counted the budget); it meters BEFORE the no-choices guard so a billed-but-empty response is still counted; `profiles()` backfills a `primary` for any `LLM_PROFILES_JSON` profile that lacks one (a missing primary used to KeyError — not an LLMError — and crash the turn); and the DEFAULT fallback slug moved off the tier-403 `openai-gpt-4o` to the reachable, priced `openai-gpt-oss-20b` (the old default was a dead fallback on any fresh deploy without `LLM_PROFILES_JSON`). **Proactive delivery integrity:** the heartbeat now logs "sent" ONLY on a successful delivery (`reply` returns None on a swallowed `TelegramError`), so a transient send failure no longer marks the day's nudge/afterglow/anticipation/greeting as delivered and suppresses the retry; `proactive.run` skips an ineligible (already-sent-today) hit instead of short-circuiting on it, so a persistent overdue reminder can't starve the memory-candidate / uncategorized-item nudges for the day; the daily "≤ max non-urgent/day" cap counts only the non-urgent heartbeat keys (`proactive_sent_count(day, proactive.NONURGENT_KEYS)` = candidates/unsorted — urgent overdue bypasses AND doesn't consume it, and the relationship outreach never counts); (the afterglow/anticipation/intimacy-outreach/daily-greeting `proactive_days` fixes from this batch applied to the pre-split proactive set — those checks moved to Nikki with the 2026-07-03 split; Cara's surviving non-urgent keys are `candidates`/`unsorted` plus urgent overdue). | — |
 | **Correctness batch (2026-07-02)** | Five fixes from the full code review. (1) `list_messages` no longer pre-caps its scan at the newest 200 rows — it delegates to `list_messages_filtered`, so bulk recategorize genuinely moves everything and reports true counts, and `resolve_item`/keyword context see old notes (`limit=None` = everything). **Made hot-path-cheap again (2026-07-02):** that unification had used `.fetchall()` (materialising the whole inbox even for a `limit=1` call — the router's every-turn recent-item hint); it now iterates the cursor LAZILY (reverse-rowid scan stops at `limit`) and, for a limited query, fetches facts per candidate (new `idx_facts_message`) instead of aggregating the whole facts table. (A companion `idx_chunks_message` speeds the per-note render + cascade delete, not this path.) (2) A **firing reminder no longer clobbers a pending confirmation** (single pending slot, PK=chat_id): if a confirmation is in flight the `reminder_fired` pending is skipped — his "да" confirms what he was asked; the fired reminder stays addressable via `last_reminder_id`. (3) **`REMINDER_MAX_DEFER_HOURS` is implemented** (was documented-only): a reminder overdue past the cap (default 2h) fires even mid-exchange — the 5-min lull can't defer it indefinitely. (4) **Meeting state machine** (historical: fixed here, then the whole meeting layer was removed with the 2026-07-03 Cara/Nikki split — `meeting_activate`/`meetings_expire_scheduled` no longer exist in Cara). (5) **Telemetry retention** (`store.prune_telemetry`, housekeep, `TELEMETRY_RETENTION_DAYS`=90, 0 off): traces (+events via cascade), done/failed events+jobs, proactive_log, expired cooldowns pruned; `llm_usage`/`conversation`/`issues`/memory tables never touched. Plus: `candidate_exists` now covers `merged`/`superseded`, so the curator stops re-proposing candidates the consolidation already folded. | — |
@@ -373,13 +374,50 @@ tone variants; only conversation and grounded answers are free-form.
   into the boss profile or attaching an unrelated real quote to a fabricated rule.
   Evidence is preserved through candidate confirmation; pending near-duplicates merge
   deterministically and increment recurrence instead of producing duplicate prompts.
+  **Learned vs proposed (2026-07-26):** a *sensitive* correction becomes a confirm-first
+  candidate, i.e. it is NOT a standing rule until he says yes — yet it was still counted as
+  learned, so Cara answered «Запомнила: …» about a rule she was not following. The curator
+  now returns the two lists separately and only stored-and-active rules get the done-claim;
+  the rest get confirm-first phrasing. Two corrections from the review round: the proposal is
+  announced only when `candidate_add` actually created one — it returns None for a text that
+  already exists in ANY resolved status, so a rule he had REJECTED (or one consolidation
+  folded) used to be announced as queued with nothing pending behind it, and counted in
+  `corrections` on top; and the copy NAMES the answer route («положила в предложения — скажи
+  «что ты хочешь запомнить»») instead of asking «подтвердишь?», because that line stages no
+  pending action and carries no keyboard, so a «да» reached `resolve_pending` and got «нечего
+  подтверждать» — the truthful wording had promised an interaction the code did not provide.
+  **Prompt selection (2026-07-26):** `standing_guidance` (and the descriptive
+  `operating_model`) filter kinds in SQL, before the LIMIT. Filtering the top-20 rows in
+  Python meant a profile with 20+ higher-confidence facts of OTHER kinds returned no guidance
+  at all — Cara silently stopped honoring every standing correction he had taught her, with
+  nothing in the logs to show for it. That is what the `kinds=` parameter on
+  `store.boss_items` exists to prevent.
 - **Consolidation (`memory_curator.consolidate`).** The curator accumulates near-duplicate
   facts over time (the same trait restated). A **weekly** pass (first run fires immediately;
   on-demand via the `memory_cleanup` action, "почисти память") asks the model to GROUP genuine
   duplicates/paraphrases of one fact and KEEP the single richest item. It runs over BOTH
   **boss facts** (`boss_profile_items` — the rest demoted to `merged`, reversible) AND **her
-  life flavour** (`cara_life` — redundant copies deleted, keeping one of each distinct beat;
-  this is what folds the over-grown "tea" duplicates). Never merges genuinely distinct facts.
+  life flavour** (`cara_life` — redundant copies demoted to `merged` too since 2026-07-26,
+  keeping one of each distinct beat; this is what folds the over-grown "tea" duplicates).
+  Never merges genuinely distinct facts.
+  **Provenance outranks richness (2026-07-26).** This is the one pass allowed to demote what
+  Cara knows, and it took its instructions from a fast model that judges by wording: it
+  regularly kept the long INFERRED paraphrase and demoted the fact the boss had CONFIRMED —
+  after which the "confirmed wins" guards below (`_tidy_candidates`, `_tidy_inferred`)
+  defended the guess instead of the truth, permanently. A confirmed item is now only ever
+  folded into another CONFIRMED item; if the model picks an unconfirmed keeper for a group
+  holding confirmed facts, the highest-confidence confirmed one takes over (ties to the
+  oldest id). Where the model already kept a confirmed item its judgment stands — it read the
+  wording. The reply is also made **self-consistent** before it can touch the database: an id
+  that some group is KEEPING is never dropped (`{keep:5,drop:[6]}` + `{keep:6,drop:[7]}` in
+  one answer folded 6 while 7 was being folded into it, i.e. every richer copy at once), and
+  a repeated drop is applied once. `cara_life`'s soft delete makes the whole pass reversible:
+  a wrong grouping call now costs a hidden row, not a destroyed one. Reversible **by hand**,
+  deliberately: the folded row still holds the UNIQUE text, so the curator cannot re-learn it
+  from conversation. Reviewed and kept as-is — auto-reactivating on a re-extraction would put
+  a second live copy of the beat beside the keeper on the next curation pass, re-creating the
+  exact over-growth the fold exists to remove (the "tea" problem), so this is one place where
+  the old hard DELETE was *less* sticky on purpose.
   It also tidies **pending `memory_candidates`**: any candidate that **contradicts a CONFIRMED
   fact** is dropped (`superseded`) — a sensed guess never overrides confirmed truth (the
   кофе-vs-confirmed-чай case) — and duplicate candidates are folded (`merged`), so the same
@@ -392,7 +430,11 @@ tone variants; only conversation and grounded answers are free-form.
   grown from conversation so her persona stays coherent across chats.
 - **Relationship (`relationship`).** Grounded working history: every entry traces
   to a real row (a confirmed save/correction, a reminder, a saved document, a
-  review, an export). Never fabricated.
+  review, an export). Never fabricated. **One definition of "overdue" (2026-07-26):**
+  `ongoing_threads` (the morning brief's open-loops line) counted every fired-but-unacked
+  alarm as overdue, while `proactive._overdue_reminders` and the spec agree that a fired
+  one-shot awaiting «готово» is NOT overdue — so the brief contradicted the heartbeat about
+  the same reminders. Both now carry the same `last_fired_at < due_utc` predicate.
 
 ### 5a. Smooth register switching (Hermes + warm converse)
 
@@ -499,14 +541,18 @@ dedup; `kind` = `inbox`|`journal`) · `reminders` (`prev_due_utc`, `closed_at`,
 `close_reason`) + `reminder_events` · `note_outcomes` (content-free durable
 capture/use/triage/delete ledger by stable note number; no message FK) · `feedback` ·
 `preferences` (identity/config) · `pending_actions` (per-chat,
-TTL) · `conversation` (recent turns) · `kv`.
+TTL) · `conversation` (recent turns; `update_id` under a partial unique index for
+redelivery idempotence, and `tg_message_id` — 2026-07-26 — so an `edited_message` can
+rewrite exactly that turn) · `kv`.
 
 Spend & reliability: `llm_usage` (ts/skill/kind/model/tokens/cost/request-seconds/trace) ·
 `model_cooldowns` (failover).
 
 Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity + evidence)
 · `memory_candidates` (evidence/source trace/recurrence/first+last seen) ·
-`relationship_events` (title + trace) · `cara_life`.
+`relationship_events` (title + trace) · `cara_life` (`status` = `active`|`merged` since
+2026-07-26 — consolidation folds a duplicate beat instead of DELETEing it; readers filter
+`active`, while the seed marker `life_count` counts every row on purpose).
 
 Embedding storage (retrieval): vectors in `chunks` are stored as
 **packed float32 BLOBs** (4 B/dim, ~5× smaller than the old JSON-text form and far

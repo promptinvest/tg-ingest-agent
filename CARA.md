@@ -95,7 +95,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   guarded since 2026‑07‑25 (documented here 2026‑07‑26): it used to re‑insert its three
   life rows on every start, so a life fact the boss had deliberately removed (memory
   consolidation or a purge) came back at the next restart. A life fact he deletes now
-  stays deleted.
+  stays deleted. **2026‑07‑26:** consolidation no longer DELETES a duplicate beat at
+  all — it demotes it (`cara_life.status='merged'`, hidden from every reader, reversible
+  by hand), so a wrong grouping call costs nothing permanent. `life_count` still counts
+  folded rows on purpose: it is the "was this DB ever seeded?" marker read on every
+  start, and an active‑only count would re‑attempt the whole seed insert at each startup.
+  A folded beat is deliberately **not re‑learned** from conversation either (its text
+  still occupies the UNIQUE key): re‑adding it would put a second live copy of the beat
+  next to the one that was kept, i.e. re‑create exactly the over‑growth the fold exists
+  to remove. Undoing a fold is therefore a manual `status='active'`, by design.
 - **Never fabricates a stored fact (guardrail)** — creativity is free in her *voice* and her
   own fictional life, but any fact about the boss (notes, journal, reminders, names, dates,
   counts, spend) must be real. Every `converse` turn is **grounded**: his most relevant saved
@@ -152,6 +160,32 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   subject (see referential saves below). Her conversation memory in free‑form
   chat now spans the last **20 turns** (was 12); deeper reads stay behind
   `recall_conversation` («перечитай наш разговор за вчера»).
+- **You edit a message, she follows (2026‑07‑26).** Telegram edits are now requested
+  (`allowed_updates` included `edited_message` for the first time) and handled:
+  · the **dialogue record** is rewritten, so a verbatim readback matches what your chat
+  shows (the whole promise of `recall_conversation`) — except from a caption on a **voice
+  note**, whose turn holds the transcript of what you actually said, and except a caption
+  you **delete**, which would blank the turn rather than correct it (§10);
+  · a note still **in the inbox** (pending/suggested/failed) is re‑ingested — new text,
+  re‑derived links, a fresh summary and new embeddings, with the old vectors dropped
+  first, the stale card's buttons retired, and **everything the old text produced cleared
+  with it** (a reminder candidate it carried, a journal draft it filled — otherwise a
+  «созвон в 15:00» you replaced could still schedule 15:00 from the new card);
+  · a note she has already **saved** is never rewritten behind your back: «я уже
+  сохранила старую версию — обновить заметку #N?» with ✅/✖️ buttons, and only your yes
+  applies the text, its links and a re‑embed (the outdated summary and key facts are
+  dropped, so lists show the edited text itself; the category you filed it under does not
+  change). The offer never takes the pending slot from a confirmation you are already
+  mid‑way through — and because its buttons deliberately outlive that slot, a tap on a
+  **stale** offer (older than an hour) is refused out loud instead of applying words
+  staged days ago;
+  · an edit that changes **nothing** is a no‑op — no model call, no new card;
+  · edits from any other chat are ignored before anything is read or written.
+  **Honest about the outage case:** the re‑embed is best‑effort. If the embedder is down
+  in that moment the note keeps its text and stays in your lists but is briefly out of
+  `ask` — the sweep that retries pending notes now also re‑indexes any visible note left
+  without vectors, so it comes back on its own (it used to be permanent and silent).
+  What is NOT applied at all is in §10.
 - **Ingest forwards/notes:** forwarded posts and typed notes (text, URLs, photos;
   an album = one item) are saved with forward origin, t.me source link, post date.
   Forwarded albums are **crash-safe** (2026‑07‑17): buffered parts stay pending in
@@ -622,6 +656,21 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   it, **applies** it (injected into her prompt), and **reports** it in the review. If
   the same correction recurs she flags it as **needing a code fix** instead of
   pretending to fix it. She says “Запомнила” only after the evidence checks above pass.
+  **2026‑07‑26:** …and only for corrections that are actually IN FORCE. A *sensitive*
+  correction is a confirm‑first candidate, not a standing rule — it used to be counted
+  as learned anyway, so she claimed «Запомнила: …» for a rule she was not following.
+  Those now get their own confirm‑first line, which **names the route that exists**
+  («положила в предложения — скажи «что ты хочешь запомнить»») rather than asking a bare
+  yes/no: nothing is staged in the pending slot for it, so a «да» would have reached
+  «нечего подтверждать». And it is said only when a proposal was really queued — a rule
+  you already **refused**, or one the consolidation folded, creates no candidate, so
+  there is nothing to announce and nothing to confirm.
+- **Standing rules reach the prompt even as the profile grows (2026‑07‑26).** The
+  tone/workflow/avoidance/quality rules were selected by fetching the top‑20 profile
+  items and filtering the kinds in Python: past ~20 higher‑confidence facts of other
+  kinds, the guidance list came back EMPTY and Cara silently stopped honoring every
+  standing correction, with nothing in the logs to say so. The kind filter is now part
+  of the SQL, before the LIMIT (same for the descriptive operating model, limit 80).
 - **Working history:** "как ты мне помогала?" → a grounded summary of real actions
   (saves, corrections, reminders, reviews, exports) — never fabricated.
 - **Settings memory** (`memory`): "запомни: отвечай по‑английски", "что ты помнишь из
@@ -823,6 +872,19 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   the model‑health/budget alerts stay technical by design — owner‑requested ops notices).
 - **Never fabricates specifics** — IDs, numbers, trace codes, prices, dates, model
   names; if unsure she says so.
+- **What you confirmed outranks what she inferred (2026‑07‑26).** Weekly consolidation
+  pools confirmed and inferred facts and asks a fast model which of a duplicate group to
+  keep — and that model judges by richness, so it regularly kept the long *inferred*
+  paraphrase and demoted the fact you had confirmed to `merged`. After that every
+  “confirmed wins” guard downstream defended the guess instead. Now a confirmed item is
+  only ever folded into another CONFIRMED item; if the model picks an unconfirmed keeper
+  for a group that holds confirmed facts, the highest‑confidence confirmed one takes over.
+  The same reply is also made self‑consistent before it can touch anything: an id another
+  group is keeping is never dropped (`{keep:5,drop:[6]}` + `{keep:6,drop:[7]}` used to
+  fold 6 while 7 was being folded into it — i.e. every richer copy gone at once).
+- **She never rewrites a saved note behind your back (2026‑07‑26).** If you EDIT a
+  message she has already saved, she says which version she is holding and asks before
+  applying the new text (see §10).
 - **Action‑truth:** she won't claim a real task was done unless the code did it; every
   rendered template is checked in production and a catalogue‑wide test requires every
   "done/saved/scheduled" template to declare its lifecycle state.
@@ -1096,7 +1158,8 @@ per‑chat kv counter (`note_no_next:{chat}`), seeded once from live rows *and* 
 ledger, so from the first claim onward a deleted number is never handed out again (the
 single residual hole is the seed itself, on a database whose numbers pre‑date the
 counter — see §2). `delete_message` also drops that
-message's id‑keyed kv state (`capture_action:{id}`, `journal_draft:{id}`) — SQLite reuses
+message's id‑keyed kv state (`capture_action:{id}`, `journal_draft:{id}`,
+`note_edit:{id}` — the text staged by an unanswered edit offer) — SQLite reuses
 the highest rowid, so a new note used to inherit a deleted note's reminder draft or
 journal payload. **kv VALUES carrying row ids got the same treatment (2026‑07‑26):** the
 note‑review snapshot and the resurfacing pointer store the stable `#N` beside each
@@ -1115,7 +1178,11 @@ and retrieval kept grounding answers in a DELETED note's chunks while the new no
 invisible. (The legacy JSON→blob embedding conversion in `_migrate` bumps it too — it
 rewrites rows without changing an id.) Inbound `conversation` rows carry their Telegram
 `update_id` under a partial unique index, so an at‑least‑once redelivery cannot make the
-boss repeat himself in the history or in prompts.
+boss repeat himself in the history or in prompts — **and since 2026‑07‑26 their
+`tg_message_id` too**, which is what lets an `edited_message` rewrite that exact turn.
+`cara_life` gained a `status` column the same day: consolidation folds a duplicate beat
+to `merged` instead of DELETEing it (all readers filter `status='active'`; the seed
+marker `life_count` deliberately still counts every row).
 
 **A purge deletes what it says, and only that (2026‑07‑25).** `categories.kind` is the
 single source of truth for journal protection, so scope `stats` now deletes only
@@ -1278,6 +1345,37 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   line with extra words around it can now pass through as text, and a very SHORT genuine
   dictation wrapped in a hallucinated outro («спасибо за просмотр, купи молоко») is still
   discarded, because 13 characters of remainder are indistinguishable from credit‑line glue.
+- **Edited messages (2026‑07‑26) — what is handled and what is not.** Handled: the
+  dialogue record, a note still in the inbox, and an ask‑first update of a note she
+  already saved (§3). Deliberately NOT applied to the note — because the note's text was
+  probably never derived from that message's caption, so writing the caption over it
+  would destroy content rather than correct it. In both cases she now **says so** (one
+  line naming the note) instead of staying silent:
+  · a **note with a document** (PDF/.md/.txt): `finalize` stores the document's text
+  layer and discards the caption, so a whole PDF body would become one line. This is
+  decided by the FILE KIND, not by whether a text layer was really extracted — a
+  **scanned** PDF has no text layer, so that note's text genuinely IS the caption and the
+  edit is refused anyway. She cannot tell the two apart after the fact (a forwarded
+  document keeps the forward's origin type, so there is no marker to read), and
+  overwriting a contract with one line is the worse mistake. The workaround is to send
+  the file again.
+  · an **album**: its note was built from every part's text and links, and an edit
+  carries exactly one part.
+  · **the other parts of an album** (2..N) have no note row of their own, so editing
+  those captions touches only the dialogue record.
+  Not applied to the **dialogue record** either: a caption edit on a **voice/audio**
+  message (its turn holds the transcript — a caption would put words there you never
+  said), and **removing** the text/caption entirely (the turn keeps the last real words
+  rather than going blank; the note is untouched too).
+  Also unhandled: turns from **before this change** carry no `tg_message_id`, so their
+  edits find no row to rewrite (nothing is invented — the edit is a silent no‑op); a
+  **journal entry's extracted fields** (e.g. gratitude items) are not re‑derived when its
+  text is updated, and a journal row also records no entry in the note‑outcome ledger
+  (journal entries are outside note lifecycle by design); a confirmed note's **key facts
+  and summary are dropped rather than re‑derived** (that would mean a model call inside a
+  confirm path — renderers fall back to the note's own edited text); and Telegram itself
+  only delivers edits within its own edit window, so a very old message cannot be
+  corrected at all.
 - **Compound commands** (two+ distinct actions in one message) are recognised but not
   executed as a batch — she asks to take them one at a time.
 - A Telegram bot can't read arbitrary chat history or private‑channel links by URL —

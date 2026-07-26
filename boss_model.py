@@ -205,13 +205,19 @@ _OPERATING_GROUPS = (
     ("filing", ("как он раскладывает", "how he files"), ("category_preference",)),
 )
 
+# The union of the group kinds — the SQL filter, so the LIMIT is spent on rows
+# this view can actually show instead of on guidance/other kinds it discards.
+_OPERATING_KINDS = tuple(dict.fromkeys(k for _key, _labels, kinds in _OPERATING_GROUPS
+                                       for k in kinds))
+
 
 def operating_model(conn, lang):
     """Grouped, deduped, non-sensitive facts about the boss for the prompt:
     list of (label, [values]). Confirmed + inferred."""
     rows = []
     for status in ("confirmed", "inferred"):
-        rows += store.boss_items(conn, status, sensitivities=("normal",), limit=80)
+        rows += store.boss_items(conn, status, sensitivities=("normal",), limit=80,
+                                 kinds=_OPERATING_KINDS)
     out = []
     for _key, (ru, en), kinds in _OPERATING_GROUPS:
         vals = _dedup([r["value"] for r in rows if r["kind"] in kinds])
@@ -279,11 +285,17 @@ GUIDANCE_KINDS = ("tone", "workflow", "avoidance", "quality_bar")
 
 
 def standing_guidance(conn, max_items=8, max_chars=600):
+    """The standing behavioral rules for the prompt.
+
+    The kind filter lives in SQL, before the LIMIT: filtering the top-20 rows in
+    Python meant a profile with 20+ higher-confidence facts of OTHER kinds
+    returned no guidance at all — Cara silently stopped honoring every standing
+    correction he had taught her, with nothing in the logs to say so.
+    """
     out, used, seen = [], 0, set()
     for status in ("confirmed", "inferred"):
-        for row in store.boss_items(conn, status, sensitivities=("normal",), limit=20):
-            if row["kind"] not in GUIDANCE_KINDS:
-                continue
+        for row in store.boss_items(conn, status, sensitivities=("normal",), limit=20,
+                                    kinds=GUIDANCE_KINDS):
             value = (row["value"] or "").strip()
             if not value or value in seen:
                 continue

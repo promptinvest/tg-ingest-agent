@@ -647,6 +647,20 @@ TEXTS = {
         "ru": "Поняла, босс — буду так делать. Запомнила: {items} ✍️",
         "en": "Got it, boss — I'll do that from now on. Noted: {items} ✍️",
     },
+    # Confirm-FIRST: the rule is a candidate, not yet in force — so no «Запомнила»
+    # here (see memory_curator.curate_conversation's learned/proposed split).
+    # It NAMES the route instead of asking a bare yes/no: nothing is staged in the
+    # pending slot and there are no buttons on this line, so «да» would land on
+    # `resolve_pending` and get «нечего подтверждать». The answer path is
+    # memory_review, which renders each candidate with its own ✅/✖️.
+    "correction_proposed": {
+        "ru": ("Поняла, босс. Это личное — сама такое в правила не беру: "
+               "положила в предложения, скажи «что ты хочешь запомнить» — "
+               "там кнопки. {items} 🤍"),
+        "en": ("Got it, boss. This one's personal — I don't turn that into a rule "
+               "on my own: it's in my suggestions, say \"what do you want to "
+               "remember\" and you'll get the buttons. {items} 🤍"),
+    },
     "correction_needs_code": {
         "ru": "Я это уже отмечала, но всё равно повторяется — сама не починю, нужна правка кода. Записала, чтобы поправили: {items} 🔧",
         "en": "I'd already noted this and it keeps happening — I can't fix it myself, it needs a code change. I've flagged it: {items} 🔧",
@@ -915,6 +929,51 @@ TEXTS = {
     "note_edit_unclear": {
         "ru": "На что поменять краткое? Напиши новый текст — и я исправлю.",
         "en": "What should the summary say? Give me the new text and I'll fix it.",
+    },
+    # -- he EDITED the Telegram message a saved note was made from ------------
+    # Honest, never silent: the old version is the one she is holding, and the
+    # new text is applied only after he says yes. («сохранила» is a completed
+    # action here — the note really is saved; see action_truth.TEMPLATE_STATES.)
+    "note_edit_offer": {
+        "ru": ("Босс, ты поправил то сообщение — а я уже сохранила старую версию. "
+               "Обновить заметку #{row_id}?"),
+        "en": ("Boss, you edited that message — but I'd already saved the older "
+               "version. Update note #{row_id}?"),
+    },
+    "note_edit_yes": {"ru": "✅ Обновить", "en": "✅ Update"},
+    "note_edit_no": {"ru": "✖️ Оставить", "en": "✖️ Keep it"},
+    "note_edit_applied": {
+        "ru": "Готово — заметка #{row_id} теперь с новым текстом 🤍",
+        "en": "Done — note #{row_id} now holds the new text 🤍",
+    },
+    "note_edit_kept": {
+        "ru": "Хорошо, заметка #{row_id} остаётся как есть.",
+        "en": "Okay, note #{row_id} stays as it is.",
+    },
+    # The ✅ button outlives the pending slot on purpose (the offer must stay
+    # answerable) — so an old card carries no visible age, and a tap on it is not
+    # consent to text staged days ago. She says so instead of applying it.
+    "note_edit_stale": {
+        "ru": ("Босс, это предложение уже старое — не буду переписывать заметку "
+               "#{row_id} вслепую. Поправь сообщение ещё раз, и я спрошу заново."),
+        "en": ("Boss, that offer has gone stale — I won't rewrite note #{row_id} "
+               "blind. Edit the message once more and I'll ask again."),
+    },
+    # The caption changed but the note's text does not come from the caption.
+    # Never silent: he sees the 'edited' mark and would otherwise get nothing.
+    "note_edit_from_file": {
+        "ru": ("Босс, подпись поменялась — но заметку #{row_id} я так не обновлю: "
+               "текст заметки с документом я беру из самого файла. Если изменился "
+               "он — пришли файл заново."),
+        "en": ("Boss, the caption changed — but I can't update note #{row_id} that "
+               "way: for a note with a document I take the text from the file "
+               "itself. If the file changed, send it again."),
+    },
+    "note_edit_from_album": {
+        "ru": ("Босс, подпись поменялась — но заметку #{row_id} я так не обновлю: "
+               "она собрана из всего альбома, а не из одной подписи."),
+        "en": ("Boss, the caption changed — but I can't update note #{row_id} that "
+               "way: it was built from the whole album, not from one caption."),
     },
     "journal_open_hint": {
         "ru": "\nОткрой любую запись целиком: «покажи #N».",

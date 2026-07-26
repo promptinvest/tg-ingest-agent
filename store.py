@@ -179,7 +179,11 @@ CREATE TABLE IF NOT EXISTS conversation (
   -- message here, so retries made him "repeat himself" in every prompt and in
   -- the verbatim readback; the partial unique index in _migrate makes the
   -- user-turn write idempotent per update.
-  update_id INTEGER
+  update_id INTEGER,
+  -- Which of HIS messages this inbound turn is (NULL for Cara's own turns).
+  -- Telegram delivers an edit as a separate update naming only this id, so
+  -- without it his correction could never reach the verbatim record.
+  tg_message_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS facts (
@@ -413,6 +417,10 @@ CREATE TABLE IF NOT EXISTS cara_life (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL,
   text TEXT NOT NULL UNIQUE,
+  -- 'active' | 'merged'. Consolidation folds duplicate beats by DEMOTING them
+  -- (it used to DELETE, which threw away a fact the boss may have taught her
+  -- and which no review could undo). Readers show 'active' only.
+  status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL
 );
 
@@ -725,18 +733,27 @@ def boss_add(conn, kind, value, *, status="pending", confidence=0.5, sensitivity
     return cur.lastrowid
 
 
-def boss_items(conn, status, sensitivities=None, limit=30):
+def boss_items(conn, status, sensitivities=None, limit=30, kinds=None):
+    """Profile items of one status, best-first.
+
+    `kinds` filters IN SQL, before the LIMIT: a caller that wants only the
+    behavioral rules (tone/workflow/…) used to fetch the top N of everything and
+    drop the rest in Python, so a growing profile silently pushed every standing
+    correction out of the prompt while Cara kept reporting she had them.
+    """
+    where = ["status=?"]
+    args = [status]
     if sensitivities:
-        marks = ",".join("?" for _ in sensitivities)
-        return conn.execute(
-            f"SELECT * FROM boss_profile_items WHERE status=? AND sensitivity IN ({marks})"
-            " ORDER BY confidence DESC, last_seen_at DESC LIMIT ?",
-            (status, *sensitivities, limit),
-        ).fetchall()
+        where.append("sensitivity IN (%s)" % ",".join("?" for _ in sensitivities))
+        args += list(sensitivities)
+    if kinds:
+        where.append("kind IN (%s)" % ",".join("?" for _ in kinds))
+        args += list(kinds)
+    args.append(limit)
     return conn.execute(
-        "SELECT * FROM boss_profile_items WHERE status=? ORDER BY confidence DESC,"
-        " last_seen_at DESC LIMIT ?",
-        (status, limit),
+        "SELECT * FROM boss_profile_items WHERE " + " AND ".join(where)
+        + " ORDER BY confidence DESC, last_seen_at DESC LIMIT ?",
+        tuple(args),
     ).fetchall()
 
 
@@ -877,6 +894,10 @@ def rel_recent(conn, since_iso, limit=8):
 # -- Cara's (fictional) private life: persisted so she stays consistent -------
 
 def life_add(conn, kind, text):
+    # UNIQUE(text) also covers rows consolidation has folded ('merged'), so a beat
+    # she once folded is not re-learned into a second copy on the next curation
+    # pass. That is the point of folding it — an operator who wants it back sets
+    # status='active' again.
     text = str(text or "").strip()[:300]
     if not text:
         return None
@@ -895,22 +916,46 @@ def life_facts(conn, limit=40):
     # RANDOM (not ORDER BY id) so no single trait is pinned into EVERY prompt — the
     # old fixed slice made her over-index on the same details (the 'tea' problem).
     return conn.execute(
-        "SELECT kind, text FROM cara_life ORDER BY RANDOM() LIMIT ?", (limit,)
+        "SELECT kind, text FROM cara_life WHERE status = 'active'"
+        " ORDER BY RANDOM() LIMIT ?", (limit,)
     ).fetchall()
 
 
 def life_all(conn):
-    """Every life fact with its id (for consolidation/dedup)."""
-    return conn.execute("SELECT id, text FROM cara_life ORDER BY id").fetchall()
+    """Every ACTIVE life fact with its id (for consolidation/dedup). A folded row
+    stays in the table but is never re-offered to the grouping model."""
+    return conn.execute(
+        "SELECT id, text FROM cara_life WHERE status = 'active' ORDER BY id").fetchall()
+
+
+def life_set_status(conn, life_id, status):
+    """Soft-delete/restore one life fact ('merged' hides it from every reader)."""
+    cur = conn.execute("UPDATE cara_life SET status = ? WHERE id = ?", (status, life_id))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def life_delete(conn, life_id):
+    """HARD delete of one life fact — a deliberate removal, not a fold.
+
+    Consolidation stopped using this on 2026-07-26 (it demotes to 'merged'
+    instead, which is reversible). It stays for a genuine removal, where the
+    row must not keep blocking UNIQUE(text) — `life_add` treats a folded row as
+    already known, so a fold is deliberately not re-learnable."""
     cur = conn.execute("DELETE FROM cara_life WHERE id = ?", (life_id,))
     conn.commit()
     return cur.rowcount > 0
 
 
 def life_count(conn):
+    """How many life rows EXIST — deliberately including folded ones.
+
+    This is the "was this DB ever seeded?" marker (converse.seed_life runs on
+    every start). Counting only active rows would make a fully-folded life look
+    unseeded and re-attempt the whole LIFE_SEED insert on every single start,
+    which is exactly the steady-state-writes-at-startup that a full disk turns
+    into an unrecoverable crash loop.
+    """
     return conn.execute("SELECT COUNT(*) AS n FROM cara_life").fetchone()["n"]
 
 
@@ -1184,10 +1229,24 @@ def _migrate_steps(conn):
         # Historic rows have no update provenance — NULL, and the partial index
         # below ignores NULLs, so they neither collide nor get de-duplicated.
         conn.execute("ALTER TABLE conversation ADD COLUMN update_id INTEGER")
-    # Created here (not in SCHEMA) so executescript can't reference update_id
-    # before the ALTER above adds it to a pre-existing conversation table.
+    if convo_columns and "tg_message_id" not in convo_columns:
+        # Which Telegram message an INBOUND turn is: an `edited_message` names
+        # only that id, and without it his edit could never be applied to the
+        # verbatim record. Historic rows stay NULL (their edits are unhandled —
+        # documented in CARA.md §10).
+        conn.execute("ALTER TABLE conversation ADD COLUMN tg_message_id INTEGER")
+    # Created here (not in SCHEMA) so executescript can't reference update_id /
+    # tg_message_id before the ALTERs above add them to a pre-existing table.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_update"
                  " ON conversation(chat_id, update_id) WHERE update_id IS NOT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_tg_msg"
+                 " ON conversation(chat_id, tg_message_id)"
+                 " WHERE tg_message_id IS NOT NULL")
+    life_columns = {row["name"] for row in conn.execute("PRAGMA table_info(cara_life)")}
+    if life_columns and "status" not in life_columns:
+        # Existing rows are all live beats of her life; 'active' is correct.
+        conn.execute("ALTER TABLE cara_life ADD COLUMN status TEXT NOT NULL"
+                     " DEFAULT 'active'")
     # One-time tea de-emphasis (the original seed life over-indexed on tea — 'a bad
     # joke'). Rebalance the two emphatic tea seed rows on an ALREADY-seeded DB and add a
     # few varied facts. Skip a fresh/empty DB entirely: seed_life plants the full (already
@@ -1195,8 +1254,9 @@ def _migrate_steps(conn):
     # seeded and skip the rest. Idempotent: UPDATEs match the old text once, INSERT OR
     # IGNORE is a no-op when present. Marker-guarded like the outcome backfill:
     # without it the three INSERT OR IGNOREs would resurrect these rows on the
-    # next start if the boss ever legitimately removes one (consolidation's
-    # life_delete, or a purge), silently overruling a deliberate deletion.
+    # next start if the boss ever legitimately removes one (a purge, or a
+    # consolidation fold — which since 2026-07-26 demotes to status='merged'
+    # instead of deleting), silently overruling a deliberate removal.
     tea_done = conn.execute(
         "SELECT value FROM kv WHERE key = 'life_tea_rebalance_v1'"
     ).fetchone()
@@ -2316,11 +2376,47 @@ def mark_failed(conn, message_id):
     conn.commit()
 
 
+def reopen_failed_ingest(conn, message_id):
+    """Give a note that ran out of ingest attempts a FRESH series.
+
+    Only for a genuinely new text (he edited the message): the retry sweep reads
+    `status='pending' AND llm_attempts < cap`, so without this a re-ingest of a
+    'failed' note that hits a model outage would answer «сохранила, попробую
+    ещё раз» about a row nothing ever comes back to. Returns True if reopened."""
+    cur = conn.execute(
+        "UPDATE messages SET status = 'pending', llm_attempts = 0"
+        " WHERE id = ? AND status = 'failed'", (message_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def pending_messages(conn, max_attempts, limit=5):
     return conn.execute(
         "SELECT * FROM messages WHERE status = 'pending' AND llm_attempts < ?"
         " ORDER BY id LIMIT ?",
         (max_attempts, limit),
+    ).fetchall()
+
+
+def messages_missing_chunks(conn, limit=3):
+    """Visible notes whose text is NOT in the semantic index — newest first.
+
+    The recovery route for the one window that used to be permanent: an edit
+    deletes the old vectors FIRST (so `ask` can never answer out of text he
+    replaced) and the re-embed right after it is best-effort. One gateway 429
+    and the note stayed in his lists showing the edited text while silently
+    disappearing from every semantic answer — forever, because `pending_messages`
+    only ever revisits status='pending'. Bounded per sweep; a row with nothing
+    chunkable costs nothing (index_message returns before the model call).
+    Duplicates ('duplicate') and failed/pending rows are deliberately out of
+    scope — they are not part of the searchable corpus (yet)."""
+    return conn.execute(
+        "SELECT id, raw_text, summary FROM messages"
+        " WHERE status IN ('suggested', 'confirmed')"
+        "   AND COALESCE(raw_text, summary, '') != ''"
+        "   AND NOT EXISTS (SELECT 1 FROM chunks WHERE chunks.message_id = messages.id)"
+        " ORDER BY id DESC LIMIT ?",
+        (limit,),
     ).fetchall()
 
 
@@ -2546,6 +2642,31 @@ def message_by_note_no(conn, n):
     return conn.execute("SELECT * FROM messages WHERE note_no = ? LIMIT 1", (n,)).fetchone()
 
 
+def message_update_raw_text(conn, message_id, raw_text):
+    """Replace a note's ORIGINAL text — used only when the boss EDITED the
+    Telegram message this note was built from, so the stored 'verbatim' copy
+    keeps matching what his chat shows. Returns True if a row was updated.
+
+    Callers own the follow-through: the KB chunks were embedded from the OLD
+    text and must be re-built (store.set_chunks), and a summary written about
+    the old text is no longer about this note.
+    """
+    cur = conn.execute("UPDATE messages SET raw_text = ? WHERE id = ?",
+                       (str(raw_text or "").strip() or None, message_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_urls(conn, message_id, urls):
+    """Replace a message's URL rows (idempotent; used when an edit changes the
+    links in the text). Order preserved, duplicates dropped."""
+    conn.execute("DELETE FROM urls WHERE message_id = ?", (message_id,))
+    for url in dict.fromkeys(urls or []):
+        conn.execute("INSERT INTO urls (message_id, url) VALUES (?, ?)",
+                     (message_id, url))
+    conn.commit()
+
+
 def message_update_summary(conn, message_id, summary):
     """Fix a saved note's SUMMARY in place (the displayed line). raw_text — the original
     message, and the source of the KB search chunks — is left untouched. Returns True if a
@@ -2586,7 +2707,7 @@ def delete_message(conn, message_id):
 # highest one after a delete, so anything keyed by it MUST be swept with the
 # row — otherwise the next note silently inherits the deleted note's reminder
 # candidate or journal draft. ANY future per-message kv key must be added here.
-MESSAGE_KV_KEYS = ("capture_action", "journal_draft")
+MESSAGE_KV_KEYS = ("capture_action", "journal_draft", "note_edit")
 
 # kv VALUES that hold raw `messages.id` rowids (rather than being keyed by one):
 # which notes the review showed, which one was resurfaced, which were shown
@@ -3017,7 +3138,8 @@ def prune_telemetry(conn, cutoff_iso):
     return total
 
 
-def convo_add(conn, chat_id, role, text, source="boss", update_id=None):
+def convo_add(conn, chat_id, role, text, source="boss", update_id=None,
+              tg_message_id=None):
     # Full verbatim history is kept (no pruning) so the boss can have Cara read back past
     # dialogue on demand (recall_conversation). convo_recent still reads only the latest N
     # for live context, so keeping everything costs nothing at conversation time.
@@ -3029,13 +3151,36 @@ def convo_add(conn, chat_id, role, text, source="boss", update_id=None):
     # and a retried update used to append the boss's message twice — so he "repeated
     # himself" in every prompt and in the verbatim readback. Cara's own turns pass
     # NULL (the unique index is partial) and are unaffected.
+    # tg_message_id identifies WHICH of his messages this turn is, so a later
+    # `edited_message` can rewrite exactly this row (convo_set_text).
     conn.execute(
-        "INSERT OR IGNORE INTO conversation (chat_id, ts, role, text, source, update_id)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO conversation"
+        " (chat_id, ts, role, text, source, update_id, tg_message_id)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
         (chat_id, _now(), role, text[:1000], source,
-         int(update_id) if update_id is not None else None),
+         int(update_id) if update_id is not None else None,
+         int(tg_message_id) if tg_message_id is not None else None),
     )
     conn.commit()
+
+
+def convo_set_text(conn, chat_id, tg_message_id, text):
+    """Rewrite the boss's stored turn behind one Telegram message.
+
+    He edited it: his chat now shows the NEW text (with Telegram's 'edited'
+    mark), so the verbatim record he can have read back must show it too.
+    Restricted to 'user' rows — only inbound turns carry a tg_message_id, and
+    Cara's own words are never rewritten. Returns True when a row changed.
+    """
+    if tg_message_id is None:
+        return False
+    cur = conn.execute(
+        "UPDATE conversation SET text = ?"
+        " WHERE chat_id = ? AND tg_message_id = ? AND role = 'user'",
+        (str(text or "")[:1000], chat_id, int(tg_message_id)),
+    )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def convo_recent(conn, chat_id, limit=10):

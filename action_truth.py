@@ -89,6 +89,10 @@ TEMPLATE_STATES = {
     "files_empty": "done",
     # Rendered only AFTER apply_category_confirm committed the note.
     "capture_reminder_slot_busy": "confirmed",
+    # "I'd already saved the older version" — the claim is about the note that IS
+    # saved; the EDIT itself is explicitly not applied yet, which is what the
+    # question in the same sentence asks about.
+    "note_edit_offer": "confirmed",
 }
 
 
