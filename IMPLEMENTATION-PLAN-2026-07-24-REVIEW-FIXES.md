@@ -1289,7 +1289,75 @@ column + partial unique index.
    every test and would still have deleted a 16 MB hand-made backup on the live box,
    because no test knew such files exist. Post-deploy inspection of real state caught it.
 
-### Session B — WP5–WP9 — pending
+### Session B — WP5–WP8 done, WP9 NOT STARTED (2026-07-26)
+
+Committed and pushed, NOT yet deployed (production is still on `2eefa19` = WP1–WP4):
+
+| Commit | What | Tests |
+|---|---|---|
+| `5e23b75` | WP5 deterministic reminder/note precision | 731 |
+| `eeb8ef0` | WP6 fetch deadline + media/ingest correctness | 763 |
+| `9a19d76` | WP7 LLM stack, budget, availability | 809 |
+| `8b1a3be` | WP8 prompt-injection hardening | 833 |
+
+**WP9 (memory truthfulness + `edited_message`) has not been started.** Resume there.
+
+Process note: WP8's implementer was killed by a process exit DURING its revert-proof
+(source reverted, not yet restored). It survived only because that step writes its patch
+OUTSIDE the repo. Keep doing that. Its review pass was then interrupted mid-edit, leaving
+`neutralize_untrusted(quote_fence=…)` half-applied — the opt-in existed but the three call
+sites that wrap a row in «…» still passed the default, so those exact prompts stayed
+forgeable. Finished by hand in `8b1a3be`.
+
+### NEXT SESSION: START HERE — audit of WP1–WP7 (2026-07-26)
+
+An independent read-only audit (7 auditors, one per package) verified every task against
+the committed code AND current HEAD. Result: **48 of 51 tasks complete**, 3 partial, 0
+missing, 0 regressed. The packages are real. But the auditors also found defects the
+pre-commit reviews missed. Fix these BEFORE deploying session B:
+
+**Highest priority — same bug class as the one caught on the live box:**
+1. `backup.rotate()` still globs `ingest-*.db.gz` and prunes by NAME. `2eefa19` hardened
+   `sweep_stray` against hand-made backups but left the sibling function untouched, and the
+   live box holds `ingest-pre-review-fix-20260713T104530Z.db.gz` and
+   `ingest-pre-review-lifecycle-cleanup-20260713T112217Z.db.gz`. They survive today only by
+   accident of sort order ('p' > '2' descending), which also means retention silently keeps
+   fewer automated snapshots than `backup_keep`. Scope `rotate()` to `_OWN_SNAPSHOT` too.
+2. **Scope regression I introduced in `2eefa19`:** the pre-fix sweep globbed `*.tmp`, which
+   covered `encrypt_snapshot()`'s `ingest-<stamp>.db.gz.enc.tmp`. `_OWN_SNAPSHOT` does not
+   match that name, so a crash between encrypt and rename now leaks it forever. Widen the
+   regex to `\.db(\.gz(\.enc)?\.tmp)?$` (still excluding hand-made names).
+3. `backup.run()` enforces retention only on attempts that survive `snapshot()` — in the
+   nearly-full-disk case WP1 exists to break, `conn.backup`/gzip raises ENOSPC and `rotate()`
+   never runs. Move rotation ahead of the snapshot, or into a `finally`.
+4. WP5 fail-closed is incomplete: `do_note_edit` (notes_svc.py:766), `do_show_media` (:424),
+   `item_detail_text`, and `_note_reminder_title` (reminders_svc.py:180) still call
+   `resolve_item`, which falls open to the NEWEST note when an explicit `#N` is stale. WP5
+   fixed `resolve_items` (plural) but not these. Same wrong-target class, unconfirmed paths.
+5. `correction_category` (tg_ingest_agent.py:3156) accepts any reply that
+   `llm.match_category_fuzzy` maps onto an existing category, and that helper matches when
+   EITHER token set is a subset of the other — so a short reply can still recategorize.
+6. WP3's rowid-reuse fix covered kv KEYS but not kv VALUES: `note_review_snapshot`
+   (notes_svc.py:791) stores raw `messages.id` lists that a reused rowid re-points.
+
+**Docs that overclaim (fix the text or the code):** CARA.md/SOLUTION.md still say `rotate()`
+sweeps `.db`/`.tmp`; the fetch row claims a budget "measured from the START (DNS and connect
+included)" which the code cannot enforce (urllib's internal `readline` on headers is one
+opaque blocking call — T6.1 is `partial` for this reason); scope `all` claims "no verbatim
+residue" but `telegram_updates.last_error` keeps a 1000-char slice of the failing text;
+the WP5 row claims a closed-alarm reply is "never redirected" but the guard only covers
+wordings the deterministic parser recognises (T5.4 `partial`).
+
+**Also flagged (minor, full list in the audit run):** `_purge_all_message_kv`/
+`_reset_note_counters` use `LIKE` with unescaped `_`; the finalize repair path returns
+before `storage.offload`; a photo whose first download failed is never recovered by repair;
+`db_full_alert` has no cross-restart dedupe; `budget_limits._eff` still uses the
+falsy-swallowing `or default` idiom T7.3 removed elsewhere; `_transcribe_local_server`
+falls back only on `URLError`, not on a hung server; the PDF bomb pre-scan can be bypassed
+by a payload containing a literal `endstream`; a mixed own album drops picture parts
+silently. The 8th (mechanical: MODULES/pricing/env/unit/secrets) auditor did not finish —
+re-run it.
+
 ### Session C — WP10–WP14 — pending
 
 ## 17. Traceability
