@@ -1371,6 +1371,44 @@ deterministic parser CAN read).
   sentence was narrowed instead of the code widened; if that is not acceptable it deserves
   its own task.
 
+### Session B — COMPLETE, DEPLOYED 2026-07-26 (`a9d026e`)
+
+| Commit | What | Tests |
+|---|---|---|
+| `5e23b75` | WP5 deterministic reminder/note precision | 731 |
+| `eeb8ef0` | WP6 fetch deadline + media/ingest correctness | 763 |
+| `9a19d76` | WP7 LLM stack, budget, availability | 809 |
+| `8b1a3be` | WP8 prompt-injection hardening (recovered by hand) | 833 |
+| `574b639` | fix: backup retention ignores hand-made copies, survives a failed snapshot | 836 |
+| `4359ece` | fix: WP1–WP7 audit findings (A–E) | 888 |
+| `a9d026e` | WP9 memory truthfulness + edited_message | 933 |
+
+Deploy verified: service `active`, 0 restarts, journal clean, `integrity_check` ok,
+`conversation.update_id` + `cara_life.status` migrations applied, `WatchdogUSec=15min` /
+`NotifyAccess=main`, hand-made backups intact, 68 GB free.
+
+**All 51 audit findings from the WP1–WP7 audit are now closed** (the three backup ones in
+`574b639`, items A–E in `4359ece`). The audit-fix batch itself needed TWO review rounds —
+the second caught that fixing `resolve_item` to fail closed had broken the `#7`/`J#7`/`7.`
+forms a live note legitimately uses, that a lone token still matched a multi-word category,
+and that the proactive nudge re-derived the review snapshot from queued ids instead of what
+the card rendered.
+
+Mechanical audit (re-run, 7 checks): 5 pass, 2 warn. The two that silently kill production
+both hold — the installer MODULES list is byte-for-byte the transitive import closure
+(34 == 34, empty diff both ways, AST-enforced) and every reachable model slug is priced.
+The warns are already-planned WP10/WP11 items, not regressions:
+ - 25 env keys `load_config` reads are missing from `tg-ingest-agent.env.example` (10
+   documented nowhere), `VISION_MODEL` the costly one; the installer's inline template is
+   33 keys further behind and never mentions `STT_MODE`, whose default `remote` would ship
+   voice audio off-box. → **T11.1**, and add the parity TEST (MODULES has one, env does not).
+ - the real fleet ops chat id is still committed at `tg-ingest-agent.env.example:182`. → **T10.5**
+
+**Open item for the operator (not a code change):** `/etc/tg-ingest-agent.env` on the box
+still defines an `LLM_PROFILES_JSON` profile named `review_balanced`, which T7.8 removed from
+the code. Harmless — `profiles()` backfills it and logs one warning per process start — but
+it is live-env drift. The live env was deliberately NOT edited.
+
 ### Session C — WP10–WP14 — pending
 
 ## 17. Traceability
