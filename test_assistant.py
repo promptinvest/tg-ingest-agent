@@ -15109,7 +15109,21 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         return path.read_text(encoding="utf-8")
 
     def checkout_only(self, name):
-        """A repo file that deliberately does NOT ship to the box (see deploy.sh)."""
+        """A repo file that deliberately does NOT ship to the box (see deploy.sh).
+
+        Absence is NOT a safe way to detect the stage dir. `/root/tg-ingest-agent-stage`
+        is only `mkdir -p`'d and untarred into — never wiped — so it accumulates
+        every file any past payload ever shipped, and those copies are as old as
+        the deploy that left them. `*.md` really is sitting there, months stale
+        (2026-07-26): a doc invariant would have asserted against a snapshot of a
+        spec nobody has edited since, failing or passing for reasons that have
+        nothing to do with the working tree. So require a real CHECKOUT — the one
+        thing the stage dir never has is `.git` — and skip otherwise. GitHub
+        Actions runs the suite on `actions/checkout`, which does have it, so these
+        invariants really execute in CI.
+        """
+        if not (self.REPO / ".git").exists():
+            self.skipTest(f"not a checkout: {name} may be a stale stage-dir copy")
         path = self.REPO / name
         if not path.is_file():
             self.skipTest(f"stage dir: {name} is not part of the deploy payload")
@@ -15395,6 +15409,44 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         # CRLF from the Windows checkout would break both of those on the box.
         self.assertIn("sed -i 's/\\r\\$//' *.py *.sh tg-ingest-agent.service "
                       "tg-ingest-agent.env.example", deploy)
+
+    # --- T11.3 / T11.4 (review WP11) — two doc facts that keep rotting ------
+    # The specs are not in deploy.sh's FILES, so these skip on the box and really
+    # run in a full checkout (GitHub Actions runs the suite on actions/checkout).
+    # Both facts had already gone stale by hand-maintenance alone. Verified green
+    # against the working tree, and both were seen to FAIL on the stage dir's
+    # months-old *.md copies before checkout_only learned to skip those.
+
+    def test_no_spec_carries_a_hard_coded_test_count(self):
+        """456 -> 529 -> 575: three different wrong numbers in the specs, each
+        stale within days. T11.4 replaced them with a phrase; nothing stopped the
+        next agent writing a fresh one. (The 2026-07-17 PRD is a frozen, disclaimed
+        snapshot and is deliberately not covered.)"""
+        import re as remod
+        count = remod.compile(r"\b\d{3,4}\s+(?:offline\s+)?(?:unit\s+)?tests\b",
+                              remod.IGNORECASE)
+        for name in ("CARA.md", "SOLUTION.md", "README.md"):
+            for line in self.checkout_only(name).splitlines():
+                self.assertIsNone(
+                    count.search(line),
+                    f"{name}: a hard-coded test count goes stale within days — say "
+                    f"'the full offline suite': {line.strip()}")
+
+    def test_every_purge_scope_is_named_in_the_capability_row(self):
+        """`store.PURGE_SCOPES` gained `journal` on 2026-07-17 and SOLUTION.md's
+        purge row still listed six scopes nine days later. T11.3 fixed the text by
+        hand; the next scope added to the tuple would desync it again."""
+        import re as remod
+        row = [line for line in self.checkout_only("SOLUTION.md").splitlines()
+               if line.startswith("| **Discard / delete / purge**")]
+        self.assertEqual(len(row), 1, "the purge capability row moved or was renamed")
+        listed = remod.search(r"by scope \(([^)]*)\)", row[0])
+        self.assertIsNotNone(listed, "the row must still enumerate the scopes it claims")
+        for scope in store.PURGE_SCOPES:
+            self.assertRegex(
+                listed.group(1), r"\b" + remod.escape(scope) + r"\b",
+                f"purge scope {scope!r} exists in store.PURGE_SCOPES but the "
+                "SOLUTION.md capability row does not name it")
 
 
 class OwnerBindingHardening20260726Tests(unittest.TestCase):
@@ -15807,6 +15859,406 @@ class StagedSecretApply20260726Tests(unittest.TestCase):
             self.assertEqual(self.env.read_text(encoding="utf-8"), "ALLOWED_CHAT_IDS=7\n")
             self.assertTrue(staged.exists())            # kept so it can be fixed
             self.assertIn("KEPT", out)
+
+
+class ConfigCatalogue20260726Tests(unittest.TestCase):
+    """T11.1 — the env catalogue may not drift from the code that reads it.
+
+    Same shape as InstallerModulesTests, and for the same reason: the MODULES
+    list has had a mechanical guard since it first crash-looped production and
+    has never drifted since; `tg-ingest-agent.env.example` had none and had
+    drifted by 23 keys. Since WP10 this file IS `/etc/tg-ingest-agent.env` on a
+    fresh box, so an undocumented key is not a documentation nit — rebuilding a
+    host from the example silently drops the behaviour behind it (VISION_MODEL
+    empty = no photo description, and nothing says so).
+    """
+
+    REPO = Path(__file__).resolve().parent
+
+    # Keys an operator may legitimately keep in /etc/tg-ingest-agent.env that
+    # `common.load_config` does NOT read. systemd loads the whole EnvironmentFile
+    # into the unit's process environment, so a process-level variable (`TZ`,
+    # `PYTHONWARNINGS`) or a key another module reads straight from `os.environ`
+    # is a real case — it just is not a load_config key. EMPTY today, and the
+    # right response to the first one is to name it here (two lines, and the name
+    # then documents itself), NOT to delete the guard below.
+    PROCESS_ENV_KEYS = frozenset()
+
+    # Template values that are deliberately NOT the code default: the two budgets
+    # this box actually runs on, the `REPLACE_ME` placeholders, and illustrative
+    # values for knobs whose default is empty (an empty example line teaches
+    # nothing). Everything else must match common.py exactly — see
+    # test_every_documented_default_is_the_code_default.
+    ILLUSTRATIVE_VALUES = frozenset({
+        "BUDGET_DAILY_USD", "BUDGET_MONTHLY_USD",        # the live box's real caps
+        "PRICING_JSON", "LLM_PROFILES_JSON", "CATEGORIES", "GCAL_CALENDAR_ID",
+        "SPACES_BUCKET", "VISION_MODEL",                 # default empty; shown by example
+        "SPACES_KEY", "SPACES_SECRET",                   # REPLACE_ME
+        "FLEET_NOTIFY_BOT_TOKEN", "FLEET_NOTIFY_CHAT_ID",   # REPLACE_ME
+    })
+
+    # The one documented key whose value load_config OPENS (load_categories
+    # read_text) — a smoke test cannot use the documented path on a test host.
+    READS_A_FILE = frozenset({"CATEGORIES_FILE"})
+
+    # Required, and `REPLACE_ME` in the example by design: ALLOWED_CHAT_IDS=REPLACE_ME
+    # parses to an empty set and SystemExits, which is exactly what should happen
+    # on a box nobody has filled in yet.
+    SECRETS = {"TELEGRAM_BOT_TOKEN": "123:abc", "ALLOWED_CHAT_IDS": "7",
+               "DO_MODEL_ACCESS_KEY": "dop_v1_x"}
+
+    def _config_keys(self):
+        """Every env key common.py's config loaders read.
+
+        Collected from EVERY function that takes an `env` parameter, not from a
+        hard-coded pair of names: `load_config` already delegates to
+        `load_categories`, and the next helper split out of it must be covered
+        without anyone remembering to edit this test. Deliberately excludes
+        `os.environ` reads (`WATCHDOG_USEC`, `NOTIFY_SOCKET`) — systemd injects
+        those, they are not config-file keys.
+
+        The SHAPE is pinned as well as the set, because the collector recognises
+        exactly one form — `env.get("LITERAL")`. A helper reading `env[key]`, or
+        `env.get(name)` with the literal at the call site, would contribute zero
+        keys and this guard would pass with the key undocumented. Any such read
+        fails here instead, so the only way to read config stays the way the walk
+        can see.
+        """
+        import ast as astmod
+        tree = astmod.parse(Path(common.__file__).read_text(encoding="utf-8"))
+        keys, sources = set(), {}
+        for func in astmod.walk(tree):
+            if not isinstance(func, astmod.FunctionDef):
+                continue
+            args = func.args
+            names = [a.arg for a in list(args.args) + list(args.kwonlyargs)]
+            if "env" not in names:
+                continue
+            for node in astmod.walk(func):
+                if (isinstance(node, astmod.Subscript)
+                        and isinstance(node.value, astmod.Name)
+                        and node.value.id == "env"):
+                    self.fail(f"{func.name}: env[...] is invisible to this guard — "
+                              "read config with env.get(\"LITERAL\")")
+                if not (isinstance(node, astmod.Call)
+                        and isinstance(node.func, astmod.Attribute)
+                        and node.func.attr == "get"
+                        and isinstance(node.func.value, astmod.Name)
+                        and node.func.value.id == "env"):
+                    continue
+                if not (node.args and isinstance(node.args[0], astmod.Constant)
+                        and isinstance(node.args[0].value, str)):
+                    self.fail(f"{func.name}: env.get() with a non-literal key is "
+                              "invisible to this guard — the key would go undocumented")
+                keys.add(node.args[0].value)
+                sources.setdefault(node.args[0].value, func.name)
+        self.assertIn("TELEGRAM_BOT_TOKEN", keys, "the AST walk found nothing — it broke")
+        self.assertIn("CATEGORIES_FILE", keys, "helper functions must be covered too")
+        return keys, sources
+
+    def _template_lines(self):
+        """Every template line as (key, value) — commented or active, in file order.
+
+        A commented line is not decoration: it is how every optional knob ships,
+        and an operator uncomments it verbatim.
+        """
+        import re as remod
+        pairs = []
+        text = (self.REPO / "tg-ingest-agent.env.example").read_text(encoding="utf-8")
+        for line in text.splitlines():
+            match = remod.match(r"^\s*#?\s*([A-Z][A-Z0-9_]*)=(.*)$", line)
+            if match:
+                pairs.append((match.group(1), match.group(2)))
+        return pairs
+
+    def _example_keys(self):
+        """Keys present in the example, ACTIVE or commented — an operator reads
+        both, and a commented template line is how every optional knob ships."""
+        return {key for key, _ in self._template_lines()}
+
+    def test_every_config_key_is_documented_in_the_env_example(self):
+        keys, sources = self._config_keys()
+        missing = sorted(keys - self._example_keys())
+        self.assertFalse(
+            missing,
+            "read by common.py but undocumented in tg-ingest-agent.env.example "
+            "(a host rebuilt from the example loses these silently): "
+            + ", ".join(f"{k} (in {sources[k]})" for k in missing))
+
+    def test_the_example_documents_no_key_the_code_does_not_read(self):
+        # NOT revert-proven — it passes with or without WP11, because the example
+        # happened to contain no stale key when this landed. It is a STANDING
+        # guard: the other direction, mirroring the MODULES guard's
+        # empty-diff-both-ways. A typo (`VISON_MODEL=`) or a knob deleted from the
+        # code otherwise leaves a line an operator will set and wait for, and
+        # nothing will ever read it.
+        keys, _ = self._config_keys()
+        stale = sorted(self._example_keys() - keys - self.PROCESS_ENV_KEYS)
+        self.assertFalse(
+            stale,
+            "documented in tg-ingest-agent.env.example but read nowhere in "
+            "common.py's config loaders (dead knob or typo). If one of these is a "
+            "PROCESS-environment variable systemd should export rather than a "
+            "load_config key, name it in PROCESS_ENV_KEYS — do not delete this "
+            "guard: " + ", ".join(stale))
+
+    def test_no_key_is_documented_twice(self):
+        """A second template line for a key that already has one is invisible to
+        both directions of the parity guard above (it compares SETS) and to WP10's
+        invariant (which only rejects `#`/`->` inside a value). It shipped: a prose
+        sentence in the Backup block began `# STORAGE_BACKEND=spaces, else posted
+        to the fleet notify chat…`, so the file documented that key twice with
+        different values and the sentence looked exactly like a line to uncomment —
+        which would have set the backend to a sentence and silently degraded to
+        local (`== "spaces"` fails in storage.py and self_model.py)."""
+        seen, dupes = {}, []
+        for key, value in self._template_lines():
+            if key in seen:
+                dupes.append(f"{key} (= {seen[key]!r} and {value!r})")
+            seen[key] = value
+        self.assertFalse(
+            dupes,
+            "documented more than once in tg-ingest-agent.env.example — prose that "
+            "starts with KEY= is a line an operator will uncomment: " + "; ".join(dupes))
+
+    def test_every_documented_value_actually_loads(self):
+        """The parity guard pins key NAMES; this pins that each documented VALUE
+        is one `common.load_config` accepts.
+
+        Since WP10 this file IS `/etc/tg-ingest-agent.env` on a fresh box, so every
+        commented line is one uncomment away from production: `QUIET_HOURS_START=22:00`
+        or `RECALL_DEFAULT_HOURS=60m` would pass every other test in this suite and
+        then raise inside `int()`/`float()` at startup — SystemExit, crash loop, on
+        the live box. Same lesson as the systemd inline-comment trap, one step removed.
+
+        NOT revert-proven: every value the pre-WP11 example carried was loadable
+        too, so this passes either way. It is a STANDING guard over the 23 lines
+        WP11 added and every line added after them.
+        """
+        for key, value in self._template_lines():
+            if key in self.SECRETS or key in self.READS_A_FILE:
+                continue
+            env = dict(self.SECRETS)
+            env[key] = value
+            try:
+                common.load_config(env)
+            except (Exception, SystemExit) as exc:
+                # SystemExit is NOT an Exception subclass and is exactly the failure
+                # this test exists for: load_config's validators raise it, and
+                # systemd turns it into a restart loop.
+                self.fail(f"{key}={value!r} (as documented) breaks load_config: {exc!r}")
+
+    def test_every_documented_default_is_the_code_default(self):
+        """…and that the value is not merely loadable but TRUE.
+
+        Changing `# PROACTIVE_ENABLED=true` to `false` would leave the example
+        quietly contradicting the code, and an operator reads the example as the
+        documentation of what happens if he changes nothing. Every documented line
+        except the explicitly illustrative ones must therefore reproduce the
+        empty-env config exactly.
+        """
+        for key in self.ILLUSTRATIVE_VALUES:
+            self.assertIn(key, self._example_keys(),
+                          f"{key} is exempted but no longer documented — stale exemption")
+        baseline = vars(common.load_config(dict(self.SECRETS)))
+        env = dict(self.SECRETS)
+        for key, value in self._template_lines():
+            if (key in self.SECRETS or key in self.READS_A_FILE
+                    or key in self.ILLUSTRATIVE_VALUES):
+                continue
+            env[key] = value
+        loaded = vars(common.load_config(env))
+        diffs = {k: (baseline[k], loaded[k]) for k in baseline if loaded[k] != baseline[k]}
+        self.assertFalse(
+            diffs,
+            "tg-ingest-agent.env.example documents a value that is NOT the code "
+            "default (code -> example): "
+            + "; ".join(f"{k}: {a!r} -> {b!r}" for k, (a, b) in sorted(diffs.items()))
+            + ". If the difference is deliberate, name the key in ILLUSTRATIVE_VALUES.")
+
+    def _comment_above(self, key):
+        """The contiguous comment lines directly above `key`'s template line —
+        i.e. exactly what an operator reads as that key's explanation."""
+        import re as remod
+        lines = (self.REPO / "tg-ingest-agent.env.example").read_text(
+            encoding="utf-8").splitlines()
+        for i, line in enumerate(lines):
+            if remod.match(r"^\s*#?\s*" + remod.escape(key) + "=", line):
+                block = []
+                for prev in reversed(lines[:i]):
+                    stripped = prev.lstrip("#").strip()
+                    if not stripped or remod.match(r"^[A-Z][A-Z0-9_]*=", stripped):
+                        break
+                    block.append(stripped)
+                return " ".join(reversed(block)).lower()
+        self.fail(f"{key} has no template line in the env example")
+
+    def test_the_vision_comment_sits_over_vision_model_not_the_chat_model(self):
+        """The specific misfiling this task exists for: the "Vision-capable model
+        id" comment sat over DO_CHAT_MODEL, so an operator following the example
+        verbatim swapped Cara's MAIN chat model for a vision model."""
+        chat = self._comment_above("DO_CHAT_MODEL")
+        self.assertNotIn("vision-capable model id", chat)   # the misfiled sentence
+        self.assertIn("main chat model", chat)
+        self.assertIn("vision", self._comment_above("VISION_MODEL"))
+
+    def test_the_off_box_stt_mode_stays_documented(self):
+        # NOT revert-proven: STT_MODE was already documented before WP11 (WP10 put
+        # it there), so this passes either way. It rode inside the vision test until
+        # 2026-07-26, which made that test's revert-proof status unreadable. It is a
+        # STANDING guard, kept because the code default ("remote") ships the boss's
+        # private voice audio OFF the box, and `local_server` is what the live box
+        # runs — an example that stopped naming both would hide that trade.
+        example = (self.REPO / "tg-ingest-agent.env.example").read_text(encoding="utf-8")
+        self.assertIn("# STT_MODE=", example)
+        self.assertIn("local_server", example)
+
+
+class ConversationVerbatimStorageTests(unittest.TestCase):
+    """T11.5 — a stored turn is the whole turn, up to Telegram's own maximum."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.conn = store.open_db(Path(self.tmp.name) / "test.db")
+        self.addCleanup(self.conn.close)
+
+    def test_a_long_message_survives_storage_and_replay_intact(self):
+        long_text = "".join(f"предложение номер {i}. " for i in range(200))[:3000]
+        self.assertEqual(len(long_text), 3000)
+        store.convo_add(self.conn, 1, "user", long_text)
+        row = store.convo_recent(self.conn, 1, limit=1)[0]
+        self.assertEqual(row["text"], long_text)
+        self.assertEqual(store.convo_replay_text(row), long_text)
+
+    def test_an_edit_does_not_shorten_what_was_stored_verbatim(self):
+        # The sibling-function trap: convo_set_text carried its OWN copy of the
+        # cap, so raising it only in convo_add would have made editing a long
+        # message TRUNCATE the turn that was previously stored in full.
+        long_text = "ы" * 3000
+        store.convo_add(self.conn, 1, "user", "short", tg_message_id=77)
+        self.assertTrue(store.convo_set_text(self.conn, 1, 77, long_text))
+        self.assertEqual(store.convo_recent(self.conn, 1, limit=1)[0]["text"], long_text)
+
+    def test_the_cap_is_telegrams_maximum_and_is_still_enforced(self):
+        # Not unbounded. 4096 is Telegram's own limit, so no typed message or
+        # caption can reach it — but a transcribed VOICE note is not bounded by
+        # Telegram's limit at all and IS clipped here (see the voice test in
+        # ConversationVerbatimReadbackTests, and the honest note in CARA.md §6).
+        # The column is never pruned, so it does not get to grow without us.
+        self.assertEqual(store.CONVO_TEXT_MAX, 4096)
+        store.convo_add(self.conn, 1, "user", "x" * 9000)
+        self.assertEqual(len(store.convo_recent(self.conn, 1, limit=1)[0]["text"]), 4096)
+
+
+class ConversationVerbatimReadbackTests(unittest.TestCase):
+    """T11.5, review round 2 — assert the WRITER and the READER, not the row.
+
+    The three tests above stop at `store.convo_*`. Both ends of the promise live
+    elsewhere: the inbound path decides what is handed to `convo_add`, and
+    `_render_dialog` decides how much of it `recall_conversation` can read back.
+    A future "trim before store" would restore the 1000-char behaviour with the
+    store tests still green (the guard-in-the-wrong-place failure this programme
+    has already hit), and raising the per-turn cap silently NARROWED how many
+    long turns fit in the reader's budget — that half was unpinned too.
+    """
+
+    RENDER_OVERHEAD = 20   # "[07-26 10:00] Босс: " — the per-line stamp
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "convo.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"),
+                               INGEST_READ_LINKS="false")
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+        self.addCleanup(self.conn.close)
+
+    def _budget(self):
+        """The reader's real char budget, read off the signature so this test
+        cannot quietly drift from `_render_dialog`."""
+        import inspect as inspectmod
+        return inspectmod.signature(self.agent._render_dialog).parameters["budget"].default
+
+    def _recall(self, query="что я говорил?"):
+        captured = {}
+
+        def cp(cfg, conn, skill, messages, **kw):
+            captured["sys"] = messages[0]["content"]
+            return "ага, помню 🤍"
+
+        with mock.patch.object(llm, "chat_profile", side_effect=cp), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.do_recall_conversation(1, "ru", {"query": query}, query)
+        return captured["sys"]
+
+    def _turn(self, n, size=None):
+        """A turn of exactly `size` characters, marked at both ends so a clip can
+        be told from a drop."""
+        size = store.CONVO_TEXT_MAX if size is None else size
+        head, tail = f"НАЧАЛО-{n}", f"КОНЕЦ-{n}"
+        return f"{head} " + "щ" * (size - len(head) - len(tail) - 2) + f" {tail}"
+
+    def test_the_inbound_path_stores_the_whole_message_and_reads_it_back(self):
+        """Nothing pinned that `handle_update` hands `convo_add` the FULL text —
+        it does today (`msg["text"] or msg["caption"]`, passed straight through),
+        but a trim added anywhere on the way in would be invisible to the store
+        tests. Then read it back, because storage the reader cannot reach is not
+        the promise either."""
+        long_text = self._turn(7, size=3000)
+        self.assertEqual(len(long_text), 3000)
+        with mock.patch.object(self.agent, "dispatch"):
+            self.agent.handle_update({"update_id": 900, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 900,
+                "text": long_text}})
+        row = store.convo_recent(self.conn, 1, limit=1)[0]
+        self.assertEqual(row["text"], long_text)          # durable, verbatim, whole
+        self.assertIn(long_text, self._recall())          # and the model sees it whole
+
+    def test_a_bigger_per_turn_cap_buys_fewer_turns_in_the_readers_budget(self):
+        """The honest other half of raising 1000 -> 4096: `_render_dialog` keeps
+        the last `budget` characters, so the readback got truer per turn and
+        SHORTER per conversation. Both halves are asserted here, and the docs say
+        so (CARA.md §6, SOLUTION.md §12) rather than only claiming the win."""
+        budget = self._budget()
+        per_line = store.CONVO_TEXT_MAX + self.RENDER_OVERHEAD
+        self.assertLess(budget // per_line, 2)                 # now: under two full turns
+        self.assertGreaterEqual(budget // (1000 + self.RENDER_OVERHEAD), 6)   # before: six
+        for n in (1, 2, 3):
+            store.convo_add(self.conn, 1, "user", self._turn(n))
+        system = self._recall()
+        # The newest turn survives WHOLE — that is what verbatim readback means.
+        self.assertIn(self._turn(3), system)
+        # The oldest is gone entirely, and the middle one is sliced mid-word with
+        # no marker: the tail is there, the head is not.
+        self.assertNotIn("НАЧАЛО-1", system)
+        self.assertNotIn("КОНЕЦ-1", system)
+        self.assertNotIn("НАЧАЛО-2", system)
+        self.assertIn("КОНЕЦ-2", system)
+
+    def test_a_long_voice_transcript_is_the_one_thing_the_cap_still_clips(self):
+        """The cap's justification used to read "text longer than Telegram can
+        deliver can only arrive if the API changes". False for exactly one inbound
+        path: `handle_update` overwrites `msg["text"]` with the STT transcript, and
+        nothing on that path caps its length (STT_LOCAL_TIMEOUT_SECONDS allows
+        minutes of dictation). A long dictation IS clipped, so the comment and both
+        specs now say so instead of promising every stored turn is whole."""
+        transcript = self._turn(9, size=6000)
+        with mock.patch.object(self.agent, "dispatch"), \
+                mock.patch.object(self.agent, "transcribe_voice", return_value=transcript), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.handle_update({"update_id": 901, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 901,
+                "voice": {"file_id": "v1", "file_unique_id": "u1", "duration": 420}}})
+        stored = store.convo_recent(self.conn, 1, limit=1)[0]["text"]
+        self.assertEqual(len(stored), store.CONVO_TEXT_MAX)
+        self.assertTrue(transcript.startswith(stored))
+        self.assertNotIn("КОНЕЦ-9", stored)      # the end of what he dictated is gone
 
 
 if __name__ == "__main__":

@@ -3138,11 +3138,39 @@ def prune_telemetry(conn, cutoff_iso):
     return total
 
 
+# Per-turn storage cap. 4096 is Telegram's own maximum message length, so for
+# every TYPED turn this is the smallest number that keeps the layer's promise: a
+# stored turn is the WHOLE turn, and "verbatim readback" (recall_conversation) is
+# literally true. It was 1000, which silently clipped any longer message — a
+# forwarded post, a pasted spec — and then read the clipped version back as if it
+# were what he said.
+# Kept as a cap rather than removed, and it is NOT out of reach: ONE inbound path
+# is not bounded by Telegram's 4096 at all — a transcribed VOICE note. handle_update
+# replaces msg["text"] with the transcript, and neither llm.transcribe nor
+# Agent.transcribe_voice caps its length (STT_LOCAL_TIMEOUT_SECONDS allows minutes
+# of dictation, and ~5 minutes of Russian speech already exceeds 4096 characters).
+# Such a transcript IS clipped here, and the specs say so rather than claiming
+# every stored turn is whole (CARA.md §6, SOLUTION.md §12). The cap stays because
+# this column is never pruned and every prompt replay below reads from it.
+CONVO_TEXT_MAX = 4096
+
+
 def convo_add(conn, chat_id, role, text, source="boss", update_id=None,
               tg_message_id=None):
     # Full verbatim history is kept (no pruning) so the boss can have Cara read back past
     # dialogue on demand (recall_conversation). convo_recent still reads only the latest N
     # for live context, so keeping everything costs nothing at conversation time.
+    # Turns are stored up to CONVO_TEXT_MAX (4096 = Telegram's message maximum), i.e.
+    # in full. The cost lands on every prompt that REPLAYS this table — router (14
+    # turns), converse (20), the ingest referential context (8) and the memory
+    # curator (12) — because convo_replay_text applies no length bound of its own:
+    # the replayed history is bounded by turn COUNT only. A run of long turns (and
+    # forwarded posts, the ordinary input here, are stored as turns) is therefore up
+    # to 4x the input tokens the old 1000-char clip produced, with the far end of
+    # that range a context-window risk and not only a budget one. Deliberate:
+    # STORAGE stays verbatim because recall_conversation's readback is the promise
+    # this table exists for. If budget or context pressure ever shows up, the
+    # surgical fix is a per-row clip at the router/converse call sites — not here.
     # source distinguishes the boss's OWN words ('boss') from UNTRUSTED forwarded/quoted
     # channel content ('forward'): the latter is fenced when replayed into prompts so a
     # forwarded post can't smuggle instructions into the router / converse (prompt-injection
@@ -3157,7 +3185,7 @@ def convo_add(conn, chat_id, role, text, source="boss", update_id=None,
         "INSERT OR IGNORE INTO conversation"
         " (chat_id, ts, role, text, source, update_id, tg_message_id)"
         " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (chat_id, _now(), role, text[:1000], source,
+        (chat_id, _now(), role, text[:CONVO_TEXT_MAX], source,
          int(update_id) if update_id is not None else None,
          int(tg_message_id) if tg_message_id is not None else None),
     )
@@ -3171,13 +3199,17 @@ def convo_set_text(conn, chat_id, tg_message_id, text):
     mark), so the verbatim record he can have read back must show it too.
     Restricted to 'user' rows — only inbound turns carry a tg_message_id, and
     Cara's own words are never rewritten. Returns True when a row changed.
+
+    Same CONVO_TEXT_MAX cap as convo_add, and it has to be: an edit that stored
+    less than the original write would make correcting a typo in a long message
+    TRUNCATE the turn that was already there.
     """
     if tg_message_id is None:
         return False
     cur = conn.execute(
         "UPDATE conversation SET text = ?"
         " WHERE chat_id = ? AND tg_message_id = ? AND role = 'user'",
-        (str(text or "")[:1000], chat_id, int(tg_message_id)),
+        (str(text or "")[:CONVO_TEXT_MAX], chat_id, int(tg_message_id)),
     )
     conn.commit()
     return cur.rowcount > 0

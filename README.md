@@ -1,95 +1,44 @@
 # tg-ingest-agent
 
-Conversational personal assistant on Telegram, running on the PD-VPS
-(`174.138.108.85`). The former Pilot-VPS was retired in 2026-06.
+Cara — a single-owner conversational assistant on Telegram, running on the
+PD-VPS (`174.138.108.85`). The former Pilot-VPS was retired in 2026-06.
 
 One dedicated bot, no slash commands needed: you write or **speak** (voice
-notes) in Russian or English, a closed-world intent router decides which
-skill handles the request, and everything risky is confirmed conversationally
-("да" / "нет, лучше крипта" / "через полчаса"). Forwarded channel posts are
-ingested automatically without burning router tokens.
+notes) in Russian or English, a closed-world intent router decides which skill
+handles the request, and everything that changes state is confirmed
+conversationally ("да" / "нет, лучше крипта" / "через полчаса"). Forwarded
+channel posts are ingested automatically without burning router tokens.
+Stdlib-only Python 3 (urllib, sqlite3), one process, one thread, one SQLite
+connection; long polling, so no inbound ports — the host firewall stays
+SSH-only. Runs as systemd service `tg-ingest-agent` under the non-root user
+`tg-ingest`.
 
-## Skills
+## Where the real documentation lives
 
-- **Ingest** — stores forwarded posts and notes (text, URLs, photos; an album
-  counts as one message) in SQLite + media files; a vision-capable LLM on
-  DigitalOcean Gradient serverless inference suggests a category (reusing the
-  taxonomy of previously confirmed categories, matching by meaning across
-  RU/EN) plus a summary in the source language. You confirm by reply or
-  inline button; only confirmed categories enter the taxonomy.
-- **Reminders** — "напомни завтра в 10 позвонить в банк", one-shot or
-  daily/weekly; the parsed draft is confirmed before scheduling; fired
-  reminders snooze via natural replies ("через 30 минут", "готово").
-- **Spend** — every LLM/STT call goes through a budget-guarded gateway that
-  prices and logs usage; ask "сколько потратили на AI за месяц?" for a
-  breakdown by skill and model. At 80% of `BUDGET_DAILY_USD`/`BUDGET_MONTHLY_USD`
-  the bot warns; at 100% model calls stop (messages keep being stored and are
-  processed after the period resets).
-- **Memory** — "запомни: отвечай по-английски", "что ты обо мне знаешь?",
-  "забудь...". Special keys: `language`, `timezone_offset`; everything else
-  is stored as notes. The ingest skill also **learns**: operator corrections
-  are fed back into the suggestion prompt, and after `HABIT_THRESHOLD`
-  same-category confirmations from one source the bot offers to auto-confirm
-  that source.
+**[`CARA.md`](CARA.md) and [`SOLUTION.md`](SOLUTION.md) are the maintained
+specs. This README is a pointer and setup guide only** — it is deliberately
+thin so it cannot drift out of agreement with them (it did, for months).
 
-## Persona
+- **What she can do**, the request flow, the persona and honesty rules, the
+  data model, the configuration catalogue and the known limits →
+  [`CARA.md`](CARA.md).
+- **Why it is built this way** — design principles, module map, skill
+  permission model, security posture, operations, roadmap →
+  [`SOLUTION.md`](SOLUTION.md).
+- **Working agreement for agents** (analyze first, argue before acting, deploy
+  and test discipline) → [`CLAUDE.md`](CLAUDE.md).
+- **Every env var**, with defaults and what each one costs you if it is wrong →
+  [`tg-ingest-agent.env.example`](tg-ingest-agent.env.example), which is also
+  the file that seeds `/etc/tg-ingest-agent.env` on a fresh box. A guard test
+  fails the suite if a key `common.load_config` reads is missing from it.
 
-Cara's character — warm, loyal, redheaded private aide; the operator is her
-"boss" — is specified in [prompts/cara_persona.md](prompts/cara_persona.md).
-She **fully emulates a human and never breaks character** (owner decision,
-non-deceptive because owner-only). Transactional/system replies come from
-`texts.py` templates written in her voice; free-form conversation and
-grounded answers are LLM-generated (`converse.py` / the Hermes register)
-with the safety rules embedded above the persona. Persona sits below the
-hard rules and cannot override them.
-
-Ask «как ты поработала за неделю?» for a performance review (activity, what
-she learned, issues, spend) — say «сделай отчёт файлом» and she sends a
-Markdown report (also saved under `/var/lib/tg-ingest-agent/reviews/`) meant
-to be fed back into VS Code to improve the solution. The same review arrives
-automatically once a week.
-
-## Guardrails
-
-- Closed action set in the router — every route (including the warm `converse`
-  action) is a named, manifest-gated action; a low-confidence read falls to
-  warm conversation, never to an unrouted free-for-all.
-- State-changing replies never come from free model prose: transactional
-  messages are bilingual templates (`texts.py`), model output fills validated
-  slots, and a `converse` turn performs no state change.
-- Forwarded content is wrapped in delimiters and treated as untrusted data
-  (prompt-injection defense); low router confidence asks a clarifying
-  question instead of guessing.
-- Chat-ID allowlist; per-skill argument validation; budget hard stop.
-
-Stdlib-only Python 3 (urllib, sqlite3); long polling, so no inbound ports —
-the host firewall stays SSH-only. Runs as systemd service `tg-ingest-agent`
-under the non-root user `tg-ingest`.
-
-## Module layout
-
-| File | Responsibility |
-|---|---|
-| `tg_ingest_agent.py` | entry point: poll loop, dispatch, pending-action resolution (installed as `agent.py`) |
-| `router.py` | closed-world intent router (LLM, JSON-only output) |
-| `ingest.py` | message parsing, URL extraction (UTF-16-safe), category suggestion |
-| `reminders.py` | reminder drafts, recurrence, local-time rendering |
-| `spend.py` | usage aggregation and reports |
-| `llm.py` | DO inference gateway: chat, STT (Whisper), pricing, budgets |
-| `store.py` | SQLite schema + helpers (messages, categories, usage, prefs, reminders…) |
-| `tg_api.py` | Telegram Bot API client |
-| `texts.py` | bilingual (ru/en) reply templates |
-| `common.py` | config loading |
-
-## Layout on the VPS
-
-| Path | Purpose |
-|---|---|
-| `/opt/tg-ingest-agent/` | the service modules (`agent.py` + the files above) |
-| `/etc/tg-ingest-agent.env` | config + secrets, mode 0600 (see `tg-ingest-agent.env.example`) |
-| `/var/lib/tg-ingest-agent/ingest.db` | SQLite |
-| `/var/lib/tg-ingest-agent/media/` | downloaded photos and voice files |
-| `/etc/systemd/system/tg-ingest-agent.service` | unit — installed verbatim from the tracked `tg-ingest-agent.service` (single source of truth) |
+Skills at a glance: ingest (notes, forwards, documents, journals), reminders +
+calendar, spend/budget, knowledge Q&A over your own notes, remote fetch of a
+link, VPS stats, weekly review, memory and proactive nudges. Guardrails at a
+glance: owner-only allowlist, closed router action set, state-changing replies
+from validated templates rather than free model prose, untrusted-content
+fences, budget hard stop. Both lists are specified properly in `CARA.md` §3
+and §7 — do not treat these two sentences as complete.
 
 ## One-time setup
 
@@ -99,7 +48,10 @@ under the non-root user `tg-ingest`.
    (`DO_MODEL_ACCESS_KEY`).
 3. Check the STT model slug in the DO console and set `STT_MODEL` if it
    differs from `whisper-large-v3` (voice input degrades gracefully when the
-   endpoint is unavailable).
+   endpoint is unavailable). For on-box transcription instead, install
+   whisper.cpp once via `install-whisper-pilot-remote.sh` and set
+   `STT_MODE=local_server` — note the code default is `remote`, which sends
+   audio off the box.
 
 ## Deploy (from Git Bash, repo root)
 
@@ -110,11 +62,16 @@ DEPLOY_HOST=root@174.138.108.85 DEPLOY_PORT=22 \
 ```
 
 `DEPLOY_HOST`, `DEPLOY_KEY`, and `DEPLOY_KH` are required; the script has no
-retired-host fallback. Use `--test` for the disposable test stage only.
+retired-host fallback. `--test` pushes the working tree and runs the suite in
+the disposable stage dir without installing; `--pull` deploys `origin/main`;
+`--rollback <sha|branch>` checks that ref out on the box and reinstalls.
 
 The installer is idempotent: it backs up replaced files to
-`/root/codex-hardening-backups/<ts>-tg-ingest-agent/`, preserves an existing
-env file, and leaves the service stopped if `REPLACE_ME` placeholders remain.
+`/root/codex-hardening-backups/<ts>-tg-ingest-agent/` (newest 10 kept), installs
+the tracked `tg-ingest-agent.service` and — only when `/etc/tg-ingest-agent.env`
+does not yet exist — seeds it from `tg-ingest-agent.env.example`, gates on
+`py_compile`, and leaves the service stopped while any `REPLACE_ME` placeholder
+remains.
 
 Fill `/etc/tg-ingest-agent.env` **in an SSH session on the box** (never push
 it from PowerShell with `Out-File`/redirect — UTF-16/BOM trap), then
@@ -132,53 +89,33 @@ opt-in `--deep-read` reaches the END of a flooded queue with negative offsets
 and, per the API ("all previous updates will be forgotten"), DISCARDS everything
 older — it prints that warning before you use it.
 
-## Behavior details
+## Layout on the VPS
 
-- **Confirmation flow**: ingest status goes `pending` → `suggested` →
-  `confirmed`; reminder drafts and habit proposals follow the same
-  suggest-then-confirm shape via a per-chat pending action (1 h TTL). Inline
-  buttons remain as a silent fallback alongside conversational replies.
-- **Albums** are buffered ~3 s and stored as ONE message row with N image
-  rows.
-- **Duplicates**: redelivered updates are dropped via
-  `UNIQUE(chat_id, tg_message_id)`; re-forwarded posts get `status=duplicate`
-  with the original's classification copied, no LLM call.
-- **Unexpected update failures**: raw Telegram updates are persisted in
-  `telegram_updates`, retried `UPDATE_MAX_ATTEMPTS` times, then retained as a
-  failed dead letter so one poison update cannot wedge long polling or disappear.
-- **LLM outage / budget stop**: store-first. Pending rows retry every
-  `RETRY_INTERVAL_SECONDS` (max `LLM_MAX_ATTEMPTS`, then `failed`).
-- **Voice**: OGG voice notes are downloaded, transcribed, quoted back to
-  you, then routed like text. `STT_MODE=local` uses whisper.cpp on the host
-  (free, ~1 min per 30 s note on 1 vCPU; install once via
-  `install-whisper-pilot-remote.sh`); `STT_MODE=remote` uses an
-  OpenAI-compatible `/v1/audio/transcriptions` endpoint.
-- **Hidden command aliases** for debugging: `/start`, `/stats`, `/categories`.
-- **Bilingual categories**: dedup uses Python `casefold()` (SQLite NOCASE is
-  ASCII-only and would split «Крипта»/«крипта»).
-
-## Known limitations
-
-- Images sent as **documents** are stored metadata-only and not analyzed;
-  videos/stickers are ignored (text/caption still ingested).
-- Media disk usage grows unbounded (slow at personal volume); pruning is a
-  future task.
-- Only one poller per bot token: never run the agent or test `getUpdates`
-  calls against the same token elsewhere (causes HTTP 409).
-- Recurrence is limited to daily/weekly.
-- The STT model slug on DO must be verified once at deploy time.
+| Path | Purpose |
+|---|---|
+| `/opt/tg-ingest-agent/` | the service modules (`agent.py` + the modules listed in the installer's `MODULES`) |
+| `/etc/tg-ingest-agent.env` | config + secrets, mode 0600 (seeded from `tg-ingest-agent.env.example`) |
+| `/var/lib/tg-ingest-agent/ingest.db` | SQLite |
+| `/var/lib/tg-ingest-agent/media/` | downloaded photos and voice files |
+| `/var/lib/tg-ingest-agent/backups/` | daily DB snapshots (rotated; off-box copies are encrypted) |
+| `/etc/systemd/system/tg-ingest-agent.service` | unit — installed verbatim from the tracked `tg-ingest-agent.service` (single source of truth) |
 
 ## Tests
 
-There are 456 offline unit tests (no network, temp SQLite), also run by GitHub
-Actions on every push and pull request. On this Windows/OneDrive workstation,
-run them only in the disposable VPS stage:
+The full offline suite (no network, temp SQLite) also runs in GitHub Actions on
+every push and pull request. On this Windows/OneDrive workstation, run it only
+in the disposable VPS stage — never locally:
 
 ```bash
 DEPLOY_HOST=root@174.138.108.85 DEPLOY_PORT=22 \
   DEPLOY_KEY="$HOME/.ssh/digitalocean-dataplatform-asus" \
   DEPLOY_KH=known_hosts_pd_dataplatform bash deploy.sh --test
 ```
+
+Only one poller may hold a bot token: never run the agent, a test, or a manual
+`getUpdates` against the live token elsewhere (Telegram answers HTTP 409).
+
+## Backups
 
 Off-box database backups require `BACKUP_ENCRYPTION_KEY_FILE` (default
 `/etc/tg-ingest-agent-backup.key`). Keep a recovery copy outside both the VPS

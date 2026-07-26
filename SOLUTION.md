@@ -269,7 +269,7 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Show media** | "покажи фото/файл из #2" → re-sends stored photos and documents by `file_id` (no re-upload). | — |
 | **Fetch** | "прочитай https://…" → fetches a public page (or public t.me web view), extracts text, ingests it. SSRF-guarded. | As ingest. |
 | **VPS stats** | "как сервер?" → CPU load, memory, disk, uptime, Cara's own footprint. | — |
-| **Discard / delete / purge** | Decline a fresh suggestion (`discard`); delete stored items by id/ids/count (`item_delete`); **bulk purge** by scope (all / category / stats / reminders / messages / issues) with a **typed confirmation phrase**. Preview == execute (2026-07-16): `stats` never touches `conversation`; `all` is the only scope that deletes it and its preview counts the turns. **2026-07-25:** `stats` also spares journal categories (the `kind` row IS the protection), and `all` scrubs the verbatim `telegram_updates` payloads it used to leave behind, disclosed in the preview. | Discard immediate; delete & purge confirmed (purge requires the exact phrase). |
+| **Discard / delete / purge** | Decline a fresh suggestion (`discard`); delete stored items by id/ids/count (`item_delete`); **bulk purge** by scope (all / category / stats / reminders / messages / issues / **journal**) with a **typed confirmation phrase**. Preview == execute (2026-07-16): `stats` never touches `conversation`; `all` is the only scope that deletes it and its preview counts the turns. The `journal` scope (shipped 2026-07-17, recorded here 2026-07-26 — this row listed six scopes while `store.PURGE_SCOPES` has had seven) has its OWN phrase («да, очистить дневник X») and empties a diary without deleting it: entries and their source messages go, the category row and the `journal_definitions` entry stay. **2026-07-25:** `stats` also spares journal categories (the `kind` row IS the protection), and `all` scrubs the verbatim `telegram_updates` payloads it used to leave behind, disclosed in the preview. | Discard immediate; delete & purge confirmed (purge requires the exact phrase). |
 | **Proactive nudges** | Gentle, suggestion-only heads-up (overdue reminders, memory candidates waiting, notes worth a review decision — the generic "unsorted" nudge became the note-review invitation 2026-07-17) — throttled and quiet-hours-aware (§6). On successful delivery `proactive_context` snapshots the nudge type + row ids for 15 minutes; «Давай»/«Да»/“show them” opens that exact queue before router/smalltalk. The review invitation opens the exact snapshotted ≤3-item batch (15-min follow-up TTL), candidates use the snapshotted ids, and overdue opens the real reminder list—never unrelated free-form content. A fired one-shot awaiting “готово” is not overdue and cannot re-trigger an urgent overdue nudge. Tunable in plain language. | Suggestion-only; never acts. |
 | **Trace / why** | "почему ты так решила?" → the last trace timeline. Issues are logged; weekly digest + trace-summary export. | — |
 | **Report a problem** | "запиши в проблемы" / "добавь в ошибки" logs a boss-reported issue (`boss_reported`, surfaces in the review) — distinct from the issues report, which only shows them. | — |
@@ -672,7 +672,13 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
 - Dedicated bot token and dedicated DO inference key (independent billing &
   revocation).
 - **Housekeeping:** voice notes and orphaned media auto-purged after processing;
-  review/export files trimmed — disk stays bounded.
+  review/export files trimmed; DB snapshots rotated to `BACKUP_KEEP` and install-time
+  backup dirs to the newest 10. Bounded, but **not proof against a full disk** — the
+  honest version since WP1/WP2 (2026-07-25) is that free space is *monitored*
+  (`DISK_ALERT_MIN_FREE_PCT`, a one-shot warning with a `disk_low` issue) and a
+  disk-full `sqlite3.OperationalError` is *contained* rather than crash-looping, because
+  the failure modes that actually filled it were leaked snapshots and retention that
+  skipped itself precisely when the disk was full.
 
 ---
 
@@ -726,10 +732,52 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   names the scripts it ships instead of globbing `*.sh`, so no future one-shot at the repo
   root can ride onto the live box (`migrate-cara-to-pd.sh`, which stops services and
   overwrites the env file, is deliberately not shipped and is syntax-checked in a checkout).
+- **The env catalogue is enforced, not maintained by hand (2026-07-26, review WP11).**
+  WP10 made `tg-ingest-agent.env.example` the file that seeds `/etc/tg-ingest-agent.env`
+  on a fresh box; the same audit found it missing **23 keys** `common.load_config` reads,
+  and the "Vision-capable model id" comment sitting over `DO_CHAT_MODEL` — an operator
+  following it verbatim would swap Cara's main chat model for a vision model, and one
+  rebuilding a host from it would lose photo description (`VISION_MODEL` undocumented and
+  therefore empty) with nothing said. The keys were added and the comment moved, but the
+  durable part is the **guard test**: it AST-walks every function in `common.py` that
+  takes an `env` parameter (so a future helper split out of `load_config` is covered
+  without anyone remembering), collects the literal keys read from it, and diffs that set
+  against every key the example carries commented or active — failing in **both**
+  directions, so a dead knob or a typo (`VISON_MODEL=`) is caught as loudly as a missing
+  one. Chosen deliberately in the shape of the `MODULES` guard: that list crash-looped
+  production once, got a mechanical test, and has not drifted since; the env had no
+  guard and drifted by 23 keys. **Names were not enough (same day, review round 2):**
+  every template line's VALUE is now loaded through `common.load_config` too, because
+  every commented line in that file is one uncomment away from production — a documented
+  `QUIET_HOURS_START=22:00` would pass a names-only guard and then raise inside `int()`
+  at startup, which systemd turns into a restart loop. The values are also compared
+  against the code defaults (a named `ILLUSTRATIVE_VALUES` list holds the deliberate
+  exceptions: the box's real budgets, the `REPLACE_ME` placeholders and example values
+  for knobs whose default is empty), and a duplicate-key check catches the class that
+  shipped here — a prose sentence beginning `# STORAGE_BACKEND=spaces, else …`, which
+  documented that key twice and looked exactly like a line to uncomment. The key-set
+  guard also pins its own SHAPE (`env.get("LITERAL")` only, no `env[...]`, no computed
+  key), because a read it cannot see is a key it cannot require.
+- **Two doc facts are now machine-checked (2026-07-26).** The specs are not in
+  `deploy.sh`'s payload, so a doc invariant skips cleanly on the box and really runs in
+  a full checkout — which is where CI runs the suite. Both facts had already rotted
+  under hand-maintenance: the hard-coded test count was wrong three times over
+  (456 → 529 → 575), so no spec may carry a `\d{3,4} tests` phrase at all; and
+  SOLUTION.md's purge capability row listed six scopes for nine days while
+  `store.PURGE_SCOPES` had seven, so every member of that tuple must appear in the row.
+- **README is a pointer, not a spec (2026-07-26).** It still described the pre-2026-07
+  system and contradicted the code on about five points (stickers/videos "ignored",
+  "unbounded media growth", a clarifying-question router, no `local_server` STT, a
+  10-module layout). Rather than re-synchronising a third document forever, its
+  Skills/Guardrails/Module-layout/Known-limitations sections were replaced by links, and
+  it now states outright that `CARA.md` and `SOLUTION.md` are the maintained specs. What
+  it keeps is what lives nowhere else: one-time setup, the deploy/test commands, the
+  chat-id bootstrap, the VPS layout table and the verification queries.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
-- **Tests:** 529 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run
-  on the VPS as part of every deploy and in GitHub Actions — including a
+- **Tests:** the full offline suite (no network; temp SQLite) — deliberately not a
+  number here, because every count this file has ever carried went stale within days
+  (2026‑07‑26). Run on the VPS as part of every deploy and in GitHub Actions — including a
   **golden-transcript harness** that replays
   end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
   captured) and asserts replies, DB writes, and **no state change before
@@ -755,11 +803,49 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
 - **Compound commands** (two+ distinct actions in one message) are recognised and
   declined gracefully ("one at a time"), not executed as a batch — a deliberate limit
   of the single-action router.
-- **Journals:** deferred for now — an optional daily "record today's entry?" nudge and
-  per-journal markdown export (both straightforward follow-ons).
+- **Journals — SHIPPED, no longer deferred (corrected 2026-07-26).** This list still
+  named the optional daily "record today's entry?" nudge and the per-journal markdown
+  export as future work; both landed with the structured-journals batch on 2026-07-17.
+  The nudge is `proactive._journal_prompts` (opt-in per journal, its hour validated out
+  of `prompt_config_json`, skipped once the day already has an entry, and counted
+  against the same daily nudge cap as every other heartbeat check); the export is
+  `journals.export_markdown`. What remains genuinely unbuilt is a second **entry type**
+  — the registry is closed and only `gratitude` is active.
 - **TTS** (Cara replying with voice) is the one researched-but-unbuilt item —
   parked pending a decision (a real engine install on a small box).
+- **Conversation turns are stored to 4096 characters** (2026-07-26, review WP11) —
+  Telegram's own message maximum, so for every TYPED turn a stored turn is the whole
+  turn and the verbatim readback `recall_conversation` promises is literally true. It
+  was 1000, which clipped a long pasted or forwarded message and then read the clipped
+  version back as his words. **One inbound path is not bounded by Telegram's limit and
+  is still clipped: a transcribed voice note** (`handle_update` overwrites the message
+  text with the transcript; neither `llm.transcribe` nor `transcribe_voice` caps its
+  length, and `STT_LOCAL_TIMEOUT_SECONDS` allows minutes of dictation), so the promise
+  is about typed messages, not about a long dictation. The honest cost: every prompt
+  that replays this table pays it — router (14 turns), converse (20), the ingest
+  referential context (8) and the memory curator (12) — because `convo_replay_text`
+  applies no length bound, i.e. the replayed history is bounded by turn COUNT only. Up
+  to four times the input tokens of the old clip, and **forwarded posts are the ordinary
+  long turn** (every forward's text is stored as a conversation turn), so that is the
+  common case rather than the rare one; at the far end it is a context-window risk and
+  not only a budget one. Accepted deliberately — storage stays verbatim because the
+  readback is the promise this table exists for, and the surgical fix if cost ever bites
+  is a per-row clip at the router/converse call sites. `recall_conversation` keeps its
+  own separate 7000-character render budget, unchanged — but that budget now covers
+  **fewer turns** (under two maximum-length turns where the old cap fitted six, oldest
+  sliced mid-word and unmarked): truer per turn, shorter per conversation. Both halves
+  are pinned by tests on the READER, not only on the stored row.
 - Deferred by design (single-user posture): multi-channel adapters, any web
   console/webhooks, MCP adapter, independent multi-agent processes, plugin
   marketplace, and shell/browser automation — none are implemented.
+- **Closed by the 2026-07-24 review programme, so no longer listed as gaps:** the
+  disk-full crash-loop class (WP1/WP2 — leaked snapshots, retention that skipped
+  itself precisely when the disk was full, an unguarded update path, a low-disk
+  warning that arrives while there is still room), identity reuse (WP3 — `note_no`,
+  message-keyed kv rows and kv values carrying raw rowids, plus the vector cache whose
+  `(count, max_id, sum_id)` fingerprint collided under rowid reuse and kept grounding
+  answers in a deleted note's chunks), purge overreach (WP4), fence forgery (WP8, §10),
+  memory consolidation that could drop a CONFIRMED fact (WP9), and edit-blindness
+  (WP9 — `allowed_updates` never asked for `edited_message`, so an edit was never
+  delivered at all; §3, with its remaining honest exclusions in CARA.md §10).
 ```

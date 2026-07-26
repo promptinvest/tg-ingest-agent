@@ -217,6 +217,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   not cut off at Telegram's length limit. Gratitude (and any **journal** entry) lands in
   the right journal even when the model writes a singular/variant of its name; a
   referential save with no resolvable subject keeps its real text instead of a blank note.
+- **Habit auto‑confirm (opt‑in, documented 2026‑07‑26 — it shipped undocumented):** when
+  you have filed the last `HABIT_THRESHOLD` (default 10) forwards from the **same source
+  channel** into the same category, she **asks once** — «я заметила: последние 10 постов
+  из «X» ты относишь к «Y». Давай я буду подтверждать их сама?». Only your yes turns it
+  on (stored as the `auto_cat:{source}` preference); after that, posts from **that one
+  source** are filed under **that one category** without a card, and she says she did it
+  («сама записала в «Y» (#N)»). A no is remembered too (`auto_cat_declined:{source}`), so
+  she never asks about that source again, and the proposal is skipped whenever another
+  confirmation is already pending. It changes only WHO presses confirm — it never widens
+  what may be saved, and it never applies to a source you have not agreed to.
 - **Link‑aware ingest (2026‑07‑06):** a **link‑centric** note (short text + a URL) has
   its first URL **fetched** through the SSRF‑guarded reader — the summary describes the
   ACTUAL page (no more "вероятно, содержит…") and the page text is **indexed**, so `ask`
@@ -353,6 +363,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Overview & stats:** "что у тебя есть?" → a digest (counts, reminders, memory,
   spend); per‑status/category **stats** (`stats`) and the **category list**
   (`categories`).
+  **Three hidden slash aliases (documented 2026‑07‑26 — they shipped, and the only
+  place they were written down was the README section that WP11 replaced):**
+  `/start` → her greeting by name, `/stats` → exactly the same text as the `stats`
+  capability above, `/categories` → the same category list. They bypass the router
+  (no model call, no tokens) and exist for debugging and for the very first message
+  to a fresh bot; nothing else needs a slash command.
 - **Re‑categorize** (`recategorize`): "поменяй категорию #2 на Документы", "переложи
   это в Чеки" (most recent), "переложи всё из crypto в news" (bulk — moves the WHOLE
   set, reporting the real count). Logged as a correction so it feeds learning.
@@ -677,6 +693,20 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   настроек?" — language, timezone, auto‑calendar, named notes.
 
 ### Reporting & ops
+- **Morning brief (opt‑in, documented 2026‑07‑26 — it shipped undocumented):** OFF until
+  you ask for it — «делай мне утреннюю сводку» / «присылай утренний бриф» (and
+  «не нужна утренняя сводка» turns it back off; it is stored as the `morning_brief`
+  preference, so it survives restarts). When on, it fires **once a day at or after
+  `MORNING_BRIEF_HOUR`** (default 9, your local time) and only if the proactive
+  heartbeat is enabled and you are outside quiet hours — a brief is a nudge, not an
+  alarm. Contents, all deterministic (no model call): today's reminders with their
+  times, what is **overdue**, one‑shots that fired and still wait for «готово», the
+  open threads from your working history, and the **📔 Дневники** journal rollup.
+  When there is genuinely nothing worth a ping she sends nothing and marks the day
+  done. **Delivery‑gated (2026‑07‑06):** the day is stamped done only after Telegram
+  confirms the send — a transient failure backs off 15 minutes and retries up to 3
+  times, then logs a `sched_send_failed` issue and gives up for that day rather than
+  wedging the schedule forever.
 - **Weekly performance review:** runs on a fixed schedule (default **Monday 10:00
   local**); "когда следующий review?" tells you the date; "как ты поработала?" runs it
   on demand. **Saved‑to‑used outcomes lead (2026‑07‑17, MET‑001):** the user‑facing
@@ -1130,7 +1160,39 @@ durable capture/use/triage/delete ledger keyed by stable note number; deliberate
 no message FK, never retention-pruned) · `reminders` (incl.
 `prev_due_utc`, `closed_at`, `close_reason`) + `reminder_events` lifecycle log ·
 `feedback` · `preferences` (identity/config + budget overrides) ·
-`pending_actions` (TTL) · `conversation` (recent turns) · `kv`.
+`pending_actions` (TTL) · `conversation` (every turn, never pruned) · `kv`.
+
+**Conversation turns are stored to 4096 characters (2026‑07‑26)** — Telegram's own
+message maximum, so for anything he TYPES a stored turn is the WHOLE turn and the
+verbatim readback `recall_conversation` promises is literally true. The cap was 1000: a
+long pasted spec or forwarded post was clipped on the way in and then read back as his
+words, silently. An `edited_message` rewrite uses the same cap, or editing a typo in a
+long message would have truncated the turn that was already stored in full. It applies
+to new writes only: **turns already clipped at 1000 stay clipped** — the rest of those
+messages was never stored and cannot be recovered.
+
+**The one thing 4096 still clips: a long VOICE note.** Text and captions cannot exceed
+Telegram's own limit, but a transcript can — `handle_update` replaces the message text
+with what Whisper returned, and nothing on that path caps its length (a dictation may
+run for minutes; ~5 minutes of Russian speech already passes 4096 characters). Such a
+transcript is stored up to the cap and the tail is lost, so "the whole turn" is a
+promise about typed messages, not about a long dictation.
+
+The honest cost of the change: every prompt that REPLAYS this table pays it — the
+router (14 turns), warm conversation (20), the referential context prepended to each
+ingest (8) and the daily memory curator (12). None of them clips a row, so the replayed
+history is bounded by turn COUNT only and can be up to four times larger than the old
+1000‑char clip produced. That is not a rare case: **forwarded posts are her ordinary
+input and every forward's text is stored as a turn**, so a forward‑heavy day is exactly
+the long‑turn run. At the far end of that range it is a context‑window risk, not only
+input tokens against the daily budget. Deliberate: storage stays verbatim because the
+readback is what this table is for; if the cost ever shows up, the surgical fix is a
+per‑row clip at the router/converse call sites, not a smaller cap here.
+`recall_conversation` was already bounded separately (7000 characters of rendered
+transcript, most‑recent‑first) and that bound is unchanged — but it now buys **fewer
+turns**: under two maximum‑length turns where the old cap fitted six, with the oldest
+surviving turn sliced mid‑word and unmarked. The readback got truer per turn and
+shorter per conversation.
 
 Spend & reliability: `llm_usage` · `model_cooldowns`.
 
@@ -1296,8 +1358,13 @@ STT (code defaults shown; the box overrides the first two): `STT_MODE` (default
 `WHISPER_SERVER_URL` · `WHISPER_MODEL` · `STT_ENABLED=true`.
 
 Schedules & proactivity: `REVIEW_WEEKDAY=0` (Mon) / `REVIEW_HOUR=10` ·
-`PROACTIVE_ENABLED=true` · `QUIET_HOURS_START=22` / `QUIET_HOURS_END=8` ·
-`PROACTIVE_MAX_PER_DAY=1` · `PROACTIVE_INTERVAL_SECONDS=3600`.
+`MORNING_BRIEF_HOUR=9` (the opt‑in morning brief's earliest local hour; the brief
+itself is off until he asks for it — §3) · `PROACTIVE_ENABLED=true` ·
+`QUIET_HOURS_START=22` / `QUIET_HOURS_END=8` · `PROACTIVE_MAX_PER_DAY=1` ·
+`PROACTIVE_INTERVAL_SECONDS=3600`.
+
+Learning: `HABIT_THRESHOLD=10` — how many consecutive same‑category filings from one
+source before she offers to auto‑confirm that source (§3; the offer still needs a yes).
 
 Backup: `BACKUP_ENABLED=true` · `BACKUP_KEEP=7` ·
 `BACKUP_ENCRYPTION_KEY_FILE=/etc/tg-ingest-agent-backup.key` (local gzip plus encrypted
@@ -1307,6 +1374,23 @@ off‑box copy; recovery key retained separately from the VPS/repo) ·
 Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 `GCAL_SA_KEY_FILE` (Calendar) · `STORAGE_BACKEND=spaces` + `SPACES_*` (DO Spaces) ·
 `FETCH_ENABLED` · `CATEGORIES`/`CATEGORIES_FILE`.
+
+**The complete catalogue is `tg-ingest-agent.env.example`, and it is now enforced
+(2026‑07‑26).** That file both documents every knob and *is* `/etc/tg-ingest-agent.env`
+on a fresh box, so an undocumented key is a real capability loss on a rebuild rather
+than a documentation nit: 23 keys `common.load_config` reads were missing from it,
+including `VISION_MODEL` — empty means photos are handled text‑only from the caption,
+so a host rebuilt from the example lost photo description with nothing said. The
+"vision‑capable model id" comment also sat over `DO_CHAT_MODEL`, i.e. following the
+example verbatim swapped Cara's MAIN chat model for a vision model. A guard test now
+diffs the keys `common.py`'s config loaders read against the keys the example carries
+(commented or active) and fails the suite in **both** directions — the same mechanical
+shape as the installer `MODULES` guard, which has never drifted since it got one. It
+also checks every documented **value**: each template line is loaded through
+`load_config` (a documented `QUIET_HOURS_START=22:00` would otherwise sit there until
+someone uncommented it and the service crash‑looped on `int()`), compared against the
+code default unless it is on a named list of deliberate examples, and rejected if a key
+is documented twice. The lists above stay as the short tour; they are not the catalogue.
 
 ---
 
@@ -1338,7 +1422,9 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   `--test`) now deletes those two copies by name before installing.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
-- **Tests:** 529 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run on
+- **Tests:** the full offline suite (no network; temp SQLite) — deliberately not a
+  number here, because every count these specs have carried went stale within days
+  (2026‑07‑26). Run on
   the box as part of every deploy and in GitHub Actions — including a
   **golden‑transcript harness** that replays end‑to‑end
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
@@ -1389,6 +1475,17 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   line with extra words around it can now pass through as text, and a very SHORT genuine
   dictation wrapped in a hallucinated outro («спасибо за просмотр, купи молоко») is still
   discarded, because 13 characters of remainder are indistinguishable from credit‑line glue.
+- **Voice is RUSSIAN‑pinned on the live box — English voice notes degrade (recorded
+  honestly 2026‑07‑26).** `STT_LANGUAGE` defaults to `auto` in code, but the live box sets
+  it to `ru`. That is a deliberate trade, not an oversight: with `auto`, Whisper guesses
+  from the first moments of audio and a wrong guess is what produces the YouTube‑style
+  hallucinations («[Subscribe]», «Спасибо за просмотр») the noise filter above then has to
+  throw away — pinning one language removes that failure for a single‑language speaker.
+  The price is that an ENGLISH voice note on this box is transcribed as if it were
+  Russian and comes back mangled or empty. **Text stays fully bilingual** (`detect_lang`
+  per message, ru/en templates, replies in the language he wrote in) — only the audio
+  path is pinned. To take English voice notes, set `STT_LANGUAGE=auto` and accept the
+  hallucination rate back.
 - **Edited messages (2026‑07‑26) — what is handled and what is not.** Handled: the
   dialogue record, a note still in the inbox, and an ask‑first update of a note she
   already saved (§3). Deliberately NOT applied to the note — because the note's text was
