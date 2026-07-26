@@ -2369,11 +2369,11 @@ class ConversationDispatchTests(unittest.TestCase):
         msgs = knowledge.build_ask_messages(
             "когда рейс?", [{"message_id": 1, "text": "рейс в 10:00", "category": "Travel",
                             "title": None}])
-        sys = msgs[0]["content"]
-        self.assertIn("HERMES", sys)                          # business register, not warm persona
-        self.assertIn("crisp", sys.lower())
-        self.assertNotIn("personal assistant", sys.lower())  # still not a generic 'assistant'
-        self.assertIn("Never call yourself an AI", sys)      # no AI/bot disclaimer
+        sys_prompt = msgs[0]["content"]                       # not `sys`: shadows the module
+        self.assertIn("HERMES", sys_prompt)                   # business register, not warm persona
+        self.assertIn("crisp", sys_prompt.lower())
+        self.assertNotIn("personal assistant", sys_prompt.lower())  # still not a generic 'assistant'
+        self.assertIn("Never call yourself an AI", sys_prompt)      # no AI/bot disclaimer
         self.assertIn("рейс в 10:00", msgs[1]["content"])    # grounding still present (data turn)
 
     def test_converse_grounding_uses_stored_facts(self):
@@ -2906,13 +2906,34 @@ class ProactiveTests(unittest.TestCase):
         from datetime import datetime, timezone, timedelta
         past = (datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc) - timedelta(days=1)).isoformat()
         store.reminder_add(self.conn, 1, "call the bank", past)
-        # cap already spent today by a non-urgent nudge
-        store.proactive_log_add(self.conn, "candidates", "sent", sent=True)
+        # Cap already spent today by a non-urgent nudge. `day=` is load-bearing: the
+        # cap is counted per DAY string, and without it the row got the real
+        # wall-clock date while run() is driven at 2026-06-15 — so the cap was never
+        # actually spent and this test passed even with the urgent bypass deleted.
+        # The spent key is note_review, NOT the candidates one asserted below, so the
+        # suppression proven there is the daily CAP and not "already sent today".
+        store.proactive_log_add(self.conn, "note_review", "sent", sent=True, day="2026-06-15")
+        self.assertEqual(
+            store.proactive_sent_count(self.conn, "2026-06-15",
+                                       self.proactive._nonurgent_keys(self.conn)),
+            self.cfg.proactive_max_per_day)      # the cap really is spent
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
         sent = []
         key = self.proactive.run(self.conn, self.cfg, "ru", self._reply_ok(sent),
                                  now=self._now_local(12))
         self.assertEqual(key, "overdue")        # urgent fires despite the cap
         self.assertEqual(len(sent), 1)
+        # Inverse control: the non-urgent candidate waiting in the SAME db does NOT
+        # get through — run() logs it suppressed with the daily-cap reason. (Its own
+        # turn only comes on the next run: the loop returns as soon as one nudge is
+        # sent, and the overdue one is then 'already sent today'.)
+        again = self.proactive.run(self.conn, self.cfg, "ru", self._reply_ok(sent),
+                                   now=self._now_local(13))
+        self.assertIsNone(again)
+        self.assertEqual(len(sent), 1)          # nothing else was sent
+        suppressed = {r["check_name"]: r["reason"] for r in self.conn.execute(
+            "SELECT check_name, reason FROM proactive_log WHERE result = 'suppressed'")}
+        self.assertEqual(suppressed.get("candidates"), "daily cap")
 
     def test_fired_unacknowledged_reminder_is_not_an_overdue_nudge(self):
         from datetime import timedelta
@@ -4820,8 +4841,16 @@ class EventJobTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.conn = store.open_db(Path(self.tmp.name) / "ej.db")
+        # `runtime._HANDLERS` is a process-global registry: every Agent built by an
+        # earlier test registers the PRODUCTION handlers into it. SNAPSHOT it and put
+        # it back in tearDown — this class used to `.clear()` it, which erased those
+        # handlers for the rest of the process and made later tests depend on test
+        # ORDER (they passed only because they happen to build an Agent themselves).
+        self._saved_handlers = dict(runtime._HANDLERS)
 
     def tearDown(self):
+        runtime._HANDLERS.clear()
+        runtime._HANDLERS.update(self._saved_handlers)
         self.conn.close()
         self.tmp.cleanup()
 
@@ -4908,7 +4937,129 @@ class EventJobTests(unittest.TestCase):
             jobs.add_job(self.conn, "t", "unregistered", max_attempts=1)
             runtime.drain(self.conn, ctx=None)
         finally:
-            runtime._HANDLERS.clear()
+            # Remove ONLY what this test registered (tearDown restores the rest).
+            runtime._HANDLERS.pop(("t", "good"), None)
+            runtime._HANDLERS.pop(("t", "boom"), None)
+
+
+class TestSuiteHygiene20260726Tests(unittest.TestCase):
+    """WP12 — three ways this suite can quietly stop testing what it claims.
+
+    A test that mutates PROCESS-GLOBAL state and never puts it back changes what
+    every later test sees (T12.3: `runtime._HANDLERS.clear()` erased the handlers
+    each constructed Agent registers); a duplicate method name inside one class
+    silently replaces the earlier definition — the shadowed body never runs and
+    nothing reports it missing; and a conditional EXPRESSION statement reads like an
+    assertion while checking nothing (T12.2). None of the three fails loudly, which
+    is why each gets a standing guard here.
+    """
+
+    def test_event_job_tests_restore_the_global_handler_registry(self):
+        """T12.3. Runs EventJobTests in-process with a foreign handler already in
+        the registry — standing in for the production handlers a previously built
+        Agent leaves there. Before the fix its drain test ended with
+        `runtime._HANDLERS.clear()` and this marker did not survive."""
+        key = ("hygiene_probe", "keep_me")
+        marker = object()
+        runtime._HANDLERS[key] = marker
+        try:
+            result = unittest.TestResult()
+            unittest.TestLoader().loadTestsFromTestCase(EventJobTests).run(result)
+            self.assertEqual([f"{t}: {err}" for t, err in result.errors + result.failures], [])
+            self.assertGreater(result.testsRun, 0)
+            self.assertIs(runtime._HANDLERS.get(key), marker,
+                          "EventJobTests wiped a handler it did not register")
+        finally:
+            runtime._HANDLERS.pop(key, None)
+
+    # The two AST guards below walk every `test_*.py` NEXT TO THIS FILE. On the box
+    # that is the stage dir, which is only `mkdir -p`'d and untarred into — never
+    # wiped (see `OpsArtifactHardening20260726Tests.checkout_only`) — so it can still
+    # hold a module deleted from the repo long ago (`test_meeting.py`, gone
+    # 2026-07-03). Walking them is DELIBERATE: those are exactly the files
+    # `unittest discover -p 'test_*.py'` runs there, so a defect inside one really
+    # does cost that run a test. A failure may therefore name a file that is no
+    # longer in the working tree.
+
+    def test_no_duplicate_method_names_shadow_each_other(self):
+        """NOT revert-proven — nothing in the suite duplicates a name today. It is a
+        standing guard: the failure mode is invisible (no error, just one fewer test
+        than the run reports), and these three files are tens of thousands of lines.
+
+        It tracks EVERY method, not only `test*` ones: a duplicated `setUp`/`tearDown`
+        or helper is the same silent shadowing with a wider blast radius — it changes
+        the fixture for every test in the class without failing anything."""
+        import ast as astmod
+        repo = Path(__file__).resolve().parent
+        shadowed = []
+        for path in sorted(repo.glob("test_*.py")):
+            tree = astmod.parse(path.read_text(encoding="utf-8"))
+            classes = {}
+            for node in tree.body:
+                if not isinstance(node, astmod.ClassDef):
+                    continue
+                if node.name in classes:
+                    shadowed.append(f"{path.name}:{node.lineno} class {node.name} "
+                                    f"(replaces line {classes[node.name]})")
+                classes[node.name] = node.lineno
+                methods = {}
+                for item in node.body:
+                    if not isinstance(item, (astmod.FunctionDef, astmod.AsyncFunctionDef)):
+                        continue
+                    if item.name in methods:
+                        shadowed.append(f"{path.name}:{item.lineno} {node.name}."
+                                        f"{item.name} (replaces line {methods[item.name]})")
+                    methods[item.name] = item.lineno
+        self.assertEqual(shadowed, [], "the earlier definition never runs: "
+                                       + "; ".join(shadowed))
+
+    def test_no_conditional_expression_poses_as_an_assertion(self):
+        """T12.2's bug class as a standing guard. `self.assertIn(a, b) if cond else None`
+        is an EXPRESSION statement — its value is discarded, so when `cond` is false it
+        checks nothing and NOTHING fails; `cond and self.assertIn(a, b)` is the same
+        trick. Both read like assertions, which is how the ask-prompt test carried a
+        dead check for months. Green today (the only survivors of that shape are inside
+        calls and comprehensions, where the value is actually used)."""
+        import ast as astmod
+        repo = Path(__file__).resolve().parent
+        posers = []
+        for path in sorted(repo.glob("test_*.py")):
+            tree = astmod.parse(path.read_text(encoding="utf-8"))
+            for node in astmod.walk(tree):
+                if (isinstance(node, astmod.Expr)
+                        and isinstance(node.value, (astmod.IfExp, astmod.BoolOp))):
+                    posers.append(f"{path.name}:{node.lineno}")
+        self.assertEqual(posers, [], "an expression statement asserts nothing: "
+                                     + "; ".join(posers))
+
+    def test_ci_unit_job_is_bounded_and_names_what_it_cannot_cover(self):
+        """T12.4. `.github/` is not in deploy.sh's FILES, so this runs in a checkout
+        (GitHub Actions included) and skips on the box — and absence alone cannot
+        identify the stage dir, which is never wiped (see
+        `OpsArtifactHardening20260726Tests.checkout_only`)."""
+        repo = Path(__file__).resolve().parent
+        if not (repo / ".git").exists():
+            self.skipTest("not a checkout: the CI workflow is not in the deploy payload")
+        workflow = repo / ".github" / "workflows" / "test.yml"
+        self.assertTrue(workflow.is_file(), "the CI workflow must exist in a checkout")
+        text = workflow.read_text(encoding="utf-8")
+        unit = text.split("\n  unit:\n", 1)
+        self.assertEqual(len(unit), 2, "the unit job was renamed")
+        # Bound the slice to THIS job — everything up to the next key at job indent.
+        # Unbounded, `unit[1]` runs to EOF, so the day a second job is added its
+        # timeout (or a scope note that migrated into it) would satisfy these
+        # assertions after someone deleted the unit job's own: a guard that cannot
+        # trigger, in a test whose whole point is to keep triggering.
+        block = []
+        for line in unit[1].splitlines():
+            if line.strip() and not line.startswith("   "):
+                break
+            block.append(line)
+        block = "\n".join(block)
+        self.assertIn("timeout-minutes: 10", block)   # a hung run must not idle for hours
+        # And the honest scope note: what this job structurally cannot exercise.
+        self.assertIn("pdfminer", block)
+        self.assertIn("deploy.sh", block)
 
 
 class KnowledgeTests(unittest.TestCase):
@@ -4958,10 +5109,17 @@ class KnowledgeTests(unittest.TestCase):
             "когда рейс?",
             [{"message_id": 7, "note_no": 42, "text": "Рейс 14 июня 10:05",
               "category": "Plan", "title": "Trip"}])
-        sys = msgs[0]["content"]
+        sys_prompt = msgs[0]["content"]      # not `sys`: that shadows the module
         data = msgs[1]["content"]
-        self.assertIn("ONLY", sys)
-        self.assertIn("did", sys.lower()) if "didn't find" in sys.lower() else None
+        self.assertIn("ONLY", sys_prompt)
+        # The refuse-if-absent contract, pinned to the wording the prompt really
+        # uses. (It was `assertIn("did", …) if "didn't find" in … else None`: an
+        # expression whose condition is false for this prompt, so it asserted
+        # nothing at all and would have passed on a prompt with no honesty rule.)
+        low = sys_prompt.lower()
+        self.assertIn("if the answer isn't in the notes", low)
+        self.assertIn("don't guess", low)
+        self.assertIn("never invent", low)      # and no fabricated facts
         self.assertIn("Рейс 14 июня 10:05", data)
         self.assertIn("#42", data)
         self.assertNotIn("#7", data)

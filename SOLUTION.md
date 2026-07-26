@@ -765,6 +765,38 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   (456 → 529 → 575), so no spec may carry a `\d{3,4} tests` phrase at all; and
   SOLUTION.md's purge capability row listed six scopes for nine days while
   `store.PURGE_SCOPES` had seven, so every member of that tuple must appear in the row.
+- **The suite is now guarded against lying about itself (2026-07-26, review WP12).**
+  Three tests asserted less than they claimed. `test_overdue_is_urgent_and_bypasses_cap`
+  planted its "cap already spent" row through `proactive_log_add` **without `day=`**, so
+  the row took the real wall-clock date while `run()` was driven at a fixed 2026-06-15:
+  the cap was never spent, and the test passed with the urgent-bypass logic *deleted* —
+  verified by deleting it (`not urgent and …`) and watching the whole suite stay green,
+  which also showed that nothing else covered that branch. It now pins the day, asserts
+  the spent count, and asserts the inverse — a non-urgent candidate in the same DB is
+  suppressed with the `daily cap` reason, which is the only thing that proves the cap
+  real. The `ask`-prompt test's `assertIn(…) if "didn't find" in … else None` was an
+  expression, not an assertion, and its condition never held (the prompt phrases honesty
+  differently); it now pins the wording the prompt actually carries. `EventJobTests` ended
+  in `runtime._HANDLERS.clear()`, erasing the production handlers every constructed Agent
+  registers — a process-global wipe that made later tests depend on test ORDER; it now
+  snapshots in `setUp` and restores in `tearDown` (the pattern WP7 used for
+  `llm._UNPRICED_SEEN`), and the proof runs `EventJobTests` in-process with a foreign
+  handler already in the registry. Three standing guards were added, one per silent
+  failure mode. (a) No duplicate method or class name may shadow an earlier one in these
+  files — every method, not just `test*`, since a shadowed `setUp` changes the fixture
+  for a whole class; not revert-proven, nothing duplicates a name today. (b) No `ast.Expr`
+  statement may be a conditional expression (`IfExp`/`BoolOp`) — the exact shape of the
+  `ask`-prompt bug, which is invisible by eye; this one IS revert-proven: run against the
+  pre-fix file it flags that line and nothing else in ~15k lines. (c) The CI unit job must
+  keep `timeout-minutes: 10`, asserted inside the slice bounded by that job's own block —
+  the first version split on `\n  unit:\n` and read to EOF, so once a second job existed
+  its timeout would have satisfied the check after the unit job's own was deleted: a guard
+  that cannot trigger, which is the class of defect this whole review keeps finding. That
+  job's honest scope is now written
+  into the workflow: one pinned CPython with no optional system packages, so the pdfminer
+  path and parity with the box's distro `python3` are exercised ONLY by `deploy.sh`'s
+  on-VPS run; conversely the repo files outside the deploy payload (the specs, the
+  workflow) are checked in CI and skip on the box.
 - **README is a pointer, not a spec (2026-07-26).** It still described the pre-2026-07
   system and contradicted the code on about five points (stickers/videos "ignored",
   "unbounded media growth", a clarifying-question router, no `local_server` STT, a

@@ -1430,6 +1430,25 @@ is documented twice. The lists above stay as the short tour; they are not the ca
   scenarios through `handle_update` (LLM scripted per skill, Telegram captured) and
   asserts replies, DB writes, and **no state change before confirmation**; an
   un‑scripted LLM call fails the scenario.
+  **Suite hygiene (2026‑07‑26):** three tests asserted less than they claimed and were
+  fixed — the "overdue reminder bypasses the daily proactive cap" regression planted its
+  spent‑cap row without a day, so the cap was never actually spent and the test passed
+  even with the bypass deleted (it now pins the day and asserts the inverse: a non‑urgent
+  nudge in the same DB IS suppressed with the daily‑cap reason); the `ask`‑prompt test's
+  honesty check was an expression that asserted nothing and now pins the refuse‑if‑absent
+  wording the prompt really uses; and the event/job tests snapshot‑and‑restore the
+  process‑global job‑handler registry instead of clearing it (clearing erased the handlers
+  every constructed Agent registers, so later tests depended on test order). Three new
+  standing guards, each against a failure that is silent by construction: no duplicate
+  method name may shadow an earlier one inside a class (`setUp`/helpers included, not
+  just `test*` — a shadowed fixture changes every test in the class); no conditional
+  expression may pose as an assertion (`self.assertIn(…) if cond else None` checks
+  nothing when `cond` is false — that was the `ask`‑prompt bug); and the CI unit job
+  must stay time‑bounded (`timeout-minutes: 10`, asserted inside that job's own block
+  so a second job's timeout can never stand in for it). GitHub Actions is **not** the
+  whole gate — it runs one pinned CPython with no optional system packages, so the
+  pdfminer path and parity with the box's distro `python3` are exercised only by the
+  on‑VPS run in `deploy.sh`.
 - **Observability:** journald (routing decisions with risk + confidence, per‑row
   lifecycle), `traces`/`trace_events`, `llm_usage` (spend), `issues` + `proactive_log`
   (behavior), weekly digest + trace‑summary export.

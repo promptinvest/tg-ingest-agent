@@ -10,6 +10,20 @@ permissions:
 jobs:
   unit:
     runs-on: ubuntu-latest
+    # The offline suite finishes in well under a minute; anything past this is a
+    # hang (a test waiting on a socket or subprocess), not slow work.
+    timeout-minutes: 10
+    # Scope note — this job is NOT the whole gate. It runs one pinned CPython on
+    # ubuntu-latest with no optional system packages, so it cannot exercise:
+    #   * the pdfminer path in pdftext.py — pdfminer is an OPTIONAL system package
+    #     probed at runtime, so here the probe finds nothing and the stdlib
+    #     fallback is what gets tested;
+    #   * parity with the box's DISTRO python3, which is the interpreter the
+    #     service actually runs.
+    # Both are covered only by the on-VPS run in deploy.sh (`--test` for tests
+    # only), which executes this same suite on the PD box before an install.
+    # Conversely, repo files outside deploy.sh's payload (the specs, this
+    # workflow) are checked here and skip there.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
