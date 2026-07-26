@@ -1059,6 +1059,19 @@ database whose only remaining content is dead‑lettered inbox rows must not ans
   **Forwarded content in the conversation log is fenced too** (2026‑07‑02): a forward
   is stored `source='forward'` and replayed into the router/converse prompts as DATA,
   never as the boss's own instruction — so a forwarded post can't inject via history.
+- **The fences are unforgeable (2026‑07‑25, review WP8).** A fence only holds if the
+  content can't write one itself. Two shared sanitizers in `common.py` now defang every
+  untrusted string before it reaches a prompt: `neutralize_fences` (keeps line structure,
+  collapses a forged `=== … ===` delimiter line to `—` and drops literal
+  `<message>`/`<entry>`/`<user_request>` tags) and `neutralize_untrusted` (flattens to one
+  line with ` · `, strips leading `user:`/`Босс:`‑style role labels). Applied to saved
+  notes in the **ask** prompt, the converse grounding block, the router's recent‑
+  conversation rows and `<user_request>` fence, the replied‑to/quoted message, replayed
+  forwarded turns (`store.convo_replay_text`), the memory‑curator transcript, and the
+  ingest/journal `<message>`/`<entry>` payloads. **Saved notes also left the system role**:
+  the ask prompt now carries them in their own user‑role DATA turn, so even a successful
+  escape lands in data, not in system‑role authority. Nothing is censored — the words
+  survive verbatim, they just can't impersonate a delimiter or a turn.
 - **Fetch SSRF guard:** http/https only, no URL creds, every URL + redirect hop
   rejected if it resolves to a private/loopback/link‑local/reserved IP or the cloud
   metadata endpoint — and the socket is **pinned to the validated IP** (2026‑07‑02) so

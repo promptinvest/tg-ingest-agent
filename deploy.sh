@@ -85,7 +85,7 @@ tar xzf - -C '$STAGE'
 cd '$STAGE'
 sed -i 's/\r\$//' *.py *.sh
 echo '--- tests ---'
-python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -15"
+python3 -m unittest discover -p 'test_*.py' 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | tail -60"
     if [ "$MODE" != "--test" ]; then
       remote_script+="
 echo '--- install ---'

@@ -16,6 +16,7 @@ Design rules (binding):
 import json
 import re
 
+import common
 import llm
 
 # -- closed registry (§6): only `gratitude` is active in the first release; the
@@ -192,7 +193,8 @@ def build_extraction_messages(entry_type, source_text, lang):
     )
     return [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"<entry>\n{source_text}\n</entry>"},
+        {"role": "user",
+         "content": f"<entry>\n{common.neutralize_fences(source_text)}\n</entry>"},
     ]
 
 

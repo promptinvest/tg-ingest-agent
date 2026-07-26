@@ -13,6 +13,7 @@ optional LLM extraction pass is gated behind MEMORY_CURATOR_LLM.
 import re
 
 import boss_model
+import common
 import store
 from texts import T
 
@@ -155,15 +156,25 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
         return {"life": 0, "boss": 0}
     # Fence forwarded turns (convo_replay_text): a forwarded channel post must not be
     # mined as the boss's OWN fact/correction — otherwise a single forward could poison
-    # inferred memory (benign learned facts are auto-stored, not confirm-gated).
+    # inferred memory (benign learned facts are auto-stored, not confirm-gated). One
+    # turn per LINE, so every row is flattened too — an embedded "\nBoss: …" would
+    # otherwise fabricate a boss turn the fence never covers.
     transcript = "\n".join(
-        f"{'Boss' if r['role'] == 'user' else 'Cara'}: {store.convo_replay_text(r)}"
+        f"{'Boss' if r['role'] == 'user' else 'Cara'}: "
+        f"{common.neutralize_untrusted(store.convo_replay_text(r))}"
         for r in turns)
-    boss_sources = [r["text"] for r in turns
+    # The evidence gate compares the model's verbatim quote against the source, so the
+    # sources must be the SAME rendering the model was shown. Otherwise the boss's own
+    # two-line correction («не пиши так длинно\nи не используй списки») is shown flattened,
+    # quoted back with ' · ', and then silently fails _supported_item — exactly the path
+    # correction_mode exists for.
+    boss_sources = [common.neutralize_untrusted(r["text"]) for r in turns
                     if r["role"] == "user" and store.convo_row_source(r) != "forward"]
-    cara_sources = [r["text"] for r in turns if r["role"] != "user"]
+    cara_sources = [common.neutralize_untrusted(r["text"]) for r in turns
+                    if r["role"] != "user"]
     known = [r["text"] for r in store.life_facts(conn, limit=40)]
-    known_block = "\n".join(f"- {t}" for t in known[-24:]) or "(none yet)"
+    known_block = "\n".join(f"- {common.neutralize_untrusted(t)}"
+                            for t in known[-24:]) or "(none yet)"
     messages = [
         {"role": "system", "content": _EXTRACT_SYSTEM},
         {"role": "user",
@@ -306,7 +317,10 @@ def _merge_groups(conn, cfg, items, max_items=120):
     import llm
     if len(items) < 8:
         return []
-    listing = "\n".join(f"{i}: {v}" for i, v in items[:max_items])
+    # '<id>: <text>' per line — flatten each item so a remembered string carrying a
+    # newline cannot forge an extra id row for the model to keep/drop.
+    listing = "\n".join(f"{i}: {common.neutralize_untrusted(v)}"
+                        for i, v in items[:max_items])
     try:
         reply = llm.chat_profile(
             cfg, conn, "memory_curator",
@@ -410,8 +424,13 @@ def _tidy_candidates(conn, cfg, max_items=120):
         return 0
     confirmed = [r["value"] for r in store.boss_items(conn, "confirmed", limit=80)
                  if (r["value"] or "").strip()]
-    conf_listing = "\n".join(f"- {v}" for v in confirmed) or "(none)"
-    cand_listing = "\n".join(f"{c['id']}: {c['proposed_text']}" for c in pending)
+    # '<id>: <text>' / '- <text>' per line, and the ids the model returns DEMOTE real rows
+    # ('superseded'/'merged') — flatten each so a stored string carrying a newline cannot
+    # forge an extra id row naming a genuine candidate.
+    conf_listing = "\n".join(f"- {common.neutralize_untrusted(v)}"
+                             for v in confirmed) or "(none)"
+    cand_listing = "\n".join(f"{c['id']}: {common.neutralize_untrusted(c['proposed_text'])}"
+                             for c in pending)
     try:
         reply = llm.chat_profile(
             cfg, conn, "memory_curator",
@@ -468,8 +487,9 @@ def _tidy_inferred(conn, cfg, max_items=120):
                  if (r["value"] or "").strip()]
     if not inferred or not confirmed:
         return 0
-    listing = "\n".join(f"{i}: {v}" for i, v in inferred)
-    conf = "\n".join(f"- {v}" for v in confirmed)
+    # Same one-row-per-line contract as _tidy_candidates: flatten both listings.
+    listing = "\n".join(f"{i}: {common.neutralize_untrusted(v)}" for i, v in inferred)
+    conf = "\n".join(f"- {common.neutralize_untrusted(v)}" for v in confirmed)
     try:
         reply = llm.chat_profile(
             cfg, conn, "memory_curator",

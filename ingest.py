@@ -3,6 +3,7 @@
 import re
 from datetime import datetime, timedelta, timezone
 
+import common
 import llm
 import store
 
@@ -202,7 +203,11 @@ def build_llm_messages(cfg, known, text_block, image_paths, corrections=None, la
         " states a concrete dated deadline/action.\n"
         "Reply with ONLY a JSON object: " + JSON_SCHEMA
     )
-    content = [{"type": "text", "text": f"<message>\n{text_block}\n</message>"}]
+    # The forwarded post is the most untrusted text Cara ever prompts with: strip any
+    # literal <message>/</message> it carries so it cannot close its own fence (line
+    # structure is preserved — the summary depends on it).
+    content = [{"type": "text",
+                "text": f"<message>\n{common.neutralize_fences(text_block)}\n</message>"}]
     used = 0
     for path in image_paths:
         if used >= cfg.max_llm_images:
