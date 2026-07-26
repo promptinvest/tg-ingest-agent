@@ -5909,6 +5909,71 @@ class BackupAndDiskHardeningTests(unittest.TestCase):
         self.assertEqual(left, ["ingest-20260101T000000Z.db.gz",
                                 "ingest-20260102T000000Z.db.gz"])
 
+    def test_rotation_neither_counts_nor_deletes_hand_made_archives(self):
+        # Audit finding: 2eefa19 scoped sweep_stray to our own names but left
+        # rotate() globbing ingest-*.db.gz. On the live box the two hand-made
+        # .gz copies ate 2 of the 7 retention slots, so only 5 automated
+        # snapshots survived — and a hand-made name that sorted lower would have
+        # been deleted outright.
+        import backup
+        cfg = self.agent.cfg
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        hand_made = ["ingest-pre-review-fix-20260713T104530Z.db.gz",
+                     "ingest-pre-review-lifecycle-cleanup-20260713T112217Z.db.gz"]
+        for name in hand_made:
+            (d / name).write_bytes(b"operator's")
+        ours = [f"ingest-2026072{i}T000000Z.db.gz" for i in range(1, 6)]
+        for name in ours:
+            (d / name).write_bytes(b"x")
+        cfg.backup_keep = 3
+
+        removed = backup.rotate(cfg)
+
+        left = sorted(p.name for p in d.iterdir())
+        self.assertEqual(removed, 2)                       # 5 ours -> keep 3
+        # every hand-made copy survives...
+        for name in hand_made:
+            self.assertIn(name, left)
+        # ...and retention kept a FULL backup_keep of our own, not 3 minus theirs
+        self.assertEqual([n for n in left if n.startswith("ingest-2026")],
+                         sorted(ours[2:]))
+
+    def test_sweep_removes_a_half_written_encrypted_archive(self):
+        # Scope regression from 2eefa19: the pre-fix sweep globbed *.tmp, which
+        # covered encrypt_snapshot's ingest-<stamp>.db.gz.enc.tmp. The narrowed
+        # pattern stopped matching it, so a crash between encrypt and rename
+        # leaked it forever (rotate never sees a .tmp).
+        import backup
+        cfg = self.agent.cfg
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "ingest-20200101T000000Z.db.gz.enc.tmp").write_bytes(b"half encrypted")
+        (d / "ingest-20200101T000000Z.db.gz.tmp").write_bytes(b"half gzipped")
+        (d / "ingest-20200101T000000Z.db").write_bytes(b"raw leak")
+        (d / "ingest-pre-july15-corrections-20260715T153357Z.db").write_bytes(b"keep")
+
+        self.assertEqual(backup.sweep_stray(cfg), 3)
+        self.assertEqual([p.name for p in d.iterdir()],
+                         ["ingest-pre-july15-corrections-20260715T153357Z.db"])
+
+    def test_retention_runs_even_when_the_snapshot_itself_fails(self):
+        # The nearly-full-disk case this module exists to break: snapshot() is
+        # what raises, and rotation used to be skipped, so the disk stayed full.
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        for i in range(1, 6):
+            (d / f"ingest-2026072{i}T000000Z.db.gz").write_bytes(b"x")
+        cfg.backup_keep = 2
+        with mock.patch.object(backup, "snapshot",
+                               side_effect=sqlite3.OperationalError(
+                                   "database or disk is full")):
+            with self.assertRaises(sqlite3.OperationalError):
+                backup.run(cfg, conn)
+        self.assertEqual(len([p for p in d.iterdir() if p.name.endswith(".db.gz")]), 2)
+
     def test_sweep_spares_hand_made_backups(self):
         # Caught on the live box: the backups dir also holds deliberate
         # pre-change copies (ingest-pre-july15-corrections-<stamp>.db, 16 MB,

@@ -87,7 +87,13 @@ def snapshot(cfg, conn):
 # Deliberately NOT `ingest-*.db` — the backups dir also holds hand-made
 # pre-change copies like `ingest-pre-july15-corrections-<stamp>.db`, and this
 # sweep must never mistake an operator's deliberate backup for our garbage.
-_OWN_SNAPSHOT = re.compile(r"^ingest-\d{8}T\d{6}Z\.db(?:\.gz\.tmp)?$")
+_OWN_SNAPSHOT = re.compile(r"^ingest-\d{8}T\d{6}Z\.db(?:\.gz(?:\.enc)?\.tmp)?$")
+
+# The finished archive, for retention. Same reason as above: `ingest-*.db.gz`
+# also matches hand-made copies like ingest-pre-review-fix-<stamp>.db.gz, which
+# then eat slots in backup_keep — on the live box that silently held 5 automated
+# snapshots instead of 7 — and would be deletable if a future name sorted lower.
+_OWN_ARCHIVE = re.compile(r"^ingest-\d{8}T\d{6}Z\.db\.gz$")
 
 
 def sweep_stray(cfg):
@@ -110,9 +116,14 @@ def sweep_stray(cfg):
 
 def rotate(cfg):
     """Keep only the newest cfg.backup_keep local snapshots (name-sortable
-    UTC stamps); returns how many stale ones were removed."""
+    UTC stamps); returns how many stale ones were removed.
+
+    Counts and prunes ONLY snapshots this module made. A hand-made copy in the
+    same directory is neither deleted nor counted against backup_keep.
+    """
     sweep_stray(cfg)
-    files = sorted(backups_dir(cfg).glob("ingest-*.db.gz"),
+    files = sorted((p for p in backups_dir(cfg).iterdir()
+                    if p.is_file() and _OWN_ARCHIVE.match(p.name)),
                    key=lambda p: p.name, reverse=True)
     removed = 0
     for stale in files[cfg.backup_keep:]:
@@ -211,7 +222,14 @@ def offsite(cfg, encrypted_path, conn=None):
 
 def run(cfg, conn):
     """The daily backup job body; returns a result dict for the job log."""
-    gz = snapshot(cfg, conn)
+    try:
+        gz = snapshot(cfg, conn)
+    except Exception:
+        # Retention must not depend on THIS attempt succeeding. On a nearly full
+        # disk snapshot() is precisely what fails, and skipping rotation there
+        # leaves the disk full — the feedback loop this module exists to break.
+        rotate(cfg)
+        raise
     # Rotate BEFORE encryption/off-box: a raised BackupEncryptionError used to skip
     # retention entirely, so a broken key file grew the backups dir without bound.
     removed = rotate(cfg)
