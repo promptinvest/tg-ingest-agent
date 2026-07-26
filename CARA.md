@@ -1243,7 +1243,36 @@ database whose only remaining content is dead‑lettered inbox rows must not ans
 - Secrets in `/etc/tg-ingest-agent.env` (0600), staged via files (never argv/journal);
   access keys redacted from logged HTTP errors. Dedicated bot token + DO key.
 - systemd hardening: non‑root user, `NoNewPrivileges`, `ProtectSystem=strict`,
-  `PrivateTmp`, writable only in `/var/lib/tg-ingest-agent`.
+  `PrivateTmp`, writable only in `/var/lib/tg-ingest-agent`. **Tightened 2026‑07‑26:**
+  empty `CapabilityBoundingSet`, `PrivateDevices`, `ProtectKernelTunables`/
+  `ProtectKernelModules`/`ProtectControlGroups`, `RestrictNamespaces`,
+  `RestrictSUIDSGID`, `LockPersonality`, `RestrictAddressFamilies=AF_INET AF_INET6
+  AF_UNIX`, `SystemCallArchitectures=native` and `SystemCallFilter=@system-service`
+  with `SystemCallErrorNumber=EPERM`. The filter is the only directive no test can prove:
+  she forks ffmpeg/whisper‑cli (voice) and openssl (backup encryption), and a missing
+  syscall fails the CHILD, not the service — so every deploy that changes it must be
+  followed by a real voice note and a real backup, with the drop‑in escape hatch
+  documented in the unit file itself. `EPERM` is there because the default action is
+  SIGSYS: with `Restart=always`/`RestartSec=10` a killed main process would never trip
+  systemd's start limiter, i.e. an incomplete filter meant an endless 10‑second crash
+  loop rather than a unit that stops and stays visibly failed.
+- **Operator scripts hardened (2026‑07‑26).** `bootstrap_chat_id.py` now REQUIRES the
+  expected chat id (a sole pending private chat used to be enough, so whoever `/start`‑ed
+  first could become the owner); with no argument it only lists candidates. It refuses to
+  run while the service is polling and rewrites the env file atomically with a `.bak`. It
+  reads the queue with a plain NO-offset `getUpdates` — the only form the Bot API promises
+  consumes nothing — and reports honestly when the queue is deeper than that one page;
+  the opt-in `--deep-read` reaches the end of a flooded queue with negative offsets and
+  warns that, per the API, everything older is then forgotten.
+  `apply_token.py`/`apply_do_key.py` validate the staged secret against the API BEFORE
+  touching the env, append the line when it is missing (the old `re.sub` was a silent
+  no‑op that still reported success), and keep the staged file when anything fails.
+  The whisper STT server no longer runs as root (`DynamicUser=yes`), and its build and
+  model can be pinned by ref + sha256 — both pins default to EMPTY (an unpinned build with
+  a loud warning) until the live ref/digest are captured from the box and recorded in the
+  PD‑VPS KB. The armed 2026‑07‑03 Cara/Nikki split one‑shot moved to
+  `archive/2026-07-03-cara-nikki-split/` (executed once; must never run again); the staged
+  copy at `/root/cara-nikki-split/` on the PD box is a pending box action, not yet removed.
 - Housekeeping: voice notes & orphaned media auto‑purged; review/export files trimmed;
   telemetry retention (2026‑07‑02): traces, done/failed events+jobs, the proactive audit
   log and expired model cooldowns are pruned past `TELEMETRY_RETENTION_DAYS` (default 90;
@@ -1292,6 +1321,21 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   a content‑hash `VERSION` so Cara announces real code changes (not reboots). The
   remote scripts run with `pipefail` (2026‑07‑02), so a FAILED test run or a mid‑way
   installer abort fails the deploy instead of being masked by the `| tail` pipes.
+  **Single source of truth (2026‑07‑26):** the tracked `tg-ingest-agent.service` is the
+  unit the installer installs (`install -m 0644`) and the tracked
+  `tg-ingest-agent.env.example` is what seeds a MISSING `/etc/tg-ingest-agent.env` —
+  the installer's own copies of both are gone, so the unit can no longer drift from the
+  file a human reads and the env template can no longer drift from the documented one.
+  A reinstall still never touches a populated env file, and a freshly seeded one still
+  trips the `=REPLACE_ME` guard that keeps the service stopped until the secrets are in.
+  `--rollback` now rejects option‑shaped refs (`--rollback --pull` used to reach
+  `git checkout --pull`) and verifies the ref resolves to a commit before checking out.
+  The deploy payload NAMES the scripts it carries (`deploy.sh` + the two installers)
+  rather than globbing `*.sh`, so a one‑shot left at the repo root can never ride onto the
+  live box; `migrate-cara-to-pd.sh` is deliberately excluded and checked in a checkout.
+  The stage dir is never wiped, so both one‑shots had already reached
+  `/root/tg-ingest-agent-stage/` while the glob was in place — a real deploy (not
+  `--test`) now deletes those two copies by name before installing.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
 - **Tests:** 529 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run on

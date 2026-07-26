@@ -20,8 +20,11 @@
 #     is just re-enabling it (until the target has received new traffic).
 #   - One bot token => exactly one long-poller (Telegram 409). The cutover STOPS
 #     the source before STARTING the target.
-#   - The local staging dir briefly holds the DB + env (secrets); it is removed
-#     at the end. Keep it on an encrypted disk; it is git-ignored.
+#   - The local staging dir briefly holds the DB + env (secrets). It defaults
+#     OUTSIDE the OneDrive-synced repo (%LOCALAPPDATA%), is created 0700, and a
+#     `trap … EXIT` removes it on EVERY exit path — the old default put an
+#     unencrypted copy of the whole DB into a cloud-synced folder and only
+#     cleaned it up when the migration succeeded.
 set -euo pipefail
 
 # --- connection config (override via env) -----------------------------------
@@ -40,7 +43,11 @@ ENV_FILE=/etc/tg-ingest-agent.env
 SERVICE=tg-ingest-agent
 APP_USER="${APP_USER:-tg-ingest}"
 WHISPER_PORT="${WHISPER_PORT:-8089}"
-STAGE="${STAGE:-./.migrate-stage}"
+# Staging holds an unencrypted copy of the DB and of the env file (bot token, DO
+# key): it must NEVER default inside this OneDrive-synced repo.
+STAGE_BASE="${LOCALAPPDATA:-/tmp}"
+STAGE_BASE="${STAGE_BASE//\\//}"                     # Git Bash inherits C:\… paths
+STAGE="${STAGE:-$STAGE_BASE/cara-migrate-stage}"
 
 SSH_SRC=(ssh -i "$SRC_KEY" -p "$SRC_PORT" -o IdentitiesOnly=yes -o ConnectTimeout=25
          -o UserKnownHostsFile="$SRC_KH" -o ServerAliveInterval=15)
@@ -51,6 +58,19 @@ SCP_TGT=(scp -i "$TGT_KEY" -P "$TGT_PORT" -o IdentitiesOnly=yes -o UserKnownHost
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 die(){ echo "ERROR: $*" >&2; exit 1; }
+
+cleanup(){
+  # Idempotent and armed on EVERY exit path (abort, die, Ctrl-C): the staging
+  # dir holds the DB and the env file in clear text.
+  [ -d "$STAGE" ] || return 0
+  log "Removing local staging (held the DB + env/secrets)…"
+  rm -rf "$STAGE" || true
+  if [ -d "$STAGE" ]; then
+    echo "WARNING: $STAGE could not be removed and still holds an unencrypted DB" >&2
+    echo "         copy and the env file (bot token, DO key). Delete it by hand." >&2
+  fi
+}
+trap cleanup EXIT
 
 preflight(){
   log "== SOURCE ($SRC_HOST) =="
@@ -74,12 +94,19 @@ snapshot_source(){
   log "Freezing source poller (stop $SERVICE)…"
   "${SSH_SRC[@]}" "$SRC_HOST" "systemctl stop $SERVICE"
   log "Consistent DB backup + media tar on source…"
+  # umask 077 + chmod 700 + a failure trap: the snapshot is the whole DB and the
+  # env file in clear text, and /tmp is world-readable by default — it used to
+  # be left there 0755/0644, and to survive an abort.
   "${SSH_SRC[@]}" "$SRC_HOST" "
-    set -e; rm -rf /tmp/cara-migrate; mkdir -p /tmp/cara-migrate
+    set -e; umask 077
+    rm -rf /tmp/cara-migrate; mkdir -p /tmp/cara-migrate; chmod 700 /tmp/cara-migrate
+    trap 'rc=\$?; [ \$rc -eq 0 ] || rm -rf /tmp/cara-migrate; exit \$rc' EXIT
     sqlite3 $STATE_DIR/ingest.db \".backup '/tmp/cara-migrate/ingest.db'\"
     if [ -d $STATE_DIR/media ]; then tar czf /tmp/cara-migrate/media.tgz -C $STATE_DIR media; fi
     cp $ENV_FILE /tmp/cara-migrate/tg-ingest-agent.env
+    chmod 600 /tmp/cara-migrate/*
     ls -la /tmp/cara-migrate"
+  umask 077
   mkdir -p "$STAGE"; chmod 700 "$STAGE"
   "${SCP_SRC[@]}" "$SRC_HOST:/tmp/cara-migrate/ingest.db" "$STAGE/ingest.db"
   "${SCP_SRC[@]}" "$SRC_HOST:/tmp/cara-migrate/tg-ingest-agent.env" "$STAGE/tg-ingest-agent.env"
@@ -96,12 +123,13 @@ install_app(){
   # because the env still has REPLACE_ME, ENABLES but leaves the service STOPPED.
   log "Installing app on target (tests + installer; stays stopped until env is placed)…"
   tar czf - *.py install-tg-ingest-agent-pilot-remote.sh tg-ingest-agent.env.example \
+        tg-ingest-agent.service \
     | "${SSH_TGT[@]}" "$TGT_HOST" "
         set -e
         rm -rf /root/tg-ingest-agent-stage; mkdir -p /root/tg-ingest-agent-stage
         tar xzf - -C /root/tg-ingest-agent-stage
         cd /root/tg-ingest-agent-stage
-        sed -i 's/\r\$//' *.py *.sh
+        sed -i 's/\r\$//' *.py *.sh tg-ingest-agent.service tg-ingest-agent.env.example
         echo '--- tests ---'; python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -3
         echo '--- install ---'; bash install-tg-ingest-agent-pilot-remote.sh 2>&1 | tail -3"
   log "Building whisper.cpp STT server on target (several minutes)…"
@@ -142,11 +170,6 @@ start_and_verify(){
 retire_source(){
   log "Disabling source service (kept installed as cold standby for rollback)…"
   "${SSH_SRC[@]}" "$SRC_HOST" "systemctl disable $SERVICE; systemctl is-enabled $SERVICE || true"
-}
-
-cleanup(){
-  log "Removing local staging (held the DB + env/secrets)…"
-  rm -rf "$STAGE"
 }
 
 confirm_gate(){

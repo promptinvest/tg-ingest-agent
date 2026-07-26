@@ -1,3 +1,6 @@
+# THE deployed unit. `install-tg-ingest-agent-pilot-remote.sh` installs this exact
+# file to /etc/systemd/system/tg-ingest-agent.service — it no longer carries a
+# second copy in a heredoc, which had been drifting from this one.
 [Unit]
 Description=Telegram ingest agent (LLM categorization)
 After=network-online.target
@@ -14,19 +17,60 @@ Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-# See the installer heredoc (the deployed source of truth): the agent pings
-# WATCHDOG=1 from inside its long primitives (every model call, every
-# transcription attempt, every drained job) so a wedged poll loop is restarted
-# instead of reporting active/running forever, while a legitimately slow step is
-# not. Type=simple + NotifyAccess=main on purpose. The budget must exceed the
-# longest un-pinged span: a cold transcription (STT_LOCAL_TIMEOUT_SECONDS + ffmpeg).
+# Liveness, not just "the process exists": the agent pings WATCHDOG=1 as it works,
+# so a WEDGED poll loop (which reports active/running forever) is restarted instead
+# of going silent. NotifyAccess=main lets a Type=simple service send it —
+# deliberately NOT Type=notify, whose missing READY=1 would be a startup failure and
+# a crash loop.
+# The budget must exceed the longest UN-PINGED span. Pings sit inside the long
+# primitives (every llm.chat/embed/transcribe, each whisper-server attempt, each
+# runtime.drain job), so that span is ONE bounded wait, and the largest of those is
+# a cold transcription: STT_LOCAL_TIMEOUT_SECONDS (600) + ffmpeg conversion.
+# Raising STT_LOCAL_TIMEOUT_SECONDS above ~780 invalidates this number — the agent
+# logs a startup warning if it does.
 NotifyAccess=main
 WatchdogSec=900
+# Sandbox. This process parses untrusted content all day (forwarded posts, fetched
+# web pages, PDFs), so it keeps only what it actually uses: an unprivileged uid, a
+# single writable directory, outbound sockets, and the ability to fork ffmpeg /
+# whisper-cli / openssl.
 NoNewPrivileges=yes
+CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/tg-ingest-agent
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_INET/AF_INET6: Telegram + the model gateway. AF_UNIX: sd_notify's watchdog
+# socket and the local resolver. glibc's getaddrinfo also probes an AF_NETLINK
+# socket for source-address selection; a blocked family returns EAFNOSUPPORT and
+# it falls back cleanly. If the journal ever shows name resolution failing right
+# after a unit change, add AF_NETLINK here before suspecting anything else.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# SystemCallFilter is the one directive here that cannot be proved by the test
+# suite: the agent FORKS ffmpeg + whisper-cli (voice notes) and openssl (backup
+# encryption), and a syscall this set omits fails the CHILD, not the service.
+# After any deploy that changes it, verify BOTH a voice note that transcribes
+# and a backup that encrypts. If either breaks, drop THESE TWO lines only (a
+# /etc/systemd/system/tg-ingest-agent.service.d/ override with an empty
+# SystemCallFilter= resets it) and record it in the PD-VPS KB.
+# SystemCallErrorNumber=EPERM exists because the default is SIGSYS, i.e. death.
+# With Restart=always + RestartSec=10 a killed MAIN process could never trip
+# systemd's start limiter (5 starts / 10 s — one start per 10 s never reaches
+# it), so an incomplete filter would be an INDEFINITE 10-second crash loop of a
+# live assistant rather than a `failed` unit that stops and stays visible. EPERM
+# turns the same miss into an errno Python raises and logs. The call is still
+# blocked either way; RestrictAddressFamilies keeps its own EAFNOSUPPORT, so the
+# glibc resolver fallback described above is unaffected.
 
 [Install]
 WantedBy=multi-user.target

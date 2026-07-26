@@ -685,6 +685,47 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   an idempotent installer that backs up replaced files, preserves env, gates on
   `py_compile`, and restarts only when secrets are complete; `--pull`/`--rollback`
   supported.
+- **One copy of each operational truth (2026-07-26, review WP10).** The installer used
+  to carry its own heredoc of the systemd unit AND its own 40-line env template, with the
+  tracked `tg-ingest-agent.service` and `tg-ingest-agent.env.example` sitting beside them
+  as documentation nobody deployed. They had already drifted (different budget defaults,
+  dozens of missing keys, no `STT_MODE` — whose default `remote` ships voice audio off the
+  box). Now `deploy.sh` ships both files and the installer installs them
+  (`install -m 0644` for the unit, `install -m 0600` for the env — the latter ONLY when
+  `/etc/tg-ingest-agent.env` does not exist, because the installer runs on every deploy).
+  Two invariants are pinned by tests: the installer contains no `[Service]` heredoc, and
+  the seeded env still matches the installer's `^KEY=REPLACE_ME` guard (the `=` is
+  load-bearing) so a fresh box stays stopped until its secrets are filled in. The unit
+  also gained the cheap sandbox directives; `SystemCallFilter=@system-service` is the one
+  thing the suite cannot prove, because the failure lands on a FORKED child (ffmpeg,
+  whisper-cli, openssl) — the unit file names the check and the escape hatch. It is paired
+  with `SystemCallErrorNumber=EPERM` (2026-07-26 review): the default action is SIGSYS, and
+  with `Restart=always` + `RestartSec=10` a killed MAIN process could never reach systemd's
+  start limiter (5 starts per 10 s), so an incomplete filter would have been an indefinite
+  crash loop instead of a unit that fails and stays failed. An errno the code raises and
+  logs is the recoverable version of the same block.
+- **Ops scripts (2026-07-26).** Binding an owner is no longer implicit: `bootstrap_chat_id.py`
+  demands the expected id, lists candidates otherwise, refuses to run against a live
+  poller (instead of a raw 409 traceback), and replaces the env file through a
+  temp+`fsync`+`os.replace` with a `.bak`, since the old truncate-and-write could take the
+  bot token and the DO key with it (a stale `.tmp` from a killed run is now explained
+  instead of raising a bare `FileExistsError`, and the `.bak` is re-chmodded 0600 even when
+  it already existed). Reading the queue is deliberately shallow: a plain **no-offset**
+  `getUpdates` is the only call the Bot API promises consumes nothing. The first WP10
+  implementation paged BACKWARDS with negative offsets on the reading that a negative
+  offset "confirms nothing"; the API documents the opposite in the same paragraph ("all
+  previous updates will be forgotten"), which would have made the fix destroy exactly what
+  it was written to protect. Negative paging is now the opt-in `--deep-read` for a flooded
+  queue, and it prints what it discards. `apply_token.py`/`apply_do_key.py` validate BEFORE
+  they write and append a missing key line rather than silently doing nothing; all three
+  refuse a duplicated key rather than half-updating it (systemd honours the LAST
+  assignment), report that refusal as a message instead of a traceback, and substitute with
+  a callable so a backslash in a secret is not read as a regex escape.
+  `migrate-cara-to-pd.sh` stages secrets outside the OneDrive-synced repo, cleans up on
+  every exit path, and creates the remote snapshot 0700 under `umask 077`. `deploy.sh`
+  names the scripts it ships instead of globbing `*.sh`, so no future one-shot at the repo
+  root can ride onto the live box (`migrate-cara-to-pd.sh`, which stops services and
+  overwrites the env file, is deliberately not shipped and is syntax-checked in a checkout).
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
   pushed after every commit.
 - **Tests:** 529 offline unit tests (as of 2026‑07‑17; no network; temp SQLite), run

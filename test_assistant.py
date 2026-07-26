@@ -2974,7 +2974,7 @@ class MaintenanceJobTests(unittest.TestCase):
         # Deploy notices go to the FLEET ops bot (tg_call to a distinct token/chat), never
         # into the boss's conversation (reply); they fire once per real version change.
         self.agent.cfg.fleet_notify_token = "FLEET:tok"
-        self.agent.cfg.fleet_notify_chat_id = "160568780"
+        self.agent.cfg.fleet_notify_chat_id = "555000111"   # fixture, not the real ops chat
         with mock.patch("tg_ingest_agent.tg_call") as tg, \
                 mock.patch.object(self.agent, "reply") as reply:
             with mock.patch.object(self.agent, "build_version", return_value="v1"):
@@ -2988,7 +2988,7 @@ class MaintenanceJobTests(unittest.TestCase):
         self.assertEqual(tg.call_count, 2)                   # one per real version change
         token, method = tg.call_args[0][0], tg.call_args[0][1]
         self.assertEqual((token, method), ("FLEET:tok", "sendMessage"))
-        self.assertEqual(tg.call_args[0][2]["chat_id"], "160568780")
+        self.assertEqual(tg.call_args[0][2]["chat_id"], "555000111")
 
     def test_deploy_notice_skipped_when_fleet_unconfigured(self):
         # No fleet creds -> stay silent (never falls back to the boss's chat),
@@ -6491,18 +6491,24 @@ class ReviewFixes2026_07_10Tests(unittest.TestCase):
         handle.assert_called_once_with(update)
         self.assertEqual(store.telegram_update_get(self.agent.conn, 701)["status"], "done")
 
-    def test_bootstrap_selects_exactly_one_private_owner(self):
+    def test_bootstrap_binds_only_the_expected_private_owner(self):
         import bootstrap_chat_id
-        payload = {"result": [
+        updates = [
             {"message": {"chat": {"id": 10, "type": "private"}, "from": {"id": 10}}},
             {"message": {"chat": {"id": -20, "type": "group"}, "from": {"id": 10}}},
-        ]}
-        self.assertEqual(bootstrap_chat_id.select_owner(payload), 10)
-        payload["result"].append(
-            {"message": {"chat": {"id": 11, "type": "private"}, "from": {"id": 11}}})
+        ]
+        pending = bootstrap_chat_id.candidates(updates)
+        self.assertEqual(set(pending), {10})              # the group is never eligible
+        # A SOLE pending private chat is no longer enough: whoever /start-ed first
+        # would have become the owner (T10.2). The expected id is mandatory.
         with self.assertRaises(ValueError):
-            bootstrap_chat_id.select_owner(payload)
-        self.assertEqual(bootstrap_chat_id.select_owner(payload, 10), 10)
+            bootstrap_chat_id.select_owner(pending, None)
+        self.assertEqual(bootstrap_chat_id.select_owner(pending, 10), 10)
+        updates.append(
+            {"message": {"chat": {"id": 11, "type": "private"}, "from": {"id": 11}}})
+        pending = bootstrap_chat_id.candidates(updates)
+        with self.assertRaises(ValueError):
+            bootstrap_chat_id.select_owner(pending, 12)   # not in the pending queue
         out = bootstrap_chat_id.write_owner(
             "TELEGRAM_BOT_TOKEN=x\nALLOWED_CHAT_IDS=REPLACE_ME\n", 10)
         self.assertIn("ALLOWED_CHAT_IDS=10", out)
@@ -12536,29 +12542,26 @@ class LlmStackBudgetAvailability20260725Tests(unittest.TestCase):
     def test_the_unit_arms_the_watchdog_with_room_for_the_longest_step(self):
         import re as remod
         repo = Path(__file__).resolve().parent
-        installer = repo / "install-tg-ingest-agent-pilot-remote.sh"
-        units = [(installer.name, installer.read_text(encoding="utf-8"))]
+        installer = (repo / "install-tg-ingest-agent-pilot-remote.sh").read_text(encoding="utf-8")
         tracked = repo / "tg-ingest-agent.service"
-        # Only the installer heredoc ships to the stage dir, but the tracked unit is
-        # what a HUMAN reads when reasoning about the live service — so pin both in a
-        # real CHECKOUT, or they drift apart unnoticed. `.git` is the checkout marker:
-        # the stage dir never has one, and it CAN hold a stale .service left by an
-        # older layout, which is not the file this assertion is about.
-        if (repo / ".git").exists() and tracked.exists():
-            units.append((tracked.name, tracked.read_text(encoding="utf-8")))
-        for name, unit in units:
-            match = remod.search(r"^WatchdogSec=(\d+)$", unit, remod.M)
-            self.assertIsNotNone(match, f"{name} must arm the watchdog")
-            self.assertIn("\nNotifyAccess=main\n", unit, name)  # Type=simple needs this
-            # NOT Type=notify: a missing READY=1 there is a startup FAILURE, i.e. a
-            # crash loop on the live box.
-            self.assertIsNotNone(remod.search(r"^Type=simple$", unit, remod.M), name)
-            # The budget must exceed the longest UN-PINGED span. Because every model
-            # call, every whisper-server attempt and every drained job pings, that
-            # span is one bounded wait — and the largest is a cold transcription.
-            self.assertGreater(int(match.group(1)),
-                               make_config().stt_local_timeout
-                               + self.mod.Agent.WATCHDOG_STEP_MARGIN_SECONDS, name)
+        # ONE unit since T10.9: the installer installs this exact staged file, so
+        # the file a human reads and the file systemd loads can no longer drift.
+        # It therefore has to be here — in a checkout AND in the stage dir.
+        self.assertTrue(tracked.is_file(), "the tracked unit must ship to the stage dir")
+        self.assertIn('install -m 0644 "$STAGE_DIR/$UNIT_SRC" "$UNIT_FILE"', installer)
+        name, unit = tracked.name, tracked.read_text(encoding="utf-8")
+        match = remod.search(r"^WatchdogSec=(\d+)$", unit, remod.M)
+        self.assertIsNotNone(match, f"{name} must arm the watchdog")
+        self.assertIn("\nNotifyAccess=main\n", unit, name)  # Type=simple needs this
+        # NOT Type=notify: a missing READY=1 there is a startup FAILURE, i.e. a
+        # crash loop on the live box.
+        self.assertIsNotNone(remod.search(r"^Type=simple$", unit, remod.M), name)
+        # The budget must exceed the longest UN-PINGED span. Because every model
+        # call, every whisper-server attempt and every drained job pings, that
+        # span is one bounded wait — and the largest is a cold transcription.
+        self.assertGreater(int(match.group(1)),
+                           make_config().stt_local_timeout
+                           + self.mod.Agent.WATCHDOG_STEP_MARGIN_SECONDS, name)
 
     def test_a_stt_timeout_raised_above_the_unit_budget_is_called_out_at_startup(self):
         """STT_LOCAL_TIMEOUT_SECONDS is operator-settable and the unit's number is
@@ -15086,6 +15089,724 @@ class EditedMessages20260726Tests(unittest.TestCase):
         self.assertIn("пирог", entry["payload_json"])   # the KNOWN limit, pinned
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) AS n FROM note_outcomes").fetchone()["n"], 0)
+
+
+class OpsArtifactHardening20260726Tests(unittest.TestCase):
+    """WP10 — the artifacts that install and operate Cara.
+
+    No golden transcript covers these: a mistake here does not produce a wrong
+    reply, it crash-loops the service, leaks a secret, or hands the bot to a
+    stranger. Everything below reads the text of a SHIPPED artifact (the deploy
+    tar now carries the unit, the env template and every root shell script) or
+    actually runs one.
+    """
+
+    REPO = Path(__file__).resolve().parent
+
+    def shipped(self, name):
+        path = self.REPO / name
+        self.assertTrue(path.is_file(), f"{name} must ship to the stage dir")
+        return path.read_text(encoding="utf-8")
+
+    def checkout_only(self, name):
+        """A repo file that deliberately does NOT ship to the box (see deploy.sh)."""
+        path = self.REPO / name
+        if not path.is_file():
+            self.skipTest(f"stage dir: {name} is not part of the deploy payload")
+        return path.read_text(encoding="utf-8")
+
+    def _bash(self):
+        import shutil as shutilmod
+        found = shutilmod.which("bash")
+        if not found:
+            self.skipTest("no bash on this host")
+        return found
+
+    def test_every_shipped_shell_script_parses(self):
+        # NOT revert-proven: `bash -n` passed on these before WP10 too. It is a
+        # standing guard, kept because these scripts are edited by hand.
+        import subprocess as sp
+        bash = self._bash()
+        for name in ("deploy.sh", "install-tg-ingest-agent-pilot-remote.sh",
+                     "install-whisper-pilot-remote.sh"):
+            self.shipped(name)
+            done = sp.run([bash, "-n", str(self.REPO / name)],
+                          capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, f"{name}: {done.stderr}")
+        # The migration one-shot is checked where it lives, never on the box.
+        self.checkout_only("migrate-cara-to-pd.sh")
+        done = sp.run([bash, "-n", str(self.REPO / "migrate-cara-to-pd.sh")],
+                      capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    # --- T10.1 -----------------------------------------------------------
+    def test_whisper_server_is_not_root_and_the_build_can_be_pinned(self):
+        text = self.shipped("install-whisper-pilot-remote.sh")
+        unit = text.split("[Service]", 1)[1]
+        # It had NO User= at all, i.e. it ran as root: a C++ multipart parser
+        # plus an ffmpeg fork per upload, with uid 0.
+        self.assertIn("\nDynamicUser=yes\n", unit)
+        self.assertIn("\nProtectKernelTunables=yes\n", unit)
+        self.assertIn("\nRestrictAddressFamilies=AF_INET AF_UNIX\n", unit)
+        self.assertIn("--host 127.0.0.1", unit)          # loopback bind, unchanged
+        self.assertIn('WHISPER_REF="${WHISPER_REF:-', text)
+        self.assertIn('WHISPER_MODEL_SHA256="${WHISPER_MODEL_SHA256:-', text)
+        self.assertIn('git -C "$WHISPER_DIR" checkout --quiet "$WHISPER_REF"', text)
+        # "sha256sum appears somewhere" would be satisfied by merely PRINTING the
+        # digest. What matters is the ORDER: verify the .part file, delete it on a
+        # mismatch, and only then move it into place. Swapping those two lines
+        # would land an unverified model while every other assertion still passed.
+        self.assertIn('actual="$(sha256sum "$1" | awk \'{print $1}\')"', text)
+        verify = text.index('verify_model "$MODEL_PATH.part"')
+        self.assertLess(verify, text.index('mv "$MODEL_PATH.part" "$MODEL_PATH"'))
+        self.assertIn('verify_model "$MODEL_PATH.part" || { rm -f "$MODEL_PATH.part"; exit 1; }',
+                      text)
+        self.assertIn('verify_model "$MODEL_PATH" || exit 1', text)   # and on reruns
+        # The build stamp is what forces a rebuild when the pin changes; without
+        # it, re-pinning to another ref would silently keep the old binary.
+        self.assertIn('[ "$(cat "$BUILT_REF_STAMP" 2>/dev/null || true)" != "$HEAD_REF" ]', text)
+        self.assertIn('printf \'%s\\n\' "$HEAD_REF" > "$BUILT_REF_STAMP"', text)
+        self.assertNotIn("run as root on Pilot-VPS", text)   # host name was stale
+        self.assertIn("PD VPS", text)
+
+    # --- T10.8 + T10.9 ---------------------------------------------------
+    def test_the_installed_unit_is_the_tracked_file_and_is_sandboxed(self):
+        installer = self.shipped("install-tg-ingest-agent-pilot-remote.sh")
+        unit = self.shipped("tg-ingest-agent.service")
+        # The installer must carry NO second copy of the unit (they had already
+        # started to drift — the tracked file was the dead one).
+        self.assertNotIn("[Service]", installer)
+        self.assertNotIn("[Unit]", installer)
+        self.assertNotIn("<<'UNIT'", installer)
+        self.assertIn("UNIT_SRC=tg-ingest-agent.service", installer)
+        self.assertIn('install -m 0644 "$STAGE_DIR/$UNIT_SRC" "$UNIT_FILE"', installer)
+        self.assertIn('for required in tg_ingest_agent.py "$UNIT_SRC" "$ENV_TEMPLATE" $MODULES',
+                      installer)
+        for directive in ("CapabilityBoundingSet=",
+                          "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+                          "ProtectKernelTunables=yes", "ProtectKernelModules=yes",
+                          "ProtectControlGroups=yes", "RestrictNamespaces=yes",
+                          "RestrictSUIDSGID=yes", "LockPersonality=yes",
+                          "PrivateDevices=yes", "SystemCallArchitectures=native",
+                          "SystemCallFilter=@system-service",
+                          # Without this the default action is SIGSYS: a filter miss
+                          # in the MAIN process would be death, and Restart=always
+                          # + RestartSec=10 can never reach systemd's start limiter
+                          # (5 starts / 10 s), so it would loop forever instead of
+                          # failing visibly. EPERM makes the same block loggable.
+                          "SystemCallErrorNumber=EPERM"):
+            self.assertIn(f"\n{directive}\n", unit, directive)
+        # …and nothing the live service already depends on may be lost in the
+        # consolidation. This file is now installed VERBATIM on every deploy, so
+        # this tuple is the only thing between an edit here and a silent prod
+        # regression: dropping Restart=always would leave Cara dead after her first
+        # unhandled crash with systemd reporting nothing wrong. WatchdogSec/
+        # NotifyAccess/Type are WP7's and are what the running box reports
+        # (WatchdogUSec=15min, NotifyAccess=main, Type=simple).
+        for kept in ("Type=simple", "User=tg-ingest", "Group=tg-ingest", "UMask=0077",
+                     "NotifyAccess=main", "WatchdogSec=900", "NoNewPrivileges=yes",
+                     "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes",
+                     "ReadWritePaths=/var/lib/tg-ingest-agent",
+                     "EnvironmentFile=/etc/tg-ingest-agent.env",
+                     "ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/agent.py",
+                     "Restart=always", "RestartSec=10",
+                     "Environment=PYTHONUNBUFFERED=1",
+                     "Environment=PYTHONDONTWRITEBYTECODE=1",
+                     "[Install]", "WantedBy=multi-user.target"):
+            self.assertIn(f"\n{kept}\n", unit, kept)
+
+    # --- T10.10 ----------------------------------------------------------
+    def test_env_is_seeded_from_the_example_and_still_trips_the_placeholder_guard(self):
+        import re as remod
+        installer = self.shipped("install-tg-ingest-agent-pilot-remote.sh")
+        example = self.shipped("tg-ingest-agent.env.example")
+        self.assertNotIn("<<'ENV'", installer)      # the drifted 40-line copy is gone
+        self.assertIn("ENV_TEMPLATE=tg-ingest-agent.env.example", installer)
+        # Seeded ONLY when the file is missing: a reinstall must never blank the
+        # live secrets (the installer is run on every deploy). The regex proves the
+        # guarded block exists; the COUNT proves there is no second, unconditional
+        # seed elsewhere in the script — which would blank the live secrets on the
+        # next deploy and leave the service stopped on the REPLACE_ME guard until
+        # an operator re-pasted the token and the DO key by hand.
+        seed = 'install -m 0600 "$STAGE_DIR/$ENV_TEMPLATE" "$ENV_FILE"'
+        self.assertEqual(installer.count(seed), 1)
+        block = remod.search(
+            r'if \[ ! -f "\$ENV_FILE" \]; then\s*\n\s*' + remod.escape(seed) +
+            r'\s*\nelse\s*\n\s*chmod 0600 "\$ENV_FILE"\s*\nfi', installer)
+        self.assertIsNotNone(block, "the else branch may only re-chmod the live file")
+        # The '=' in the REPLACE_ME guard is load-bearing, and a freshly seeded
+        # env must still trip it — otherwise a fresh box starts with no token.
+        guard = remod.search(r"grep -qE '([^']+)' \"\$ENV_FILE\"", installer)
+        self.assertIsNotNone(guard)
+        self.assertIn("=REPLACE_ME", guard.group(1))
+        self.assertTrue(remod.findall(guard.group(1), example, remod.M),
+                        "a seeded env must still stop the service until it is filled")
+        # This file IS the env file on a fresh box now, so every ACTIVE line has
+        # to be something systemd's EnvironmentFile parser accepts.
+        active = {}
+        for line in example.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            self.assertRegex(line, r"^[A-Za-z_][A-Za-z0-9_]*=.*$", line)
+            key, value = line.split("=", 1)
+            active[key] = value
+        # systemd does NOT strip an inline comment, so `BUDGET_DAILY_USD=0.80 # cap`
+        # arrives as the literal string "0.80 # cap" and float() raises at startup —
+        # a crash loop on a fresh box. Neither an active NOR a commented template
+        # line may carry one (an operator uncomments the line as-is), and the same
+        # goes for the `->` prose the STT block used to hang off assignments.
+        for line in example.splitlines():
+            stripped = line.lstrip("#").strip()
+            if not remod.match(r"^[A-Za-z_][A-Za-z0-9_]*=", stripped):
+                continue
+            body = stripped.split("=", 1)[1]
+            self.assertNotIn("#", body, line)
+            self.assertNotIn("->", body, line)
+        # Much stronger than any regex: the real parser must accept the real file.
+        # The three secrets are placeholders by design, so give them plausible
+        # values and let load_config validate everything else as written.
+        env = dict(active)
+        env.update({"TELEGRAM_BOT_TOKEN": "123:abc", "ALLOWED_CHAT_IDS": "7",
+                    "DO_MODEL_ACCESS_KEY": "dop_v1_x"})
+        cfg = common.load_config(env)
+        self.assertEqual(cfg.budget_daily_usd, float(active["BUDGET_DAILY_USD"]))
+
+    # --- T10.5 -----------------------------------------------------------
+    def test_no_real_chat_id_is_committed_in_the_env_example(self):
+        import re as remod
+        example = self.shipped("tg-ingest-agent.env.example")
+        self.assertIn("FLEET_NOTIFY_CHAT_ID=REPLACE_ME", example)
+        self.assertIn("/etc/codex-auto-update/telegram.env", example)   # where it lives
+        # Scoped to the keys that can actually leak an identity/secret: banning
+        # every 9-digit run file-wide would trip over a legitimate default such as
+        # FETCH_MAX_BYTES=104857600 the moment someone adds one.
+        for line in example.splitlines():
+            stripped = line.lstrip("#").strip()
+            match = remod.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", stripped)
+            if not match or not match.group(1).endswith(("CHAT_ID", "CHAT_IDS", "BOT_TOKEN")):
+                continue
+            self.assertEqual(match.group(2).strip(), "REPLACE_ME", line)
+
+    # --- T10.4 -----------------------------------------------------------
+    def test_migration_stages_secrets_off_onedrive_and_cleans_up_on_every_exit(self):
+        text = self.checkout_only("migrate-cara-to-pd.sh")
+        self.assertNotIn("./.migrate-stage", text)      # was: inside the synced repo
+        self.assertIn('STAGE_BASE="${LOCALAPPDATA:-/tmp}"', text)
+        self.assertIn('STAGE="${STAGE:-$STAGE_BASE/cara-migrate-stage}"', text)
+        self.assertIn("\ntrap cleanup EXIT\n", text)
+        self.assertEqual(text.count("cleanup(){"), 1)   # one definition, armed once
+        self.assertIn('[ -d "$STAGE" ] || return 0', text)   # idempotent
+        # Two DIFFERENT hardenings, one per side, and `umask 077` alone cannot tell
+        # them apart. REMOTE: the snapshot is the whole DB + the env file in
+        # world-readable /tmp. LOCAL: $STAGE is where those land on the operator's
+        # machine — the directory that used to sit inside the OneDrive-synced repo,
+        # i.e. the actual subject of the finding.
+        remote = text.split("snapshot_source(){", 1)[1].split('umask 077\n  mkdir -p "$STAGE"')[0]
+        self.assertIn("set -e; umask 077", remote)
+        self.assertIn("chmod 700 /tmp/cara-migrate", remote)
+        self.assertIn("rm -rf /tmp/cara-migrate; exit", remote)   # removed on failure
+        self.assertIn('umask 077\n  mkdir -p "$STAGE"; chmod 700 "$STAGE"', text)
+        # the installer now needs the unit file staged with everything else
+        self.assertIn("tg-ingest-agent.service", text)
+
+    # --- T10.6 -----------------------------------------------------------
+    def test_the_split_one_shot_is_archived_not_armed_at_the_repo_root(self):
+        # Runs in BOTH environments, and it is the half that matters on the box:
+        # the payload is what decides whether a destructive one-shot can land on
+        # the live host at all. Asserting on the stage DIRECTORY instead would be
+        # asserting on box history — it is never wiped, so anything an older
+        # payload shipped is still lying there (it is: see the rm -f below, which
+        # a real deploy performs). That is a box action, not a repo invariant.
+        payload = self.shipped("deploy.sh").split("FILES=(", 1)[1].split(")", 1)[0]
+        self.assertNotIn("split-cara-nikki.sh", payload)
+        self.assertNotIn("*.sh", payload, "a glob ships whatever one-shot is at the root")
+        deploy = self.shipped("deploy.sh")
+        self.assertIn("rm -f '$STAGE/split-cara-nikki.sh' '$STAGE/migrate-cara-to-pd.sh'",
+                      deploy)
+        # …and that cleanup must live in the install-only branch: --test may not
+        # change anything on the box.
+        self.assertNotIn("rm -f '$STAGE/split-cara-nikki.sh'",
+                         deploy.split('if [ "$MODE" != "--test" ]; then', 1)[0])
+        if not (self.REPO / ".git").exists():
+            self.skipTest("stage dir: archive/ is not part of the deploy payload")
+        self.assertFalse((self.REPO / "split-cara-nikki.sh").exists(),
+                         "a destructive one-shot must not sit armed at the repo root")
+        archive = self.REPO / "archive" / "2026-07-03-cara-nikki-split"
+        for name in ("split-cara-nikki.sh", "split-baseline-counts-2026-07-03.json",
+                     "split-curation-2026-07-03.json", "README.md"):
+            self.assertTrue((archive / name).is_file(), name)
+        self.assertIn("Do not run", (archive / "README.md").read_text(encoding="utf-8"))
+
+    # --- T10.7 -----------------------------------------------------------
+    def _run_deploy(self, *args):
+        """Run deploy.sh with a FAKE ssh first on PATH; returns (result, ssh argv)."""
+        import subprocess as sp
+        bash = self._bash()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        sandbox = Path(tmp.name)
+        log = sandbox / "ssh.log"
+        fake = sandbox / "ssh"
+        fake.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{log}'\nexit 0\n",
+                        encoding="utf-8")
+        fake.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = str(sandbox) + os.pathsep + env.get("PATH", "")
+        env.update({"DEPLOY_KEY": str(sandbox / "key"),
+                    "DEPLOY_HOST": "root@host.invalid",
+                    "DEPLOY_KH": str(sandbox / "known_hosts")})
+        done = sp.run([bash, str(self.REPO / "deploy.sh"), *args],
+                      capture_output=True, text=True, env=env, cwd=str(self.REPO))
+        return done, (log.read_text(encoding="utf-8") if log.exists() else None)
+
+    def test_rollback_refuses_an_option_shaped_ref(self):
+        # `--rollback --pull` used to pass validation and reach `git checkout --pull`.
+        done, ssh_argv = self._run_deploy("--rollback", "--pull")
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIsNone(ssh_argv, "an option-shaped ref must never reach the box")
+        self.assertIn("usage:", done.stderr)
+
+    def test_rollback_without_a_ref_never_connects(self):
+        # NOT revert-proven, kept as a standing guard: the OLD pattern
+        # `^[0-9a-fA-F]{4,40}$|^[A-Za-z0-9._/-]+$` also rejected "" (both
+        # alternatives need at least one character), so this passed either way.
+        done, ssh_argv = self._run_deploy("--rollback")
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIsNone(ssh_argv)
+
+    def test_rollback_verifies_the_ref_and_terminates_the_argument_list(self):
+        done, ssh_argv = self._run_deploy("--rollback", "v1.2.3")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("git rev-parse --verify --quiet 'v1.2.3^{commit}'", ssh_argv)
+        self.assertIn("git checkout --quiet 'v1.2.3' --", ssh_argv)
+
+    def test_the_deploy_payload_carries_the_unit_and_the_env_template(self):
+        deploy = self.shipped("deploy.sh")
+        files = deploy.split("FILES=(", 1)[1].split(")", 1)[0].split()
+        self.assertEqual(files, ["*.py", "deploy.sh",
+                                 "install-tg-ingest-agent-pilot-remote.sh",
+                                 "install-whisper-pilot-remote.sh",
+                                 "tg-ingest-agent.env.example", "tg-ingest-agent.service"])
+        # NAMED, not `*.sh`. WP10 archived one armed one-shot out of the repo root
+        # precisely because a glob would tar it onto the live box; migrate-cara-to-pd.sh
+        # stops the service, copies DBs and overwrites /etc/tg-ingest-agent.env, and
+        # it is not shipped for the same reason.
+        self.assertNotIn("migrate-cara-to-pd.sh", deploy.split("FILES=(", 1)[1].split(")", 1)[0])
+        # CRLF from the Windows checkout would break both of those on the box.
+        self.assertIn("sed -i 's/\\r\\$//' *.py *.sh tg-ingest-agent.service "
+                      "tg-ingest-agent.env.example", deploy)
+
+
+class OwnerBindingHardening20260726Tests(unittest.TestCase):
+    """T10.2 — bootstrap_chat_id.py: who becomes the owner, and what it writes."""
+
+    class _Resp:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def read(self):
+            return json.dumps(self.payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def setUp(self):
+        import bootstrap_chat_id
+        self.mod = bootstrap_chat_id
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.env = Path(self.tmp.name) / "tg-ingest-agent.env"
+        self.env.write_text("TELEGRAM_BOT_TOKEN=123:abc\nALLOWED_CHAT_IDS=REPLACE_ME\n"
+                            "DO_MODEL_ACCESS_KEY=do-key\n", encoding="utf-8")
+
+    def _run_main(self, argv):
+        import contextlib
+        import io
+        buf, code = io.StringIO(), None
+        with contextlib.redirect_stdout(buf):
+            try:
+                self.mod.main(argv)
+            except SystemExit as exc:
+                code = exc.code
+        return code, buf.getvalue()
+
+    @staticmethod
+    def _private(update_id, chat_id, name="Boss", **extra):
+        sender = {"id": chat_id, "first_name": name}
+        sender.update(extra)
+        return {"update_id": update_id,
+                "message": {"chat": {"id": chat_id, "type": "private"}, "from": sender}}
+
+    def test_reading_the_queue_sends_no_offset_at_all(self):
+        """The default read must be the one call the Bot API promises is free.
+
+        A POSITIVE offset confirms (deletes) everything below it. A NEGATIVE one
+        is not the safe alternative it looks like: the same paragraph of the API
+        docs says "the negative offset can be specified to retrieve updates
+        starting from -offset update from the end of the updates queue. All
+        previous updates will be forgotten" — `getUpdates(offset=-1)` is the
+        documented idiom for DROPPING the queue. Only "no offset" is safe.
+        """
+        seen_urls = []
+
+        def fake(url, timeout=None):
+            seen_urls.append(url)
+            return self._Resp({"ok": True, "result": [self._private(1, 7),
+                                                      self._private(2, 8, name="Other")]})
+
+        updates, truncated = self.mod.fetch_updates("tok", opener=fake)
+        self.assertFalse(truncated)
+        self.assertEqual([u["update_id"] for u in updates], [1, 2])
+        self.assertEqual(set(self.mod.candidates(updates)), {7, 8})
+        self.assertEqual(len(seen_urls), 1)
+        self.assertNotIn("offset", seen_urls[0])
+
+    def test_a_queue_deeper_than_one_page_is_reported_not_silently_cut(self):
+        def fake(url, timeout=None):
+            return self._Resp({"ok": True,
+                               "result": [self._private(i, 7) for i in range(1, 101)]})
+
+        updates, truncated = self.mod.fetch_updates("tok", opener=fake, limit=100)
+        self.assertTrue(truncated)          # a full page means "there may be more"
+        self.assertEqual(len(updates), 100)
+
+    def test_the_deep_read_is_opt_in_and_pages_backwards(self):
+        import re as remod
+        pages = {
+            None: [self._private(i, 9, name="Oldest") for i in range(1, 101)],
+            -100: [self._private(i, 7) for i in range(101, 201)],
+            -200: [self._private(i, 8, name="Older") for i in range(1, 101)],
+            -300: [self._private(i, 8, name="Older") for i in range(1, 101)],   # clamped
+        }
+        seen_urls = []
+
+        def fake(url, timeout=None):
+            seen_urls.append(url)
+            found = remod.search(r"offset=(-?\d+)", url)
+            return self._Resp({"ok": True,
+                               "result": pages[int(found.group(1)) if found else None]})
+
+        # Not without asking: the default never sends an offset, so the newest
+        # updates behind a full first page stay unreachable (and undamaged).
+        self.mod.fetch_updates("tok", opener=fake)
+        self.assertEqual(len(seen_urls), 1)
+        self.assertNotIn("offset", seen_urls[0])
+
+        seen_urls.clear()
+        updates, truncated = self.mod.fetch_updates("tok", opener=fake, deep=True)
+        self.assertFalse(truncated)
+        self.assertEqual(len(updates), 200)          # first page + the backward pages
+        self.assertNotIn("offset", seen_urls[0])     # the safe page still comes first
+        self.assertTrue(all("offset=-" in url for url in seen_urls[1:]), seen_urls)
+        self.assertGreater(len(seen_urls), 1)
+
+    def test_the_deep_read_says_what_it_destroys(self):
+        updates = [self._private(1, 7, name="Boss", username="boss")]
+        with mock.patch.object(self.mod, "ENV", self.env), \
+                mock.patch.object(self.mod, "service_is_active", return_value=False), \
+                mock.patch.object(self.mod, "fetch_updates",
+                                  return_value=(updates, False)) as fetched:
+            code, out = self._run_main(["--deep-read", "7"])
+        self.assertIsNone(code)
+        self.assertTrue(fetched.call_args.kwargs["deep"])
+        self.assertIn("forgotten", out)              # the API's own wording
+        self.assertIn("ALLOWED_CHAT_IDS=7", self.env.read_text(encoding="utf-8"))
+
+    def test_a_full_first_page_tells_the_operator_what_is_hidden(self):
+        with mock.patch.object(self.mod, "ENV", self.env), \
+                mock.patch.object(self.mod, "service_is_active", return_value=False), \
+                mock.patch.object(self.mod, "fetch_updates", return_value=([], True)):
+            code, out = self._run_main([])
+        self.assertEqual(code, 1)
+        self.assertIn("--deep-read", out)
+        self.assertIn("DISCARDS", out)
+
+    def test_binding_refuses_while_the_service_is_polling(self):
+        class Active:
+            stdout = "active\n"
+
+        class Inactive:
+            stdout = "inactive\n"
+
+        self.assertTrue(self.mod.service_is_active(runner=lambda *a, **k: Active()))
+        self.assertFalse(self.mod.service_is_active(runner=lambda *a, **k: Inactive()))
+
+        def missing(*a, **k):
+            raise FileNotFoundError("systemctl")
+
+        self.assertFalse(self.mod.service_is_active(runner=missing))
+        with mock.patch.object(self.mod, "ENV", self.env), \
+                mock.patch.object(self.mod, "service_is_active", return_value=True), \
+                mock.patch.object(self.mod, "fetch_updates") as fetched:
+            code, out = self._run_main(["7"])
+        self.assertEqual(code, 1)
+        fetched.assert_not_called()                             # no 409 traceback
+        self.assertIn("systemctl stop tg-ingest-agent", out)
+        self.assertIn("ALLOWED_CHAT_IDS=REPLACE_ME", self.env.read_text(encoding="utf-8"))
+
+    def test_a_409_is_explained_instead_of_traced(self):
+        error = self.mod.HTTPError("https://api.telegram.org", 409, "Conflict", {}, None)
+        with mock.patch.object(self.mod, "ENV", self.env), \
+                mock.patch.object(self.mod, "service_is_active", return_value=False), \
+                mock.patch.object(self.mod, "fetch_updates", side_effect=error):
+            code, out = self._run_main(["7"])
+        self.assertEqual(code, 1)
+        self.assertIn("stop tg-ingest-agent", out)
+
+    def test_no_argument_lists_candidates_and_binds_nobody(self):
+        updates = [self._private(1, 7, name="Boss", username="boss"),
+                   self._private(2, 9, name="Stranger")]
+        with mock.patch.object(self.mod, "ENV", self.env), \
+                mock.patch.object(self.mod, "service_is_active", return_value=False), \
+                mock.patch.object(self.mod, "fetch_updates", return_value=(updates, False)):
+            code, out = self._run_main([])
+        self.assertEqual(code, 1)
+        self.assertIn("7  Boss (@boss)", out)
+        self.assertIn("9  Stranger", out)
+        # The sole-pending-chat shortcut is gone: nothing was written.
+        self.assertIn("ALLOWED_CHAT_IDS=REPLACE_ME", self.env.read_text(encoding="utf-8"))
+
+    def test_binding_prints_the_bound_id_and_keeps_a_backup(self):
+        updates = [self._private(1, 7, name="Boss", username="boss")]
+        with mock.patch.object(self.mod, "ENV", self.env), \
+                mock.patch.object(self.mod, "service_is_active", return_value=False), \
+                mock.patch.object(self.mod, "fetch_updates", return_value=(updates, False)):
+            code, out = self._run_main(["7"])
+        self.assertIsNone(code)
+        text = self.env.read_text(encoding="utf-8")
+        self.assertIn("ALLOWED_CHAT_IDS=7", text)
+        self.assertIn("TELEGRAM_BOT_TOKEN=123:abc", text)       # nothing else touched
+        self.assertIn("DO_MODEL_ACCESS_KEY=do-key", text)
+        self.assertIn("bound ALLOWED_CHAT_IDS=7", out)
+        self.assertIn("Boss", out)                              # it says WHO it bound
+        self.assertIn("ALLOWED_CHAT_IDS=REPLACE_ME",
+                      Path(str(self.env) + ".bak").read_text(encoding="utf-8"))
+        self.assertFalse(Path(str(self.env) + ".tmp").exists())
+        self.assertEqual(oct(self.env.stat().st_mode)[-3:], "600")
+
+    def test_a_failed_env_write_leaves_the_original_intact(self):
+        original = self.env.read_text(encoding="utf-8")
+        with mock.patch("os.replace", side_effect=OSError("no space left")):
+            with self.assertRaises(OSError):
+                self.mod.write_env_atomically(self.env, "TELEGRAM_BOT_TOKEN=lost\n")
+        # The old code truncated the real file first: a crash here lost the token
+        # AND the DO key.
+        self.assertEqual(self.env.read_text(encoding="utf-8"), original)
+        self.assertFalse(Path(str(self.env) + ".tmp").exists())
+
+    def test_a_missing_key_is_appended_and_duplicates_are_refused(self):
+        self.assertEqual(self.mod.set_env_value("TELEGRAM_BOT_TOKEN=x\n", "ALLOWED_CHAT_IDS", 5),
+                         "TELEGRAM_BOT_TOKEN=x\nALLOWED_CHAT_IDS=5\n")
+        with self.assertRaises(ValueError):
+            # systemd honours the LAST assignment, so patching only the first
+            # would leave the stale value in force.
+            self.mod.set_env_value("A=1\nA=2\n", "A", 9)
+        # a secret containing a backslash must survive verbatim (re escape trap)
+        self.assertEqual(self.mod.set_env_value("K=old\n", "K", r"a\1b"), "K=a\\1b\n")
+
+    def test_a_duplicated_owner_line_is_explained_not_traced(self):
+        self.env.write_text("TELEGRAM_BOT_TOKEN=123:abc\nALLOWED_CHAT_IDS=1\n"
+                            "ALLOWED_CHAT_IDS=2\n", encoding="utf-8")
+        original = self.env.read_text(encoding="utf-8")
+        updates = [self._private(1, 7, name="Boss")]
+        with mock.patch.object(self.mod, "ENV", self.env), \
+                mock.patch.object(self.mod, "service_is_active", return_value=False), \
+                mock.patch.object(self.mod, "fetch_updates", return_value=(updates, False)):
+            code, _out = self._run_main(["7"])
+        # The ValueError used to escape main() as a raw traceback.
+        self.assertIsInstance(code, str)
+        self.assertIn("fix the file by hand", code)
+        self.assertEqual(self.env.read_text(encoding="utf-8"), original)
+
+    def test_a_stale_temp_file_is_explained_instead_of_a_bare_oserror(self):
+        """A hard kill between the O_EXCL open and os.replace leaves the .tmp.
+
+        Every later run of ANY of the three ops scripts then died with a bare
+        FileExistsError naming a path the operator has no reason to know about.
+        """
+        stale = Path(str(self.env) + ".tmp")
+        stale.write_text("half a write\n", encoding="utf-8")
+        original = self.env.read_text(encoding="utf-8")
+        with self.assertRaises(SystemExit) as caught:
+            self.mod.write_env_atomically(self.env, "ALLOWED_CHAT_IDS=9\n")
+        self.assertIn(str(stale), str(caught.exception))
+        self.assertIn("rm -f", str(caught.exception))
+        self.assertEqual(self.env.read_text(encoding="utf-8"), original)
+        self.assertEqual(stale.read_text(encoding="utf-8"), "half a write\n")
+
+    def test_a_pre_existing_backup_does_not_keep_its_loose_mode(self):
+        """`mode=` on os.open only applies when the file is CREATED.
+
+        A .bak left by an operator's `cp` kept its own permissions while being
+        handed a full copy of the bot token and the DO key.
+        """
+        backup = Path(str(self.env) + ".bak")
+        backup.write_text("old\n", encoding="utf-8")
+        os.chmod(backup, 0o644)
+        self.mod.write_env_atomically(self.env, "ALLOWED_CHAT_IDS=9\n")
+        self.assertEqual(oct(backup.stat().st_mode)[-3:], "600")
+        self.assertIn("ALLOWED_CHAT_IDS=REPLACE_ME", backup.read_text(encoding="utf-8"))
+
+
+class StagedSecretApply20260726Tests(unittest.TestCase):
+    """T10.3 — apply_token.py / apply_do_key.py: validate BEFORE writing."""
+
+    class _Resp:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def read(self):
+            return json.dumps(self.payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def setUp(self):
+        import apply_do_key
+        import apply_token
+        self.token_mod, self.key_mod = apply_token, apply_do_key
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.env = base / "tg-ingest-agent.env"
+        # deliberately WITHOUT the key lines: the old re.sub was a silent no-op
+        self.env.write_text("ALLOWED_CHAT_IDS=7\n", encoding="utf-8")
+        self.token_staged = base / ".token.env"
+        self.token_staged.write_text("TELEGRAM_BOT_TOKEN=999:new\n", encoding="utf-8")
+        self.key_staged = base / ".dokey.env"
+        self.key_staged.write_text("DO_MODEL_ACCESS_KEY=dop_v1_new\n", encoding="utf-8")
+
+    def _run(self, func, **kwargs):
+        import contextlib
+        import io
+        buf, raised = io.StringIO(), None
+        with contextlib.redirect_stdout(buf):
+            try:
+                func(**kwargs)
+            except BaseException as exc:                # noqa: BLE001 - reported below
+                raised = exc
+        return raised, buf.getvalue()
+
+    def test_a_missing_token_line_is_appended_not_silently_skipped(self):
+        raised, out = self._run(self.token_mod.main, staged=self.token_staged, env=self.env,
+                                opener=lambda *a, **k: self._Resp(
+                                    {"ok": True, "result": {"username": "cara_assist_bot"}}))
+        self.assertIsNone(raised, out)
+        text = self.env.read_text(encoding="utf-8")
+        self.assertIn("TELEGRAM_BOT_TOKEN=999:new", text)
+        self.assertIn("ALLOWED_CHAT_IDS=7", text)               # untouched
+        self.assertFalse(self.token_staged.exists())            # removed on success
+        self.assertIn("staged secret removed", out)
+
+    def test_an_invalid_token_never_reaches_the_env(self):
+        original = self.env.read_text(encoding="utf-8")
+        raised, out = self._run(self.token_mod.main, staged=self.token_staged, env=self.env,
+                                opener=lambda *a, **k: self._Resp(
+                                    {"ok": False, "description": "Unauthorized"}))
+        self.assertIsInstance(raised, SystemExit)
+        self.assertEqual(self.env.read_text(encoding="utf-8"), original)
+        self.assertTrue(self.token_staged.exists())             # kept for a retry
+        self.assertIn("KEPT", out)
+        self.assertIn("was NOT changed", out)
+
+    def test_a_network_failure_leaves_both_files_alone(self):
+        original = self.env.read_text(encoding="utf-8")
+
+        def boom(*a, **k):
+            raise OSError("api.telegram.org unreachable")
+
+        raised, out = self._run(self.token_mod.main, staged=self.token_staged, env=self.env,
+                                opener=boom)
+        self.assertIsInstance(raised, OSError)
+        self.assertEqual(self.env.read_text(encoding="utf-8"), original)
+        self.assertTrue(self.token_staged.exists())
+        self.assertIn("KEPT", out)
+
+    def test_a_missing_do_key_line_is_appended_after_validation(self):
+        raised, out = self._run(self.key_mod.main, staged=self.key_staged, env=self.env,
+                                opener=lambda *a, **k: self._Resp(
+                                    {"data": [{"id": "claude-4.7-sonnet"}]}))
+        self.assertIsNone(raised, out)
+        self.assertIn("DO_MODEL_ACCESS_KEY=dop_v1_new", self.env.read_text(encoding="utf-8"))
+        self.assertFalse(self.key_staged.exists())
+
+    def test_a_do_key_that_lists_nothing_never_reaches_the_env(self):
+        original = self.env.read_text(encoding="utf-8")
+        raised, out = self._run(self.key_mod.main, staged=self.key_staged, env=self.env,
+                                opener=lambda *a, **k: self._Resp({"data": []}))
+        self.assertIsInstance(raised, SystemExit)
+        self.assertEqual(self.env.read_text(encoding="utf-8"), original)
+        self.assertTrue(self.key_staged.exists())
+        self.assertIn("KEPT", out)
+
+    def test_the_env_write_is_atomic_and_backed_up(self):
+        for module in (self.token_mod, self.key_mod):
+            self.env.write_text("ALLOWED_CHAT_IDS=7\n", encoding="utf-8")
+            module.write_env_atomically(self.env, "ALLOWED_CHAT_IDS=8\n")
+            self.assertEqual(self.env.read_text(encoding="utf-8"), "ALLOWED_CHAT_IDS=8\n")
+            self.assertEqual(Path(str(self.env) + ".bak").read_text(encoding="utf-8"),
+                             "ALLOWED_CHAT_IDS=7\n")
+            self.assertFalse(Path(str(self.env) + ".tmp").exists())
+            self.assertEqual(oct(self.env.stat().st_mode)[-3:], "600")
+
+    def test_each_script_carries_its_own_hardened_write_helper(self):
+        """Three standalone operator scripts, three copies — fix all three.
+
+        A stale `<env>.tmp` from a killed run made every later run die on a bare
+        FileExistsError, and a pre-existing `.bak` kept its own (looser) mode
+        while receiving the token and the DO key.
+        """
+        for module in (self.token_mod, self.key_mod):
+            original = self.env.read_text(encoding="utf-8")
+            stale = Path(str(self.env) + ".tmp")
+            stale.write_text("half a write\n", encoding="utf-8")
+            with self.assertRaises(SystemExit) as caught:
+                module.write_env_atomically(self.env, "ALLOWED_CHAT_IDS=8\n")
+            self.assertIn("rm -f", str(caught.exception))
+            self.assertEqual(self.env.read_text(encoding="utf-8"), original)
+            stale.unlink()
+            backup = Path(str(self.env) + ".bak")
+            backup.write_text("older\n", encoding="utf-8")
+            os.chmod(backup, 0o644)
+            module.write_env_atomically(self.env, "ALLOWED_CHAT_IDS=8\n")
+            self.assertEqual(oct(backup.stat().st_mode)[-3:], "600")
+            self.env.write_text("ALLOWED_CHAT_IDS=7\n", encoding="utf-8")
+
+    def test_a_duplicated_key_is_refused_per_script_and_reported(self):
+        cases = ((self.token_mod, "TELEGRAM_BOT_TOKEN", self.token_staged,
+                  lambda *a, **k: self._Resp({"ok": True, "result": {"username": "cara"}})),
+                 (self.key_mod, "DO_MODEL_ACCESS_KEY", self.key_staged,
+                  lambda *a, **k: self._Resp({"data": [{"id": "claude-4.7-sonnet"}]})))
+        for module, key, staged, opener in cases:
+            self.env.write_text(f"{key}=old\n{key}=older\n", encoding="utf-8")
+            original = self.env.read_text(encoding="utf-8")
+            raised, out = self._run(module.main, staged=staged, env=self.env, opener=opener)
+            # Each script has its OWN copy of set_env_value; the ValueError used
+            # to escape main() as a traceback right after the "KEPT" line.
+            self.assertIsInstance(raised, SystemExit)
+            self.assertIn("fix the file by hand", str(raised))
+            self.assertEqual(self.env.read_text(encoding="utf-8"), original)
+            self.assertTrue(staged.exists())
+            self.assertIn("was NOT changed", out)
+
+    def test_a_staged_file_without_the_key_leaves_everything_alone(self):
+        for module, staged in ((self.token_mod, self.token_staged),
+                               (self.key_mod, self.key_staged)):
+            self.env.write_text("ALLOWED_CHAT_IDS=7\n", encoding="utf-8")
+            staged.write_text("SOMETHING_ELSE=x\n", encoding="utf-8")
+            raised, out = self._run(module.main, staged=staged, env=self.env,
+                                    opener=lambda *a, **k: self._Resp({"ok": True}))
+            self.assertIsInstance(raised, SystemExit)
+            self.assertIn("staged file", str(raised))
+            self.assertEqual(self.env.read_text(encoding="utf-8"), "ALLOWED_CHAT_IDS=7\n")
+            self.assertTrue(staged.exists())            # kept so it can be fixed
+            self.assertIn("KEPT", out)
 
 
 if __name__ == "__main__":

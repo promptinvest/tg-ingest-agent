@@ -13,10 +13,15 @@ APP_DIR=/opt/tg-ingest-agent
 STATE_DIR=/var/lib/tg-ingest-agent
 ENV_FILE=/etc/tg-ingest-agent.env
 UNIT_FILE=/etc/systemd/system/${SERVICE}.service
+UNIT_SRC=tg-ingest-agent.service
+ENV_TEMPLATE=tg-ingest-agent.env.example
 
 MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py storage.py backup.py knowledge.py skill_manifest.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py"
 
-for required in tg_ingest_agent.py $MODULES; do
+# The unit file and the env template are STAGED FILES now, not heredocs in this
+# script: one copy of each, versioned in the repo. A stage dir that predates that
+# change must fail loudly here rather than install half a service.
+for required in tg_ingest_agent.py "$UNIT_SRC" "$ENV_TEMPLATE" $MODULES; do
   if [ ! -f "$STAGE_DIR/$required" ]; then
     echo "Missing $STAGE_DIR/$required (stage it first)." >&2
     exit 1
@@ -65,91 +70,21 @@ rm -rf "$APP_DIR/__pycache__"
 ( cd "$APP_DIR" && cat agent.py $MODULES | sha1sum | cut -c1-12 ) > "$APP_DIR/VERSION"
 chmod 0644 "$APP_DIR/VERSION"
 
+# Seed a MISSING env file from the tracked example — never touch an existing one
+# (a reinstall must not blank the live secrets). This script used to carry its own
+# 40-line template, which had already drifted from the example: different budget
+# defaults, dozens of keys missing, and no mention of STT_MODE, whose default
+# `remote` ships voice audio off the box. One template, one place.
 if [ ! -f "$ENV_FILE" ]; then
-  cat >"$ENV_FILE" <<'ENV'
-# tg-ingest-agent configuration. Required values are marked REPLACE_ME.
-# systemd EnvironmentFile: no inline comments after values, no quotes needed.
-TELEGRAM_BOT_TOKEN=REPLACE_ME
-# Comma-separated numeric chat ids allowed to feed the bot.
-ALLOWED_CHAT_IDS=REPLACE_ME
-DO_MODEL_ACCESS_KEY=REPLACE_ME
-# Optional overrides (defaults shown):
-# BOT_LANGUAGE=ru
-# TIMEZONE_OFFSET_HOURS=3
-# BUDGET_DAILY_USD=1.0
-# BUDGET_MONTHLY_USD=15.0
-# STT_ENABLED=true
-# STT_MODEL=whisper-large-v3
-# ROUTER_MODEL=deepseek-4-flash
-# ROUTER_CONFIDENCE_THRESHOLD=0.6
-# HABIT_THRESHOLD=10
-# Optional seed taxonomy; categories also emerge from confirmed suggestions.
-# CATEGORIES=news,tools,ideas
-# Google Calendar sync (optional; .ics export works without it):
-# GCAL_CALENDAR_ID=you@gmail.com
-# GCAL_SA_KEY_FILE=/etc/tg-ingest-agent/gcal-sa.json
-# EVENT_DURATION_MINUTES=30
-# CATEGORIES_FILE=/etc/tg-ingest-agent/categories.txt
-# FALLBACK_CATEGORY=uncategorized
-# DO_CHAT_MODEL=deepseek-4-flash
-# ASK_MIN_SCORE=0.25
-# UPDATE_MAX_ATTEMPTS=3
-# BACKUP_ENCRYPTION_KEY_FILE=/etc/tg-ingest-agent-backup.key
-# DO_INFERENCE_BASE_URL=https://inference.do-ai.run/v1
-# PRICING_JSON={"model-id": [in_usd_per_1m, out_usd_per_1m]}
-# DB_PATH=/var/lib/tg-ingest-agent/ingest.db
-# MEDIA_DIR=/var/lib/tg-ingest-agent/media
-# POLL_TIMEOUT_SECONDS=50
-# ALBUM_SETTLE_SECONDS=3
-# MAX_LLM_IMAGES=4
-# LLM_TIMEOUT_SECONDS=90
-# LLM_MAX_ATTEMPTS=5
-# RETRY_INTERVAL_SECONDS=300
-ENV
-  chmod 0600 "$ENV_FILE"
+  install -m 0600 "$STAGE_DIR/$ENV_TEMPLATE" "$ENV_FILE"
 else
   chmod 0600 "$ENV_FILE"
 fi
 
-cat >"$UNIT_FILE" <<'UNIT'
-[Unit]
-Description=Telegram ingest agent (LLM categorization)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=tg-ingest
-Group=tg-ingest
-UMask=0077
-EnvironmentFile=/etc/tg-ingest-agent.env
-ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/agent.py
-Restart=always
-RestartSec=10
-Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONDONTWRITEBYTECODE=1
-# Liveness, not just "the process exists": the agent pings WATCHDOG=1 as it works,
-# so a WEDGED poll loop (which reports active/running forever) is restarted instead
-# of going silent. NotifyAccess=main lets a Type=simple service send it —
-# deliberately NOT Type=notify, whose missing READY=1 would be a startup failure and
-# a crash loop.
-# The budget must exceed the longest UN-PINGED span. Pings sit inside the long
-# primitives (every llm.chat/embed/transcribe, each whisper-server attempt, each
-# runtime.drain job), so that span is ONE bounded wait, and the largest of those is
-# a cold transcription: STT_LOCAL_TIMEOUT_SECONDS (600) + ffmpeg conversion.
-# Raising STT_LOCAL_TIMEOUT_SECONDS above ~780 invalidates this number — the agent
-# logs a startup warning if it does.
-NotifyAccess=main
-WatchdogSec=900
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/var/lib/tg-ingest-agent
-PrivateTmp=yes
-
-[Install]
-WantedBy=multi-user.target
-UNIT
+# The unit is the tracked tg-ingest-agent.service, installed verbatim. It used to
+# be a heredoc here with the repo's copy as a dead duplicate beside it — two files
+# to keep in sync, and only one of them deployed.
+install -m 0644 "$STAGE_DIR/$UNIT_SRC" "$UNIT_FILE"
 
 python3 -m py_compile "$APP_DIR/agent.py" $(for m in $MODULES; do echo "$APP_DIR/$m"; done)
 rm -rf "$APP_DIR/__pycache__"

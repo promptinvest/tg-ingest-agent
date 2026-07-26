@@ -89,7 +89,7 @@ under the non-root user `tg-ingest`.
 | `/etc/tg-ingest-agent.env` | config + secrets, mode 0600 (see `tg-ingest-agent.env.example`) |
 | `/var/lib/tg-ingest-agent/ingest.db` | SQLite |
 | `/var/lib/tg-ingest-agent/media/` | downloaded photos and voice files |
-| `/etc/systemd/system/tg-ingest-agent.service` | unit (reference copy: `tg-ingest-agent.service`) |
+| `/etc/systemd/system/tg-ingest-agent.service` | unit — installed verbatim from the tracked `tg-ingest-agent.service` (single source of truth) |
 
 ## One-time setup
 
@@ -121,9 +121,16 @@ it from PowerShell with `Out-File`/redirect — UTF-16/BOM trap), then
 `systemctl start tg-ingest-agent`.
 
 Bootstrap your chat id while the service is stopped: message the bot once, then
-run `python3 bootstrap_chat_id.py <expected_numeric_chat_id>`. The helper accepts
-one exact private owner and refuses an ambiguous pending queue; it never
-allowlists every sender it sees.
+run `python3 bootstrap_chat_id.py <expected_numeric_chat_id>`. The id is
+mandatory — run it with no argument to LIST the pending private chats (it exits
+non-zero and binds nobody), then re-run with the right one. It refuses to run
+while the service is polling and rewrites the env file atomically (keeping a
+`.bak`). It reads the queue with a plain no-offset `getUpdates`, the only form
+the Bot API guarantees consumes nothing; that returns the OLDEST 100 pending
+updates, so on a deeper queue it says so rather than hiding the rest. The
+opt-in `--deep-read` reaches the END of a flooded queue with negative offsets
+and, per the API ("all previous updates will be forgotten"), DISCARDS everything
+older — it prints that warning before you use it.
 
 ## Behavior details
 

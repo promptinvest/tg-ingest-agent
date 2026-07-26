@@ -348,7 +348,8 @@ REPLACE_ME anchor, spec-consistency sweep.
     env.example; installer backups dir grows unboundedly.
 16. Dead Pilot-era files to archive: `migrate-cara-to-pd.sh`,
     `split-cara-nikki.sh`, `split-*.json`, `known_hosts_pilot_rnd`,
-    `stt_probe.py`.
+    `stt_probe.py`. (2026-07-26: the split script + its two JSONs moved to
+    `archive/2026-07-03-cara-nikki-split/`; the rest are still at the root.)
 
 **Product backlog (owner-acknowledged, ask before building):**
 17. Memory consolidation/forgetting: candidate dedup/contradiction shipped;

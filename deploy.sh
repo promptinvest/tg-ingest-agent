@@ -60,21 +60,38 @@ $install_verify"
     ;;
   --rollback)
     REF="${2:-}"
-    if ! [[ "$REF" =~ ^[0-9a-fA-F]{4,40}$|^[A-Za-z0-9._/-]+$ ]]; then
-      echo "usage: ./deploy.sh --rollback <sha|branch>" >&2; exit 2
+    # A ref must never be able to become a git OPTION: the old pattern's second
+    # alternative allowed a leading '-', so `--rollback --pull` validated and
+    # reached `git checkout --pull`. Require an alphanumeric first character,
+    # verify the ref really resolves to a commit on the box, and pass `--` after
+    # it so it can never be read as a pathspec either.
+    if [ -z "$REF" ] || ! [[ "$REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+      echo "usage: ./deploy.sh --rollback <sha|branch>   (no leading '-')" >&2; exit 2
     fi
     ssh "${SSH_OPTS[@]}" "$HOST" "
 set -e -o pipefail
 $git_env
 cd '$SRC'
 git fetch --quiet origin
-git checkout --quiet '$REF'
+git rev-parse --verify --quiet '$REF^{commit}' >/dev/null || {
+  echo 'not a commit on the box: $REF' >&2; exit 2; }
+git checkout --quiet '$REF' --
 echo \"rolled back to \$(git rev-parse --short HEAD): \$(git log -1 --format=%s)\"
 $install_verify
 echo '(return to latest with: ./deploy.sh --pull)'"
     ;;
   deploy|--test)
-    FILES=(*.py install-tg-ingest-agent-pilot-remote.sh tg-ingest-agent.env.example)
+    # The unit file and the env example are INSTALLED from the stage dir now (they
+    # are the single source of truth for the unit and for the env template), and
+    # the three scripts that operate this box ship so their `bash -n` / invariant
+    # tests run where the suite actually runs — on the box, not only in a checkout.
+    # NAMED, never `*.sh`: a glob would drop any future one-shot sitting at the
+    # repo root straight onto the live host (which is why the 2026-07-03 split
+    # script was archived). migrate-cara-to-pd.sh stops services and overwrites
+    # /etc/tg-ingest-agent.env — it stays off the box and is checked in a checkout.
+    FILES=(*.py deploy.sh install-tg-ingest-agent-pilot-remote.sh
+           install-whisper-pilot-remote.sh
+           tg-ingest-agent.env.example tg-ingest-agent.service)
     SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
     DIRTY=""; [ -n "$(git status --porcelain 2>/dev/null)" ] && DIRTY=" +local-changes"
     echo "deploying from ${SHA}${DIRTY}"
@@ -83,11 +100,19 @@ set -e -o pipefail
 mkdir -p '$STAGE'
 tar xzf - -C '$STAGE'
 cd '$STAGE'
-sed -i 's/\r\$//' *.py *.sh
+sed -i 's/\r\$//' *.py *.sh tg-ingest-agent.service tg-ingest-agent.env.example
 echo '--- tests ---'
 python3 -m unittest discover -p 'test_*.py' 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | tail -60"
     if [ "$MODE" != "--test" ]; then
       remote_script+="
+# Stage-dir debris. The dir is only mkdir -p'd and untarred into, never wiped, so
+# anything an OLDER payload shipped stays there for good — and both destructive
+# one-shots reached it that way while FILES still globbed '*.sh'. Neither is in
+# the payload any more, so delete the copies by NAME (a glob could take a file
+# something still needs, and dotfiles must survive: apply_token.py reads a staged
+# .token.env from this directory). Real deploys only: --test refreshes the payload,
+# it must never delete anything.
+rm -f '$STAGE/split-cara-nikki.sh' '$STAGE/migrate-cara-to-pd.sh'
 echo '--- install ---'
 bash install-tg-ingest-agent-pilot-remote.sh 2>&1 | tail -5
 echo -n 'service: '; systemctl is-active tg-ingest-agent"
