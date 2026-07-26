@@ -35,6 +35,21 @@ MAX_STREAMS = 200
 # still handed to pdfminer unbounded.
 MAX_INFLATED_BYTES = 128 * 1024 * 1024
 _INFLATE_CHUNK = 1024 * 1024
+# Input handed to zlib in ONE decompress call. Whatever zlib does not consume it
+# copies back OUT — `unconsumed_tail`, and at Z_STREAM_END CPython memcpy's the
+# entire remainder into `unused_data` — so a call's hidden cost is the size of
+# what it was FED, not of what it read. Measuring each stream from its payload
+# start to the end of the file (what "look past `endstream`" naively means) then
+# costs one copy of the rest of the document PER STREAM: a 20 MB forward built
+# from ~800 000 eight-byte VALID streams turns a bounded pre-scan into terabytes
+# of memcpy on the one poll thread. A fixed input window keeps every copy small.
+_SCAN_INPUT_CHUNK = 64 * 1024
+# ...and reading past an `endstream` marker at all is budgeted across the whole
+# document, because a payload can consume input while producing nothing (empty
+# stored blocks), which the inflated-bytes ceiling alone would never stop. A
+# well-formed PDF never spends any of this: its streams end where they say they
+# do, and zlib reports that within the regex's own group.
+MAX_SCAN_TAIL_BYTES = 16 * 1024 * 1024
 _TJ = re.compile(r"\((?:\\.|[^()\\])*\)\s*Tj")
 _TJ_ARRAY = re.compile(r"\[(.*?)\]\s*TJ", re.DOTALL)
 _PAREN = re.compile(r"\((?:\\.|[^()\\])*\)")
@@ -63,24 +78,55 @@ def extract_text(data, max_chars=20000):
     return text if _looks_like_text(text) else ""
 
 
-def _inflated_bytes(raw, budget):
-    """How many bytes this stream inflates to, counted up to `budget` and never
-    kept — the point is to learn the SIZE without ever holding it. A stream that
-    isn't flate-encoded inflates to nothing."""
+def _inflated_bytes(view, start, stop, budget, tail_budget):
+    """How many bytes the stream at `start` inflates to, counted up to `budget`
+    and never kept — the point is to learn the SIZE without ever holding it. A
+    stream that isn't flate-encoded inflates to nothing.
+
+    `stop` is where the regex found `endstream`. When zlib has NOT finished by
+    then, the payload really does run past that marker — the regex is non-greedy
+    and a stored deflate block copies its input verbatim, so a bomb can carry the
+    literal bytes «endstream» inside the compressed data and have this pre-scan
+    measure a harmless prefix while pdfminer, which takes the length from the
+    object dictionary, still inflates the whole thing. So the count continues
+    into the rest of the file — but in `_SCAN_INPUT_CHUNK` windows, and only
+    while `tail_budget` allows: both the per-call copy and the total past-marker
+    read stay bounded, which is what keeps this scan O(document) rather than
+    O(streams × document).
+
+    A stream that breaks half-way still reports what it had already produced —
+    the count is evidence about a bomb, and discarding it would hand the bomb a
+    second bypass (append garbage, get measured at zero).
+
+    Returns `(inflated, tail_bytes_read)`."""
     seen = 0
-    pending = raw
+    tail_used = 0
+    pos = start
+    end = stop
+    total = len(view)
     try:
         d = zlib.decompressobj()
-        while pending and seen < budget:
-            out = d.decompress(pending, _INFLATE_CHUNK)
-            tail = d.unconsumed_tail
-            if not out and tail == pending:
-                break  # no progress: truncated/corrupt stream
+        while seen < budget:
+            chunk = view[pos:min(end, pos + _SCAN_INPUT_CHUNK)]
+            if not len(chunk):
+                # zlib wants more input: this stream did not end at the marker.
+                grow = min(_SCAN_INPUT_CHUNK, total - end, tail_budget - tail_used)
+                if grow <= 0 or pos <= start:
+                    break   # nothing left, no allowance, or no progress at all
+                end += grow
+                tail_used += grow
+                continue
+            out = d.decompress(chunk, _INFLATE_CHUNK)
             seen += len(out)
-            pending = tail
+            if d.eof:
+                break       # zlib knows its own framing: the stream ended here
+            consumed = len(chunk) - len(d.unconsumed_tail)
+            if consumed <= 0 and not out:
+                break       # no progress: truncated/corrupt stream
+            pos += consumed
     except Exception:
-        return 0
-    return seen
+        return seen, tail_used
+    return seen, tail_used
 
 
 def _is_decompression_bomb(data):
@@ -88,9 +134,21 @@ def _is_decompression_bomb(data):
     MAX_INFLATED_BYTES in total. Counting stops at the ceiling, so the check
     itself is bounded in both time and memory."""
     budget = MAX_INFLATED_BYTES
+    tail_budget = MAX_SCAN_TAIL_BYTES
+    view = memoryview(data)
     for m in _STREAM.finditer(data):
-        budget -= _inflated_bytes(m.group(1), budget + 1)
+        inflated, tail_used = _inflated_bytes(view, m.start(1), m.end(1),
+                                              budget + 1, tail_budget)
+        budget -= inflated
+        tail_budget -= tail_used
         if budget < 0:
+            return True
+        if tail_budget <= 0:
+            # Streams that do not end where they claim have used up the whole
+            # past-marker allowance, so the rest of the document cannot be
+            # measured. Unverifiable is refused like a bomb: a well-formed PDF
+            # never spends any of this budget, and a false positive costs a
+            # «не смогла прочитать», not a wrong answer.
             return True
     return False
 

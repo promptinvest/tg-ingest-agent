@@ -199,8 +199,11 @@ class HermesMixin:
         if self.reply(chat_id, hint, record=False):
             events.record_done(self.conn, "note_resurfaced", chat_id=chat_id,
                                payload={"message_id": related["message_id"]})
+            # `no` pins the identity: messages.id is a rowid SQLite reuses after
+            # a delete, so the id alone could credit the acceptance to a note
+            # that was never resurfaced (same class as the review snapshot).
             store.kv_set(self.conn, "last_resurfaced", json.dumps(
-                {"id": related["message_id"],
+                {"id": related["message_id"], "no": no,
                  "ts": datetime.now(timezone.utc).isoformat()}))
 
     def _keyword_context(self, question):

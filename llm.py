@@ -755,7 +755,16 @@ def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
                     f" {WHISPER_SERVER_RETRY_SECONDS}s")
                 time.sleep(WHISPER_SERVER_RETRY_SECONDS)
         except OSError as exc:
-            raise LLMError(f"whisper-server timed out: {exc}") from exc
+            # A TIMEOUT (socket.timeout is an OSError, not a URLError) means the
+            # server accepted the connection and never answered — OOM thrash on a
+            # 4 GB box looks exactly like this. That was terminal: the boss's
+            # voice note was refused although the co-installed cold CLI could
+            # still transcribe it. Fall back instead. No second attempt: the full
+            # STT_LOCAL_TIMEOUT already elapsed, and repeating it against a
+            # thrashing server only doubles his wait.
+            last_exc = LLMError(f"whisper-server timed out: {exc}")
+            log(f"whisper-server timed out after {cfg.stt_local_timeout}s ({exc})")
+            break
         except http.client.HTTPException as exc:
             raise LLMError(f"whisper-server response truncated: {exc!r}") from exc
     if raw is None:
@@ -896,14 +905,27 @@ def match_category(value, categories):
     return None
 
 
-def match_category_fuzzy(value, categories):
+def match_category_fuzzy(value, categories, value_subset_only=False):
     """The existing category `value` is a near-variant of, or None.
 
     Beyond the exact casefold match: when the significant-token set of one name
     is a SUBSET of the other's ("AI tools" vs "AI Tools & Resources"), it's the
     same category — the model keeps coining such variants next to an existing
     one and the operator keeps merging them by hand. Used to SNAP a fresh
-    suggestion to the canonical existing name; never renames stored data."""
+    suggestion to the canonical existing name; never renames stored data.
+
+    `value_subset_only` drops the other direction (an existing name contained in
+    a LONGER `value`). It is right when `value` is a model-proposed category, and
+    wrong when `value` is a sentence the boss typed: «это точно не финансы»
+    contains «Финансы», so a reply that REJECTS the category matched it. Callers
+    that feed free text pass True — then every significant word he wrote has to
+    belong to the existing name.
+
+    Free text also needs MORE than a lone word for that remaining direction:
+    `toks()` filters no stopwords, so a bare «позже» is a subset of «Прочитать
+    позже» and would file — and CONFIRM — a note he was only saying "later"
+    about. A single-token reply therefore matches only a single-token category,
+    which is what the exact-match path above already handles."""
     exact = match_category(value, categories)
     if exact:
         return exact
@@ -914,8 +936,13 @@ def match_category_fuzzy(value, categories):
     vt = toks(value)
     if not vt:
         return None
+    lone = value_subset_only and len(vt) == 1
     for category in categories:
         ct = toks(category)
-        if ct and (vt <= ct or ct <= vt):
+        if not ct:
+            continue
+        if vt <= ct and not (lone and len(ct) > 1):
+            return category
+        if ct <= vt and not value_subset_only:
             return category
     return None

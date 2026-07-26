@@ -140,6 +140,20 @@ TEXTS = {
                "If you want to keep the gist, send it as text or a file, "
                "or forward the post — I'll write it down."),
     },
+    # Same decline, for a MIXED own album (photos + a real document): the
+    # picture parts are dropped, so he is told which half is missing instead of
+    # reading «фото: 0» on the card and guessing.
+    # NB: it says only what is NOT kept. The earlier wording («в заметку пойдут
+    # только файлы») was a claim about what the note WILL contain, sent before
+    # the suggestion card he still has to confirm — it passed action_truth only
+    # because «пойдут» is absent from FINAL_VERBS, not because it made no
+    # forward claim. The counts card does the claiming.
+    "own_photo_not_stored_partial": {
+        "ru": ("Свои фото ({n}) я в заметки не складываю — они остаются здесь, "
+               "в разговоре 🙂"),
+        "en": ("I don't file your own photos ({n}) as notes — they stay here "
+               "in the chat 🙂"),
+    },
     # Variant family (pre-confirmation, state=suggested → no final verbs).
     "suggestion": {
         "ru": [

@@ -625,20 +625,37 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     WATCHDOG_STEP_MARGIN_SECONDS = 120
 
     def _warn_if_watchdog_budget_is_too_tight(self):
-        """The watchdog budget is a NUMBER in the unit; STT_LOCAL_TIMEOUT_SECONDS is
-        an operator-settable env var. Raise the latter above the former and systemd
-        kills Cara in the middle of every long transcription — with a green test
-        suite, because the unit file knows nothing about the deployed env. Say it
-        once at startup, where the two values finally meet."""
+        """The watchdog budget is a NUMBER in the unit; the timeouts that bound the
+        longest single step between two pings are operator-settable env vars. Raise
+        one above the other and systemd kills Cara in the middle of every long
+        transcription (or every slow model call) — with a green test suite, because
+        the unit file knows nothing about the deployed env. Say it once at startup,
+        where the values finally meet.
+
+        EVERY ping-to-ping wait counts: a transcription (STT_LOCAL_TIMEOUT_SECONDS),
+        one model request (LLM_TIMEOUT_SECONDS — `llm.chat` pings once and then
+        blocks on the socket) and one inline link fetch (FETCH_TIMEOUT_SECONDS —
+        `fetch.fetch` contains no ping at all and spans DEADLINE_FACTOR × the knob).
+        Warning about only the STT one left a raised LLM_TIMEOUT_SECONDS silently
+        over budget; warning about only the LARGEST would make the operator lower
+        one knob and restart to discover the next."""
         budget = common.watchdog_usec() / 1_000_000.0
         if budget <= 0:
             return
-        longest = self.cfg.stt_local_timeout + self.WATCHDOG_STEP_MARGIN_SECONDS
-        if longest >= budget:
-            log(f"WARNING: WatchdogSec is {budget:.0f}s but one transcription may take "
-                f"up to {longest}s (STT_LOCAL_TIMEOUT_SECONDS="
-                f"{self.cfg.stt_local_timeout} + margin) — systemd would kill her "
-                f"mid-voice-note; lower STT_LOCAL_TIMEOUT_SECONDS or raise WatchdogSec")
+        margin = self.WATCHDOG_STEP_MARGIN_SECONDS
+        steps = (("STT_LOCAL_TIMEOUT_SECONDS", self.cfg.stt_local_timeout,
+                  self.cfg.stt_local_timeout, "transcription"),
+                 ("LLM_TIMEOUT_SECONDS", self.cfg.llm_timeout,
+                  self.cfg.llm_timeout, "model call"),
+                 ("FETCH_TIMEOUT_SECONDS", self.cfg.fetch_timeout,
+                  self.cfg.fetch_timeout * fetch.DEADLINE_FACTOR, "link fetch"))
+        for name, knob, span, what in steps:
+            longest = span + margin
+            if longest < budget:
+                continue
+            log(f"WARNING: WatchdogSec is {budget:.0f}s but one {what} may take "
+                f"up to {longest}s ({name}={knob} → {span}s + {margin}s margin) — "
+                f"systemd would kill her mid-step; lower {name} or raise WatchdogSec")
 
     def _tick(self, name, fn):
         """Run one scheduler tick, isolating an UNEXPECTED failure so it can't exit the poll
@@ -1239,6 +1256,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     def do_reminder_create(self, chat_id, lang, params):
         params = self._note_reminder_title(params)  # "напомни по заметке N"
+        if params is None:
+            # He named a note that isn't there. Not-found, never another note's
+            # subject on a reminder he'd then confirm without seeing the swap.
+            self.reply(chat_id, T(lang, "items_empty"))
+            return
         draft = reminders.validate_draft(params)
         if not draft:
             self.start_partial_reminder(chat_id, lang, params)
@@ -2711,10 +2733,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if kind == "note_review":
             # Open the EXACT snapshotted review batch (never a recomputed list);
             # the snapshot the review sets keeps the 15-min proactive window.
-            self.do_note_review(chat_id, lang, preset_ids=ids)
-            self._review_snapshot_set([i for i in ids
-                                       if store.get_message(self.conn, i)],
-                                      ttl_seconds=15 * 60)
+            # Re-stamp the TTL on the ids the card actually RENDERED — rebuilding
+            # the list from `ids` here filtered only by row existence, so a note
+            # that lost its knowledge_state (or a card that was never delivered,
+            # where do_note_review deliberately writes no snapshot) put items in
+            # the snapshot that he was never shown: «второе в архив» would then
+            # hit the wrong one, or one he never saw.
+            shown = self.do_note_review(chat_id, lang, preset_ids=ids)
+            if shown:
+                self._review_snapshot_set(shown, ttl_seconds=15 * 60)
             return True
         if kind == "overdue":
             self.reply(chat_id, self._reminder_list_body(chat_id, lang))
@@ -3166,7 +3193,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         category = llm.normalize_category(raw)
         if not category:
             return None
-        return llm.match_category_fuzzy(category, store.known_categories(self.conn))
+        # DIRECTION matters here. The fuzzy matcher snaps both ways (either token
+        # set a subset of the other), which is what a model-coined variant needs
+        # — but this candidate is the boss's own SENTENCE. «это точно не финансы»
+        # (24 chars, no «?») contains the whole of «Финансы», so a rejection
+        # recategorized the note into it. Only the other direction is a category
+        # reply: everything he wrote must belong to the existing name («AI tools»
+        # → «AI Tools & Resources»), so no incidental word can carry a note away.
+        return llm.match_category_fuzzy(category, store.known_categories(self.conn),
+                                        value_subset_only=True)
 
     def handle_correction(self, row, chat_id, text, reply_to):
         """Apply a category correction sent as a REPLY to a suggestion card.
@@ -3617,6 +3652,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             # N photos at a time, behind a normal confirmation card. The counts
             # line stays honest about it («фото: 0 · файлов: 3»).
             kept = [p for p in parts if not self._picture_part(p)]
+            if kept and len(kept) != len(parts):
+                # …and SAY it. A counts line reading «фото: 0» is not a word
+                # about the pictures he just sent: he asked to save an album and
+                # part of it is silently not in the note.
+                self.reply(chat_id, T(lang, "own_photo_not_stored_partial",
+                                      n=len(parts) - len(kept)))
             if kept:
                 parts = kept
         self.finalize(parts)
@@ -3671,6 +3712,44 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 files += 1
         return images, files
 
+    def _retry_failed_downloads(self, row_id, parts):
+        """Re-download the pictures whose FIRST download failed.
+
+        `_store_attachments` keeps the row with `local_path = NULL` when Telegram
+        errors, so the attachment IS present on the natural key — which put it in
+        the repair pass's skip set and meant no redelivery ever recovered the
+        file. Update the existing row instead of inserting a second one (an
+        insert here would duplicate the image on every redelivery, the one thing
+        the repair path must never do). Returns how many were recovered.
+        """
+        missing = {r["tg_file_unique_id"]: r["id"]
+                   for r in store.message_images(self.conn, row_id)
+                   if not r["local_path"] and r["tg_file_unique_id"]}
+        if not missing:
+            return 0
+        recovered = 0
+        for part in parts:
+            photo_sizes = part.get("photo") or []
+            if not photo_sizes:
+                continue
+            largest = photo_sizes[-1]
+            image_id = missing.get(largest.get("file_unique_id"))
+            if image_id is None:
+                continue
+            try:
+                local_path = self.download_file(
+                    largest.get("file_id"), largest.get("file_unique_id"), ".jpg")
+            except TelegramError as exc:
+                log(f"photo re-download still failing for message #{row_id}: {exc}")
+                continue
+            if local_path:
+                store.set_image_local_path(self.conn, image_id, local_path)
+                recovered += 1
+        if recovered:
+            log(f"recovered {recovered} previously failed photo download(s) "
+                f"for message #{row_id}")
+        return recovered
+
     def _repair_attachments(self, row_id, parts, urls):
         """Backfill the urls/media a crashed finalize pass never reached.
         Idempotent on the attachments' natural key (Telegram's file_unique_id).
@@ -3679,6 +3758,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         for url in urls:
             if url not in have_urls:
                 store.insert_url(self.conn, row_id, url)
+        self._retry_failed_downloads(row_id, parts)
         have = {r["tg_file_unique_id"] for r in store.message_images(self.conn, row_id)}
         have |= {r["tg_file_unique_id"] for r in store.message_files(self.conn, row_id)}
         # NULL is deliberately KEPT in the skip set: `files.tg_file_unique_id` is
@@ -3750,6 +3830,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if done:
                 # Already carried through to a suggestion/confirmation: only the
                 # missing media was backfilled, the finished note is left alone.
+                # Backfilled images still need the durable copy — this branch
+                # returned BEFORE the offload below, so a crash-repaired note's
+                # pictures stayed local-only forever (no-op on the local backend).
+                if store.message_images(self.conn, row_id):
+                    storage.offload(self.cfg, self.conn, row_id)
                 log(f"redelivered message #{row_id} already processed;"
                     " attachments repaired")
                 return

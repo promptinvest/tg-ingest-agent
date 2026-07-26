@@ -553,23 +553,42 @@ class NotesMixin:
         return [row] if row else []
 
     def resolve_item(self, params):
-        """Resolve an item by its stable note number (#N), query/category, or most recent."""
-        try:
-            no = int(params.get("id")) if params.get("id") is not None else None
-        except (TypeError, ValueError):
-            no = None
-        if no is None:
-            # "покажи заметку 11" / "заметку #11" / "#11" / "J#11" — a bare note
-            # reference (only a kind word + number) resolves by number regardless
-            # of phrasing (J# is the journal-entry form of the SAME stable number,
-            # §5.6); a richer query ("про крипту 2024") still goes to text search.
-            m = re.fullmatch(r"\s*(?:заметк\w*|запис\w*|пост\w*|note|item|[jJ]?#)?\s*"
-                             r"[jJ]?#?(\d{1,7})\s*",
-                             str(params.get("query") or ""), re.IGNORECASE)
-            if m:
-                no = int(m.group(1))
-        if no is not None:
-            row = store.message_by_note_no(self.conn, no)
+        """Resolve an item by its stable note number (#N), query/category, or most recent.
+
+        FAIL CLOSED on an EXPLICIT number, exactly like `resolve_items` (WP5) and
+        the reminder path: «покажи #7» when #7 is gone is a not-found, never the
+        newest note. The singular resolver was missed by WP5 and it feeds the
+        handlers that act WITHOUT confirmation — `do_note_edit` rewrote another
+        note's summary, `do_show_media` sent another note's photos, the detail
+        card showed another note, and «напомни по заметке 7» tied the reminder to
+        the newest one. An id-LESS request (a query or a category, or nothing)
+        keeps its old meaning: the best match, else the most recent.
+        """
+        raw_id = params.get("id")
+        if raw_id is not None:
+            row = store.message_by_note_no(self.conn, raw_id)
+            if row is not None or store.note_no_value(raw_id) is not None:
+                return row      # a number he NAMED: it resolves, or it is gone
+            # Present but UNUSABLE ("", "abc", a stray dict): that is a router
+            # artefact, not a number he named, so it may fall through — but only
+            # to a SEARCH, which can return solely what actually matches. With no
+            # query and no category the fall-through would be "the most recent",
+            # i.e. exactly the substitution this rule exists to stop.
+            if not (params.get("query") or params.get("category")):
+                return None
+        # "покажи заметку 11" / "заметку #11" / "#11" / "J#11" — a bare note
+        # reference (only a kind word + number) resolves by number regardless
+        # of phrasing (J# is the journal-entry form of the SAME stable number,
+        # §5.6); a richer query ("про крипту 2024") still goes to text search.
+        # This one deliberately keeps its fall-through: `query` is not an
+        # explicit id, and the fallback is a SEARCH for that same text (a bare
+        # «9800» finds the note whose key fact says 9800) — it can only return
+        # something that actually matches, never the newest note by recency.
+        m = re.fullmatch(r"\s*(?:заметк\w*|запис\w*|пост\w*|note|item|[jJ]?#)?\s*"
+                         r"[jJ]?#?(\d{1,7})\s*",
+                         str(params.get("query") or ""), re.IGNORECASE)
+        if m:
+            row = store.message_by_note_no(self.conn, int(m.group(1)))
             if row is not None:
                 return row
         rows = store.list_messages(self.conn, params.get("category"), params.get("query"), limit=1)
@@ -657,7 +676,11 @@ class NotesMixin:
                 ts = datetime.fromisoformat(res["ts"])
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
+                # The stable #N is checked alongside the rowid (which SQLite
+                # reuses after a delete) so the acceptance can only be credited
+                # to the note that was actually resurfaced.
                 if (int(res["id"]) == row["id"]
+                        and res.get("no") in (None, row["note_no"])
                         and datetime.now(timezone.utc) - ts <= timedelta(minutes=15)):
                     events.record_done(self.conn, "note_resurface_accepted",
                                        chat_id=chat_id,
@@ -789,8 +812,21 @@ class NotesMixin:
     }
 
     def _review_snapshot_set(self, ids, ttl_seconds):
+        """Remember WHICH notes were shown — each with its stable identity.
+
+        `messages.id` is a plain rowid and SQLite REUSES the highest one after a
+        delete, so a bare id list could point at a note he was never shown (WP3
+        closed that for kv KEYS; the VALUE had the same hole). The `note_no` is
+        stored beside the id and re-checked on resolve: it is claimed once and
+        never reused, so a mismatch means the shown note is gone."""
+        items = []
+        for i in ids:
+            row = store.get_message(self.conn, i)
+            items.append({"id": int(i),
+                          "no": row["note_no"] if row is not None else None})
         store.kv_set(self.conn, "note_review_snapshot", json.dumps(
-            {"ids": ids, "ts": datetime.now(timezone.utc).isoformat(),
+            {"items": items, "ids": ids,
+             "ts": datetime.now(timezone.utc).isoformat(),
              "ttl": int(ttl_seconds)}, ensure_ascii=False))
 
     def _review_snapshot_rows(self, keep_gaps=False):
@@ -807,10 +843,20 @@ class NotesMixin:
             if datetime.now(timezone.utc) - ts > timedelta(
                     seconds=int(snap.get("ttl") or 0)):
                 return []
-            ids = [int(i) for i in snap.get("ids") or []]
+            items = snap.get("items")
+            if items is None:   # snapshot written before identities were pinned
+                items = [{"id": int(i), "no": None} for i in snap.get("ids") or []]
+            items = [{"id": int(it["id"]), "no": it.get("no")} for it in items]
         except (KeyError, TypeError, ValueError):
             return []
-        rows = [store.get_message(self.conn, i) for i in ids]
+        rows = []
+        for item in items:
+            row = store.get_message(self.conn, item["id"])
+            # Rowid reuse: the row answering to this id now may be a DIFFERENT
+            # note. He named a shown item — a substitute is never the answer.
+            if row is not None and item["no"] is not None and row["note_no"] != item["no"]:
+                row = None
+            rows.append(row)
         return rows if keep_gaps else [r for r in rows if r is not None]
 
     def _rows_from_review_snapshot(self, text):
@@ -836,7 +882,12 @@ class NotesMixin:
     def do_note_review(self, chat_id, lang, params=None, preset_ids=None):
         """«Покажи, что стоит пересмотреть»: at most three snapshotted items,
         each with a deterministic reason. Suggestion-only — every action goes
-        through the normal note_lifecycle/delete flows."""
+        through the normal note_lifecycle/delete flows.
+
+        Returns the ids it actually RENDERED (empty when nothing was shown or
+        the reply was not delivered), so a caller that wants a different TTL
+        re-stamps that exact list instead of re-deriving one: a snapshot must
+        never name a note the card did not list."""
         ru = lang == "ru"
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         shown_key = f"note_review_shown:{day}"
@@ -855,7 +906,7 @@ class NotesMixin:
             batch = store.notes_review_candidates(self.conn, exclude_ids=shown)
         if not batch:
             self.reply(chat_id, T(lang, "note_review_empty"))
-            return
+            return []
         lines = [T(lang, "note_review_header", n=len(batch))]
         for i, (row, reason) in enumerate(batch, 1):
             no = self.note_no(row["id"])
@@ -865,12 +916,13 @@ class NotesMixin:
             lines.append(f"{i}. #{no} · {cat} — {preview}\n   ↳ {label}")
         lines.append(T(lang, "note_review_footer"))
         if not self.reply(chat_id, "\n\n".join(lines)):
-            return  # not delivered -> no snapshot, no shown-marking
+            return []  # not delivered -> no snapshot, no shown-marking
         ids = [row["id"] for row, _ in batch]
         self._review_snapshot_set(ids, ttl_seconds=24 * 3600)
         store.kv_set(self.conn, shown_key, json.dumps(sorted(set(shown + ids))))
         events.record_done(self.conn, "note_review_shown", chat_id=chat_id,
                            payload={"ids": ids})
+        return ids
 
     _LIFECYCLE_OPS = ("archive", "restore", "keep", "set_purpose", "review_later",
                       "make_temporary")

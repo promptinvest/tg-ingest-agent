@@ -34,8 +34,17 @@ READ_CHUNK = 64 * 1024
 # days. fetch() runs INLINE in the single-threaded poll loop (and a forwarded
 # link post auto-fetches its first URL), so one such server freezes the entire
 # bot — reminders included. Every fetch therefore also gets a total wall-clock
-# budget of DEADLINE_FACTOR × timeout, measured from the start and shared by
+# budget of DEADLINE_FACTOR × timeout, started at the FIRST hop and shared by
 # every redirect hop.
+# What that budget actually bounds, stated honestly: the HOP CHAIN and the BODY.
+# It is checked at every hop boundary and before every body chunk, and the
+# per-hop socket timeout is clamped to what is left. Inside one hop
+# `opener.open()` — DNS, connect, TLS and the response headers — is a single
+# opaque blocking call this code cannot interrupt (urllib reads headers with
+# `readline` on the buffered socket), so there the only bound is the per-socket-
+# operation timeout. A server that dribbles header bytes just under that timeout
+# can still outlive the budget within one hop; closing that would need a
+# socket-level deadline (a custom handler/connection class).
 DEADLINE_FACTOR = 2
 
 
@@ -302,8 +311,9 @@ def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
     """Fetch and extract text from a public HTTP(S) page. Returns
     (final_url, title, text). Raises FetchError on any problem. Redirects are
     followed manually so every hop is independently validated AND pinned.
-    The whole call (DNS, connect and body, across every hop) is capped at
-    DEADLINE_FACTOR × `timeout` seconds — see the module note."""
+    The hop chain and the body are capped at DEADLINE_FACTOR × `timeout`
+    seconds; inside one hop (DNS, connect, TLS, response headers) only the
+    per-socket-operation timeout applies — see the module note."""
     url = normalize_tme(url)
     deadline = time.monotonic() + DEADLINE_FACTOR * max(1, int(timeout or 1))
     for _ in range(MAX_REDIRECTS + 1):

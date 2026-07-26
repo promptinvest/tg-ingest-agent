@@ -91,7 +91,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   😂→🤣) rather than dropped, so the emotion always lands.
 - **Her life flavour is varied, not fixated** — life details are sampled per turn (not the
   same fixed slice every time), and the old tea over‑emphasis was rebalanced, so she stops
-  repeating the same beat ("a bad joke").
+  repeating the same beat ("a bad joke"). That rebalance is a ONE‑TIME migration, marker‑
+  guarded since 2026‑07‑25 (documented here 2026‑07‑26): it used to re‑insert its three
+  life rows on every start, so a life fact the boss had deliberately removed (memory
+  consolidation or a purge) came back at the next restart. A life fact he deletes now
+  stays deleted.
 - **Never fabricates a stored fact (guardrail)** — creativity is free in her *voice* and her
   own fictional life, but any fact about the boss (notes, journal, reminders, names, dates,
   counts, spend) must be real. Every `converse` turn is **grounded**: his most relevant saved
@@ -157,7 +161,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   document part** — it used to keep part 1 and lose 2..N unrecoverably behind a normal
   confirmation card. A **mixed** album (photos + a real file) still files only the
   files: own photos stay unstored (retired 2026‑07‑16), and the counts line says so
-  («фото: 0»). Own‑media album parts are durable/deferred like forwarded ones (a crash
+  («фото: 0») — **and since 2026‑07‑26 she says it in words too**, naming how many
+  picture parts stay in the chat instead of leaving him to read a zero off a card.
+  That line describes only what is NOT kept: it is sent before the confirmation
+  card, so it must make no promise about what the note will end up holding.
+  Own‑media album parts are durable/deferred like forwarded ones (a crash
   in the settle window no longer drops the album), and if their filing fails you get
   an honest «отправь ещё раз» + an incident row — before, only a forwarded album's
   failure was ever mentioned. A **shutdown** leaves a half‑arrived album to the startup
@@ -184,7 +192,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **2026‑07‑25:** every fetch has a **total wall‑clock budget** (2 × `FETCH_TIMEOUT_SECONDS`,
   shared across redirect hops, and the per‑hop socket timeout is clamped to what's left)
   — a server that drips bytes used to hold the single thread for hours and freeze the
-  whole bot, reminders included, from one forwarded link. The body is read one socket
+  whole bot, reminders included, from one forwarded link. **What the budget really
+  bounds (stated honestly 2026‑07‑26):** it is checked at every hop boundary and before
+  every body chunk, so the BODY transfer and the hop chain are genuinely capped. Inside
+  one hop, `urlopen()` — DNS, connect, TLS and the response headers — is a single opaque
+  blocking call this code cannot interrupt; there the only bound is the socket timeout,
+  already clamped to the remaining budget, applied PER socket operation. A server that
+  dribbles header bytes just under that timeout can therefore still outlive the budget
+  within one hop. The body is read one socket
   read at a time so the budget is actually reachable; an unknown/quoted page charset no
   longer loses the page; the SSRF filter also
   blocks 100.64.0.0/10 (CGN/Tailscale); a bare‑domain link entity («example.com/x») is
@@ -314,7 +329,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   one (2026‑07‑25):** an explicit phrase («категория: планы», «смени категорию на
   …») always counts, whatever its length; a bare word counts when it is short, not
   a question, and a near‑variant of a category that already exists («финансы» →
-  «Финансы»). Anything else — «а зачем это сохранять?» — routes on as ordinary
+  «Финансы»). **Tightened 2026‑07‑26:** "near‑variant" now means every significant
+  word he wrote belongs to the existing name («ai tools» → «AI Tools & Resources»)
+  **and that it is more than one word** — a lone «позже» is a subset of a category
+  called «Прочитать позже», and he was saying "later", not choosing a shelf; a
+  single‑word reply therefore only matches a single‑word category.
+  The other direction — an existing name contained in a LONGER reply — is what made
+  «это точно не финансы» file the note into «Финансы»: short enough, no «?», and
+  the fuzzy matcher accepted a subset either way. (The ingest snap still matches
+  both ways; there the candidate is model‑written, not a sentence he typed.)
+  Anything else — «а зачем это сохранять?» — routes on as ordinary
   conversation and the card stays pending; it used to be taken wholesale as the
   note's new category and confirmed into it. **Narrowed on purpose:** a bare reply
   naming a category that does NOT exist yet («Крипта» when there is no such
@@ -338,7 +362,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   strip the journal mark from every diary, so its entries flooded the #N lists and
   the next notes purge deleted them), and `all` additionally **scrubs the verbatim
   copies** Telegram delivery left in the durable inbox — disclosed in the preview
-  as «служебных копий входящих сообщений».
+  as «служебных копий входящих сообщений». **2026‑07‑26:** that scrub now also
+  clears `telegram_updates.last_error`, which kept up to 1000 chars of the failing
+  text (an exception repr routinely quotes the message), and drops the kv pointers
+  that hold raw row ids — the note‑review snapshot, the resurfacing pointer, the
+  fired‑notification map and «последнее напоминание».
 - **One-card capture (2026‑07‑17, NTE‑003):** the suggestion card now carries the
   **why** — a source‑grounded `saved_reason` + proposed purpose (📌 line; the
   meta‑copy guard drops a reason that describes the request instead of the
@@ -388,7 +416,20 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   and touches nothing — it no longer falls back to the newest note (lifecycle ops
   skip confirmation, so that archived an unrelated note instantly); the same holds
   for delete‑by‑ids, for a single stale `#N` on re‑categorize, and for an unusable
-  count. A **bulk** archive asks for confirmation first. New notes enter
+  count. **Extended to every single‑note handler (2026‑07‑26):** the SINGULAR
+  resolver used by «покажи #7», «покажи фото из #7», «исправь заметку #7 на …» and
+  «напомни по заметке 7» fell through to the newest note in exactly the same way —
+  so a stale number could edit the wrong note's summary, send another note's
+  photos, show another note's card, or tie the reminder to a note he never named
+  (none of these ask for confirmation, and none of them name the substitute back
+  to him). All of them now answer «ничего не нашла». An id‑LESS request (a query,
+  a category, or nothing) is unchanged: best match, else the most recent. Two
+  boundaries, pinned the same day: a router id arriving as «#7» / «J#7» / «7.» is
+  normalized rather than refused (the router is a model reading prose full of «#»,
+  and a hard not‑found on a note that exists is its own bug), while an id that is
+  present but unusable («», «abc») counts as a router artefact — it may fall back
+  to a text SEARCH, which can only return a real match, never to "the most recent".
+  A **bulk** archive asks for confirmation first. New notes enter
   as `inbox` on suggestion and become `active`/`reference` on confirm; journal
   entries stay outside note lifecycle. **Real‑use accounting:** opening a note's
   detail card or having it cited in a *delivered* KB answer bumps its use count
@@ -433,7 +474,17 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     (2026‑07‑25):** if that reminder is closed/expired/gone Cara says so plainly
     and touches nothing — she no longer falls through to the live pending or the
     last‑touched reminder (the same incident class as above). Substantive content
-    replied to a closed alarm still routes normally.
+    replied to a closed alarm still routes normally. **Scope, made exact
+    2026‑07‑26:** that guard only sees follow‑up wordings the deterministic parser
+    recognises; anything else reaches the router, where a targetless
+    reschedule/rename used to bind to the last‑touched reminder. So the same rule
+    now also sits in `_resolve_reminder_target` **and in the undo handler, which
+    resolves its own target** (a Reply saying «верни как было» on an acked alarm
+    used to restore an unrelated reminder's previous time): when a message is a
+    Reply to a fired notification and names no target of its own, that reminder IS
+    the target if it is still active, and a not‑found refusal if it is closed —
+    never a different one. An explicit `#N`/title in the same message still wins,
+    and so does a positional «второе».
     **Deterministic follow‑up parsing fixes (2026‑07‑25):** «отложи на
     послезавтра» now moves it **two** days (a substring test read «завтра» inside
     it and re‑armed the alarm a full day early; "day after tomorrow" works too),
@@ -647,9 +698,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **No-leak / no-silence hardening (2026‑07‑25):** the raw `.db` snapshot and the
   half‑written archive are always removed (a failed gzip used to leave a full DB copy
   rotation could not see), the archive gets its rotation‑visible name only after a
-  complete write (`.gz.tmp` → `os.replace`), and `rotate()` sweeps stray `.db`/`.tmp`
-  files. **Rotation now runs before encryption**, so a missing key file can no longer
-  skip local retention forever. An off‑box copy blocked by the Telegram 45 MB cap logs a
+  complete write (`.gz.tmp` → `os.replace`), and `rotate()` sweeps the stray files this
+  module itself makes — `ingest-<stamp>.db`, `ingest-<stamp>.db.gz.tmp` and
+  `ingest-<stamp>.db.gz.enc.tmp` (2026‑07‑26 wording fix: the sweep is scoped to that
+  exact machine‑generated name form, never a hand‑made copy or its `-wal`/`-shm`
+  companions). **Rotation now runs before encryption**, so a missing key file can no
+  longer skip local retention forever, **and it also runs when the snapshot itself fails**
+  (2026‑07‑26) — a nearly full disk is exactly what makes `conn.backup`/gzip raise, i.e.
+  retention was skipped precisely when it was needed. Retention likewise counts and prunes
+  ONLY `ingest-<stamp>.db.gz`: on the live box two hand‑made pre‑change copies were
+  occupying 2 of the 7 slots, so five automated snapshots survived instead of seven. An off‑box copy blocked by the Telegram 45 MB cap logs a
   `backup_offbox_blocked` issue and reports the blocked state in the job result instead
   of looking green (plus a one‑time `backup_offbox_near_limit` warning past ~35 MB), and
   a **terminally failed backup tells the boss** once a day, then holds the retry for an
@@ -730,7 +788,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   router + converse + embed, each with primary+fallback × 2 attempts × `LLM_TIMEOUT`, and
   one drain runs up to 5 durable jobs). **Honest limits:** raising
   `STT_LOCAL_TIMEOUT_SECONDS` above ~780 breaks the arithmetic — she logs a startup
-  WARNING naming both numbers when you do — and a kill mid‑update would still be a
+  WARNING naming both numbers when you do, and since 2026‑07‑26 the same check covers
+  `LLM_TIMEOUT_SECONDS` **and `FETCH_TIMEOUT_SECONDS`** (an inline link fetch carries no
+  progress ping at all and spans 2× that knob), naming EVERY knob that is over budget
+  rather than only the largest — and a kill mid‑update would still be a
   SIGABRT, i.e. no dead‑letter (the same update replays after restart). Outside systemd
   the notify helper is a silent no‑op.
 
@@ -880,6 +941,11 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   an unreachable `whisper-server` is retried once (~3 s — its unit restarts in 5 s) and
   then served by the co‑installed cold `whisper-cli`, and the server itself is now part
   of the model‑health sweep (same debounced down/recovered alerts as a chat model).
+  **2026‑07‑26:** a server that ACCEPTS the connection and then never answers (OOM
+  thrash on a 4 GB box) now falls back to the CLI as well — that timeout raises
+  `socket.timeout`, an `OSError` rather than a `URLError`, and used to be terminal, so
+  the voice note was refused while a working transcriber sat next to it. It is not
+  retried first: one full `STT_LOCAL_TIMEOUT_SECONDS` has already elapsed.
 - **Stored recordings are metered with their real length (2026‑07‑25):** `files` keeps
   Telegram's `duration`, and `read_media` passes it to `transcribe`. It used to pass 0,
   which bills any recording as a single second in remote mode. Where the duration is
@@ -951,7 +1017,13 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   says so (`update_dead_letter`), instead of the message just vanishing from the
   boss's side. Best‑effort: a failed notice never changes the dead‑letter outcome. It
   is sent after the turn is already over, so it speaks the language of the message that
-  failed, not the stored default.
+  failed, not the stored default. **Allowlist‑gated (2026‑07‑25, documented 2026‑07‑26):**
+  the owner check lives inside `handle_update`, i.e. after the raw chat id was captured,
+  so an update that failed BEFORE that gate used to draw a reply in Cara's voice into a
+  stranger's chat; the notice now goes only to allowed chats (the update is dead‑lettered
+  either way). The disk‑full alert's send loop likewise survives a non‑JSON HTTP reply
+  (captive portal / proxy error page) instead of replacing the honest disk‑full exit with
+  a traceback.
 - **A redelivered save repairs itself (2026‑07‑25):** filing a forward writes the
   message row first and downloads its media afterwards, so a crash in between left a
   text‑only note — and the redelivery hit `ON CONFLICT DO NOTHING`, was logged as
@@ -960,7 +1032,13 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   whatever is missing (idempotent on Telegram's `file_unique_id` / the URL), then
   resumes the suggestion pipeline if the note never got that far — without re‑logging
   what the crashed pass already recorded. A note that already reached a
-  suggestion/confirmation only gets its missing media back; it is never re‑suggested.
+  suggestion/confirmation only gets its missing media back; it is never re‑suggested —
+  and since 2026‑07‑26 those backfilled pictures also get their durable off‑box copy
+  (that branch returned before the offload). **A picture whose FIRST download failed is
+  recovered too (2026‑07‑26):** the failure stored the image row with no local file, and
+  a row that exists counted as "already there", so no redelivery ever fetched it; the
+  repair pass now re‑downloads exactly those rows and updates them in place (never a
+  second row — duplicating on every redelivery is the one thing this path must not do).
   The saved counts also describe the note itself now, so an uncompressed image sent as a
   **document** is finally reported («фото: 1») instead of as nothing at all.
 - **Per‑turn context dies with its turn (2026‑07‑25):** the quoted/replied‑to message,
@@ -1020,7 +1098,18 @@ single residual hole is the seed itself, on a database whose numbers pre‑date 
 counter — see §2). `delete_message` also drops that
 message's id‑keyed kv state (`capture_action:{id}`, `journal_draft:{id}`) — SQLite reuses
 the highest rowid, so a new note used to inherit a deleted note's reminder draft or
-journal payload. Every write to `chunks` bumps a `vec_gen` counter and drops the decoded
+journal payload. **kv VALUES carrying row ids got the same treatment (2026‑07‑26):** the
+note‑review snapshot and the resurfacing pointer store the stable `#N` beside each
+`messages.id` and re‑check it on resolve, so a reused rowid can no longer answer for a
+note he was shown (an ordinal that resolves to a mismatch is a not‑found); the whole‑table
+purges drop those pointers outright, because scope `all` restarts the rowids AND the `#N`
+counter, and a reminders purge drops `fired_reminder_msgs`/`last_reminder_id` so a reply
+to an old alarm cannot bind to whatever new reminder inherited its id. The kv sweeps also
+escape `_` (a single‑character wildcard in `LIKE`) so a prefix matches only itself. The
+snapshot is also written from what the review card actually RENDERED: accepting a
+proactive nudge («Давай») used to rebuild it from the queued ids instead, so a note the
+card had dropped — or every note, when the card was never delivered — could still be hit
+by «второе в архив». Every write to `chunks` bumps a `vec_gen` counter and drops the decoded
 vector cache: the old `(count, max_id, sum_id)` fingerprint collided under rowid reuse,
 and retrieval kept grounding answers in a DELETED note's chunks while the new note stayed
 invisible. (The legacy JSON→blob embedding conversion in `_migrate` bumps it too — it
@@ -1036,7 +1125,10 @@ next start; any other diary lost its protection permanently). Scope `all` scrubs
 `telegram_updates.payload` on every non‑pending row (`'{}'`, row and `update_id` kept as
 the redelivery dedupe key): the durable inbox held a verbatim copy of every message, and
 only `done` rows are retention‑pruned, so a dead‑lettered one outlived «удали всё» and
-rode along in the off‑box backups. Still‑`pending` rows are the one exception — they are
+rode along in the off‑box backups. **The same statement covers `last_error` since
+2026‑07‑26** — a failed row keeps up to 1000 chars of the exception, which is routinely
+the offending text quoted back, so the scrub sets it to NULL and the WHERE clause picks up
+a row that has only the error left. Still‑`pending` rows are the one exception — they are
 unprocessed work the startup replay must read, and the turn that types the confirmation
 phrase is itself `pending`, so its own copy survives the purge it triggers (a later purge
 scrubs it, once it reaches a terminal state). `events.payload` / `trace_events.data` carry
@@ -1163,8 +1255,21 @@ Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
   cap and reads at most 200 streams, and — because **pdfminer runs FIRST and inflates
   unbounded** — a pre‑scan refuses the whole document before pdfminer sees it if its
   streams inflate past **128 MB** in total (the scan only counts bytes, never keeps
-  them). Honest limits: the pre‑scan reads the streams the stdlib regex can find, so a
-  PDF that hides them from it still reaches pdfminer unbounded; and a genuinely huge PDF
+  them). **2026‑07‑26:** the pre‑scan keeps measuring PAST the `endstream` marker when
+  zlib says the stream did not end there — that regex is non‑greedy, so a payload
+  CONTAINING the literal bytes «endstream» (trivial: a stored deflate block copies its
+  input verbatim) made the scan measure a harmless prefix while pdfminer, which takes the
+  length from the object dictionary, still inflated the whole bomb. **The same day's
+  review corrected how:** the first version handed zlib «payload start → end of file» for
+  every stream, and zlib copies back whatever it was given but did not consume, so the
+  scan cost one copy of the rest of the document PER STREAM — a 20 MB forward of ~800 000
+  tiny valid streams would have frozen the single thread for tens of minutes and then been
+  killed by the watchdog. Input now reaches zlib in 64 KB windows, the past‑marker read
+  only happens when a stream really does run on (a well‑formed PDF never does), and that
+  read has its own 16 MB per‑document allowance. Honest limits: the pre‑scan reads the
+  streams the stdlib regex can find, so a
+  PDF that hides them from it still reaches pdfminer unbounded; a document that exhausts
+  the past‑marker allowance is unverifiable and refused; and a genuinely huge PDF
   may be refused («не смогла прочитать») or read only up to the cap.
 - **Voice transcripts** are discarded as Whisper noise only when the known hallucination
   phrases are essentially the WHOLE transcript (2026‑07‑25) — strip every phrase that

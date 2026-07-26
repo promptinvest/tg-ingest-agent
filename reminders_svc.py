@@ -173,13 +173,19 @@ class ReminderMixin:
     def _note_reminder_title(self, params):
         """'поставь напоминание по заметке N' arrives with note_id and no real
         subject (the router otherwise titles it literally 'Заметка N'); use the
-        note's actual subject instead. The boss's own title always wins."""
+        note's actual subject instead. The boss's own title always wins.
+
+        Returns None when he named a note that does NOT exist — `resolve_item`
+        used to answer with the newest note, so «напомни по заметке 7» with #7
+        gone took a stranger note's subject as the title AND linked the reminder
+        to it (WP5's fail-closed rule; the note is never named back to him, so
+        the substitution is invisible in the draft he confirms)."""
         note_id = params.get("note_id")
         if note_id is None:
             return params
         note = self.resolve_item({"id": note_id})
         if note is None:
-            return params
+            return None
         params = dict(params)
         # Keep the note→reminder link (DB id) for the saved-to-used outcome
         # metrics (MET-001): the commit point records note_reminder_created.
@@ -203,6 +209,16 @@ class ReminderMixin:
             self.reply(chat_id, T(lang, "reminder_not_found"))
             return
         row = reminders.find_by_query(rows, params)
+        if row is None and getattr(self, "turn_reply_reminder_id", None) is not None:
+            # Same binding as `_resolve_reminder_target`: a Reply to a fired
+            # notification names ITS reminder and nothing else. Undo resolves its
+            # own target, so the widened guard did not cover it — «верни как
+            # было» on an already-acked alarm fell to the `moved` fallback below
+            # and silently restored an UNRELATED reminder's previous time.
+            row = next((r for r in rows if r["id"] == self.turn_reply_reminder_id), None)
+            if row is None:
+                self.reply(chat_id, T(lang, "reminder_already_closed"))
+                return
         if row is None:
             moved = [r for r in rows if r["prev_due_utc"]]
             if len(moved) == 1:
@@ -554,6 +570,19 @@ class ReminderMixin:
             for stem, n in self._ORDINALS.items():
                 if stem in t and 1 <= n <= len(rows):
                     return rows[n - 1]
+        if row is None and getattr(self, "turn_reply_reminder_id", None) is not None:
+            # He REPLIED to a fired notification and named no target of his own:
+            # that reply names ITS reminder and nothing else. Still active -> it
+            # is the target; already closed/gone -> not-found. The deterministic
+            # follow-up guard only sees the wordings `_parse_fired_followup`
+            # recognises; everything else reaches the router, and the bare
+            # fallback below would hand the move to the last-touched reminder —
+            # the 2026-07-23 incident, one route further along.
+            match = next((r for r in rows if r["id"] == self.turn_reply_reminder_id), None)
+            if match is not None:
+                return match
+            self.reply(chat_id, T(lang, "reminder_already_closed"))
+            return None
         if row is None:  # bare "это/последнее/это напоминание" reference
             last_id = store.kv_get(self.conn, "last_reminder_id")
             if last_id:

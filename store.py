@@ -2108,6 +2108,13 @@ def message_images(conn, message_id):
     return conn.execute("SELECT * FROM images WHERE message_id = ? ORDER BY id", (message_id,)).fetchall()
 
 
+def set_image_local_path(conn, image_id, local_path):
+    """Fill in the local file of an image whose first download failed (stored
+    with local_path NULL). Used by the redelivery repair path."""
+    conn.execute("UPDATE images SET local_path = ? WHERE id = ?", (local_path, image_id))
+    conn.commit()
+
+
 def set_image_object_key(conn, image_id, object_key):
     conn.execute("UPDATE images SET object_key = ? WHERE id = ?", (object_key, image_id))
     conn.commit()
@@ -2513,12 +2520,28 @@ def ensure_note_no(conn, message_id, *, commit=True):
     return nxt
 
 
+def note_no_value(n):
+    """The integer #N a router-supplied note reference names, or None.
+
+    The value comes from a probabilistic model reading prose that is full of
+    «#», so it arrives as `7`, `"7"`, `"#7"`, `"J#7"`, `" 7 "` or `"7."` — the
+    same forms `resolve_item`'s own query regex already accepts. Every explicit
+    note path now fails CLOSED, so an un-normalized «#7» is no longer a
+    fall-through to the newest note but a hard «ничего не нашла» on a note that
+    exists. Anything that still isn't a number stays None (fail closed)."""
+    if isinstance(n, str):
+        n = re.sub(r"^\s*[jJ]?\s*#?\s*", "", n).strip().rstrip(".")
+    try:
+        return int(n)
+    except (TypeError, ValueError):
+        return None
+
+
 def message_by_note_no(conn, n):
     """Resolve a stable note number to its row, or None. Numbers never shift, so this is the
     same note tomorrow. Owner-only, so note_no is effectively global."""
-    try:
-        n = int(n)
-    except (TypeError, ValueError):
+    n = note_no_value(n)
+    if n is None:
         return None
     return conn.execute("SELECT * FROM messages WHERE note_no = ? LIMIT 1", (n,)).fetchone()
 
@@ -2565,6 +2588,15 @@ def delete_message(conn, message_id):
 # candidate or journal draft. ANY future per-message kv key must be added here.
 MESSAGE_KV_KEYS = ("capture_action", "journal_draft")
 
+# kv VALUES that hold raw `messages.id` rowids (rather than being keyed by one):
+# which notes the review showed, which one was resurfaced, which were shown
+# today. Resolution pins each id to its stable `note_no`, which covers ordinary
+# deletion — but the whole-table purges below restart the rowids AND (scope
+# 'all') the note_no counter, so a brand-new note can inherit an id/#N pair
+# verbatim. These die with the rows they describe.
+NOTE_REF_KV_KEYS = ("note_review_snapshot", "last_resurfaced")
+NOTE_REF_KV_PREFIXES = ("note_review_shown",)
+
 
 def delete_message_kv(conn, message_id):
     keys = [f"{prefix}:{message_id}" for prefix in MESSAGE_KV_KEYS]
@@ -2574,9 +2606,35 @@ def delete_message_kv(conn, message_id):
 
 def _purge_all_message_kv(conn):
     """Same sweep for the whole-table purge fast paths (which bypass
-    delete_message) — rowids restart at 1 there, so leftovers are certain."""
-    for prefix in MESSAGE_KV_KEYS:
-        conn.execute("DELETE FROM kv WHERE key LIKE ?", (f"{prefix}:%",))
+    delete_message) — rowids restart at 1 there, so leftovers are certain.
+
+    `_` is a single-character WILDCARD in LIKE, so the prefixes are escaped:
+    `capture_action:%` would also match a future `captureXaction:` key, and a
+    sweep that deletes more than it names is exactly the class of bug this
+    module keeps paying for."""
+    for prefix in MESSAGE_KV_KEYS + NOTE_REF_KV_PREFIXES:
+        conn.execute(r"DELETE FROM kv WHERE key LIKE ? ESCAPE '\'",
+                     (_like_prefix(prefix) + ":%",))
+    marks = ",".join("?" for _ in NOTE_REF_KV_KEYS)
+    conn.execute(f"DELETE FROM kv WHERE key IN ({marks})", NOTE_REF_KV_KEYS)
+
+
+# kv VALUES holding raw `reminders.id` rowids. A purge deletes reminder rows,
+# SQLite hands the ids out again, and these two would then point a REPLY to an
+# old alarm (or a bare «это напоминание») at whatever new reminder inherited the
+# id. They are cleared with the rows they describe.
+REMINDER_KV_KEYS = ("fired_reminder_msgs", "last_reminder_id")
+
+
+def _purge_reminder_kv(conn):
+    marks = ",".join("?" for _ in REMINDER_KV_KEYS)
+    conn.execute(f"DELETE FROM kv WHERE key IN ({marks})", REMINDER_KV_KEYS)
+
+
+def _like_prefix(value):
+    """Escape LIKE's own wildcards so a literal prefix matches only itself."""
+    return (str(value).replace("\\", r"\\").replace("_", r"\_")
+            .replace("%", r"\%"))
 
 
 def _reset_note_counters(conn):
@@ -2584,7 +2642,8 @@ def _reset_note_counters(conn):
     left that a number could collide with, numbering restarts at #1 (what the
     boss saw before the counter existed). Every other scope keeps the counter —
     the ledger survives there and its numbers must stay unique."""
-    conn.execute("DELETE FROM kv WHERE key LIKE 'note_no_next:%'")
+    conn.execute(r"DELETE FROM kv WHERE key LIKE ? ESCAPE '\'",
+                 (_like_prefix("note_no_next") + ":%",))
 
 
 PURGE_SCOPES = ("all", "category", "stats", "reminders", "messages", "issues", "journal")
@@ -2644,7 +2703,12 @@ def _record_bulk_delete_outcomes(conn):
 
 # Raw inbound copies scope 'all' wipes: everything already handled or dead-lettered
 # (a still-'pending' row is unprocessed work the startup replay must be able to read).
-_SCRUBBABLE_UPDATES = "WHERE status != 'pending' AND payload NOT IN ('', '{}')"
+# `last_error` counts as a verbatim copy too: a failed update keeps up to 1000
+# chars of the exception, which routinely quotes the offending text — so «удали
+# всё» has to take it, and a row whose payload was already scrubbed must still be
+# picked up for the error alone.
+_SCRUBBABLE_UPDATES = ("WHERE status != 'pending'"
+                       " AND (payload NOT IN ('', '{}') OR last_error IS NOT NULL)")
 
 
 def purge_preview(conn, scope, category=None):
@@ -2723,8 +2787,10 @@ def purge_execute(conn, scope, category=None):
         # they can hold an exception repr that quotes the offending text — but
         # they are truncated to 500/200 chars and retention-pruned, so they are
         # accepted residue rather than a second verbatim archive.)
-        conn.execute("UPDATE telegram_updates SET payload = '{}' " + _SCRUBBABLE_UPDATES)
+        conn.execute("UPDATE telegram_updates SET payload = '{}', last_error = NULL "
+                     + _SCRUBBABLE_UPDATES)
         _purge_all_message_kv(conn)
+        _purge_reminder_kv(conn)
         _reset_note_counters(conn)
     elif scope == "category":
         ids = _messages_in_category(conn, category)
@@ -2747,6 +2813,7 @@ def purge_execute(conn, scope, category=None):
             conn.execute(f"DELETE FROM {table}")
     elif scope == "reminders":
         conn.execute("DELETE FROM reminders WHERE status='active'")
+        _purge_reminder_kv(conn)
     elif scope == "messages":
         protected = _non_journal_message_ids(conn)  # journals are spared
         if protected is None:  # no journals -> fast whole-table clear

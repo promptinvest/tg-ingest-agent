@@ -1309,54 +1309,67 @@ OUTSIDE the repo. Keep doing that. Its review pass was then interrupted mid-edit
 sites that wrap a row in «…» still passed the default, so those exact prompts stayed
 forgeable. Finished by hand in `8b1a3be`.
 
-### NEXT SESSION: START HERE — audit of WP1–WP7 (2026-07-26)
+### Audit of WP1–WP7 (2026-07-26) — CLOSED
 
 An independent read-only audit (7 auditors, one per package) verified every task against
 the committed code AND current HEAD. Result: **48 of 51 tasks complete**, 3 partial, 0
-missing, 0 regressed. The packages are real. But the auditors also found defects the
-pre-commit reviews missed. Fix these BEFORE deploying session B:
+missing, 0 regressed. The packages are real. The auditors also found defects the pre-commit
+reviews had missed; **all of them are now fixed** — the three backup items in `574b639`,
+the rest in the audit-fix batch below.
 
-**Highest priority — same bug class as the one caught on the live box:**
-1. `backup.rotate()` still globs `ingest-*.db.gz` and prunes by NAME. `2eefa19` hardened
-   `sweep_stray` against hand-made backups but left the sibling function untouched, and the
-   live box holds `ingest-pre-review-fix-20260713T104530Z.db.gz` and
-   `ingest-pre-review-lifecycle-cleanup-20260713T112217Z.db.gz`. They survive today only by
-   accident of sort order ('p' > '2' descending), which also means retention silently keeps
-   fewer automated snapshots than `backup_keep`. Scope `rotate()` to `_OWN_SNAPSHOT` too.
-2. **Scope regression I introduced in `2eefa19`:** the pre-fix sweep globbed `*.tmp`, which
-   covered `encrypt_snapshot()`'s `ingest-<stamp>.db.gz.enc.tmp`. `_OWN_SNAPSHOT` does not
-   match that name, so a crash between encrypt and rename now leaks it forever. Widen the
-   regex to `\.db(\.gz(\.enc)?\.tmp)?$` (still excluding hand-made names).
-3. `backup.run()` enforces retention only on attempts that survive `snapshot()` — in the
-   nearly-full-disk case WP1 exists to break, `conn.backup`/gzip raises ENOSPC and `rotate()`
-   never runs. Move rotation ahead of the snapshot, or into a `finally`.
-4. WP5 fail-closed is incomplete: `do_note_edit` (notes_svc.py:766), `do_show_media` (:424),
-   `item_detail_text`, and `_note_reminder_title` (reminders_svc.py:180) still call
-   `resolve_item`, which falls open to the NEWEST note when an explicit `#N` is stale. WP5
-   fixed `resolve_items` (plural) but not these. Same wrong-target class, unconfirmed paths.
-5. `correction_category` (tg_ingest_agent.py:3156) accepts any reply that
-   `llm.match_category_fuzzy` maps onto an existing category, and that helper matches when
-   EITHER token set is a subset of the other — so a short reply can still recategorize.
-6. WP3's rowid-reuse fix covered kv KEYS but not kv VALUES: `note_review_snapshot`
-   (notes_svc.py:791) stores raw `messages.id` lists that a reused rowid re-points.
+| Audit item | Where it landed |
+|---|---|
+| 1. `rotate()` globbed `ingest-*.db.gz` and pruned hand-made copies by name | `574b639` — scoped to `_OWN_SNAPSHOT` |
+| 2. Scope regression from `2eefa19`: `.db.gz.enc.tmp` no longer swept | `574b639` — regex widened to `\.db(\.gz(\.enc)?\.tmp)?$` |
+| 3. `run()` skipped retention when `snapshot()` raised (the ENOSPC case) | `574b639` — rotation runs first |
+| 4. WP5 fail-closed missed `resolve_item` (edit / show_media / detail / note-reminder) | audit-fix batch |
+| 5. `correction_category` accepted either subset direction | audit-fix batch (`value_subset_only=True`) |
+| 6. kv VALUES carrying raw rowids (`note_review_snapshot`, `last_resurfaced`) | audit-fix batch (`#N` pinned, purges drop the pointers) |
+| Four doc overclaims (rotate sweep, fetch budget, «no verbatim residue», closed-alarm) | audit-fix batch — text corrected, and `last_error` is now actually scrubbed |
+| Minors: unescaped `LIKE _`, offload after repair, unrecovered failed photo, `URLError`-only STT fallback, `endstream` pre-scan bypass, silent mixed-album drop | audit-fix batch |
+| Minor: `budget_limits._eff`'s `or default` | **REFUTED** — `pref_set` stringifies and `preferences.value` is TEXT, so a stored 0 is the truthy string `"0"` and `float("0") == 0.0` survives; only an empty-string pref falls back, which is the correct reading of "unset". No writer produces one. Recorded in SOLUTION.md; no code change. |
 
-**Docs that overclaim (fix the text or the code):** CARA.md/SOLUTION.md still say `rotate()`
-sweeps `.db`/`.tmp`; the fetch row claims a budget "measured from the START (DNS and connect
-included)" which the code cannot enforce (urllib's internal `readline` on headers is one
-opaque blocking call — T6.1 is `partial` for this reason); scope `all` claims "no verbatim
-residue" but `telegram_updates.last_error` keeps a 1000-char slice of the failing text;
-the WP5 row claims a closed-alarm reply is "never redirected" but the guard only covers
-wordings the deterministic parser recognises (T5.4 `partial`).
+### Second review of the audit-fix batch (2026-07-26) — what it found
 
-**Also flagged (minor, full list in the audit run):** `_purge_all_message_kv`/
-`_reset_note_counters` use `LIKE` with unescaped `_`; the finalize repair path returns
-before `storage.offload`; a photo whose first download failed is never recovered by repair;
-`db_full_alert` has no cross-restart dedupe; `budget_limits._eff` still uses the
-falsy-swallowing `or default` idiom T7.3 removed elsewhere; `_transcribe_local_server`
-falls back only on `URLError`, not on a hung server; the PDF bomb pre-scan can be bypassed
-by a payload containing a literal `endstream`; a mixed own album drops picture parts
-silently. The 8th (mechanical: MODULES/pricing/env/unit/secrets) auditor did not finish —
-re-run it.
+The batch above was itself reviewed before it shipped. **One of its fixes was worse than
+the bug**, which is the lesson worth carrying: the PDF pre-scan started measuring each
+stream past its `endstream` marker (correct) by handing zlib `view[m.start(1):]` — payload
+start to end of file — once per stream. zlib copies back whatever it was given but did not
+consume, and at `Z_STREAM_END` CPython memcpy's the entire remainder into `unused_data`, so
+the scan went from O(filesize) to O(streams × filesize): a 20 MB forward of ~800 000
+eight-byte VALID streams costs ~8 TB of memcpy with the single poll thread frozen, then a
+watchdog kill and a replay of the same PDF. Fixed by bounding the WORK (64 KB input
+windows; the past-marker read only happens when zlib says the stream really runs on, and it
+has a 16 MB per-document allowance whose exhaustion means "unverifiable" = refused). A
+`MAX_STREAMS` cap in the pre-scan was rejected: a bomb at stream 201 walks straight past it.
+
+Also fixed in the same pass: the proactive nudge rebuilt the review snapshot from the
+QUEUED ids instead of what the card rendered; `do_reminder_undo` resolves its own target and
+so was not covered by the widened closed-alarm guard; a LONE token that is a word of a
+multi-word category still confirmed a note (`toks()` filters no stopwords); the watchdog
+warning gained `FETCH_TIMEOUT_SECONDS` and now names every over-budget knob; a bare `int(n)`
+in `message_by_note_no` turned «#7» into a false not-found now that every explicit path
+fails closed; `fetch.py` still carried the budget overclaim the docs had corrected; the new
+mixed-album line made a forward claim about the note's contents. Test gaps named by the
+reviewers were closed (the pre-scan's work is now asserted by counting bytes handed to zlib;
+`last_resurfaced` and the already-scrubbed `telegram_updates` row are driven through their
+REAL producers; the closed-alarm binding has a golden transcript through `handle_update` —
+which revealed that the wording the earlier test called unparseable is in fact one the
+deterministic parser CAN read).
+
+### STILL OPEN
+
+- **`db_full_alert` has no cross-restart dedupe** (flagged by the WP2 auditor, never fixed).
+- **The 8th "mechanical" auditor** (installer `MODULES` / `DEFAULT_PRICING` / env-var
+  documentation / unit file / secret scan) has never finished a run. Re-run it. For the
+  record, the audit-fix batch adds no new module, no new env var and no new model slug.
+- **WP9 (memory truthfulness + `edited_message`) has not been started**, and WP10–WP14 are
+  untouched. Session B's work (WP5–WP8) plus these fixes are still **NOT DEPLOYED** —
+  production runs `2eefa19` (WP1–WP4).
+- The fetch budget stays PARTIAL **by design**: bounding the header read inside
+  `opener.open()` needs a socket-level deadline (a custom handler/connection class). The
+  sentence was narrowed instead of the code widened; if that is not acceptable it deserves
+  its own task.
 
 ### Session C — WP10–WP14 — pending
 
