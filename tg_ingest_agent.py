@@ -169,6 +169,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # Daily off-box DB backup — the single file everything Cara is lives in.
         runtime.register("maintenance", "db_backup",
                          lambda ctx, conn, payload, job: ctx.run_db_backup(conn))
+        # Monthly proof that yesterday's snapshot is still a restorable database.
+        runtime.register("maintenance", "backup_verify",
+                         lambda ctx, conn, payload, job: ctx.run_backup_verify(conn))
         # A crash mid-job leaves the row 'claimed' with no owner; reclaim so the
         # job kind isn't wedged forever (has_pending would block re-enqueue).
         requeued, dead = jobs.reclaim_stale(self.conn)
@@ -622,6 +625,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         "check_morning_brief",
         "check_daily_curator",
         "check_daily_backup",
+        "check_backup_verify",
         "check_memory_consolidation",
         "check_proactive",
         "check_model_health",
@@ -3027,6 +3031,42 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         store.kv_set(conn, "backup_retry_at", "")
         return result
 
+    # A failed restore self-check must not re-enqueue on every sweep for the rest
+    # of the month: hold it a day (the job's own two attempts still run).
+    BACKUP_VERIFY_RETRY_HOURS = 24
+
+    def check_backup_verify(self):
+        """Enqueue the MONTHLY restore self-check (durable job). A backup nobody
+        has ever restored is a hope, not a backup — this one decrypts the newest
+        snapshot with the on-box key, gunzips it and runs `PRAGMA integrity_check`
+        on the result. Like `check_daily_backup`, the month is stamped by the
+        job's SUCCESS path so a failed month keeps trying."""
+        if not self.cfg.backup_enabled:
+            return
+        now = datetime.now(timezone.utc)
+        if store.kv_get(self.conn, "backup_verify_month") == now.strftime("%Y-%m"):
+            return
+        if self._sched_backing_off("backup_verify", now):
+            return
+        if not jobs.has_pending(self.conn, "maintenance", "backup_verify"):
+            jobs.add_job(self.conn, "maintenance", "backup_verify",
+                         trace_id=current_trace())
+
+    def run_backup_verify(self, conn):
+        """The backup_verify job body. The failure path is `backup.verify_restore`'s
+        (log + a `backup_restore_failed` issue); here it only arms the backoff so a
+        permanent cause (a missing key file) doesn't re-snapshot-check hourly."""
+        now = datetime.now(timezone.utc)
+        try:
+            result = backup.verify_restore(self.cfg, conn)
+        except Exception:
+            store.kv_set(conn, "backup_verify_retry_at",
+                         (now + timedelta(hours=self.BACKUP_VERIFY_RETRY_HOURS)).isoformat())
+            raise
+        store.kv_set(conn, "backup_verify_month", now.strftime("%Y-%m"))
+        store.kv_set(conn, "backup_verify_retry_at", "")
+        return result
+
     def check_memory_consolidation(self):
         """Weekly: fold duplicate boss-memory items (the curator accumulates near-dupes
         over time) so her self-knowledge stays clean. The first run (no timestamp yet)
@@ -3041,14 +3081,22 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 pass
         store.kv_set(self.conn, "memory_consolidate_at", now.isoformat())
         try:
-            n = memory_curator.consolidate(self.conn, self.cfg)
+            # `now` also seeds the batch rotation: consecutive weekly runs cut the
+            # item list in different places, so a duplicate pair a boundary split
+            # this week is inside one batch the next.
+            n = memory_curator.consolidate(self.conn, self.cfg, now=now)
             if n:
                 log(f"memory consolidation: merged {n} duplicate item(s)")
         except Exception as exc:
             log(f"memory consolidation failed: {exc}")
 
     def do_memory_cleanup(self, chat_id, lang):
-        """On-demand: 'почисти память' — fold duplicate remembered items now."""
+        """On-demand: 'почисти память' — fold duplicate remembered items now.
+
+        No `now=`: the batch rotation falls back to today, so a manual run on the
+        same calendar day as the weekly pass reproduces that day's cuts. That is
+        the deterministic contract (`_batches`, SOLUTION.md §5), not an oversight
+        — running it again TOMORROW rotates the cuts by one."""
         try:
             n = memory_curator.consolidate(self.conn, self.cfg)
         except Exception as exc:

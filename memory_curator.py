@@ -11,6 +11,7 @@ Deterministic by default (spec §21: deterministic candidates first). An
 optional LLM extraction pass is gated behind MEMORY_CURATOR_LLM.
 """
 import re
+from datetime import datetime, timezone
 
 import boss_model
 import common
@@ -405,7 +406,41 @@ def _merge_groups(conn, cfg, items, max_items=120, status_of=None):
     return out
 
 
-def consolidate(conn, cfg, max_items=120):
+BATCH_SIZE = 40
+
+
+def _batches(seq, run_day=None, size=BATCH_SIZE):
+    """Split `seq` into `size`-item batches, ROTATING where the cuts fall from one
+    run to the next.
+
+    The batching itself is deliberate: the fast grouping model reliably spots
+    duplicates in ~40 items and misses them in a 120-item wall. But the cuts used
+    to land on the same indexes every time, so two near-identical items sitting
+    either side of a boundary were re-separated week after week and could never
+    fold — the "re-running across weeks folds anything a batch split" comment was
+    an overclaim, since nothing moved between runs.
+
+    The offset is the RUN DATE's ordinal day mod `size`, which keeps the whole
+    thing reproducible (no `random`: same date -> same batches) and advances by 7
+    every week, so consecutive WEEKLY runs never share an offset and a pair a
+    boundary split this week is inside one batch the next. Day-granular rather
+    than week-granular so an on-demand cleanup run on a DIFFERENT day also cuts
+    elsewhere; a re-run on the SAME day deliberately reproduces that day's cuts
+    (see SOLUTION.md §5 — reproducibility is what stops a re-run reshuffling her
+    memory).
+    """
+    n = len(seq)
+    if n <= size:
+        yield from ([seq] if seq else [])
+        return
+    day = run_day or datetime.now(timezone.utc)
+    offset = (day.toordinal() % size) % n
+    rotated = list(seq[offset:]) + list(seq[:offset])
+    for i in range(0, n, size):
+        yield rotated[i:i + size]
+
+
+def consolidate(conn, cfg, max_items=120, now=None):
     """De-duplicate Cara's memory: an LLM groups genuine duplicate items and we KEEP the
     richest — except that a CONFIRMED boss fact always outranks an inferred paraphrase and
     is never the one folded. Boss facts: the rest are marked 'merged' (reversible). Her
@@ -414,12 +449,10 @@ def consolidate(conn, cfg, max_items=120):
     what folds the over-grown 'tea' duplicates. Pending memory
     candidates are also tidied: duplicates folded ('merged') and any that CONTRADICT a fact
     he already confirmed dropped ('superseded') — a sensed guess never overrides confirmed
-    truth (the кофе-vs-confirmed-чай case). Returns total folded."""
-    # Group in SMALL batches — the fast model reliably spots duplicates in ~40 items but
-    # misses them in a 120-item wall. (Re-running across weeks folds anything a batch split.)
-    def _batches(seq, size=40):
-        for i in range(0, len(seq), size):
-            yield seq[i:i + size]
+    truth (the кофе-vs-confirmed-чай case). Returns total folded.
+
+    `now` is the run date the batch rotation is derived from (see `_batches`); it
+    defaults to the current UTC time."""
     merged = 0
     # 1) boss profile items -> demote duplicates to 'merged' (reversible)
     items, seen, status_of = [], set(), {}
@@ -432,7 +465,7 @@ def consolidate(conn, cfg, max_items=120):
             if val:
                 items.append((row["id"], val))
                 status_of[row["id"]] = (status, row["confidence"])
-    for batch in _batches(items):
+    for batch in _batches(items, now):
         for _keep, drops in _merge_groups(conn, cfg, batch, status_of=status_of):
             for d in drops:
                 # Belt and braces for the hard rule: whatever the model said, a
@@ -444,7 +477,7 @@ def consolidate(conn, cfg, max_items=120):
                     merged += 1
     # 2) Cara's life flavour -> demote redundant duplicates, keep the richest of each
     life = [(r["id"], r["text"]) for r in store.life_all(conn) if (r["text"] or "").strip()]
-    for batch in _batches(life):
+    for batch in _batches(life, now):
         for _keep, drops in _merge_groups(conn, cfg, batch):
             for d in drops:
                 if store.life_set_status(conn, d, "merged"):

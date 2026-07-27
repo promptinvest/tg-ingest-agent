@@ -794,6 +794,23 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   stamp lands only after Telegram confirms delivery, so a blip doesn't swallow the notice
   and a permanent cause doesn't repeat it hourly). The UTC day is stamped only after a
   **successful** run — a failed morning is retried the same day instead of being marked done.
+- **Monthly restore self‑check (2026‑07‑26):** nothing ever proved a snapshot could be
+  turned back INTO a database — the job was green once the file was written and sent. A
+  second durable job (`maintenance`/`backup_verify`, one per calendar month, tick
+  `check_backup_verify`) now takes the newest snapshot through the real recovery path:
+  decrypt with `BACKUP_ENCRYPTION_KEY_FILE`, gunzip, open read‑only, `PRAGMA
+  integrity_check`, and confirm it is Cara's schema — in a `backups/restore-check/`
+  scratch dir removed on every path (the daily sweep also clears one left by a killed
+  run, since it holds a DECRYPTED copy). "Newest" is by stamp across both forms, taking
+  the encrypted copy of THAT stamp. ANY failure — including an out-of-disk error while
+  copying — logs a `backup_restore_failed` issue and holds the retry a day; the month is
+  stamped only on success. It refuses to start when free disk cannot hold the expansion,
+  and the gunzip is capped at that same budget — what a restore can legitimately produce,
+  not what the disk could absorb — so the check can never be what fills the disk.
+  **Honest limit:** the key file lives on the same droplet as the backups, so a green
+  check means "archive and key agree here", not "the off‑box copy is openable after this
+  box is gone" — that needs an operator‑held OFF‑BOX copy of the key (never automated,
+  never printed by the code). The restore one‑liner is in SOLUTION.md §9.
 - **Low‑disk alert (2026‑07‑25):** a `check_disk_space` scheduler tick (every 30 min)
   reads free space on the DB filesystem and tells the boss ONCE when it drops below
   `DISK_ALERT_MIN_FREE_PCT` (default 10%), with a `disk_low` issue row, and once again
@@ -804,7 +821,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
   quiet‑hours‑aware (22:00–08:00), fully audited; never acts. **A "sent" is recorded only
   on real delivery** (2026‑07‑02), so a transient Telegram error doesn't mark the day's
-  nudge delivered and lose it. **A persistent overdue reminder no
+  nudge delivered and lose it. **One calendar (2026‑07‑26):** the daily cap and the
+  "same nudge once a day" dedup bucket by YOUR local day, like quiet hours and off‑days
+  always did — they used the UTC day, so with the +3 default the allowance rolled at
+  03:00 local (nudges spent in the evening freed up in the middle of the night). **A persistent overdue reminder no
   longer starves the other nudges** — an already‑sent‑today hit is skipped, not treated
   as fatal, so a waiting candidate/uncategorized item still gets its turn.
   A delivered nudge snapshots its type + row ids for 15 minutes; a short «Давай»/«Да»/
@@ -912,6 +932,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   The same reply is also made self‑consistent before it can touch anything: an id another
   group is keeping is never dropped (`{keep:5,drop:[6]}` + `{keep:6,drop:[7]}` used to
   fold 6 while 7 was being folded into it — i.e. every richer copy gone at once).
+  **Rotating batches (2026‑07‑26):** that pass groups in 40‑item batches (the fast model
+  misses duplicates in a 120‑item wall), and the cuts used to fall on the same indexes
+  every run — so a duplicate pair either side of a boundary was re‑separated week after
+  week and could never fold. The batch offset now rotates with the run date, so a pair a
+  boundary split this week is compared next week; it stays deterministic (same date →
+  same batches), never randomized. **The flip side, said plainly:** «почисти память» run
+  again on the SAME day reproduces that day's cuts — the next day, or the weekly pass,
+  is what moves them.
 - **She never rewrites a saved note behind your back (2026‑07‑26).** If you EDIT a
   message she has already saved, she says which version she is holding and asks before
   applying the new text (see §10).
@@ -924,7 +952,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   above the persona voice and her changeable life — so charm can never precede or override
   safety, confirmation, or truth. (The old `persona.py` layer‑order *table* was inert —
   nothing assembled prompts from it — and was removed 2026‑07‑02; the enforcement was
-  always the prompt content itself.)
+  always the prompt content itself.) **The operative persona is code (2026‑07‑26):**
+  `converse.CHARACTER` (warm) + `hermes.PERSONA` (business) are what reach the model;
+  `prompts/cara_persona.md` is descriptive copy that nothing loads at runtime, and now
+  says so in its header — change the code first and mirror the wording there.
 - Conversation and grounded answers are LLM‑generated; **transactional/system messages
   are deterministic `texts.py` templates** (bilingual, with tone variants).
 
@@ -969,7 +1000,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ fetch.py         SSRF-guarded URL reader
    ├─ storage.py       binary backend (local; DO Spaces S3 SigV4, dormant)
    ├─ backup.py        daily consistent DB snapshot: local rotation + encrypted off-box
-   │                   copy (Spaces or fleet notify chat), as a durable daily job
+   │                   copy (Spaces or fleet notify chat), as a durable daily job;
+   │                   monthly restore self-check (decrypt → gunzip → integrity_check)
    ├─ llm.py           budget-guarded gateway: chat profiles + failover + cooldowns,
    │                   embeddings, STT (local/local_server/remote), pricing, budgets
    ├─ store.py         SQLite schema + helpers + additive migrations

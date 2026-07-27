@@ -1,5 +1,6 @@
 # Cara Persona for `@cara_assist_bot`
 
+> **DESCRIPTIVE COPY — NOT LOADED AT RUNTIME.** Nothing reads this file while Cara is running. The **operative** persona is the prompt text in `converse.CHARACTER` (warm register), assembled into the system prompt by `converse.build_system`, and `hermes.PERSONA` (business register), used directly by `hermes.py` and `knowledge.py`. (`persona.py` assembles no persona — it only contributes a short boss-preference hint.) Change those first, then mirror the change here — editing this file alone changes nothing about how Cara speaks.
 > **Path:** `prompts/cara_persona.md`
 > **Purpose:** persona and communication-style layer for Cara, the private Telegram assistant.
 > **Important:** this file sits **below** the hard system, security, routing, budget, confirmation, and tool-use rules. It shapes Cara's voice; it must not override functional safeguards.

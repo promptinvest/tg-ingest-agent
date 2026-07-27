@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Probe STT options on DO serverless inference using a real stored voice
-file. Reads the key from /etc/tg-ingest-agent.env; secrets never in argv."""
+file. Reads the key from /etc/tg-ingest-agent.env; secrets never in argv.
+
+MANUAL RESEARCH TOOL — run by hand, never imported and never on any code path
+the agent takes. It calls the inference endpoint DIRECTLY, so its calls are
+**UNMETERED**: they bypass `llm.py` entirely and therefore the budget guard, the
+`llm_usage` ledger and the spend report. That is by design (the point is to find
+out which model slugs exist and answer at all, before anything can be priced),
+but it means every run spends real money that Cara's meter will never show.
+Four probes on one short voice note; don't loop it.
+"""
 import base64
 import json
 from pathlib import Path
@@ -28,10 +37,14 @@ def show(label, fn):
         body = ""
         try:
             body = exc.read().decode("utf-8")[:300]
-        except Exception:
+        except (OSError, ValueError):  # unreadable / undecodable body, not a bug here
             pass
         print(f"--- {label}: HTTP {exc.code} -> {body.replace(key, '<redacted>')}")
-    except (URLError, Exception) as exc:
+    except (URLError, TimeoutError) as exc:
+        # Transport failures only. `except (URLError, Exception)` used to swallow
+        # everything — a typo in this file printed as a probe "FAIL" against the
+        # endpoint, which is exactly the wrong conclusion for a research tool.
+        # A programming error now surfaces as a traceback.
         print(f"--- {label}: FAIL -> {exc!r}")
 
 

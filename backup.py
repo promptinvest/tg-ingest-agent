@@ -16,6 +16,7 @@ survives restarts, never blocks the live request path.
 import gzip
 import os
 import re
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -39,6 +40,10 @@ PBKDF2_ITERATIONS = 200_000
 
 class BackupEncryptionError(RuntimeError):
     pass
+
+
+class BackupRestoreError(RuntimeError):
+    """The newest snapshot could not be taken back to an openable database."""
 
 
 def backups_dir(cfg):
@@ -93,7 +98,16 @@ _OWN_SNAPSHOT = re.compile(r"^ingest-\d{8}T\d{6}Z\.db(?:\.gz(?:\.enc)?\.tmp)?$")
 # also matches hand-made copies like ingest-pre-review-fix-<stamp>.db.gz, which
 # then eat slots in backup_keep — on the live box that silently held 5 automated
 # snapshots instead of 7 — and would be deletable if a future name sorted lower.
-_OWN_ARCHIVE = re.compile(r"^ingest-\d{8}T\d{6}Z\.db\.gz$")
+_OWN_ARCHIVE = re.compile(r"^ingest-(\d{8}T\d{6}Z)\.db\.gz$")
+
+# The encrypted form — the only one that ever leaves the box, and therefore the
+# one the restore self-check prefers when it exists for the newest stamp.
+_OWN_ENCRYPTED = re.compile(r"^ingest-(\d{8}T\d{6}Z)\.db\.gz\.enc$")
+
+# Scratch directory (inside the 0700 backups dir) the restore self-check works
+# in. Fixed name on purpose: a run killed mid-check leaves a DECRYPTED copy of
+# the database behind, and a deterministic name is one the next sweep can find.
+RESTORE_CHECK_DIR = "restore-check"
 
 
 def sweep_stray(cfg):
@@ -107,6 +121,14 @@ def sweep_stray(cfg):
     """
     out_dir = backups_dir(cfg)
     removed = 0
+    # Our own restore-check scratch dir, left by a killed run: it can hold a
+    # DECRYPTED database, so it must not wait for next month's check. Safe to do
+    # from here — one process, one thread, so no self-check is in flight while a
+    # backup job runs. Matched by exact name; an operator's directory is not ours.
+    scratch = out_dir / RESTORE_CHECK_DIR
+    if scratch.is_dir():
+        shutil.rmtree(scratch, ignore_errors=True)
+        removed += 1
     for stray in sorted(out_dir.iterdir()):
         if stray.is_file() and _OWN_SNAPSHOT.match(stray.name):
             stray.unlink(missing_ok=True)
@@ -246,3 +268,232 @@ def run(cfg, conn):
     return {"file": gz.name, "bytes": gz.stat().st_size, "offsite": where,
             "offbox_blocked": blocked,
             "encrypted_file": upload_path.name if upload_path != gz else ""}
+
+
+# -- restore self-check -------------------------------------------------------
+# Until now nothing ever proved a snapshot could be turned back into a database:
+# the job was green when the file was WRITTEN and SENT. Once a month the newest
+# snapshot goes through the real recovery path — decrypt with the on-box key,
+# gunzip, open, PRAGMA integrity_check — in a scratch dir that is always removed.
+#
+# Honest about what this does NOT prove: the key file lives on the same droplet
+# as the database it protects, so a green check says "archive and key agree
+# here", not "the off-box copy is openable after this box is gone". That second
+# property needs an OFF-BOX copy of the key file, which is an operator decision
+# and is deliberately not automated (the key is never printed, moved or copied
+# by this module).
+
+# The scratch copies (the decrypted .gz plus the expanded .db) land next to the
+# backups. Refuse to start unless the disk can hold them with room to spare —
+# this check must never become the thing that fills the disk it exists to guard.
+#
+# The EXPANSION BUDGET is what the gunzip is allowed to write, and it is derived
+# from what a legitimate restore can possibly produce, not from free space. A
+# snapshot is a page-for-page copy of the live database (the online-backup API,
+# and nothing in this codebase ever VACUUMs, so the file never shrinks) — the
+# live file is therefore a hard upper bound on the restored size of any snapshot,
+# and 4x it is already generous. The archive multiple and the floor cover a fresh
+# or tiny database, where a multiple of almost nothing would be an absurdly tight
+# cap; note that a nearly-empty SQLite file compresses FAR better than 12x, so
+# "12x the archive" alone would refuse perfectly good restores.
+RESTORE_LIVE_FACTOR = 4
+RESTORE_FREE_FACTOR = 12          # gzipped SQLite expands ~5-10x; leave headroom
+RESTORE_MIN_BUDGET = 8 * 1024 * 1024
+RESTORE_FREE_MARGIN = 32 * 1024 * 1024
+
+
+def restore_budget(cfg, src_size):
+    """Most bytes the restore of a `src_size` archive may legitimately write.
+
+    The live size counts the `-wal` file too: in WAL mode the main file can be far
+    smaller than the logical database until a checkpoint lands, and a snapshot
+    (taken through the online-backup API) contains everything — so measuring the
+    main file alone would set a bound BELOW what a healthy restore produces."""
+    live = 0
+    for part in (cfg.db_path, Path(str(cfg.db_path) + "-wal")):
+        try:
+            live += part.stat().st_size
+        except OSError:      # missing on a fresh box / checkpointed away
+            pass
+    return max(live * RESTORE_LIVE_FACTOR, src_size * RESTORE_FREE_FACTOR,
+               RESTORE_MIN_BUDGET)
+
+
+def latest_snapshot(cfg):
+    """`(path, encrypted)` for the newest snapshot THIS module made, or
+    `(None, False)`.
+
+    Newest by STAMP across both forms; the encrypted copy wins only when it is a
+    copy of THAT stamp. Preferring any `.enc` over any `.gz` was wrong: `run()`
+    never deletes an `.enc` after upload and `rotate()` only prunes one together
+    with its `.gz`, so if off-box config goes away (fleet token cleared, backend
+    switched) up to `backup_keep` stale `.enc` files outlive it — and the monthly
+    check would keep reporting `integrity: ok` for a week-old archive while
+    today's snapshot was never opened. "The newest snapshot" has to mean it."""
+    out_dir = backups_dir(cfg)
+    if not out_dir.is_dir():
+        return None, False
+    best_stamp, best = "", (None, False)
+    for p in out_dir.iterdir():
+        if not p.is_file():
+            continue
+        for pattern, encrypted in ((_OWN_ENCRYPTED, True), (_OWN_ARCHIVE, False)):
+            found = pattern.match(p.name)
+            if not found:
+                continue
+            stamp = found.group(1)
+            if stamp > best_stamp or (stamp == best_stamp and encrypted and not best[1]):
+                best_stamp, best = stamp, (p, encrypted)
+            break
+    return best
+
+
+def _decrypt_snapshot(cfg, enc_path, out_path):
+    """The exact inverse of encrypt_snapshot — same cipher, KDF and iteration
+    count, so the one-liner documented in SOLUTION.md §9 is what runs here."""
+    key_path = Path(cfg.backup_encryption_key_file)
+    if not key_path.is_file():
+        raise BackupRestoreError(f"backup encryption key is missing: {key_path}")
+    try:
+        subprocess.run(
+            ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter",
+             str(PBKDF2_ITERATIONS), "-in", str(enc_path), "-out", str(out_path),
+             "-pass", f"file:{key_path}"],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", b"")
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", errors="replace")
+        raise BackupRestoreError(
+            f"decrypt failed: {str(detail or exc)[:200]}") from exc
+
+
+def _gunzip(src, dst, max_bytes):
+    """Expand `src` into `dst`, refusing to write more than `max_bytes` — a
+    corrupt archive must not fill the disk on the way to being diagnosed."""
+    written = 0
+    with gzip.open(src, "rb") as f_in:
+        fd = os.open(dst, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "wb") as f_out:
+            while True:
+                chunk = f_in.read(1 << 20)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise BackupRestoreError(
+                        f"restored database exceeds the free-space budget "
+                        f"({max_bytes} bytes) — archive corrupt?")
+                f_out.write(chunk)
+    return written
+
+
+def integrity_check(db_path):
+    """Open the restored file READ-ONLY — the check must not MODIFY the artifact
+    it is judging — and run the real PRAGMA. Returns the table count; raises
+    otherwise.
+
+    Read-only is NOT the same as touching nothing: `snapshot()` copies the live
+    WAL database with the sqlite3 backup API, so the restored file carries the
+    WAL format bytes, and even a `mode=ro` connection to a WAL database needs the
+    `-shm` wal-index — which SQLite creates in the CONTAINING DIRECTORY. The
+    scratch dir must therefore stay writable (it is rmtree'd on every path); a
+    future sandbox tightening that made it read-only would report a perfectly
+    good backup as unrestorable."""
+    try:
+        conn = sqlite3.connect(f"{Path(db_path).as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise BackupRestoreError(f"restored file will not open: {exc}") from exc
+    try:
+        row = conn.execute("PRAGMA integrity_check").fetchone()
+        verdict = (row[0] if row else "") or ""
+        if verdict != "ok":
+            raise BackupRestoreError(
+                f"integrity_check on the restored database: {verdict[:200]}")
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")]
+    except sqlite3.DatabaseError as exc:
+        raise BackupRestoreError(
+            f"restored file is not a readable database: {exc}") from exc
+    finally:
+        conn.close()
+    # A file can be a perfectly valid EMPTY database. Cara's has messages.
+    if "messages" not in tables:
+        raise BackupRestoreError(
+            "restored database has no 'messages' table — not Cara's database")
+    return len(tables)
+
+
+def verify_restore(cfg, conn=None):
+    """Prove the newest snapshot restores. Returns a result dict for the job log;
+    raises when it does not — ANY failure (BackupRestoreError, or an OSError from
+    the scratch copy) is logged and recorded as a `backup_restore_failed` issue
+    first. Every scratch file is removed on every path."""
+    out_dir = backups_dir(cfg)
+    scratch = out_dir / RESTORE_CHECK_DIR
+    try:
+        src, encrypted = latest_snapshot(cfg)
+        if src is None:
+            raise BackupRestoreError(
+                "no snapshot to verify — the daily backup has never produced one")
+        # ONE number bounds both halves of this: the disk precheck and the gunzip.
+        # The first version passed `free - MARGIN` to the gunzip, so on the live
+        # box (~68 GB free, a tens-of-MB archive) the write cap was ~400x the
+        # budget the precheck had just demanded — the guard could not fire until
+        # the expansion had ALREADY taken the filesystem down to 32 MB free, i.e.
+        # only after causing the disk-full spiral it exists to prevent, on a 4 GB
+        # box shared with a sibling bot.
+        src_size = src.stat().st_size
+        max_bytes = restore_budget(cfg, src_size)
+        # Room for the expansion, the archive copy beside it, and a margin. `free`
+        # is sampled here, before either file exists.
+        needed = max_bytes + src_size + RESTORE_FREE_MARGIN
+        free = shutil.disk_usage(out_dir).free
+        if free < needed:
+            raise BackupRestoreError(
+                f"not enough free disk to restore-check {src.name}: {free} free, "
+                f"{needed} needed")
+        shutil.rmtree(scratch, ignore_errors=True)  # leftovers from a killed run
+        scratch.mkdir(parents=True)
+        os.chmod(scratch, 0o700)
+        gz_path = scratch / "restored.db.gz"
+        if encrypted:
+            _decrypt_snapshot(cfg, src, gz_path)
+        else:
+            shutil.copyfile(src, gz_path)
+        os.chmod(gz_path, 0o600)
+        db_path = scratch / "restored.db"
+        try:
+            written = _gunzip(gz_path, db_path, max_bytes)
+        except BackupRestoreError:
+            raise
+        except (OSError, EOFError) as exc:  # BadGzipFile is an OSError
+            raise BackupRestoreError(f"gunzip failed: {exc}") from exc
+        tables = integrity_check(db_path)
+        log(f"backup restore self-check OK: {src.name} -> {written} bytes, "
+            f"{tables} tables")
+        return {"file": src.name, "encrypted": encrypted, "bytes": written,
+                "tables": tables, "integrity": "ok"}
+    except Exception as exc:  # noqa: BLE001 — every failure leaves the documented signal
+        # Deliberately NOT `except BackupRestoreError`. The setup steps
+        # (disk_usage, rmtree/mkdir/chmod, the copyfile of the archive) raise
+        # OSError, and ENOSPC during that copy is the single most likely real
+        # failure of this job — exactly the case it exists for. Catching only our
+        # own type let that one through with no `FAILED` log line and no
+        # `backup_restore_failed` issue, leaving runtime.drain's generic
+        # `job_failed` as the only trace, and only after the retries ran out.
+        detail = str(exc) or repr(exc)
+        log(f"backup restore self-check FAILED: {detail}")
+        if conn is not None:
+            try:
+                store.issue_add(conn, None, "backup_restore_failed", str(exc)[:300])
+            except Exception as issue_exc:  # noqa: BLE001
+                # The likeliest reason this check failed at all is a full disk, and
+                # that is also what stops the issue row being written. Recording the
+                # attempt must not replace the diagnosis with 'database or disk is
+                # full' — the caller needs the ORIGINAL reason.
+                log(f"could not record the restore-check failure: {issue_exc!r}")
+        raise
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)

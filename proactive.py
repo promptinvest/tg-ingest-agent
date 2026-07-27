@@ -33,6 +33,12 @@ def _tz_offset(conn, cfg):
         return cfg.timezone_offset
 
 
+def local_day(conn, cfg, now):
+    """The boss's LOCAL calendar day for a UTC instant — the one bucket the daily
+    cap, the per-key dedup, quiet hours and off-days all share."""
+    return (now + timedelta(hours=_tz_offset(conn, cfg))).strftime("%Y-%m-%d")
+
+
 def settings(conn, cfg):
     """Effective proactivity settings: a preference the boss set (in plain
     language, via proactive_prefs) overrides the configured defaults."""
@@ -146,7 +152,13 @@ def run(conn, cfg, lang, reply_fn, now=None):
     if not s["enabled"]:
         return None
     now = now or datetime.now(timezone.utc)
-    day = now.strftime("%Y-%m-%d")
+    # ONE calendar for everything this function throttles by. Quiet hours and
+    # off-days have always read the boss's LOCAL time, but the daily cap and the
+    # "same nudge at most once a day" dedup bucketed by the UTC day — so with the
+    # MSK default (+3) his allowance rolled over at 03:00 local: nudges spent
+    # during the evening freed up in the middle of the night, and a nudge sent at
+    # 01:00 could repeat at 03:01. The bucket is now the local day too.
+    day = local_day(conn, cfg, now)
     quiet = in_quiet_hours(cfg, conn, now, s)
     wrong_day = _wrong_day(conn, cfg, now, s["days"])
 

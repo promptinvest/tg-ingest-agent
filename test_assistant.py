@@ -3,6 +3,7 @@
 import gc
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -2895,6 +2896,93 @@ class ProactiveTests(unittest.TestCase):
                                  now=self._now_local(12))
         self.assertEqual(key, "candidates")  # afterglow send didn't spend the heartbeat cap
 
+    # -- T14.2: one calendar for caps, dedup, quiet hours and off-days ----------
+
+    def _open_quiet_window(self):
+        # quiet_start == quiet_end disables the window, so these tests can drive
+        # times that would otherwise be inside the default 22-8 one.
+        store.pref_set(self.conn, "quiet_start", 0)
+        store.pref_set(self.conn, "quiet_end", 0)
+
+    def test_daily_bucket_rolls_at_the_boss_midnight_not_utc(self):
+        # With the MSK default (+3) the UTC day rolls at 03:00 local, so his
+        # allowance used to reset in the middle of the night: a nudge at 23:30
+        # local and another at 00:30 local were the SAME UTC day (cap blocked the
+        # second), and 01:00 vs 03:30 local were DIFFERENT ones (cap let a second
+        # through on the same evening).
+        from datetime import datetime, timezone
+        self._open_quiet_window()
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        sent = []
+        late = datetime(2026, 6, 15, 20, 30, tzinfo=timezone.utc)     # 23:30 local 06-15
+        after_midnight = datetime(2026, 6, 15, 21, 30, tzinfo=timezone.utc)  # 00:30 local 06-16
+
+        first = self.proactive.run(self.conn, self.cfg, "ru", self._reply_ok(sent), now=late)
+        second = self.proactive.run(self.conn, self.cfg, "ru", self._reply_ok(sent),
+                                    now=after_midnight)
+
+        self.assertEqual(first, "candidates")
+        self.assertEqual(second, "candidates")   # a NEW local day -> fresh cap and dedup
+        self.assertEqual([r["day"] for r in self.conn.execute(
+            "SELECT day FROM proactive_log WHERE sent_message = 1 ORDER BY id")],
+            ["2026-06-15", "2026-06-16"])
+
+    def test_the_cap_does_not_reset_at_three_in_the_morning(self):
+        from datetime import datetime, timezone
+        self._open_quiet_window()
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        sent = []
+        night = datetime(2026, 6, 15, 22, 0, tzinfo=timezone.utc)      # 01:00 local 06-16
+        later = datetime(2026, 6, 16, 0, 30, tzinfo=timezone.utc)      # 03:30 local 06-16
+
+        first = self.proactive.run(self.conn, self.cfg, "ru", self._reply_ok(sent), now=night)
+        second = self.proactive.run(self.conn, self.cfg, "ru", self._reply_ok(sent), now=later)
+
+        self.assertEqual(first, "candidates")
+        self.assertIsNone(second)                # same local day: already sent + cap spent
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(store.proactive_sent_count(self.conn, "2026-06-16"), 1)
+        # The SUPPRESSED row buckets by the same calendar as the send it was
+        # measured against — otherwise the audit trail and the throttle disagree.
+        self.assertEqual([(r["reason"], r["day"]) for r in self.conn.execute(
+            "SELECT reason, day FROM proactive_log WHERE sent_message = 0 ORDER BY id")],
+            [("already sent today", "2026-06-16")])
+
+    def test_an_off_day_suppression_is_logged_on_the_local_day(self):
+        # The last of the four throttles: off-days already read local time, but
+        # the row recording the suppression has to land in the same bucket or the
+        # audit says the nudge was refused on a different day than it was.
+        from datetime import datetime, timezone
+        self._open_quiet_window()
+        store.pref_set(self.conn, "proactive_days", "weekdays")
+        store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
+        # Sat 2026-06-20 22:00 UTC == Sun 2026-06-21 01:00 local (+3): a weekend
+        # local day whose UTC day is still Saturday, a weekday.
+        sunday_local = datetime(2026, 6, 20, 22, 0, tzinfo=timezone.utc)
+
+        self.assertIsNone(self.proactive.run(self.conn, self.cfg, "ru",
+                                             self._reply_ok([]), now=sunday_local))
+        self.assertEqual([(r["reason"], r["day"]) for r in self.conn.execute(
+            "SELECT reason, day FROM proactive_log ORDER BY id")],
+            [("off-day", "2026-06-21")])
+
+    def test_local_day_matches_the_quiet_hours_calendar(self):
+        from datetime import datetime, timezone
+        moment = datetime(2026, 6, 15, 21, 30, tzinfo=timezone.utc)    # 00:30 local 06-16
+        self.assertEqual(self.proactive.local_day(self.conn, self.cfg, moment), "2026-06-16")
+        store.pref_set(self.conn, "timezone_offset", -5)               # boss travels west
+        self.assertEqual(self.proactive.local_day(self.conn, self.cfg, moment), "2026-06-15")
+
+    def test_the_audit_writer_cannot_pick_its_own_calendar(self):
+        # `day` used to default to the UTC day, so "one calendar" depended on every
+        # caller remembering to pass the local one — a row written with the default
+        # is invisible to the dedup/cap queries for three hours a night. It is now
+        # required and keyword-only: the trap is gone, not documented.
+        with self.assertRaises(TypeError):
+            store.proactive_log_add(self.conn, "candidates", "sent", sent=True)
+        with self.assertRaises(TypeError):
+            store.proactive_log_add(self.conn, "candidates", "sent", "2026-06-15")
+
     def test_quiet_hours_suppress_nonurgent(self):
         store.candidate_add(self.conn, "workflow", "auto-file X", confidence=0.9)
         sent = []
@@ -5601,6 +5689,85 @@ class InstallerModulesTests(unittest.TestCase):
             f"(would ModuleNotFound-crash the service): {missing}")
 
 
+class PersonaSourceAndResearchToolTests(unittest.TestCase):
+    """T14.4/T14.5 of the 2026-07-24 review: two files that quietly mislead a
+    reader. `prompts/cara_persona.md` looks like the persona Cara runs on and is
+    never loaded by anything; `stt_probe.py` looks like ordinary agent code and
+    spends money outside the budget guard."""
+
+    REPO = Path(__file__).resolve().parent
+
+    def checkout_only(self, name):
+        """Docs are not in deploy.sh's FILES, and the stage dir keeps months-old
+        copies of anything a past payload shipped — so require a real checkout
+        (same rule and reasoning as OpsArtifactHardening20260726Tests)."""
+        if not (self.REPO / ".git").exists():
+            self.skipTest(f"not a checkout: {name} may be a stale stage-dir copy")
+        path = self.REPO / name
+        if not path.is_file():
+            self.skipTest(f"stage dir: {name} is not part of the deploy payload")
+        return path.read_text(encoding="utf-8")
+
+    def test_the_persona_md_names_the_code_that_actually_runs(self):
+        header = self.checkout_only("prompts/cara_persona.md").split("\n## ")[0]
+        self.assertIn("NOT LOADED AT RUNTIME", header)
+        self.assertIn("converse.CHARACTER", header)
+        self.assertIn("hermes.PERSONA", header)
+        # …and names the code that ASSEMBLES them. The first version of this header
+        # said "assembled by persona.py", which assembles no persona at all — it
+        # exposes one boss-preference hint. A pointer to the wrong file is worse
+        # than no pointer: the whole point is to land the next reader on the code
+        # that runs.
+        self.assertIn("converse.build_system", header)
+        self.assertNotIn("assembled by `persona.py`", header)
+
+    def test_nothing_actually_loads_the_persona_md(self):
+        # FORWARD-LOOKING INVARIANT, not a regression proof: this assertion passes
+        # against pre-T14.4 source too (converse.py's only mention of the file was
+        # already a `#` comment). It exists so the header's claim STAYS true — the
+        # day a module starts reading the file, the header and the CLAUDE.md
+        # checklist step become lies. The name may appear in PROSE — converse.py
+        # points at it as the mirror — but never in code. (Shipped .py files, so
+        # this one runs on the box too.)
+        import hermes
+        for path in self.REPO.glob("*.py"):
+            if path.name.startswith("test_"):
+                continue
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if "cara_persona" in line:
+                    self.assertTrue(line.lstrip().startswith("#"),
+                                    f"{path.name}:{n} looks like it LOADS the "
+                                    f"descriptive persona doc: {line.strip()}")
+        self.assertTrue(converse.CHARACTER and hermes.PERSONA)   # the real sources
+
+    def test_the_working_agreement_carries_the_persona_sync_step(self):
+        checklist = self.checkout_only("CLAUDE.md")
+        self.assertIn("prompts/cara_persona.md", checklist)
+        self.assertIn("converse.CHARACTER", checklist)
+
+    def test_stt_probe_is_marked_unmetered_and_lets_bugs_surface(self):
+        import ast as astmod
+        source = (self.REPO / "stt_probe.py").read_text(encoding="utf-8")
+        tree = astmod.parse(source)
+        doc = astmod.get_docstring(tree) or ""
+        self.assertIn("UNMETERED", doc)
+        self.assertIn("MANUAL RESEARCH TOOL", doc)
+        # It really does bypass the budget-guarded gateway — that is why the
+        # docstring has to say so. (FORWARD-LOOKING: this line also held before
+        # T14.5; it guards the docstring's claim rather than proving a fix.)
+        self.assertNotIn("import llm", source)
+        # `except (URLError, Exception)` swallowed programming errors and printed
+        # them as probe failures against the endpoint.
+        for node in astmod.walk(tree):
+            if not isinstance(node, astmod.ExceptHandler) or node.type is None:
+                continue
+            caught = (node.type.elts if isinstance(node.type, astmod.Tuple)
+                      else [node.type])
+            names = {n.id for n in caught if isinstance(n, astmod.Name)}
+            self.assertNotIn("Exception", names,
+                             "a blanket Exception hides bugs in a research tool")
+
+
 class SysinfoTests(unittest.TestCase):
     def test_parse_meminfo(self):
         text = "MemTotal:        2014240 kB\nMemFree: 100000 kB\nMemAvailable:  1500000 kB\n"
@@ -6408,6 +6575,491 @@ class BackupAndDiskHardeningTests(unittest.TestCase):
         self.agent.check_daily_backup()                     # done for today
         self.assertEqual(conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE status = 'pending'").fetchone()[0], 0)
+
+
+class BackupRestoreSelfCheckTests(unittest.TestCase):
+    """T14.1 of the 2026-07-24 review: nothing had ever proved a snapshot could be
+    turned back INTO a database — the daily job was green once the file was written
+    and sent. A monthly durable job now decrypts the newest snapshot with the on-box
+    key, gunzips it and runs PRAGMA integrity_check on the result in a scratch dir
+    that is always removed."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(DB_PATH=str(Path(self.tmp.name) / "pd.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+
+    def tearDown(self):
+        self.agent.conn.close()
+        self.tmp.cleanup()
+
+    def _key_file(self, passphrase="test-passphrase"):
+        key = Path(self.tmp.name) / "backup.key"
+        key.write_text(passphrase, encoding="utf-8")
+        self.agent.cfg.backup_encryption_key_file = key
+        return key
+
+    def _archive(self, name, payload):
+        """Put a gzip archive with arbitrary contents under our own stamp name."""
+        import gzip as gzipmod
+        import backup
+        d = backup.backups_dir(self.agent.cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / name
+        path.write_bytes(gzipmod.compress(payload))
+        return path
+
+    def test_round_trip_on_a_real_snapshot_reports_ok(self):
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        gz = backup.snapshot(cfg, conn)
+
+        result = backup.verify_restore(cfg, conn)
+
+        self.assertEqual(result["file"], gz.name)
+        self.assertFalse(result["encrypted"])          # nothing configured off-box
+        self.assertEqual(result["integrity"], "ok")
+        self.assertGreater(result["tables"], 5)        # a real schema, not an empty file
+        self.assertGreater(result["bytes"], 0)
+        # No scratch left behind — the decrypted copy is plaintext database.
+        self.assertFalse((backup.backups_dir(cfg) / backup.RESTORE_CHECK_DIR).exists())
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0], 0)
+
+    @unittest.skipUnless(shutil.which("openssl"), "openssl not installed")
+    def test_round_trip_through_real_openssl_prefers_the_encrypted_copy(self):
+        # The encrypted file is the ONLY one that ever leaves the box, so it is the
+        # one worth proving readable — and the decrypt must be the exact inverse of
+        # encrypt_snapshot (same cipher, KDF, iteration count) or a real restore is
+        # impossible with a green check.
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        self._key_file()
+        gz = backup.snapshot(cfg, conn)
+        enc = backup.encrypt_snapshot(cfg, gz)
+
+        result = backup.verify_restore(cfg, conn)
+
+        self.assertEqual(result["file"], enc.name)
+        self.assertTrue(result["encrypted"])
+        self.assertEqual(result["integrity"], "ok")
+        self.assertFalse((backup.backups_dir(cfg) / backup.RESTORE_CHECK_DIR).exists())
+
+    @unittest.skipUnless(shutil.which("openssl"), "openssl not installed")
+    def test_the_wrong_key_is_caught_instead_of_reported_green(self):
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        self._key_file("the-real-passphrase")
+        backup.encrypt_snapshot(cfg, backup.snapshot(cfg, conn))
+        self._key_file("a-different-passphrase")      # the key the box would restore with
+
+        with self.assertRaises(backup.BackupRestoreError):
+            backup.verify_restore(cfg, conn)
+        self.assertEqual([r["kind"] for r in conn.execute("SELECT kind FROM issues")],
+                         ["backup_restore_failed"])
+        self.assertFalse((backup.backups_dir(cfg) / backup.RESTORE_CHECK_DIR).exists())
+
+    def test_a_valid_gzip_that_is_not_a_database_fails(self):
+        # The check has to OPEN the result: gunzip succeeding proves only that the
+        # archive is intact, not that what came out is a database.
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        self._archive("ingest-20260101T000000Z.db.gz", b"this is not a database")
+
+        with self.assertRaises(backup.BackupRestoreError) as caught:
+            backup.verify_restore(cfg, conn)
+        self.assertIn("database", str(caught.exception))
+        self.assertEqual([r["kind"] for r in conn.execute("SELECT kind FROM issues")],
+                         ["backup_restore_failed"])
+        self.assertFalse((backup.backups_dir(cfg) / backup.RESTORE_CHECK_DIR).exists())
+
+    def test_a_valid_database_that_is_not_cara_s_is_not_accepted(self):
+        # A perfectly healthy SQLite file passes integrity_check while containing
+        # none of her data; a snapshot of Cara's DB always has `messages`.
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        other = Path(self.tmp.name) / "other.db"
+        stranger = sqlite3.connect(str(other))
+        stranger.execute("CREATE TABLE something_else (a)")
+        stranger.commit()
+        stranger.close()
+        self._archive("ingest-20260101T000000Z.db.gz", other.read_bytes())
+
+        with self.assertRaises(backup.BackupRestoreError) as caught:
+            backup.verify_restore(cfg, conn)
+        self.assertIn("messages", str(caught.exception))
+
+    def test_a_corrupt_archive_fails_loudly(self):
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "ingest-20260101T000000Z.db.gz").write_bytes(b"\x1f\x8b truncated garbage")
+
+        with self.assertRaises(backup.BackupRestoreError):
+            backup.verify_restore(cfg, conn)
+        self.assertFalse((d / backup.RESTORE_CHECK_DIR).exists())
+
+    def test_no_snapshot_at_all_is_a_failure_not_a_silent_pass(self):
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        with self.assertRaises(backup.BackupRestoreError) as caught:
+            backup.verify_restore(cfg, conn)
+        self.assertIn("no snapshot", str(caught.exception))
+
+    def test_a_missing_key_file_is_named(self):
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "ingest-20260101T000000Z.db.gz.enc").write_bytes(b"ciphertext")
+        cfg.backup_encryption_key_file = Path(self.tmp.name) / "absent.key"
+
+        with self.assertRaises(backup.BackupRestoreError) as caught:
+            backup.verify_restore(cfg, conn)
+        self.assertIn("key is missing", str(caught.exception))
+
+    def test_low_free_disk_refuses_before_writing_anything(self):
+        # This check copies AND expands the database next to the backups. On the
+        # nearly-full disk WP1 exists to survive, running it would be the thing that
+        # finishes the job — so it refuses instead, loudly.
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        backup.snapshot(cfg, conn)
+        usage = mock.Mock(free=1024)
+        with mock.patch.object(backup.shutil, "disk_usage", return_value=usage):
+            with self.assertRaises(backup.BackupRestoreError) as caught:
+                backup.verify_restore(cfg, conn)
+        self.assertIn("free disk", str(caught.exception))
+        self.assertFalse((backup.backups_dir(cfg) / backup.RESTORE_CHECK_DIR).exists())
+
+    def test_the_real_reason_survives_a_failed_issue_write(self):
+        # The likeliest cause of a failed check is a full disk — which is also what
+        # stops the issue row being written. The diagnosis must not be replaced by
+        # 'database or disk is full' from the bookkeeping.
+        import backup
+        conn, cfg = self.agent.conn, self.agent.cfg
+        with mock.patch.object(backup.store, "issue_add",
+                               side_effect=sqlite3.OperationalError(
+                                   "database or disk is full")):
+            with self.assertRaises(backup.BackupRestoreError) as caught:
+                backup.verify_restore(cfg, conn)
+        self.assertIn("no snapshot", str(caught.exception))
+
+    def test_scratch_from_a_killed_run_is_swept_by_the_daily_rotation(self):
+        # The scratch dir holds a DECRYPTED database. A process killed mid-check
+        # would otherwise leave it sitting in the backups dir until next month.
+        import backup
+        cfg = self.agent.cfg
+        d = backup.backups_dir(cfg)
+        scratch = d / backup.RESTORE_CHECK_DIR
+        scratch.mkdir(parents=True)
+        (scratch / "restored.db").write_bytes(b"plaintext copy of everything")
+        (d / "keep-me").mkdir()                        # not ours -> untouched
+
+        self.assertEqual(backup.sweep_stray(cfg), 1)
+        self.assertFalse(scratch.exists())
+        self.assertTrue((d / "keep-me").is_dir())
+
+    # -- WHICH snapshot gets verified -------------------------------------------
+
+    def test_the_newest_of_several_archives_is_the_one_verified(self):
+        # `sorted(...)[-1]` regressing to `[0]` would re-verify the OLDEST archive
+        # every month and stay green forever. Every other test here seeds exactly
+        # one file, so nothing pinned "newest".
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        # January: a REAL snapshot of Cara's DB under an older stamp — verifying
+        # THIS one would come back green.
+        real = backup.snapshot(cfg, conn)
+        real.rename(real.parent / "ingest-20260101T000000Z.db.gz")
+        # July: healthy SQLite, but not hers — so the failure names which was opened.
+        other = Path(self.tmp.name) / "other.db"
+        stranger = sqlite3.connect(str(other))
+        stranger.execute("CREATE TABLE something_else (a)")
+        stranger.commit()
+        stranger.close()
+        newest = self._archive("ingest-20260701T000000Z.db.gz", other.read_bytes())
+
+        self.assertEqual(backup.latest_snapshot(cfg), (newest, False))
+        with self.assertRaises(backup.BackupRestoreError) as caught:
+            backup.verify_restore(cfg, conn)
+        self.assertIn("messages", str(caught.exception))   # it opened JULY, not January
+
+    def test_a_stale_encrypted_copy_never_outranks_a_newer_archive(self):
+        # `run()` never deletes an .enc after upload and `rotate()` prunes one only
+        # together with its .gz — so if off-box config goes away (fleet token
+        # cleared, backend switched) up to BACKUP_KEEP stale .enc files outlive it.
+        # Preferring ANY .enc over ANY .gz meant the monthly check could report
+        # `integrity: ok` for a months-old archive while today's snapshot, the one
+        # a real restore would use, was never opened.
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "ingest-20260101T000000Z.db.gz.enc").write_bytes(b"stale ciphertext")
+        fresh = backup.snapshot(cfg, conn)                 # today, unencrypted
+
+        self.assertEqual(backup.latest_snapshot(cfg), (fresh, False))
+        result = backup.verify_restore(cfg, conn)
+        self.assertEqual(result["file"], fresh.name)
+        self.assertFalse(result["encrypted"])
+        self.assertEqual(result["integrity"], "ok")
+
+    def test_the_encrypted_copy_wins_for_the_stamp_it_belongs_to(self):
+        # The rule, stated: newest STAMP, and within that stamp the encrypted form
+        # — it is the copy that actually leaves the box.
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        gz = backup.snapshot(cfg, conn)
+        enc = Path(str(gz) + ".enc")
+        enc.write_bytes(b"ciphertext of this very stamp")
+
+        self.assertEqual(backup.latest_snapshot(cfg), (enc, True))
+
+    # -- the write budget --------------------------------------------------------
+
+    def test_the_gunzip_refuses_to_write_past_its_budget(self):
+        # The guard that stands between a crafted/corrupt archive and the disk-full
+        # spiral WP1 exists to break — and on a real disk `max_bytes` is always
+        # large, so nothing reached this branch.
+        import backup
+        src = self._archive("ingest-20260101T000000Z.db.gz", b"x" * 4096)
+        dst = Path(self.tmp.name) / "expanded.db"
+
+        with self.assertRaises(backup.BackupRestoreError) as caught:
+            backup._gunzip(src, dst, max_bytes=10)
+        self.assertIn("budget", str(caught.exception))
+
+    def test_the_expansion_cap_is_a_budget_not_the_whole_free_disk(self):
+        # The cap handed to _gunzip used to be `free - 32 MB`. With 64 GB free that
+        # is ~8000x the budget the precheck had just demanded, so the guard could
+        # not fire until the expansion had ALREADY taken the filesystem down to the
+        # margin — i.e. only after causing the disk-full spiral it exists to
+        # prevent, on a 4 GB box shared with a sibling bot.
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        backup.snapshot(cfg, conn)
+        seen = {}
+        real_gunzip = backup._gunzip
+
+        def spy(src, dst, max_bytes):
+            seen["cap"] = max_bytes
+            return real_gunzip(src, dst, max_bytes)
+
+        huge = mock.Mock(free=64 * 1024 ** 3)
+        with mock.patch.object(backup.shutil, "disk_usage", return_value=huge):
+            with mock.patch.object(backup, "_gunzip", side_effect=spy):
+                self.assertEqual(backup.verify_restore(cfg, conn)["integrity"], "ok")
+        self.assertLess(seen["cap"], 64 * 1024 ** 3 // 1000)
+
+    def test_an_archive_expanding_past_the_budget_is_refused_with_disk_to_spare(self):
+        # The refusal itself, end to end, on a disk with gigabytes free: the budget
+        # is what a restore can LEGITIMATELY produce (the live DB is a few hundred
+        # KB here, so the floor applies), not what the filesystem could absorb.
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        bomb_bytes = backup.RESTORE_MIN_BUDGET + (4 << 20)
+        self._archive("ingest-20260101T000000Z.db.gz", b"\0" * bomb_bytes)
+
+        with self.assertRaises(backup.BackupRestoreError) as caught:
+            backup.verify_restore(cfg, conn)
+        self.assertIn("budget", str(caught.exception))
+        self.assertEqual([r["kind"] for r in conn.execute("SELECT kind FROM issues")],
+                         ["backup_restore_failed"])
+        self.assertFalse((backup.backups_dir(cfg) / backup.RESTORE_CHECK_DIR).exists())
+
+    def test_the_budget_is_never_tighter_than_a_real_restore(self):
+        # The mirror hazard, and the one that bites in PRODUCTION rather than in a
+        # bomb: a nearly-empty SQLite file compresses far better than 12x, so a cap
+        # of "12x the archive" refuses a perfectly good restore every month. The
+        # bound is the LIVE database (a snapshot is a page-for-page copy of it and
+        # nothing here VACUUMs, so the file never shrinks).
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        gz = backup.snapshot(cfg, conn)
+        budget = backup.restore_budget(cfg, gz.stat().st_size)
+
+        result = backup.verify_restore(cfg, conn)
+        self.assertEqual(result["integrity"], "ok")
+        # This very archive expands past 12x — a 12x-only cap would have refused it.
+        self.assertGreater(result["bytes"],
+                           gz.stat().st_size * backup.RESTORE_FREE_FACTOR)
+        self.assertGreaterEqual(budget, result["bytes"])
+
+    # -- what the scratch dir leaves on disk, and what a failure reports ----------
+
+    def test_the_scratch_copies_are_never_readable_beyond_the_service_user(self):
+        # For the length of the check the scratch dir holds a full PLAINTEXT copy of
+        # everything Cara is. The chmods were asserted by nothing: dropping them (or
+        # letting _gunzip use plain open() under the service umask) would leave a
+        # group/world-readable copy and every existing test would still pass.
+        import stat as statmod
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        backup.snapshot(cfg, conn)
+        seen = {}
+        real_check = backup.integrity_check
+
+        def spy(db_path):
+            scratch = Path(db_path).parent
+            seen["dir"] = statmod.S_IMODE(scratch.stat().st_mode)
+            seen["gz"] = statmod.S_IMODE((scratch / "restored.db.gz").stat().st_mode)
+            seen["db"] = statmod.S_IMODE(Path(db_path).stat().st_mode)
+            return real_check(db_path)
+
+        with mock.patch.object(backup, "integrity_check", side_effect=spy):
+            backup.verify_restore(cfg, conn)
+        self.assertEqual(seen, {"dir": 0o700, "gz": 0o600, "db": 0o600})
+
+    def test_an_out_of_disk_copy_still_leaves_the_documented_signal(self):
+        # ENOSPC while copying the archive into the scratch dir is the likeliest
+        # real failure of this job — and it is an OSError, not our own type. The
+        # handler caught BackupRestoreError alone, so that case propagated with NO
+        # `FAILED` log line and NO `backup_restore_failed` issue, leaving only
+        # runtime.drain's generic job_failed once the retries ran out.
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        backup.snapshot(cfg, conn)
+
+        with mock.patch.object(backup.shutil, "copyfile",
+                               side_effect=OSError(28, "No space left on device")):
+            with self.assertRaises(OSError):
+                backup.verify_restore(cfg, conn)
+        self.assertEqual([r["kind"] for r in conn.execute("SELECT kind FROM issues")],
+                         ["backup_restore_failed"])
+        self.assertIn("No space left", conn.execute(
+            "SELECT detail FROM issues").fetchone()[0])
+        self.assertFalse((backup.backups_dir(cfg) / backup.RESTORE_CHECK_DIR).exists())
+
+    # -- the halves have to agree, and so does the documented one-liner ----------
+
+    def test_decrypt_is_the_exact_inverse_of_encrypt(self):
+        # The only UNSKIPPABLE proof of T14.1's central claim: both round-trip tests
+        # need the openssl CLI, so on a host without it the suite went green with
+        # nothing comparing the two commands.
+        import backup
+        cfg = self.agent.cfg
+        key = self._key_file()
+        gz = self._archive("ingest-20260101T000000Z.db.gz", b"payload")
+        calls = []
+        with mock.patch.object(backup.subprocess, "run",
+                               side_effect=lambda argv, **kw: calls.append(argv)):
+            backup.encrypt_snapshot(cfg, gz)
+            backup._decrypt_snapshot(cfg, Path(str(gz) + ".enc"),
+                                     Path(self.tmp.name) / "out.gz")
+        enc_argv, dec_argv = calls
+
+        def without_paths(argv):
+            out, i = [], 0
+            while i < len(argv):
+                if argv[i] in ("-in", "-out"):
+                    i += 2
+                    continue
+                out.append(argv[i])
+                i += 1
+            return out
+
+        for argv in (enc_argv, dec_argv):
+            self.assertEqual(argv[argv.index("-iter") + 1], str(backup.PBKDF2_ITERATIONS))
+            self.assertEqual(argv[argv.index("-pass") + 1], f"file:{key}")
+        # Identical apart from the direction (-d) and the encrypt-only -salt.
+        self.assertEqual([a for a in without_paths(dec_argv) if a != "-d"],
+                         [a for a in without_paths(enc_argv) if a != "-salt"])
+        self.assertIn("-aes-256-cbc", without_paths(dec_argv))
+
+    def test_the_documented_restore_one_liner_matches_the_code(self):
+        # SOLUTION.md §9's command is the single named deliverable of T14.1 and the
+        # thing that gets typed at 3 a.m. when the box is gone — and nothing pinned
+        # it. Both round-trip tests read PBKDF2_ITERATIONS on the encrypt AND the
+        # decrypt side, so raising it to 300_000 (or switching cipher) leaves the
+        # whole suite green while the documented command fails with 'bad decrypt'.
+        # checkout-only for the same reason as OpsArtifactHardening20260726Tests:
+        # docs are not in deploy.sh's FILES and the stage dir holds stale copies.
+        import backup
+        repo = Path(__file__).resolve().parent
+        if not (repo / ".git").exists():
+            self.skipTest("not a checkout: SOLUTION.md may be a stale stage-dir copy")
+        blocks = [b for b in (repo / "SOLUTION.md").read_text(encoding="utf-8").split("```")
+                  if "openssl enc -d" in b]
+        self.assertEqual(len(blocks), 1, "exactly one documented restore block")
+        block = blocks[0]
+
+        self.assertIn(f"-iter {backup.PBKDF2_ITERATIONS}", block)
+        self.assertIn("-aes-256-cbc", block)
+        self.assertIn("-pbkdf2", block)
+        self.assertIn(f"-pass file:{make_config().backup_encryption_key_file}", block)
+        # …and it must not leave a world-readable plaintext database behind, the way
+        # a bare `-out /tmp/restore.db` under the operator's 0022 umask did — while
+        # the code path deliberately uses 0700/0600 for exactly these files.
+        self.assertIn("umask 077", block)
+        self.assertIn("rm -rf", block)
+        self.assertNotIn("/tmp/restore.db", block)
+
+    # -- the monthly job wiring -------------------------------------------------
+
+    def test_verify_job_runs_once_a_month_and_stamps_only_on_success(self):
+        import backup
+        conn = self.agent.conn
+        self.agent.check_backup_verify()
+        self.agent.check_backup_verify()               # idempotent while pending
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE action = 'backup_verify'").fetchone()[0], 1)
+        self.assertIn(("maintenance", "backup_verify"), runtime._HANDLERS)
+
+        with mock.patch.object(backup, "verify_restore",
+                               side_effect=backup.BackupRestoreError("no snapshot")):
+            runtime.drain(conn, self.agent)
+        self.assertIsNone(store.kv_get(conn, "backup_verify_month"))   # not done
+        self.assertTrue(store.kv_get(conn, "backup_verify_retry_at"))  # but held off
+        self.agent.check_backup_verify()
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE action = 'backup_verify'").fetchone()[0], 1)
+
+        store.kv_set(conn, "backup_verify_retry_at", "")               # a day passes
+        conn.execute("UPDATE jobs SET available_at = ?", (store._now(),))
+        conn.commit()
+        with mock.patch.object(backup, "verify_restore",
+                               return_value={"integrity": "ok"}) as ok:
+            runtime.drain(conn, self.agent)
+        self.assertTrue(ok.called)
+        # Read the clock AFTER the drain: the stamp is written inside the job body
+        # from its own `now`, so capturing the month up front made a run that
+        # straddled a month rollover fail for no code reason.
+        self.assertEqual(store.kv_get(conn, "backup_verify_month"),
+                         datetime.now(timezone.utc).strftime("%Y-%m"))
+        self.agent.check_backup_verify()               # done for this month
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE action = 'backup_verify'").fetchone()[0], 1)
+
+    def test_a_previous_month_re_enqueues_the_check(self):
+        # The stamp has to ROLL. A wrong format ("%Y"), or one written from the
+        # wrong clock, would wedge the monthly check forever while every other
+        # assertion stayed green — the check would simply never run again.
+        conn = self.agent.conn
+        store.kv_set(conn, "backup_verify_month",
+                     datetime.now(timezone.utc).strftime("%Y-%m"))
+        self.agent.check_backup_verify()
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE action = 'backup_verify'").fetchone()[0], 0)
+
+        last_month = (datetime.now(timezone.utc).replace(day=1)
+                      - timedelta(days=1)).strftime("%Y-%m")
+        store.kv_set(conn, "backup_verify_month", last_month)
+        store.kv_set(conn, "backup_verify_retry_at", "")
+        self.agent.check_backup_verify()
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE action = 'backup_verify'").fetchone()[0], 1)
+
+    def test_verify_tick_is_wired_into_the_loop_and_honours_the_backup_switch(self):
+        import tg_ingest_agent
+        self.assertIn("check_backup_verify", tg_ingest_agent.Agent.SCHEDULER_TICKS)
+        self.assertIn(("maintenance", "backup_verify"), jobs.JOB_KINDS)
+        self.agent.cfg.backup_enabled = False
+        self.agent.check_backup_verify()
+        self.assertEqual(self.agent.conn.execute(
+            "SELECT COUNT(*) FROM jobs").fetchone()[0], 0)
 
 
 class NotesHandlingTests(unittest.TestCase):
@@ -14239,6 +14891,118 @@ class AuditFixes20260726Tests(unittest.TestCase):
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) FROM telegram_updates WHERE last_error LIKE '%50 000%'"
         ).fetchone()[0], 0)
+
+
+class ConsolidationBatchRotationTests(unittest.TestCase):
+    """T14.3 of the 2026-07-24 review: consolidation groups duplicates in 40-item
+    batches, and the cuts used to fall on the same indexes every single run — so a
+    duplicate pair sitting either side of a boundary was re-separated week after
+    week and could never fold. The batch offset now rotates with the run date
+    (deterministically: same date, same batches)."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "rot.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+        self.seq = [(i, f"факт №{i}") for i in range(50)]
+        self.monday = datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _runs(self, weeks):
+        return [list(memory_curator._batches(self.seq, self.monday + timedelta(weeks=w)))
+                for w in range(weeks)]
+
+    def test_every_item_lands_in_exactly_one_batch_of_at_most_forty(self):
+        for batches in self._runs(6):
+            flat = [item for batch in batches for item in batch]
+            self.assertEqual(sorted(flat), sorted(self.seq))   # nothing lost, nothing doubled
+            self.assertTrue(all(0 < len(b) <= memory_curator.BATCH_SIZE for b in batches))
+
+    def test_the_same_run_date_always_produces_the_same_batches(self):
+        # Reproducibility is the reason this is derived from the date rather than
+        # randomized: a re-run of the same day must not re-shuffle her memory.
+        self.assertEqual(list(memory_curator._batches(self.seq, self.monday)),
+                         list(memory_curator._batches(self.seq, self.monday)))
+
+    def _together_on(self, day):
+        """Do items 39 and 40 — the pair the OLD fixed cut always separated — land
+        in one batch for a run on `day`?"""
+        left, right = self.seq[39], self.seq[40]
+        return any(left in b and right in b
+                   for b in memory_curator._batches(self.seq, day))
+
+    def test_a_pair_a_boundary_splits_is_inside_one_batch_the_next_run(self):
+        # The guarantee the whole task exists for, driven through a run that really
+        # DOES split the pair. An earlier version of this test only sampled weeks in
+        # which they happened to be together, so both its assertions were vacuous.
+        # Find the run day whose offset reproduces the old fixed cut…
+        split_days = [self.monday + timedelta(days=k) for k in range(60)
+                      if not self._together_on(self.monday + timedelta(days=k))]
+        self.assertTrue(split_days, "no run date splits the pair — rotation is inert")
+        split_day = split_days[0]
+
+        self.assertFalse(self._together_on(split_day))                    # split…
+        self.assertTrue(self._together_on(split_day + timedelta(weeks=1)))  # …then met.
+        # …and it really is the old behaviour that is rare now, not the new one:
+        # every other day in the window puts them together.
+        self.assertLessEqual(len(split_days), 2)
+
+    def test_the_offset_is_day_granular_not_week_granular(self):
+        # Derived from the ISO WEEK, two runs on different days of one week cut
+        # identically — including the on-demand «почисти память» a boss reaches for
+        # right after seeing a duplicate. The ordinal day moves every day.
+        self.assertNotEqual(list(memory_curator._batches(self.seq, self.monday)),
+                            list(memory_curator._batches(self.seq,
+                                                         self.monday + timedelta(days=1))))
+        # Weekly runs still never share an offset (it advances by 7 each week).
+        firsts = [batches[0][0] for batches in self._runs(6)]
+        self.assertEqual(len(set(firsts)), len(firsts))
+
+    def test_consolidate_batches_differently_from_one_weekly_run_to_the_next(self):
+        # The rotation is only worth anything if the scheduled caller's run date
+        # actually reaches it.
+        for i in range(45):
+            store.boss_add(self.conn, "project", f"Проект №{i} в работе.",
+                           status="inferred", confidence=0.6)
+        seen = []
+        with mock.patch.object(memory_curator, "_merge_groups",
+                               side_effect=lambda *a, **kw: seen.append(a[2]) or []):
+            memory_curator.consolidate(self.conn, self.cfg, now=self.monday)
+            first = list(seen)
+            seen.clear()
+            memory_curator.consolidate(self.conn, self.cfg,
+                                       now=self.monday + timedelta(weeks=1))
+        self.assertTrue(first and seen)
+        self.assertNotEqual(first[0][0], seen[0][0])   # a different first item -> different cuts
+
+    def test_the_weekly_tick_hands_its_run_date_to_the_curator(self):
+        with mock.patch.object(memory_curator, "consolidate", return_value=0) as c:
+            self.agent.check_memory_consolidation()
+        self.assertIsNotNone(c.call_args.kwargs.get("now"))
+
+    def test_the_on_demand_cleanup_reuses_todays_cuts_by_design(self):
+        # «почисти память» passes NO run date, so the rotation falls back to today:
+        # a manual run on the same calendar day as the scheduled pass reproduces
+        # that day's cuts, and cannot re-pair a duplicate a boundary just split.
+        # That is the deterministic contract, not an oversight — it is stated in
+        # SOLUTION.md §5, CARA.md and do_memory_cleanup's docstring, and running it
+        # the NEXT day does rotate (the day-granularity test above). FORWARD-LOOKING
+        # INVARIANT: it passes against pre-T14.3 source too (nothing passed `now`
+        # back then either) — it exists so a future change to this path has to
+        # update those three claims with it, not to prove a fix.
+        with mock.patch.object(self.agent, "reply"):
+            with mock.patch.object(memory_curator, "consolidate", return_value=0) as c:
+                self.agent.do_memory_cleanup(1, "ru")
+        self.assertTrue(c.called)
+        self.assertIsNone(c.call_args.kwargs.get("now"))
+        self.assertEqual(len(c.call_args.args), 2)       # (conn, cfg) — no run date
 
 
 class MemoryTruthfulness20260726Tests(unittest.TestCase):

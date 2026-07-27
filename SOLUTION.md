@@ -142,7 +142,7 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 | `hermes.py` | Cara's business register: the `ACTIONS` domain set, the Hermes `PERSONA` prompt, and `HermesMixin` (KB ask/fetch, budget_set, review, export handlers) — mixed into the Agent, same object (§5a) |
 | `notes_svc.py` | `NotesMixin`: the notes/inbox handler domain — lists, item detail, show media, discard/recategorize/merge, purge staging + typed-phrase resolve, journals, problem log (extracted from hermes, 2026-07-01 stage 2a/2b) |
 | `reminders_svc.py` | `ReminderMixin`: reminder create/list/cancel/reschedule/rename/undo, partial drafts, deterministic fired-reminder follow-ups, the fire/expiry sweeps (extracted 2026-07-01) |
-| `backup.py` | daily consistent SQLite snapshot + gzip rotation (atomic `.tmp`→`os.replace`, stray-file sweep, retention before encryption); off-box copies only as AES-256-CBC/PBKDF2-encrypted `.db.gz.enc` (Spaces or fleet chat), a size-blocked copy raises an issue instead of staying silent |
+| `backup.py` | daily consistent SQLite snapshot + gzip rotation (atomic `.tmp`→`os.replace`, stray-file sweep, retention before encryption); off-box copies only as AES-256-CBC/PBKDF2-encrypted `.db.gz.enc` (Spaces or fleet chat), a size-blocked copy raises an issue instead of staying silent; plus the MONTHLY restore self-check (`verify_restore`: decrypt → gunzip → `PRAGMA integrity_check` in a scratch dir that is always removed) |
 | `ingest.py` | message parsing, URL extraction (UTF-16-safe), category + facts + summary suggestion |
 | `pdftext.py` | best-effort PDF text-layer extraction (pdfminer.six, with a stdlib regex fallback) |
 | `knowledge.py` | document chunking, cosine retrieval, grounded-answer prompt (the `ask` skill) |
@@ -351,6 +351,17 @@ inert and was removed 2026-07-02; the enforcement was always the prompt content.
 Transactional/system messages remain deterministic `texts.py` templates with
 tone variants; only conversation and grounded answers are free-form.
 
+**Where the persona actually lives (2026-07-26, review T14.4).** The operative text is
+`converse.CHARACTER` (warm register), assembled into the system prompt by
+`converse.build_system`, plus `hermes.PERSONA` (business register), consumed directly by
+`hermes.py` and `knowledge.py`. `persona.py` assembles neither — it contributes only the
+short boss-preference hint the module table above describes, at one call site.
+`prompts/cara_persona.md` reads like the source and is loaded by nothing —
+it is descriptive copy, and it now says so in its own header, naming the two constants.
+The rule (in `CLAUDE.md`'s checklist, and pinned by a test that no module ever *loads* the
+file) is: change the code first, then mirror the wording into the md in the same commit —
+otherwise the document drifts into describing a Cara who no longer exists.
+
 ---
 
 ## 5. Memory & learning
@@ -418,6 +429,21 @@ tone variants; only conversation and grounded answers are free-form.
   a second live copy of the beat beside the keeper on the next curation pass, re-creating the
   exact over-growth the fold exists to remove (the "tea" problem), so this is one place where
   the old hard DELETE was *less* sticky on purpose.
+  **Rotating batches (2026-07-26, review T14.3).** The pass groups in 40-item batches
+  because the fast model reliably spots duplicates in ~40 items and misses them in a
+  120-item wall — but the cuts fell on the same indexes every single run, so a pair sitting
+  either side of a boundary was re-separated week after week and could never fold. "Re-running
+  across weeks folds anything a batch split" was therefore an overclaim: nothing moved between
+  runs. `_batches` now rotates its start by an offset derived from the RUN DATE (`consolidate(…,
+  now=…)`, passed by the weekly tick) — the date's ordinal day mod 40, so consecutive WEEKLY
+  runs never share an offset (it advances by 7 each week) and a pair a boundary split meets on
+  the next one. Derived from the date rather than randomized on purpose: same date → same
+  batches, so a re-run of the same day cannot re-shuffle her memory. **Stated honestly:** that
+  determinism is also a limit. The on-demand «почисти память» (`do_memory_cleanup`) passes no
+  run date, so on the same calendar day as the scheduled pass it reproduces that day's cuts —
+  running it again *right now* after seeing a duplicate cannot re-pair one a boundary split.
+  Running it the NEXT day can (the offset is day-granular, not week-granular), and the weekly
+  pass will anyway.
   It also tidies **pending `memory_candidates`**: any candidate that **contradicts a CONFIRMED
   fact** is dropped (`superseded`) — a sensed guess never overrides confirmed truth (the
   кофе-vs-confirmed-чай case) — and duplicate candidates are folded (`merged`), so the same
@@ -501,6 +527,12 @@ category. Rails:
 - **Throttled** — at most `PROACTIVE_MAX_PER_DAY` (default 1) non-urgent nudges
   per day, never repeating the same nudge in a day; urgent (overdue) may bypass
   the cap.
+- **One calendar (2026-07-26, review T14.2)** — "per day" means the BOSS's local
+  day, the same one quiet hours and off-days read. The cap and the per-key dedup
+  bucketed by the UTC day, so with the `+3` default his allowance rolled at 03:00
+  local: nudges spent during the evening came back in the middle of the night, and
+  a nudge sent at 01:00 could legitimately repeat at 03:01. `proactive.local_day`
+  is now the single source of that bucket.
 - **Quiet hours** — no non-urgent nudge inside the configured window (default
   22:00–08:00 local, wraps midnight); urgent ones only if explicitly allowed.
 - **Audited** — every evaluation (sent or suppressed, with reason) is written to
@@ -670,6 +702,58 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
 - **Binary storage:** local files under `MEDIA_DIR` by default; an optional **DO
   Spaces** backend (S3 Signature V4 in pure stdlib) uploads photos for
   durability. Built and tested, **dormant** until `SPACES_*` is configured.
+- **Database backups — and proving they restore (2026-07-26, review T14.1).** The daily
+  job wrote a gzipped snapshot and sent an encrypted copy off-box; nothing had ever taken
+  one BACK. "It was written and sent" is not "it opens", so a second durable job
+  (`maintenance`/`backup_verify`, once per calendar month) runs the real recovery path on
+  the newest snapshot — decrypt, gunzip, open read-only, `PRAGMA integrity_check`, and
+  assert the schema is Cara's (`messages` present: a healthy but foreign database is not a
+  restore). "Newest" means newest by STAMP across both forms, preferring the encrypted copy
+  of that stamp — preferring any `.enc` over any `.gz` would have kept reporting green for a
+  week-old archive if off-box config were ever removed while stale `.enc` files lingered. It
+  works in `backups/restore-check/`, removed on every path — including by the daily stray
+  sweep, because a run killed mid-check leaves a DECRYPTED database sitting next to the
+  encrypted ones. ONE number bounds both halves: an **expansion budget** of `max(4× the live
+  DB, 12× the archive, 8 MB)` — a snapshot is a page-for-page copy of the live database and
+  nothing here VACUUMs, so the live file is a hard upper bound on what any snapshot can
+  restore to. The job refuses to start unless free disk holds that budget plus the archive
+  copy plus 32 MB, and hands the SAME budget to the gunzip. (2026-07-26 review fix: the
+  gunzip was bounded by the whole free disk instead, so on ~68 GB free the guard could only
+  fire AFTER the expansion had taken the filesystem down to 32 MB — the exact disk-full
+  spiral WP1 exists to break. Bounding it by "12× the archive" alone is the opposite
+  hazard and was rejected by the tests: a nearly-empty SQLite file compresses far better
+  than 12×, so that cap refuses perfectly good restores.)
+  ANY failure — ours or an `OSError` from the scratch copy, ENOSPC being the likeliest —
+  logs and raises a `backup_restore_failed` issue and holds the retry a day; the month is
+  stamped only on success, so a failed month keeps trying.
+  **The manual restore is one line** (the same cipher, KDF and iteration count the code
+  uses — pinned by a doc-invariant test so raising `backup.PBKDF2_ITERATIONS` cannot leave
+  this block silently wrong). Work under `umask 077` in a 0700 directory: the intermediate
+  files are a full plaintext copy of everything Cara is, and the code path uses 0700/0600
+  for exactly that reason.
+
+  ```bash
+  umask 077 && install -d -m 700 /var/tmp/cara-restore
+  openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+    -in ingest-<UTC stamp>.db.gz.enc -out /var/tmp/cara-restore/restore.db.gz \
+    -pass file:/etc/tg-ingest-agent-backup.key \
+    && gunzip -f /var/tmp/cara-restore/restore.db.gz \
+    && sqlite3 /var/tmp/cara-restore/restore.db 'PRAGMA integrity_check;'
+  # only CHECKING, not restoring? remove the plaintext copy when you are done:
+  rm -rf /var/tmp/cara-restore
+  ```
+
+  (No `sqlite3` CLI on the box? The last step is
+  `python3 -c "import sqlite3;print(sqlite3.connect('/var/tmp/cara-restore/restore.db').execute('PRAGMA integrity_check').fetchone()[0])"`
+  — which is what the monthly job runs. Putting the file back into service is
+  `systemctl stop tg-ingest-agent`, move it to `/var/lib/tg-ingest-agent/ingest.db`
+  (`chown tg-ingest:tg-ingest`, `chmod 600`, and remove any stale `-wal`/`-shm`), start.)
+
+  **What the check does NOT prove, stated plainly:** the passphrase file lives on the same
+  droplet as the backups it protects, so a green result means "this archive and this key
+  agree on this box" — if the droplet is wiped, the off-box copies are unopenable without
+  a key copy that is somewhere else. Keeping that OFF-BOX copy is an operator decision and
+  is deliberately outside the code: nothing here prints, moves or copies the key.
 
 ---
 
@@ -790,6 +874,13 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   refuse a duplicated key rather than half-updating it (systemd honours the LAST
   assignment), report that refusal as a message instead of a traceback, and substitute with
   a callable so a backslash in a secret is not read as a regex escape.
+  `stt_probe.py` is labelled for what it is (2026-07-26, review T14.5): a MANUAL research
+  tool, imported by nothing, that calls the inference endpoint directly — so its four probes
+  are **unmetered**, bypassing the budget guard, `llm_usage` and the spend report by design
+  (the point is to discover which model slugs answer at all, before anything can be priced).
+  Its `except (URLError, Exception)` printed a typo in the script as a probe "FAIL" against
+  the endpoint — exactly the wrong conclusion for a research tool — and now catches transport
+  errors only, letting programming errors raise.
   `migrate-cara-to-pd.sh` stages secrets outside the OneDrive-synced repo, cleans up on
   every exit path, and creates the remote snapshot 0700 under `umask 077`. `deploy.sh`
   names the scripts it ships instead of globbing `*.sh`, so no future one-shot at the repo

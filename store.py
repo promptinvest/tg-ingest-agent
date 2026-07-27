@@ -1003,21 +1003,30 @@ def life_count(conn):
 
 # -- proactive heartbeat audit log -------------------------------------------
 
-def proactive_log_add(conn, check_name, result, sent=False, reason=None, day=None):
-    ts = _now()
+def proactive_log_add(conn, check_name, result, *, day, sent=False, reason=None):
+    """Audit one proactive evaluation. `day` is REQUIRED and keyword-only on
+    purpose: it used to default to the UTC day, which quietly made the writer
+    disagree with the readers below — a row written with that default is
+    invisible to the local-day dedup/cap queries for three hours every night
+    under the +3 default. One calendar, chosen by the caller, passed explicitly
+    (`proactive.local_day`)."""
     conn.execute(
         "INSERT INTO proactive_log (ts, day, trace_id, check_name, result, sent_message, reason)"
         " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (ts, day or ts[:10], _trace_id(), check_name, result, 1 if sent else 0, reason),
+        (_now(), day, _trace_id(), check_name, result, 1 if sent else 0, reason),
     )
     conn.commit()
 
 
 def proactive_sent_count(conn, day, check_names=None):
-    """How many proactive sends happened on a given UTC day. With check_names,
-    counts only those check types — the heartbeat's daily cap passes its NON-URGENT
-    keys (candidates/unsorted) so an urgent overdue nudge (which bypasses the cap)
-    doesn't consume it."""
+    """How many proactive sends happened on a given day. With check_names, counts
+    only those check types — the heartbeat's daily cap passes its NON-URGENT keys
+    (candidates/unsorted) so an urgent overdue nudge (which bypasses the cap)
+    doesn't consume it.
+
+    `day` is whatever calendar the CALLER buckets by; proactive.run passes the
+    boss's LOCAL day (2026-07-26), the same one quiet hours and off-days use, so
+    his allowance rolls at his midnight rather than at 03:00 local."""
     if check_names:
         placeholders = ",".join("?" for _ in check_names)
         return conn.execute(
@@ -1037,7 +1046,8 @@ def proactive_key_sent_today(conn, day, check_name):
 
 
 def proactive_key_sent_count(conn, day, check_name):
-    """How many times a specific proactive check actually sent on a given UTC day."""
+    """How many times a specific proactive check actually sent on a given day
+    (same caller-owned calendar as proactive_sent_count)."""
     return conn.execute(
         "SELECT COUNT(*) AS n FROM proactive_log WHERE day = ? AND check_name = ?"
         " AND sent_message = 1", (day, check_name),

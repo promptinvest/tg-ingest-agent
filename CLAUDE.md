@@ -136,3 +136,10 @@ weaken the closed-world router.
 - Update AND extend tests in the same change.
 - Every change also updates `CARA.md` + `SOLUTION.md`; deploys touching the
   PD box keep the PD-VPS KB current too.
+- **Persona changes touch two places.** The operative persona is
+  `converse.CHARACTER` (warm, assembled by `converse.build_system`) +
+  `hermes.PERSONA` (business, used directly by `hermes.py` / `knowledge.py`);
+  `persona.py` only contributes a boss-preference hint. `prompts/cara_persona.md`
+  is descriptive copy that nothing loads at runtime. Change the code first, then
+  mirror the wording into that md in the same commit so the document doesn't
+  drift into describing a Cara that no longer exists.
