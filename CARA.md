@@ -48,7 +48,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
         │                          file as fetchable; suggest a category to confirm
         │
         │      his OWN picture-only turn (2026-07-27) → tmp download → vision CLASSIFY:
-        │        movies/books → EXTRACT verbatim → confirmation card → notes on confirm
+        │        movies/books → EXTRACT verbatim → ENRICH creator/year/genre
+        │        (OpenLibrary/Wikipedia lookups → model fallback, every field
+        │        provenance-tagged) → confirmation card → notes on confirm
         │        (the photo itself is deleted either way — never stored);
         │        document-like → the text/file guidance; anything else → conversation
         │        about the photo, nothing stored
@@ -166,21 +168,44 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   subject (see referential saves below). Her conversation memory in free‑form
   chat now spans the last **20 turns** (was 12); deeper reads stay behind
   `recall_conversation` («перечитай наш разговор за вчера»).
-- **Media capture from your photos (2026‑07‑27, plan B1).** A picture‑only message you
+- **Media capture from your photos (2026‑07‑27, plan B1+B2).** A picture‑only message you
   send is vision‑CLASSIFIED first (media / document / other). A photo **about movies or
   books** — a poster, a cover, a shelf, a screenshot with a list — gets a second,
   separate EXTRACT pass that reads the titles **verbatim** off the photo (multi‑title
   lists supported, kind 🎬/📚 per title, visible comment text captured with an explicit
-  «на фото: …» provenance label — B1 stores only what was actually SEEN; looked‑up
-  enrichment is a later batch with its own provenance). She then shows **one
-  confirmation card per photo/batch** through the single‑pending‑slot flow (✅/✖️
+  «на фото: …» provenance label — extraction stores only what was actually SEEN).
+  **Enrichment (B2)** then fills creator/year/genre per entry BEFORE the card renders,
+  each field tagged with where it came from: keyless **lookups** — OpenLibrary for
+  books, the Wikipedia opensearch+summary APIs (wiki chosen by the title's script) for
+  movies and books, all through the same SSRF‑guarded fetch — render as «(нашла)», the
+  **model‑knowledge fallback** (ONE budgeted chat call per batch for whatever the
+  lookups left) as «(по памяти)», and a field NEITHER source yields is listed honestly
+  under «не нашла: …» — never invented (an OpenLibrary/Wikipedia hit must also MATCH
+  the normalized title exactly: honest‑missing beats the wrong book's year presented
+  as found). There is deliberately **no general web‑search API** (owner decision).
+  Lookups run inline on the one thread, so they are budgeted twice — a short per‑call
+  timeout and a per‑batch call cap (10), with fail‑fast after 2 consecutive transport
+  failures; a 20‑title screenshot enriches its first titles by lookup and hands the
+  rest to the model, provenance saying so. She then shows **one confirmation card per
+  photo/batch** through the single‑pending‑slot flow (✅/✖️
   buttons; reply‑to‑correct: «№2 — книга, не фильм» flips a kind, «убери №3» drops an
-  entry — deterministic parsing, never a model guess) and stores **only on your yes**:
+  entry — deterministic parsing, never a model guess; a kind flip CLEARS and re‑enriches
+  that entry's fields, so a looked‑up director never resurfaces labeled «автор») and
+  stores **only on your yes**:
   one confirmed NOTE per entry — summary = the title (RU stays RU), category **`Movies`**
   or **`Books`** (auto‑created, English names by owner decision), purpose `reference`,
-  photo comments as `photo:`‑prefixed facts, chunked+embedded so «ask» finds them.
+  facts with provenance prefixes (`photo:` comments, `lookup:`/`model:`
+  author/director/year/genre), chunked+embedded so «ask» finds them.
   **Dedup** on (category, normalized title): re‑capturing a known title refreshes the
-  existing note's facts and says so — never a duplicate row. **The photo itself is
+  existing note's facts and says so — never a duplicate row (a fresh enrichment fact
+  REPLACES the old fact for the same field, so no contradictory year pair survives;
+  photo comments append). **Md export:** «дай md по Movies» / «экспорт категории
+  Books» (`export what="category"`) sends an md catalog table of that category's
+  confirmed notes — title, creator, year, genre, comments, added date, missing fields
+  dashed — and works for ANY category (a generic note's facts ride the comments
+  column). If the model‑fallback call itself dies (budget included), the card still
+  renders with honest‑missing fields — classify+extract are already paid for; the
+  budget stays authoritative for classify/extract as before. **The photo itself is
   never stored** in this flow (owner decision 1): it is downloaded to a tmp path,
   parsed and deleted on every path including errors — no images/files rows, so the
   2026‑07‑16 own‑photo retirement stays fully intact (forwarded‑post media storage is
@@ -1566,10 +1591,21 @@ its details.
   «1984» is a real book) — the prompt sites that need role‑stripping already apply it
   to stored text themselves, and the confirmation card is the human check on titles.
   Nothing is stored unconfirmed, and the photo itself is deleted in `try/finally`.
+- **Lookup results are untrusted too (2026‑07‑27, media capture B2).** Everything a
+  media‑enrichment lookup returns (an OpenLibrary author, a Wikipedia summary) is
+  remote text: kept values go through the same `media._clean_line` wash (fences,
+  '===' runs, invisibles, newlines) before they can reach the card, the kv stash, the
+  stored facts or any later prompt; a GENRE can only ever be a value from the fixed
+  in‑code vocabulary (prose never becomes a genre), and a YEAR must match the year
+  regex — including what the model fallback returns. Only two fixed keyless hosts are
+  contacted (openlibrary.org, wikipedia.org) via `fetch_json`, which rides the full
+  fetch SSRF machinery below; there is NO general web‑search API (owner decision).
 - **Fetch SSRF guard:** http/https only, no URL creds, every URL + redirect hop
   rejected if it resolves to a private/loopback/link‑local/reserved IP or the cloud
   metadata endpoint — and the socket is **pinned to the validated IP** (2026‑07‑02) so
   a rebinding host can't flip to a private address between the check and the connect.
+  The JSON flavor `fetch_json` (2026‑07‑27, media enrichment) shares every hop of that
+  machinery: validation, pinning, the wall‑clock deadline, the bounded body.
 - **Bulk purge** requires a typed confirmation phrase (handled before the router, so a
   stray "да" can't wipe data); pending actions carry a TTL and are swept when abandoned.
 - **Truthfulness:** action‑truth guard + no‑fabrication persona rule. Free-form output

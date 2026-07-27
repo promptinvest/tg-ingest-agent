@@ -225,6 +225,38 @@ TEXTS = {
         "ru": "Не поняла правку 🤔 Скажи, например: «№2 — книга» или «убери №3».",
         "en": "I didn't catch the correction 🤔 Say e.g. \"#2 is a book\" or \"remove #3\".",
     },
+    # -- B2 enrichment: per-field provenance on the card -----------------------
+    # «(нашла)» = a keyless lookup (OpenLibrary/Wikipedia) said so; «(по памяти)»
+    # = the model's own knowledge; «на фото: …» stays the photo label. A field NO
+    # source yielded is listed under «не нашла: …» — honestly missing, never
+    # invented (action-truth discipline).
+    "media_field_creator_book": {"ru": "автор: {value}", "en": "author: {value}"},
+    "media_field_creator_movie": {"ru": "режиссёр: {value}", "en": "director: {value}"},
+    "media_field_year": {"ru": "год: {value}", "en": "year: {value}"},
+    "media_field_genre": {"ru": "жанр: {value}", "en": "genre: {value}"},
+    "media_src_lookup": {"ru": "нашла", "en": "found"},
+    "media_src_model": {"ru": "по памяти", "en": "from memory"},
+    "media_fields_missing": {"ru": "не нашла: {fields}", "en": "couldn't find: {fields}"},
+    # Field names as they read inside the missing note (RU accusative).
+    "media_fname_creator_book": {"ru": "автора", "en": "author"},
+    "media_fname_creator_movie": {"ru": "режиссёра", "en": "director"},
+    "media_fname_year": {"ru": "год", "en": "year"},
+    "media_fname_genre": {"ru": "жанр", "en": "genre"},
+    # -- category md export («дай md по Movies» — works for ANY category) ------
+    "export_category_which": {
+        "ru": "Какую категорию выгрузить? Сейчас есть: {names}",
+        "en": "Which category should I export? Right now: {names}",
+    },
+    "export_category_unknown": {
+        "ru": ("Категории «{name}» у меня нет 🤔 Назови точное имя — "
+               "или скажи «категории», покажу список."),
+        "en": ("I don't have a “{name}” category 🤔 Give me the exact name — "
+               "or say “categories” and I'll list them."),
+    },
+    "export_category_empty": {
+        "ru": "В категории «{category}» пока пусто — выгружать нечего.",
+        "en": "The “{category}” category is empty — nothing to export yet.",
+    },
     # Variant family (pre-confirmation, state=suggested → no final verbs).
     "suggestion": {
         "ru": [

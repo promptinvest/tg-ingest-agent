@@ -4147,6 +4147,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     self.reply(chat_id, T(lang, "llm_error" if unread
                                           else "media_nothing_extracted"))
                     return True, None
+                # B2: creator/year/genre BEFORE the card renders, so the card
+                # shows every field with its provenance (lookup/model) and says
+                # honestly what neither source yielded. Never raises: lookups
+                # are contained per call, the model fallback degrades.
+                media.enrich_entries(self.cfg, self.conn, entries)
                 notes = []
                 if len(photos) > cap:
                     notes.append(T(lang, "media_card_cap_note",
@@ -4284,21 +4289,42 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     def _media_card_text(self, lang, entries, notes=(),
                          footer_key="media_card_footer"):
-        """Every entry the confirm would store, numbered, with its kind and the
-        photo-sourced comment labeled as such (B1 has no enrichment: everything
-        shown here was read OFF the photo — provenance is honest by construction)."""
+        """Every entry the confirm would store, numbered, with its kind and
+        EVERY field labeled with where it came from (action-truth discipline):
+        «на фото: …» was read off the photo, «(нашла)» is a lookup result,
+        «(по памяти)» is the model's knowledge — and what no source yielded is
+        listed under «не нашла: …» rather than silently absent or invented."""
         lines = [T(lang, "media_card_header", n=len(entries))]
         for i, e in enumerate(entries, 1):
-            label = T(lang, "media_kind_movie" if e["kind"] == "movie"
-                      else "media_kind_book")
-            line = f"{i}. {media.KIND_EMOJI[e['kind']]} «{e['title']}» — {label}"
-            if e.get("comment"):
-                line += " · " + T(lang, "media_from_photo", comment=e["comment"])
-            lines.append(line)
+            lines.append(self._media_entry_line(lang, i, e))
         lines.extend(notes)
         lines.append("")
         lines.append(T(lang, footer_key))
         return "\n".join(lines)
+
+    def _media_entry_line(self, lang, i, e):
+        """One card line: kind, enriched fields with provenance markers, the
+        photo comment, and the honest missing-fields note."""
+        label = T(lang, "media_kind_movie" if e["kind"] == "movie"
+                  else "media_kind_book")
+        bits = [f"{i}. {media.KIND_EMOJI[e['kind']]} «{e['title']}» — {label}"]
+        missing = []
+        for f in media.FIELDS:
+            suffix = (f + "_" + ("book" if e["kind"] == "book" else "movie")
+                      if f == "creator" else f)
+            if e.get(f):
+                piece = T(lang, "media_field_" + suffix, value=e[f])
+                src = e.get(f + "_src")
+                if src in ("lookup", "model"):
+                    piece += " (" + T(lang, "media_src_" + src) + ")"
+                bits.append(piece)
+            else:
+                missing.append(T(lang, "media_fname_" + suffix))
+        if e.get("comment"):
+            bits.append(T(lang, "media_from_photo", comment=e["comment"]))
+        if missing:
+            bits.append(T(lang, "media_fields_missing", fields=", ".join(missing)))
+        return " · ".join(bits)
 
     def resolve_media_correction(self, chat_id, lang, stash, text):
         """A message while the media card is pending: apply a deterministic
@@ -4318,8 +4344,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if action == "remove":
             entries = [e for i, e in enumerate(entries, 1) if i not in chosen]
         else:
+            flipped = []
             for i in chosen:
-                entries[i - 1]["kind"] = action
+                if entries[i - 1]["kind"] != action:
+                    # A kind flip invalidates the enrichment (the looked-up
+                    # DIRECTOR must not resurface labeled «автор») — clear and
+                    # re-enrich just the flipped entries under a fresh budget.
+                    entries[i - 1]["kind"] = action
+                    flipped.append(media.clear_enrichment(entries[i - 1]))
+            if flipped:
+                media.enrich_entries(self.cfg, self.conn, flipped)
         if not entries:
             self._media_clear(chat_id)
             store.pending_clear(self.conn, chat_id)
@@ -4350,23 +4384,23 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     def _media_store_entries(self, chat_id, lang, entries):
         """One confirmed note per entry: summary = the title (RU stays RU),
         category = Movies/Books (auto-created, English), purpose 'reference',
-        photo-sourced facts with a `photo:` provenance prefix, chunked+embedded
-        for `ask`. A (category, normalized-title) match MERGES into the existing
-        note — new facts appended, index refreshed, never a duplicate row."""
+        facts with provenance prefixes (`photo:` comments, `lookup:`/`model:`
+        creator/year/genre — media.entry_facts), chunked+embedded for `ask`. A
+        (category, normalized-title) match MERGES into the existing note —
+        media.merge_facts refreshes same-field enrichment facts (fresh capture
+        wins, no contradictory year pair survives), appends the rest, re-indexes,
+        never a duplicate row."""
         lines = []
         for e in entries:
             kind = e.get("kind") if e.get("kind") in media.CATEGORY_BY_KIND else "movie"
             emoji = media.KIND_EMOJI[kind]
             category = store.ensure_category(self.conn, media.CATEGORY_BY_KIND[kind])
-            facts_new = []
-            if e.get("comment"):
-                facts_new.append(f"photo: {e['comment']}")
+            facts_new = media.entry_facts(e)
             existing = media.find_existing(self.conn, category, e["title"])
             if existing is not None:
                 row_id = existing["id"]
                 old = [r["fact"] for r in store.message_facts(self.conn, row_id)]
-                have = {f.casefold() for f in old}
-                merged = old + [f for f in facts_new if f.casefold() not in have]
+                merged = media.merge_facts(old, facts_new)
                 if merged != old:
                     store.set_facts(self.conn, row_id, merged)
                 self.index_message(row_id, "\n".join(

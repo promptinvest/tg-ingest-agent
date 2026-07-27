@@ -293,6 +293,10 @@ class HermesMixin:
             filename, md = self._journal_export_markdown(chat_id, lang, params)
             if not md:
                 return  # _journal_export_markdown already replied (which journal?)
+        elif what == "category":
+            filename, md = self._category_export_markdown(chat_id, lang, params)
+            if not md:
+                return  # already replied (which category / unknown / empty)
         elif what in ("last_trace", "trace_timeline", "trace_steps"):
             filename, md = self._last_trace_markdown(chat_id)
             if not md:
@@ -316,6 +320,41 @@ class HermesMixin:
         except TelegramError as exc:
             log(f"export send failed: {exc}")
             self.reply(chat_id, T(lang, "llm_error"))
+
+    def _category_export_markdown(self, chat_id, lang, params):
+        """Md catalog of ONE category's confirmed notes (media-capture plan B2:
+        «дай md по Movies») — title, creator, year, genre, comments, added date,
+        the enrichment facts parsed back by their provenance schema and missing
+        fields honestly dashed. Works for ANY category: a generic note's facts
+        ride the comments column. Returns (filename, md), or (None, None) after
+        replying (no/unknown/empty category)."""
+        import media
+        name = str(params.get("category") or "").strip()
+        if not name:
+            names = ", ".join(store.known_categories(self.conn, limit=30)) or "—"
+            self.reply(chat_id, T(lang, "export_category_which", names=names))
+            return None, None
+        canonical = store.canonical_category(self.conn, name)
+        if not canonical:
+            self.reply(chat_id, T(lang, "export_category_unknown", name=name[:60]))
+            return None, None
+        rows = self.conn.execute(
+            "SELECT * FROM messages WHERE status = 'confirmed' AND category = ?"
+            " ORDER BY id", (canonical,)).fetchall()
+        if not rows:
+            self.reply(chat_id, T(lang, "export_category_empty", category=canonical))
+            return None, None
+        items = [{
+            "no": self.note_no(r["id"]),
+            "title": ((r["summary"] or r["raw_text"] or "").strip() or "—")
+            .splitlines()[0][:150],
+            "facts": [f["fact"] for f in store.message_facts(self.conn, r["id"])],
+            "added": r["received_at"],
+        } for r in rows]
+        md = media.catalog_markdown(canonical, items, lang)
+        slug = re.sub(r"[^\w.-]+", "-", canonical).strip("-") or "category"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+        return f"cara-catalog-{slug}-{stamp}.md", md
 
     def _journal_export_markdown(self, chat_id, lang, params):
         """Per-journal Markdown export (plan v1.1 §7): dated entries with their

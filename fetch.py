@@ -16,6 +16,7 @@ shares, and private channels are out of scope.
 """
 import http.client
 import ipaddress
+import json
 import re
 import socket
 import time
@@ -55,6 +56,13 @@ READ_CHUNK = 64 * 1024
 # earns is contained by the startup replay's dead-letter cap (the same update is
 # re-driven only while it has attempts left), not prevented here.
 DEADLINE_FACTOR = 2
+
+# Content types accepted per fetch flavor. fetch() reads human pages; fetch_json()
+# reads keyless JSON APIs (OpenLibrary/Wikipedia for the media-capture enrichment).
+# text/plain stays in the JSON set: some APIs mislabel JSON bodies — json.loads is
+# the real gate there.
+_PAGE_CTYPES = ("text/html", "text/plain", "application/xhtml")
+_JSON_CTYPES = ("application/json", "text/json", "application/ld+json", "text/plain")
 
 
 class FetchError(Exception):
@@ -277,10 +285,11 @@ def _decode_body(raw, ctype):
         return raw.decode("utf-8", errors="replace")
 
 
-def _fetch_one(url, timeout, max_bytes, deadline=None):
+def _fetch_one(url, timeout, max_bytes, deadline=None, ctypes=_PAGE_CTYPES):
     """Fetch a single hop with the connection pinned to a validated IP. Returns
-    (kind, value): ('ok', (final_url, html)) or ('redirect', newurl). `deadline`
-    is a `time.monotonic()` stamp shared by every hop of one fetch."""
+    (kind, value): ('ok', (final_url, body)) or ('redirect', newurl). `deadline`
+    is a `time.monotonic()` stamp shared by every hop of one fetch; `ctypes` is
+    the accepted Content-Type set (page vs JSON flavor)."""
     if deadline is not None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -299,7 +308,7 @@ def _fetch_one(url, timeout, max_bytes, deadline=None):
     try:
         with opener.open(request, timeout=timeout) as response:
             ctype = response.headers.get("Content-Type", "")
-            if not any(t in ctype for t in ("text/html", "text/plain", "application/xhtml")):
+            if not any(t in ctype for t in ctypes):
                 raise FetchError(f"unsupported content type: {ctype or 'unknown'}", "fetch_failed")
             raw = _read_bounded(response, max_bytes, deadline)
             if len(raw) > max_bytes:
@@ -338,4 +347,27 @@ def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
                 raise FetchError("no readable text extracted", "fetch_failed")
             return final_url, title, text
         url = normalize_tme(value)   # 'redirect' -> re-validate + re-pin next loop
+    raise FetchError("too many redirects", "fetch_failed")
+
+
+def fetch_json(url, timeout=8, max_bytes=512 * 1024):
+    """GET a public JSON API through the SAME machinery as fetch(): every hop
+    (and every redirect) is validated and IP-pinned, the hop chain + body share
+    one wall-clock deadline, the body is size-bounded, and the watchdog is
+    pinged per hop/chunk. Returns the parsed JSON value. Raises FetchError on
+    any transport problem, an unexpected content type, or a non-JSON body (an
+    oversize body is truncated by the byte cap and therefore fails the parse —
+    honest failure, never a silently clipped document). The RESULT is untrusted
+    remote data: callers must treat its SHAPE defensively and neutralize any
+    text they keep."""
+    deadline = time.monotonic() + DEADLINE_FACTOR * max(1, int(timeout or 1))
+    for _ in range(MAX_REDIRECTS + 1):
+        common.watchdog_ping()  # same reasoning as fetch(): inline on the poll thread
+        kind, value = _fetch_one(url, timeout, max_bytes, deadline, ctypes=_JSON_CTYPES)
+        if kind == "ok":
+            try:
+                return json.loads(value[1])
+            except ValueError as exc:
+                raise FetchError(f"response was not valid JSON: {exc}", "fetch_failed") from exc
+        url = value  # 'redirect' -> re-validate + re-pin next loop
     raise FetchError("too many redirects", "fetch_failed")

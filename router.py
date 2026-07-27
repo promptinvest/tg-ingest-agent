@@ -66,7 +66,7 @@ ACTIONS = {
     "memory_review",     # show pending memory candidates for confirmation
     "memory_cleanup",    # de-duplicate remembered facts ("почисти память")
     "working_history",   # how have you helped me / what have you learned about helping me
-    "export",            # params: what in review|self|profile|history|candidates|journal — md export (journal: + category)
+    "export",            # params: what in review|self|profile|history|candidates|journal|category — md export (journal/category: + category)
     "confirm",           # pending action: yes
     "amend",             # pending action: change params (category, due_utc, snooze_minutes, done)
     "cancel",            # pending action: no
@@ -141,6 +141,7 @@ NOTE: a gratitude STATEMENT with content («я благодарен X за Y», 
 "предлагай мне вечером записывать благодарность" / "включи приглашение к дневнику благодарности в 21" / "prompt me to journal in the evening" -> {"action": "journal_prompt", "params": {"category": "Благодарности", "on": true, "time": "21:00"}, "confidence": 0.88}
 "не предлагай больше записи в благодарности" / "выключи приглашения дневника" / "stop prompting me to journal" -> {"action": "journal_prompt", "params": {"category": "Благодарности", "on": false}, "confidence": 0.88}
 "выгрузи дневник благодарности в md" / "экспортируй благодарности файлом" / "export my gratitude journal" -> {"action": "export", "params": {"what": "journal", "category": "Благодарности"}, "confidence": 0.9}
+"дай md по Movies" / "экспорт категории Books" / "выгрузи каталог фильмов файлом" / "give me an md of the Movies category" (md/file export of ONE saved-notes category — the catalog table; put the category name in params.category) -> {"action": "export", "params": {"what": "category", "category": "Movies"}, "confidence": 0.9}
 "ты используешь это?" / "будешь пользоваться стикерами?" / "тебе нравится?" / "do you use it?" -> {"action": "converse", "params": {}, "confidence": 0.9}
 "добавь напоминание про банк в календарь" -> {"action": "calendar_add", "params": {"title_query": "банк"}, "confidence": 0.9}
 "поставь в календарь встречу с Иваном в пятницу в 14" -> {"action": "calendar_add", "params": {"title": "встреча с Иваном", "due_utc": "<Friday 14:00 local in UTC>"}, "confidence": 0.9}
