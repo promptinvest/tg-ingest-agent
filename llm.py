@@ -446,6 +446,26 @@ def _vision_text_is_garbled(text):
     return False
 
 
+def vision_chat(cfg, conn, skill, model, image_path, prompt, max_tokens=400):
+    """One budget-guarded vision call: the image + a purpose-built prompt, raw
+    model content back (media.py's JSON-strict classify/extract prompts go
+    through here). '' when the image file can't be read; transport failures
+    raise LLMError like any chat call. Same plumbing as describe_image, without
+    its describe-specific prompt/garbled-read policy — callers own their own
+    output parsing."""
+    try:
+        data = Path(image_path).read_bytes()
+    except OSError:
+        return ""
+    b64 = base64.b64encode(data).decode("ascii")
+    mime = _sniff_image_mime(data)
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+    ]}]
+    return chat(cfg, conn, skill, messages, max_tokens=max_tokens, model=model)
+
+
 def describe_image(cfg, conn, skill, model, image_path, lang="ru", prompt=None):
     """Use a vision-capable model to produce a short text description of an image,
     so a non-vision text model can still categorize a photo post (or know what a

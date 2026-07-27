@@ -47,6 +47,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
         │                          images (vision) & PDFs (text); store every other
         │                          file as fetchable; suggest a category to confirm
         │
+        │      his OWN picture-only turn (2026-07-27) → tmp download → vision CLASSIFY:
+        │        movies/books → EXTRACT verbatim → confirmation card → notes on confirm
+        │        (the photo itself is deleted either way — never stored);
+        │        document-like → the text/file guidance; anything else → conversation
+        │        about the photo, nothing stored
+        │
         └─ free text ───────────► router.py  (closed-world LLM intent, JSON only,
                                    confidence-gated, recent-conversation context)
                                         │
@@ -160,6 +166,50 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   subject (see referential saves below). Her conversation memory in free‑form
   chat now spans the last **20 turns** (was 12); deeper reads stay behind
   `recall_conversation` («перечитай наш разговор за вчера»).
+- **Media capture from your photos (2026‑07‑27, plan B1).** A picture‑only message you
+  send is vision‑CLASSIFIED first (media / document / other). A photo **about movies or
+  books** — a poster, a cover, a shelf, a screenshot with a list — gets a second,
+  separate EXTRACT pass that reads the titles **verbatim** off the photo (multi‑title
+  lists supported, kind 🎬/📚 per title, visible comment text captured with an explicit
+  «на фото: …» provenance label — B1 stores only what was actually SEEN; looked‑up
+  enrichment is a later batch with its own provenance). She then shows **one
+  confirmation card per photo/batch** through the single‑pending‑slot flow (✅/✖️
+  buttons; reply‑to‑correct: «№2 — книга, не фильм» flips a kind, «убери №3» drops an
+  entry — deterministic parsing, never a model guess) and stores **only on your yes**:
+  one confirmed NOTE per entry — summary = the title (RU stays RU), category **`Movies`**
+  or **`Books`** (auto‑created, English names by owner decision), purpose `reference`,
+  photo comments as `photo:`‑prefixed facts, chunked+embedded so «ask» finds them.
+  **Dedup** on (category, normalized title): re‑capturing a known title refreshes the
+  existing note's facts and says so — never a duplicate row. **The photo itself is
+  never stored** in this flow (owner decision 1): it is downloaded to a tmp path,
+  parsed and deleted on every path including errors — no images/files rows, so the
+  2026‑07‑16 own‑photo retirement stays fully intact (forwarded‑post media storage is
+  unchanged). Up to `MAX_LLM_IMAGES` (4) photos of an album are classified per batch,
+  and the card says so honestly when an album is bigger; a photo that failed to read
+  inside a partially readable album is disclosed on the card («не смогла прочитать
+  {n} фото»); an unreadable photo gets an honest «названия разобрать не смогла», not
+  an invented title. **The card always fits one Telegram message and the staged set
+  IS the displayed set** (2026‑07‑27 review fix): entries are budgeted by count (≤30)
+  and by rendered length (`reply()` hard‑cuts at 4000 chars), any surplus is dropped
+  from the staged set too and the card states the storage consequence («сохраню
+  только то, что показано здесь») — a confirm can never cover entries a truncation
+  hid, and the cap/unread/truncation/caption disclosures survive a correction
+  re‑showing the card. Reply‑corrections are deliberately STRICT (2026‑07‑27 review
+  fix): they require an explicit entry reference («№2», an in‑range bare number,
+  «это книга» on a single‑entry card) and never fire on messages naming another
+  object — «удали напоминание №2» removes the reminder, «посоветуй фильм на вечер»
+  reaches the router; a mis‑parse fails safe (card intact, message routed). When
+  another confirmation already holds the single pending slot, the card's footer
+  offers the **buttons only** (a text reply would resolve against the other pending);
+  the buttons work off the stash regardless and keep working after the pending row's
+  1h TTL — the note‑edit precedent. A photographed **document** keeps the existing
+  guidance (send it as text/a file); anything else is conversation as before,
+  informed by the same classify description (no second paid vision pass), and stores
+  nothing. Known trade‑off: while the card is offered, a caption on a *media* photo
+  is not routed as a separate command — but it is not silently dropped either
+  (2026‑07‑27 review fix): the card shows the caption and says it was not acted on
+  («если что‑то нужно, напиши отдельным сообщением»); captions on non‑media photos
+  route exactly as before.
 - **You edit a message, she follows (2026‑07‑26).** Telegram edits are now requested
   (`allowed_updates` included `edited_message` for the first time) and handled:
   · the **dialogue record** is rewritten, so a verbatim readback matches what your chat
@@ -1504,6 +1554,18 @@ its details.
   skipped (logged) instead of silently dropping every standing rule (`standing_guidance`
   also honours its `max_items=8`). The router history keeps the boss's own «…»: the
   guillemet rewrite applies only to the forwarded row the prompt itself wraps in «…».
+- **Photo‑read text is untrusted (2026‑07‑27, media capture).** Everything the vision
+  model reads OFF a photo — titles, comments, descriptions — is fence‑neutralized and
+  whitespace‑flattened at parse time (`media._clean_line`), before it can reach a card,
+  the kv stash, or any later prompt; the classify description is additionally
+  garbled‑read checked before it feeds conversation. The staged entries live in
+  `kv:media_capture:{chat}` and **never in the pending payload** (which is rendered
+  into the router's system prompt — same rule as the note‑edit stash); the payload
+  carries only a count. Deliberately NOT applied to titles: the role‑prefix stripper
+  (it would eat «Ассистент: начало») and the garbled‑read heuristic (a digits‑only
+  «1984» is a real book) — the prompt sites that need role‑stripping already apply it
+  to stored text themselves, and the confirmation card is the human check on titles.
+  Nothing is stored unconfirmed, and the photo itself is deleted in `try/finally`.
 - **Fetch SSRF guard:** http/https only, no URL creds, every URL + redirect hop
   rejected if it resolves to a private/loopback/link‑local/reserved IP or the cloud
   metadata endpoint — and the socket is **pinned to the validated IP** (2026‑07‑02) so

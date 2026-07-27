@@ -154,6 +154,77 @@ TEXTS = {
         "en": ("I don't file your own photos ({n}) as notes — they stay here "
                "in the chat 🙂"),
     },
+    # -- media capture: photos of movies/books -> confirmed catalog notes ------
+    # The card is PRE-confirmation (state=waiting_confirmation): no final verbs —
+    # «Сохранить?» is an offer, nothing is stored until his yes.
+    "media_card_header": {
+        "ru": "📸 Вот что я вижу на фото ({n}):",
+        "en": "📸 Here's what I can see in the photo ({n}):",
+    },
+    "media_kind_movie": {"ru": "фильм", "en": "movie"},
+    "media_kind_book": {"ru": "книга", "en": "book"},
+    # Provenance label: everything on the B1 card was read OFF the photo.
+    "media_from_photo": {"ru": "на фото: {comment}", "en": "in the photo: {comment}"},
+    "media_card_footer": {
+        "ru": ("Сохранить в каталог? Если что-то не так — ответь, например: "
+               "«№2 — книга, не фильм» или «убери №3» 🙂"),
+        "en": ("Save these to the catalog? If something's off, reply e.g. "
+               "\"#2 is a book, not a movie\" or \"remove #3\" 🙂"),
+    },
+    # Footer variant for when ANOTHER confirmation holds the single pending
+    # slot: a text reply would resolve against THAT pending, so this one must
+    # not promise reply-corrections — the buttons (stash-backed) always work.
+    "media_card_footer_buttons": {
+        "ru": "Сохранить в каталог? Жми кнопку под карточкой 🙂",
+        "en": "Save these to the catalog? Use the buttons below 🙂",
+    },
+    "media_card_cap_note": {
+        "ru": "Разобрала первые {cap} фото из {total} — больше за один раз не беру.",
+        "en": "I went through the first {cap} of {total} photos — that's my per-batch cap.",
+    },
+    # States the STORAGE consequence, not a display nicety — the surplus is
+    # dropped from the staged set (confirm covers exactly what is shown). The
+    # wording is count-free on purpose: it stays true after «убери №3» re-shows
+    # the card with fewer entries.
+    "media_card_truncated": {
+        "ru": "Разобрала больше, чем влезает в карточку, — сохраню только то, что показано здесь.",
+        "en": "I read more than fits the card — I'll only save what's shown here.",
+    },
+    # A partially unread album is DISCLOSED — the card must never quietly imply
+    # it covers photos she couldn't read.
+    "media_card_photo_unread": {
+        "ru": "Не смогла прочитать {n} фото — в карточке только то, что разобрала.",
+        "en": "I couldn't read {n} of the photos — the card has only what I could make out.",
+    },
+    # A caption on a MEDIA photo is not routed while the card is offered (the
+    # documented trade-off) — but it must not vanish silently either.
+    "media_card_caption_note": {
+        "ru": ("Подпись «{caption}» вижу, но как команду её тут не выполняла — "
+               "если что-то нужно, напиши отдельным сообщением."),
+        "en": ("I can see the caption \"{caption}\", but I didn't run it as a "
+               "command — if you need something, send it as its own message."),
+    },
+    # NB: no final verbs — nothing was stored, and she says what she could NOT do.
+    "media_nothing_extracted": {
+        "ru": ("Похоже, тут фильм или книга, но названия разобрать не смогла 😔 "
+               "Пришли кадр почётче или напиши название текстом."),
+        "en": ("Looks like a movie or a book, but I couldn't make out the titles 😔 "
+               "Send a clearer shot or just type the title."),
+    },
+    "media_btn_save": {"ru": "✅ Сохранить", "en": "✅ Save"},
+    "media_btn_cancel": {"ru": "✖️ Отмена", "en": "✖️ Cancel"},
+    "media_saved": {
+        "ru": "Готово, сохранила 🤍\n{lines}",
+        "en": "Done, saved 🤍\n{lines}",
+    },
+    "media_line_merged": {
+        "ru": "{emoji} «{title}» — уже есть в {category} (#{row_id}), освежила заметку",
+        "en": "{emoji} «{title}» — already in {category} (#{row_id}), refreshed it",
+    },
+    "media_correction_unclear": {
+        "ru": "Не поняла правку 🤔 Скажи, например: «№2 — книга» или «убери №3».",
+        "en": "I didn't catch the correction 🤔 Say e.g. \"#2 is a book\" or \"remove #3\".",
+    },
     # Variant family (pre-confirmation, state=suggested → no final verbs).
     "suggestion": {
         "ru": [

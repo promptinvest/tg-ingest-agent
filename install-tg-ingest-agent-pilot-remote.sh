@@ -16,7 +16,7 @@ UNIT_FILE=/etc/systemd/system/${SERVICE}.service
 UNIT_SRC=tg-ingest-agent.service
 ENV_TEMPLATE=tg-ingest-agent.env.example
 
-MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py storage.py backup.py knowledge.py skill_manifest.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py"
+MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py storage.py backup.py knowledge.py skill_manifest.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
 
 # The unit file and the env template are STAGED FILES now, not heredocs in this
 # script: one copy of each, versioned in the repo. A stage dir that predates that

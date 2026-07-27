@@ -13,8 +13,10 @@ Pilot-VPS is a cold standby.
 import ast
 import json
 import re
+import shutil
 import signal
 import sqlite3
+import tempfile
 import time
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
@@ -34,6 +36,7 @@ import jobs  # noqa: F401 (job helpers used by registered handlers)
 import journals
 import knowledge
 import llm
+import media
 import memory_curator
 import notes_svc
 import persona
@@ -1897,6 +1900,18 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if pending and pending["kind"] == "journal_edit":
             self.resolve_journal_edit(chat_id, lang, pending, text)
             return
+        # A media confirmation card is open: corrections («№2 — фильм», «убери
+        # №3») are deterministic — never a router guess over untrusted titles.
+        # Anything that isn't a correction routes normally («да» -> confirm).
+        if pending and pending["kind"] == "media_capture":
+            stash = self._media_stash(chat_id)
+            if not stash.get("entries"):
+                # Stash consumed/lost while the slot survived — free it and
+                # route the message as an ordinary turn.
+                store.pending_clear(self.conn, chat_id)
+                pending = None
+            elif self.resolve_media_correction(chat_id, lang, stash, text):
+                return
         # Explicit category assignment while a suggestion is pending ("Категория -
         # Документы", "в категорию X", "set category to X") — resolve it
         # deterministically so the named category is never lost to a router
@@ -2024,6 +2039,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 # The staged text dies with the offer — nothing may still be
                 # holding his words once he has said no.
                 store.kv_set(self.conn, f"note_edit:{payload.get('row_id')}", "")
+            if kind == "media_capture":
+                # Same rule for the staged photo entries: his no drops them and
+                # retires the card's buttons (nothing may still offer the set).
+                self._media_clear(chat_id)
             store.pending_clear(self.conn, chat_id)
             self.reply(chat_id, T(lang, "cancelled"))
             return
@@ -2042,6 +2061,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if payload.get("row_id") == row["id"]:
                 store.pending_clear(self.conn, chat_id)   # the OTHER card stays pending
             self.apply_category_confirm(chat_id, row, category, reply_to=None)
+        elif kind == "media_capture":
+            if action == "amend":
+                # Corrections are deterministic (resolve_media_correction runs
+                # BEFORE the router) — an amend that reached here anyway gets the
+                # hint instead of a guess over untrusted photo-read titles.
+                self.reply(chat_id, T(lang, "media_correction_unclear"))
+                return
+            if not self._media_confirm(chat_id, lang):
+                store.pending_clear(self.conn, chat_id)
+                self.reply(chat_id, T(lang, "nothing_pending"))
         elif kind == "reminder":
             if action == "amend":
                 merged = dict(payload)
@@ -3674,6 +3703,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if data.startswith("ne|"):
             self.handle_note_edit_callback(callback_id, chat_id, msg, data)
             return
+        if data.startswith("mcap|"):
+            self.handle_media_callback(callback_id, chat_id, msg, data)
+            return
         parsed = ingest.parse_callback_data(callback.get("data"))
         if not parsed:
             self.answer_callback(callback_id, "Unknown action.")
@@ -3963,17 +3995,21 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                   source=row["forward_origin_title"] or source,
                                   category=category))
 
-    def describe_own_media(self, parts):
+    def describe_own_media(self, parts, descs=None):
         """For the boss's OWN photos/files sent as conversation (not a forward):
         vision-describe images and note documents so converse can respond ABOUT
-        them. Returns a context string (or '')."""
-        descs, files = [], []
+        them. Returns a context string (or ''). `descs` carries descriptions the
+        media-capture classify pass already produced (neutralized), so a photo
+        that went through classification isn't paid for twice."""
+        precomputed = descs is not None
+        descs = [d for d in (descs or []) if d][:2]
+        files = []
         had_photo = False
         for p in parts:
             photos = p.get("photo") or []
             if photos:
                 had_photo = True
-                if self.cfg.vision_model and len(descs) < 2:
+                if not precomputed and self.cfg.vision_model and len(descs) < 2:
                     largest = photos[-1]
                     try:
                         path = self.download_file(largest.get("file_id"),
@@ -4017,9 +4053,21 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         instruction (routed normally); a bare photo gets a warm, in-context
         reaction. His own PHOTOS are never stored — even an explicit «сохрани»
         gets an honest decline (own-photo filing retired 2026-07-16; his own
-        text/PDF documents still reach the notes/KB via the same caption route)."""
+        text/PDF documents still reach the notes/KB via the same caption route).
+
+        Since 2026-07-27 a picture-only turn is vision-CLASSIFIED first: a photo
+        of movies/books runs the media-capture card flow (parsed ENTRIES become
+        notes on his confirm — the photo itself is still processed transiently
+        and never stored, so the 2026-07-16 retirement holds); a photographed
+        document keeps the existing text/file guidance; anything else falls
+        through to this conversational path, reusing the classify description."""
         first = parts[0]
-        self.turn_extra.append(self.describe_own_media(parts))
+        media_descs = None
+        if self._pictures_only(parts) and self.cfg.vision_model:
+            handled, media_descs = self.handle_media_capture(parts, chat_id, text)
+            if handled:
+                return
+        self.turn_extra.append(self.describe_own_media(parts, descs=media_descs))
         self.turn_extra = [x for x in self.turn_extra if x]
         self._own_photo_turn = self._pictures_only(parts)
         # Dispatch only ever sees the FIRST part; `ingest` needs them all.
@@ -4034,6 +4082,338 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             self.turn_extra = []
             self._own_photo_turn = False
             self._own_media_parts = None
+
+    # -- Media capture (photos of movies/books -> confirmed catalog notes) ------
+    #
+    # The plan's B1 (MEDIA-CAPTURE-PLAN-2026-07-27). Owner decisions upheld here:
+    # the photo is downloaded to a TMP dir and deleted in try/finally on every
+    # path (no images/files rows — the 2026-07-16 own-photo retirement is intact);
+    # nothing is stored before his explicit confirm; entries are ordinary notes in
+    # the English categories Movies/Books; dedup on (category, normalized title)
+    # refreshes the existing note instead of duplicating it.
+    #
+    # The parsed entries are staged in kv (`media_capture:<chat_id>`), NOT in the
+    # pending payload: the payload is rendered into the router's system prompt,
+    # and photo-read titles are exactly the untrusted content that has no business
+    # there (same reasoning as offer_note_edit). The pending slot only carries the
+    # entry count; the card's buttons work off the stash even when another
+    # confirmation holds the slot (the note-edit precedent — the footer then
+    # points at the buttons only, since a text reply would resolve against the
+    # OTHER pending). There is no TTL on the stash: the card SHOWS every entry
+    # it would store — the staged set is budgeted to what actually RENDERS
+    # within one message — so confirming an old card is still consent to
+    # exactly what is displayed.
+
+    def handle_media_capture(self, parts, chat_id, text):
+        """Classify the boss's picture-only turn; run the movie/book capture flow
+        when it applies. Returns (handled, descs): handled=True when this method
+        answered the turn; descs carries classify descriptions (neutralized) for
+        the conversational fallback so vision isn't paid twice."""
+        lang = self.lang()
+        photos = [p for p in parts if self._picture_part(p)]
+        if not photos:
+            return False, None
+        cap = max(1, self.cfg.max_llm_images)
+        self.send_chat_action(chat_id, "typing")
+        tmpdir = tempfile.mkdtemp(prefix="cara-photo-")
+        try:
+            classified = []
+            for i, part in enumerate(photos[:cap]):
+                path = self._download_photo_tmp(part, tmpdir, i)
+                if path is None:
+                    continue
+                kind, desc = media.classify(self.cfg, self.conn, path, lang)
+                classified.append({"kind": kind, "desc": desc, "path": path})
+            kinds = {c["kind"] for c in classified if c["kind"]}
+            if not kinds:
+                return False, None  # nothing classifiable -> legacy conversational flow
+            if "media" in kinds:
+                entries, unread = [], 0
+                for c in classified:
+                    if c["kind"] != "media":
+                        continue
+                    try:
+                        entries.extend(media.extract(self.cfg, self.conn,
+                                                     c["path"], lang))
+                    except llm.BudgetExceeded:
+                        raise
+                    except llm.LLMError as exc:
+                        log(f"media extract failed: {exc}")
+                        unread += 1
+                entries = media.dedup_entries(entries)
+                if not entries:
+                    # Transport failure and "saw no titles" get different copy —
+                    # she never claims she looked when the model never answered.
+                    self.reply(chat_id, T(lang, "llm_error" if unread
+                                          else "media_nothing_extracted"))
+                    return True, None
+                notes = []
+                if len(photos) > cap:
+                    notes.append(T(lang, "media_card_cap_note",
+                                   cap=cap, total=len(photos)))
+                if unread:
+                    # A partial album read is DISCLOSED (review fix): the card
+                    # must never imply it covers photos she couldn't read.
+                    notes.append(T(lang, "media_card_photo_unread", n=unread))
+                if text:
+                    # His caption is NOT routed while the card is offered (the
+                    # documented trade-off) — but it must not vanish silently:
+                    # the card shows it and says it was not acted on.
+                    notes.append(T(lang, "media_card_caption_note",
+                                   caption=" ".join(text.split())[:200]))
+                # Entry-count AND rendered-length budgeting (staged == shown)
+                # happens inside _stage_media_card.
+                self._stage_media_card(chat_id, lang, entries, notes)
+                return True, None
+            descs = [common.neutralize_untrusted(c["desc"])
+                     for c in classified if c["desc"]] or None
+            if "document" in kinds:
+                if text:
+                    # A caption rides the normal route (its commands still work;
+                    # an explicit «сохрани» hits the do_ingest decline as before).
+                    return False, descs
+                self.reply(chat_id, T(lang, "own_photo_not_stored"))
+                return True, None
+            return False, descs  # 'other' -> conversational path, nothing stored
+        except llm.BudgetExceeded as exc:
+            store.issue_add(self.conn, chat_id, "budget_stop", "media capture")
+            self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent,
+                                  limit=exc.limit,
+                                  period=T(lang, f"period_{exc.period}")))
+            return True, None
+        finally:
+            # The owner decision: the photo exists on disk only for the span of
+            # this call — success, decline and exception all end here.
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def _download_photo_tmp(self, part, tmpdir, idx):
+        """Fetch ONE picture part into the transient dir (never media_dir, never
+        an images/files row). None on failure — a partial album still yields a
+        card for what she could read."""
+        if part.get("photo"):
+            obj = part["photo"][-1]  # largest size
+        else:
+            obj = part.get("document") or {}
+        file_id = obj.get("file_id")
+        if not file_id:
+            return None
+        try:
+            info = tg_call(self.cfg.token, "getFile", {"file_id": file_id})
+            file_path = info.get("file_path") or ""
+            ext = Path(file_path).suffix or ".jpg"
+            dest = Path(tmpdir) / f"photo{idx}{ext}"
+            tg_download(self.cfg.token, file_path, dest)
+            return str(dest)
+        except TelegramError as exc:
+            log(f"media-capture download failed: {exc}")
+            return None
+
+    def _media_stash(self, chat_id):
+        raw = store.kv_get(self.conn, f"media_capture:{chat_id}") or ""
+        try:
+            stash = json.loads(raw) if raw else {}
+        except ValueError:
+            stash = {}
+        return stash if isinstance(stash, dict) else {}
+
+    def _media_clear(self, chat_id):
+        """Drop the staged entries and retire the live card's buttons — nothing
+        may still offer to store a set he cancelled/replaced/confirmed."""
+        stash = self._media_stash(chat_id)
+        mid = stash.get("card_message_id")
+        if mid:
+            try:
+                tg_call(self.cfg.token, "editMessageReplyMarkup",
+                        {"chat_id": chat_id, "message_id": mid})
+            except TelegramError as exc:
+                log(f"editMessageReplyMarkup (media card) failed: {exc}")
+        store.kv_set(self.conn, f"media_capture:{chat_id}", "")
+
+    def _stage_media_card(self, chat_id, lang, entries, notes=()):
+        """One confirmation card per batch (single live stash per chat — a new
+        photo replaces the previous unanswered card, buttons retired). The
+        STAGED set is exactly the DISPLAYED set: the card is budgeted by entry
+        count AND rendered length (reply() hard-cuts at 4000 chars), so his
+        confirm can never cover entries a truncation hid — any drop is
+        disclosed on the card itself."""
+        self._media_clear(chat_id)
+        # Single pending slot: take it only when free or already ours — the
+        # buttons work off the stash either way (offer_note_edit precedent).
+        # A text reply would then resolve against the OTHER pending, so the
+        # footer must not promise reply-corrections it can't deliver.
+        existing = store.pending_get(self.conn, chat_id)
+        slot_ours = existing is None or existing.get("kind") == "media_capture"
+        entries, notes, card = self._fit_media_card(
+            lang, entries, notes,
+            "media_card_footer" if slot_ours else "media_card_footer_buttons")
+        result = self.reply(chat_id, card,
+                            reply_markup={"inline_keyboard": [[
+                                {"text": T(lang, "media_btn_save"),
+                                 "callback_data": "mcap|y"},
+                                {"text": T(lang, "media_btn_cancel"),
+                                 "callback_data": "mcap|n"},
+                            ]]})
+        # Notes ride the stash so the cap/unread/truncation/caption disclosures
+        # survive a correction re-staging (facts about the batch, not the turn).
+        stash = {"entries": entries, "notes": notes,
+                 "at": datetime.now(timezone.utc).isoformat()}
+        if result and result.get("message_id"):
+            stash["card_message_id"] = result["message_id"]
+        store.kv_set(self.conn, f"media_capture:{chat_id}",
+                     json.dumps(stash, ensure_ascii=False))
+        if slot_ours:
+            store.pending_set(self.conn, chat_id, "media_capture",
+                              {"n": len(entries)})
+
+    def _fit_media_card(self, lang, entries, notes, footer_key):
+        """Trim the batch to MAX_CARD_ENTRIES and to what actually RENDERS
+        within one message. Returns (kept_entries, notes, card_text) with any
+        drop disclosed via media_card_truncated — worded count-free so it stays
+        true when a correction re-shows the card with fewer entries."""
+        notes = [n for n in notes if n]
+        truncated = T(lang, "media_card_truncated")
+        kept = list(entries[:media.MAX_CARD_ENTRIES])
+        dropped = len(kept) < len(entries)
+        while True:
+            cur = notes + ([truncated] if dropped and truncated not in notes else [])
+            card = self._media_card_text(lang, kept, cur, footer_key)
+            if len(card) <= media.MAX_CARD_CHARS or len(kept) <= 1:
+                return kept, cur, card
+            kept.pop()
+            dropped = True
+
+    def _media_card_text(self, lang, entries, notes=(),
+                         footer_key="media_card_footer"):
+        """Every entry the confirm would store, numbered, with its kind and the
+        photo-sourced comment labeled as such (B1 has no enrichment: everything
+        shown here was read OFF the photo — provenance is honest by construction)."""
+        lines = [T(lang, "media_card_header", n=len(entries))]
+        for i, e in enumerate(entries, 1):
+            label = T(lang, "media_kind_movie" if e["kind"] == "movie"
+                      else "media_kind_book")
+            line = f"{i}. {media.KIND_EMOJI[e['kind']]} «{e['title']}» — {label}"
+            if e.get("comment"):
+                line += " · " + T(lang, "media_from_photo", comment=e["comment"])
+            lines.append(line)
+        lines.extend(notes)
+        lines.append("")
+        lines.append(T(lang, footer_key))
+        return "\n".join(lines)
+
+    def resolve_media_correction(self, chat_id, lang, stash, text):
+        """A message while the media card is pending: apply a deterministic
+        correction («№2 — фильм, не книга», «убери №3») and re-show the card.
+        Returns False when the message is no correction at all — it then routes
+        normally, so «да» still confirms and unrelated requests still work."""
+        entries = [e for e in stash.get("entries") or []
+                   if isinstance(e, dict) and e.get("title")]
+        op = media.parse_correction(text, len(entries))
+        if op is None:
+            return False
+        if op == "unclear":
+            self.reply(chat_id, T(lang, "media_correction_unclear"))
+            return True
+        action, indices = op
+        chosen = set(indices)
+        if action == "remove":
+            entries = [e for i, e in enumerate(entries, 1) if i not in chosen]
+        else:
+            for i in chosen:
+                entries[i - 1]["kind"] = action
+        if not entries:
+            self._media_clear(chat_id)
+            store.pending_clear(self.conn, chat_id)
+            self.reply(chat_id, T(lang, "cancelled"))
+            return True
+        # Carry the batch disclosures (cap/unread/truncation/caption) — a
+        # corrected card must still say what the original one disclosed.
+        self._stage_media_card(chat_id, lang, entries, stash.get("notes") or ())
+        return True
+
+    def _media_confirm(self, chat_id, lang):
+        """His yes — the ONLY write boundary of the flow. Consumes the stash
+        first so a double confirm (button + «да») cannot store twice. Returns
+        False when nothing is staged."""
+        stash = self._media_stash(chat_id)
+        entries = [e for e in stash.get("entries") or []
+                   if isinstance(e, dict) and e.get("title")]
+        if not entries:
+            return False
+        self._media_clear(chat_id)
+        pending = store.pending_get(self.conn, chat_id)
+        if pending and pending.get("kind") == "media_capture":
+            store.pending_clear(self.conn, chat_id)
+        lines = self._media_store_entries(chat_id, lang, entries)
+        self.reply(chat_id, T(lang, "media_saved", lines="\n".join(lines)))
+        return True
+
+    def _media_store_entries(self, chat_id, lang, entries):
+        """One confirmed note per entry: summary = the title (RU stays RU),
+        category = Movies/Books (auto-created, English), purpose 'reference',
+        photo-sourced facts with a `photo:` provenance prefix, chunked+embedded
+        for `ask`. A (category, normalized-title) match MERGES into the existing
+        note — new facts appended, index refreshed, never a duplicate row."""
+        lines = []
+        for e in entries:
+            kind = e.get("kind") if e.get("kind") in media.CATEGORY_BY_KIND else "movie"
+            emoji = media.KIND_EMOJI[kind]
+            category = store.ensure_category(self.conn, media.CATEGORY_BY_KIND[kind])
+            facts_new = []
+            if e.get("comment"):
+                facts_new.append(f"photo: {e['comment']}")
+            existing = media.find_existing(self.conn, category, e["title"])
+            if existing is not None:
+                row_id = existing["id"]
+                old = [r["fact"] for r in store.message_facts(self.conn, row_id)]
+                have = {f.casefold() for f in old}
+                merged = old + [f for f in facts_new if f.casefold() not in have]
+                if merged != old:
+                    store.set_facts(self.conn, row_id, merged)
+                self.index_message(row_id, "\n".join(
+                    [existing["summary"] or existing["raw_text"] or e["title"], *merged]))
+                lines.append(T(lang, "media_line_merged", emoji=emoji,
+                               title=e["title"], category=category,
+                               row_id=self.note_no(row_id)))
+                continue
+            row_id = store.insert_message(self.conn, {
+                "chat_id": chat_id,
+                # Synthetic negative id (the note exists apart from any Telegram
+                # message — the photo behind it is deliberately gone). Nanoseconds
+                # so two entries in one confirm can't collide (hermes precedent).
+                "tg_message_id": -time.time_ns(),
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "raw_text": e["title"],
+            })
+            if row_id is None:
+                continue  # id collision — skip rather than mislabel another row
+            store.set_suggestion(self.conn, row_id, category, e["title"],
+                                 self.cfg.vision_model)
+            store.set_facts(self.conn, row_id, facts_new)
+            store.confirm_category(self.conn, row_id, category)
+            self.index_message(row_id, "\n".join([e["title"], *facts_new]))
+            lines.append(f"{emoji} «{e['title']}» → {category} "
+                         f"(#{self.note_no(row_id)})")
+        return lines
+
+    def handle_media_callback(self, callback_id, chat_id, msg, data):
+        """✅/✖️ on the media confirmation card. The kv stash (not the pending
+        slot) is the source of truth, so the card stays answerable even when
+        another confirmation holds the slot — like the note-edit buttons."""
+        lang = self.lang()
+        stash = self._media_stash(chat_id)
+        if not stash.get("entries"):
+            self.answer_callback(callback_id, T(lang, "nothing_pending"))
+            return
+        if data == "mcap|y":
+            self.answer_callback(callback_id, "✅")
+            self._media_confirm(chat_id, lang)
+            return
+        self.answer_callback(callback_id, "👌")
+        self._media_clear(chat_id)
+        pending = store.pending_get(self.conn, chat_id)
+        if pending and pending.get("kind") == "media_capture":
+            store.pending_clear(self.conn, chat_id)
+        self.reply(chat_id, T(lang, "cancelled"))
 
     def _picture_part(self, part):
         """True when THIS part is a picture (a photo, or an image sent as a
