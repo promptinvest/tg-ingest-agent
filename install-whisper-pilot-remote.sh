@@ -25,8 +25,11 @@ MODEL_PATH="$WHISPER_DIR/models/$MODEL_NAME"
 BIN="$WHISPER_DIR/build/bin/whisper-cli"
 BUILT_REF_STAMP="$WHISPER_DIR/build/.built-ref"
 
-WHISPER_REF="${WHISPER_REF:-}"
-WHISPER_MODEL_SHA256="${WHISPER_MODEL_SHA256:-}"
+# Pinned 2026-07-27 from the values actually running on the PD box, so an
+# unattended re-run reproduces THIS build instead of whatever upstream HEAD and
+# the model URL happen to serve that day. Override via the env to move them.
+WHISPER_REF="${WHISPER_REF:-86c40c3bd6fc86f1187fb751d111b49e0fc18e84}"
+WHISPER_MODEL_SHA256="${WHISPER_MODEL_SHA256:-ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb}"
 
 PORT="${WHISPER_SERVER_PORT:-8089}"
 
