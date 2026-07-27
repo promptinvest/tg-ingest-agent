@@ -1312,7 +1312,7 @@ forgeable. Finished by hand in `8b1a3be`.
 ### Audit of WP1–WP7 (2026-07-26) — CLOSED
 
 An independent read-only audit (7 auditors, one per package) verified every task against
-the committed code AND current HEAD. Result: **48 of 51 tasks complete**, 3 partial, 0
+the committed code AND current HEAD. Result: **50 of 53 tasks complete**, 3 partial, 0
 missing, 0 regressed. The packages are real. The auditors also found defects the pre-commit
 reviews had missed; **all of them are now fixed** — the three backup items in `574b639`,
 the rest in the audit-fix batch below.
@@ -1409,7 +1409,58 @@ still defines an `LLM_PROFILES_JSON` profile named `review_balanced`, which T7.8
 the code. Harmless — `profiles()` backfills it and logs one warning per process start — but
 it is live-env drift. The live env was deliberately NOT edited.
 
-### Session C — WP10–WP14 — pending
+### Session C — COMPLETE, DEPLOYED 2026-07-27 — **PROGRAMME FINISHED**
+
+| Commit | What | Tests |
+|---|---|---|
+| `be60066` | WP10 ops/script hardening + split archive | 967 |
+| `503fe4e` | WP11 config catalogue + docs truth sweep | 982 |
+| `f061a79` | WP12 test hygiene + CI timeout | 1004 |
+| `f0ed2a4` | WP13 perf + small-correctness sweep | 1028 |
+| `598c635` | WP14 optional hardening (restore self-check, calendars, persona source) | 1043 |
+| `96acc14` | pin whisper.cpp ref + model sha256 to what the box runs | 1069 |
+
+Deployed at `503fe4e` (checkpoint) and `598c635` (final). Verified live: service
+`active`, 0 restarts, journal clean, `integrity_check` ok, env sha
+`b1b823d5b6dfd9bf` UNCHANGED through all three deploys, `VISION_MODEL` set,
+WP13's migration applied (index + `norm_text`, 0 NULLs), 68 GB free.
+
+**All 14 work packages and all 53 audit findings are closed. Suite 607 → 1069.**
+
+The two things tests could not prove, verified directly on the box:
+ - `SystemCallFilter=@system-service` does not block the forks Cara depends on —
+   **openssl** (backup encryption) and **whisper-cli** (STT fallback) both run.
+ - whisper-server de-rooted via `DynamicUser`, proven by POSTing real audio to
+   `/inference` and getting a correct transcription — not merely `is-active`.
+
+**Deviations from this plan, made deliberately:**
+1. **T10.6 said `rm -rf /root/cara-nikki-split`. Do not.** It holds ~46 MB of
+   irreplaceable history (pre-split DBs, media baseline, two 0600 Nikki env
+   backups). Only the one-shot was disarmed into `disarmed-2026-07-27/`.
+2. **T10.1's pins were shipped empty**, so the verification machinery existed but
+   an unattended re-run still cloned upstream HEAD. Captured from the box and
+   baked in (`96acc14`).
+
+**Left open for the operator (not defects):**
+ - `LLM_PROFILES_JSON` on the box still defines the retired `review_balanced`
+   profile → one harmless backfill warning per start. The live env was never
+   edited by this programme, by design.
+ - `BACKUP_ENCRYPTION_KEY_FILE` lives on the droplet the backups protect. T14.1
+   proves they restore; it cannot protect the key. An off-box copy is a decision
+   only the operator can make.
+
+**What this programme demonstrated about its own method** (worth keeping if the
+pattern is reused): the adversarial second review, not the implementation, is
+what caught the defects that mattered — a fetch deadline that could never fire
+because `read(n)` blocks until it has `n` bytes; a PDF bomb guard on the fallback
+parser while the real one ran first; a watchdog that would have SIGABRTed a
+healthy process into an endless kill loop during the very outage it was meant to
+survive; a bootstrap fix built on a false premise that would have destroyed the
+queue it protected; a gcal 403 handler that would have quadrupled traffic at a
+service asking for less; a stray-file sweep that passed every test and would have
+deleted a 16 MB operator backup — whose sibling function then had the same blind
+spot. Production reality beat the suite more than once: three findings were only
+visible by looking at the actual box.
 
 ## 17. Traceability
 
