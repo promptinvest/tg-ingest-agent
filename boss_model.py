@@ -7,6 +7,7 @@ are never surfaced casually.
 import re
 from datetime import datetime
 
+import common
 import store
 from texts import T
 
@@ -221,8 +222,13 @@ def operating_model(conn, lang):
     out = []
     for _key, (ru, en), kinds in _OPERATING_GROUPS:
         vals = _dedup([r["value"] for r in rows if r["kind"] in kinds])
+        # One value per '; '-joined slot on ONE prompt line: these rows are
+        # LLM-extracted and rendered into the converse SYSTEM prompt, so a value
+        # carrying a newline could otherwise open a forged prompt line above the
+        # persona (2026-07-27 review).
+        vals = [v for v in (common.neutralize_untrusted(x) for x in vals[:6]) if v]
         if vals:
-            out.append((ru if lang == "ru" else en, vals[:6]))
+            out.append((ru if lang == "ru" else en, vals))
     return out
 
 
@@ -266,13 +272,19 @@ def render_profile(conn, lang, include_inferred=True):
 
 def confirmed_context(conn, max_items=8, max_chars=600):
     """Compact confirmed-preferences snippet for prompt personalization
-    (skips sensitive). Used by persona.py."""
+    (skips sensitive). Used by persona.py. Values are flattened to one line
+    each (they can be model-extracted text), and an over-budget row is SKIPPED,
+    not a stop: `break` here meant one over-long first row emptied the whole
+    snippet (2026-07-27 review — same failure standing_guidance had)."""
     out = []
     used = 0
     for row in store.boss_items(conn, "confirmed", sensitivities=("normal",), limit=max_items):
-        line = f"- {row['value']}"
+        value = common.neutralize_untrusted(row["value"])
+        if not value:
+            continue
+        line = f"- {value}"
         if used + len(line) > max_chars:
-            break
+            continue
         out.append(line)
         used += len(line)
     return out
@@ -291,18 +303,30 @@ def standing_guidance(conn, max_items=8, max_chars=600):
     Python meant a profile with 20+ higher-confidence facts of OTHER kinds
     returned no guidance at all — Cara silently stopped honoring every standing
     correction he had taught her, with nothing in the logs to say so.
+
+    An over-budget row is SKIPPED (logged), never a stop: `return` here meant
+    one over-long stored value — model-extracted, uncapped — silently dropped
+    EVERY standing rule, the exact outcome the kind-filter fix above closed via
+    the other route (2026-07-27 review). Skipping beats truncating: half a
+    behavioral rule can instruct the opposite of the whole one. Values are
+    flattened to one '- ' line each so a value carrying a newline cannot forge
+    an extra rule under 'FOLLOW these every time'.
     """
     out, used, seen = [], 0, set()
     for status in ("confirmed", "inferred"):
         for row in store.boss_items(conn, status, sensitivities=("normal",), limit=20,
                                     kinds=GUIDANCE_KINDS):
-            value = (row["value"] or "").strip()
+            value = common.neutralize_untrusted(row["value"])
             if not value or value in seen:
                 continue
             line = f"- {value}"
             if used + len(line) > max_chars:
-                return out
+                common.log(f"standing_guidance: skipped a {len(line)}-char profile "
+                           f"item over the {max_chars - used}-char budget left")
+                continue
             out.append(line)
             used += len(line)
             seen.add(value)
+            if len(out) >= max_items:
+                return out
     return out

@@ -206,13 +206,28 @@ _ROLE_PREFIX_RE = re.compile(
 # Invisible formatting characters carry no meaning in Cara's traffic and are the
 # cheapest way to hide a role label (U+200B before "user:") or to split a
 # delimiter (U+200B inside "==="), both of which walk straight past the regexes
-# above. U+200C/U+200D are deliberately KEPT — they are part of real words and
-# of real emoji sequences.
+# above. Written as escapes, not literals, so the set is reviewable: soft hyphen,
+# Arabic letter mark, Mongolian vowel separator, ZWSP, LRM/RLM, the embedding/
+# override controls U+202A-E, the whole invisible-operator/bidi-isolate/
+# deprecated-format-control run U+2060-206F (the 2026-07-27 review found the
+# range stopped one short of the isolates U+2066-69 — same Cf class, same two
+# attacks — and its finalize pass took the rest of the default-ignorable block:
+# U+2065 plus the deprecated controls U+206A-6F), the BOM, the interlinear
+# annotation controls U+FFF9-FFFB, and the invisible TAG characters
+# U+E0000-E007F — the classic channel for smuggling an instruction no human
+# sees. U+200C/U+200D are deliberately KEPT — they are part of real words and
+# of real emoji sequences — and so are the variation selectors (U+FE0F is what
+# makes ❤️ an emoji). Known trade-off: stripping tags reduces a
+# subdivision-flag emoji (🏴 + tag letters) to a plain black flag.
 _ZERO_WIDTH_RE = re.compile(
-    r"[­​‎‏‪-‮⁠-⁤﻿]")
-# Fullwidth U+FF1D renders as an equals sign; fold it so a delimiter typed with
-# it cannot walk past the fence rules either.
-_EQUALS_LOOKALIKE = str.maketrans({"＝": "="})
+    "[\u00ad\u061c\u180e\u200b\u200e\u200f\u202a-\u202e"
+    "\u2060-\u206f\ufeff\ufff9-\ufffb\U000e0000-\U000e007f]")
+# Characters that RENDER as an equals sign fold to '=', so a delimiter typed
+# with one cannot walk past the fence rules: fullwidth U+FF1D, small U+FE66,
+# modifier U+A78A, and the box-drawing double rule U+2550 (═══ reads as a
+# terminator just as readily). A lone one merely becomes '=' — only a run of
+# three trips the fence rules below.
+_EQUALS_LOOKALIKE = str.maketrans(dict.fromkeys("\uff1d\ufe66\ua78a\u2550", "="))
 # Guillemets are a fence too — but ONLY at the three sites that wrap an untrusted
 # row in «…» themselves. Opt-in (quote_fence=True), because Cara's traffic is
 # Russian, where «…» are ordinary quotation marks: rewriting them everywhere
@@ -236,7 +251,22 @@ def neutralize_fences(text):
     # substituting a single character buys a fresh line inside a "flattened" row.
     for line in str(text or "").splitlines():
         line = _ZERO_WIDTH_RE.sub("", line).translate(_EQUALS_LOOKALIKE)
-        line = _FENCE_TAG_RE.sub("", line)
+        # A loop, not one sub (same reasoning as the role-prefix stripper below):
+        # a single pass scans the ORIGINAL string, so removing an INNER tag
+        # reconstitutes an outer one from the halves around it —
+        # '</mes</message>sage>' came back as an intact '</message>'. Each pass
+        # strictly shortens the line, so this terminates; it runs before the
+        # '===' rules so a removal that manufactures a delimiter run ('=<message>=='
+        # -> '===') is still collapsed. The invisible strip above runs FIRST, and
+        # that order is load-bearing: a tag split by a zero-width
+        # ('<mes' + ZWSP + 'sage>') must reassemble BEFORE this loop sees it —
+        # stripped after, it would hand the loop nothing and reconstitute an
+        # intact tag one operator over (2026-07-27 finalize).
+        while True:
+            stripped = _FENCE_TAG_RE.sub("", line)
+            if stripped == line:
+                break
+            line = stripped
         lines.append("—" if _FENCE_LINE_RE.match(line) else _FENCE_RUN_RE.sub("—", line))
     return "\n".join(lines)
 

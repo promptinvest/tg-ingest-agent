@@ -530,6 +530,18 @@ def profiles(cfg):
         if not prof.get("primary"):
             prof["primary"] = cfg.do_model
             log(f"profile {name!r} had no primary; defaulted to {cfg.do_model}")
+        fb = prof.get("fallbacks")
+        if isinstance(fb, str):
+            # `"fallbacks": "slug"` (an easy typo for the documented list) would
+            # iterate per CHARACTER downstream — one doomed API call, cooldown
+            # row and unpriced-model warning per letter (2026-07-27 review).
+            prof["fallbacks"] = [fb.strip()] if fb.strip() else []
+            log(f"profile {name!r} fallbacks was a string; wrapped as {prof['fallbacks']}")
+        elif fb is not None and not isinstance(fb, (list, tuple)):
+            # Any other scalar would TypeError out of chat_profile — not an
+            # LLMError, so it would escape every skill's handler and kill the turn.
+            prof["fallbacks"] = []
+            log(f"profile {name!r} fallbacks was {type(fb).__name__}, not a list; ignored")
     missing = unpriced_models(cfg, table)
     if missing:
         log(f"WARNING: model slug(s) missing from the pricing table, so every call "

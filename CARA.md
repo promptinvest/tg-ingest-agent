@@ -1022,6 +1022,9 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   open‑weight slug** (`openai-gpt-oss-20b`), not the tier‑403 `openai-gpt-4o` that used
   to be a dead fallback on a fresh deploy; a profile added via `LLM_PROFILES_JSON`
   without a `primary` is backfilled with the configured chat model so it can't crash a turn.
+  A malformed `fallbacks` is coerced the same way (2026‑07‑27): a bare string is wrapped
+  into a one‑element list (it used to iterate per CHARACTER — one doomed call, cooldown row
+  and unpriced warning per letter), any other scalar is dropped to `[]` — both logged.
   Every failover chain records its terminal result: `llm.failover_served` only after a
   fallback produces a usable response, and `llm.failover_failed` when no configured
   model does. `llm.fallback` remains the per-attempt failure signal. **2026‑07‑25:**
@@ -1370,6 +1373,23 @@ database whose only remaining content is dead‑lettered inbox rows must not ans
   the ask prompt now carries them in their own user‑role DATA turn, so even a successful
   escape lands in data, not in system‑role authority. Nothing is censored — the words
   survive verbatim, they just can't impersonate a delimiter or a turn.
+- **Sanitizer edges closed (2026‑07‑27 review).** The fence‑tag strip is a fixpoint loop
+  (a nested `</mes</message>sage>` used to reconstitute an intact terminator in one pass);
+  the invisible‑character set covers the bidi isolates U+2066–69 plus U+061C/U+180E — and,
+  since the same‑day finalize pass, the rest of the default‑ignorable block: U+2065, the
+  deprecated format controls U+206A–6F, the interlinear annotation controls U+FFF9–FFFB and
+  the invisible tag characters U+E0000–E007F (the classic hidden‑instruction smuggling
+  channel; known trade‑off — a subdivision‑flag emoji loses its tags and renders as a plain
+  black flag, while ZWNJ/ZWJ and the emoji variation selectors deliberately survive); every
+  rendered‑equals look‑alike (U+FF1D/U+FE66/U+A78A/U+2550) folds to `=` before the fence
+  rules. Inside an **ask** note body a dashes‑only line and a `[#…`‑shaped line start are
+  defanged, so a saved note can't forge a sibling note block or steal another note's `#N`.
+  Stored boss‑memory/life texts (standing guidance, operating model, life facts, the
+  preference hint) are flattened to one line per fact before they reach the converse/ask
+  SYSTEM prompts — the one region with no fence at all; one over‑long profile row is now
+  skipped (logged) instead of silently dropping every standing rule (`standing_guidance`
+  also honours its `max_items=8`). The router history keeps the boss's own «…»: the
+  guillemet rewrite applies only to the forwarded row the prompt itself wraps in «…».
 - **Fetch SSRF guard:** http/https only, no URL creds, every URL + redirect hop
   rejected if it resolves to a private/loopback/link‑local/reserved IP or the cloud
   metadata endpoint — and the socket is **pinned to the validated IP** (2026‑07‑02) so

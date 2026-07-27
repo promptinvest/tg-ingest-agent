@@ -19,6 +19,7 @@ Safety that stays even on this path:
     boss's tasks and facts stay truthful.
 """
 import boss_model
+import common
 import store
 
 # Cara's fixed character — who she is under any mood or topic. This is the soul;
@@ -139,7 +140,13 @@ def build_system(conn, lang, extra_context=None):
     name_ru = store.pref_get(conn, "owner_name_ru")
     name_en = store.pref_get(conn, "owner_name_en")
     name_any = store.pref_get(conn, "owner_name")
-    life = [f"- {row['text']}" for row in store.life_facts(conn, limit=24)]
+    # One fact per '- ' LINE, so each row is flattened: life texts are
+    # LLM-extracted (memory curator) and a stored value carrying a newline would
+    # otherwise render as an extra prompt line — in the SYSTEM role, where there
+    # is no fence at all (2026-07-27 review; same rule as do_boss_query).
+    life = [f"- {flat}" for flat in
+            (common.neutralize_untrusted(row["text"])
+             for row in store.life_facts(conn, limit=24)) if flat]
     operating = boss_model.operating_model(conn, lang)
     guidance = boss_model.standing_guidance(conn)
 

@@ -101,6 +101,29 @@ def rank_chunks(query_vec, rows, top_k, context_chars, min_score=0.0):
     return picked
 
 
+# The notes block's structure is in-band: blocks are separated by a line of
+# dashes and each opens with a '[#N — title · category]' head. A saved note is
+# forwarded content and can carry BOTH shapes, forging an extra note block —
+# and stealing a real note's #N — inside the DATA turn, so Cara would cite a
+# fabricated fact against a number that exists (2026-07-27 review). Inside a
+# note BODY a dashes-only line therefore collapses to '—' and a '[#'-shaped
+# line start is defanged to '(#', in place. Scoped HERE, not in
+# neutralize_fences: elsewhere ('---' in the boss's own fenced request, a
+# markdown rule in an ingested post) those shapes are ordinary content, and
+# rewriting them there would mangle text the router lifts verbatim.
+_RULE_LINE_RE = re.compile(r"^\s*[-_–—]{3,}\s*$")
+_HEAD_SHAPE_RE = re.compile(r"^(\s*)\[\s*#")
+
+
+def _note_body(text):
+    lines = []
+    for line in common.neutralize_fences(text).split("\n"):
+        if _RULE_LINE_RE.match(line):
+            line = "—"
+        lines.append(_HEAD_SHAPE_RE.sub(r"\g<1>(#", line))
+    return "\n".join(lines)
+
+
 def build_ask_messages(question, context_items, preference_hint=""):
     """Grounded-answer prompt: answer ONLY from the operator's stored notes;
     refuse if the answer isn't there; reply in the question's language. An
@@ -108,9 +131,11 @@ def build_ask_messages(question, context_items, preference_hint=""):
 
     Saved notes are typically FORWARDED channel/web content — untrusted data. They
     are therefore (a) fence-neutralized, so a note carrying '=== END NOTES ===' can
-    no longer close the block it sits in, and (b) carried in their OWN user-role
-    message rather than inside the system prompt, so escaping the fence lands in
-    the data turn instead of promoting the text to system authority."""
+    no longer close the block it sits in (and, via _note_body, cannot forge a
+    sibling note block or another note's head either), and (b) carried in their
+    OWN user-role message rather than inside the system prompt, so escaping the
+    fence lands in the data turn instead of promoting the text to system
+    authority."""
     if context_items:
         blocks = []
         for item in context_items:
@@ -119,7 +144,7 @@ def build_ask_messages(question, context_items, preference_hint=""):
             if item.get("title"):
                 head += f" — {common.neutralize_untrusted(item['title'])}"
             head += f" · {item['category']}]"
-            blocks.append(f"{head}\n{common.neutralize_fences(item['text'])}")
+            blocks.append(f"{head}\n{_note_body(item['text'])}")
         context = "\n\n---\n\n".join(blocks)
     else:
         context = "(no stored notes matched)"
