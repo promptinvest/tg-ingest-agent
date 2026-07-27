@@ -443,6 +443,12 @@ TEXTS = {
         "ru": "У #{row_id} нет голосового или файла, который я могу открыть.",
         "en": "#{row_id} has no voice note or file I can open.",
     },
+    # The router garbled which note he named («первая», not a number): ask,
+    # never read the newest UNRELATED file as if it were the answer.
+    "read_media_which": {
+        "ru": "Не поняла, из какой именно записи открыть вложение 🤔 Назови её номер — «#N».",
+        "en": "I'm not sure which note's attachment you mean 🤔 Give me its number — \"#N\".",
+    },
     "read_media_fail": {
         "ru": "Не получилось открыть это — что-то пошло не так при загрузке. Попробуй ещё раз?",
         "en": "Couldn't open that — something went wrong fetching it. Try again?",
@@ -945,6 +951,24 @@ TEXTS = {
     "note_edit_applied": {
         "ru": "Готово — заметка #{row_id} теперь с новым текстом 🤍",
         "en": "Done — note #{row_id} now holds the new text 🤍",
+    },
+    # An EDITED message whose original turn produced a reminder / remembered
+    # fact (no note row): the dialogue record follows his chat, the artifact
+    # does NOT — one honest line instead of a silent divergence (2026-07-27).
+    # NB: no final verbs (action_truth) — «обновила» describes the record,
+    # the artifact wording claims no action.
+    "edited_turn_reminder": {
+        "ru": ("Текст в нашей переписке обновила 🙂 Напоминание из того сообщения "
+               "осталось со старыми деталями — скажи, если его тоже поправить."),
+        "en": ("I've updated the text in our chat history 🙂 The reminder from that "
+               "message still has the old details — tell me if you want it changed too."),
+    },
+    "edited_turn_memory": {
+        "ru": ("Текст в нашей переписке обновила 🙂 Но у меня в памяти осталась "
+               "прежняя версия из того сообщения — скажи, если её тоже поправить."),
+        "en": ("I've updated the text in our chat history 🙂 But my memory still holds "
+               "the earlier version from that message — tell me if you want it "
+               "changed too."),
     },
     "note_edit_kept": {
         "ru": "Хорошо, заметка #{row_id} остаётся как есть.",

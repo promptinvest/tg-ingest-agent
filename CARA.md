@@ -180,7 +180,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **stale** offer (older than an hour) is refused out loud instead of applying words
   staged days ago;
   · an edit that changes **nothing** is a no‑op — no model call, no new card;
-  · edits from any other chat are ignored before anything is read or written.
+  · edits from any other chat are ignored before anything is read or written;
+  · **(2026‑07‑27)** an edit of a message that was a routed **command** — «напомни
+  завтра в 15:00…», «запомни: …» — rewrites the dialogue record like any turn, and she
+  adds ONE honest line: the reminder/remembered fact made from that message keeps the
+  old details until you say to change it (she never re‑derives an alarm or a memory
+  item from edited prose behind your back). The line fires only when the artifact
+  **actually exists** — the pointer is written when the reminder is created at your
+  confirm / the fact is stored, so a draft or a flagged fact you declined (or let
+  expire) earns plain silence, a purge that deleted the reminders drops the pointer
+  with the rows, and a replayed edit carrying identical text does not repeat the line.
   **Honest about the outage case:** the re‑embed is best‑effort. If the embedder is down
   in that moment the note keeps its text and stays in your lists but is briefly out of
   `ask` — the sweep that retries pending notes now also re‑indexes any visible note left
@@ -305,6 +314,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   number issued *before* the counter existed and deleted while the note was still merely
   «suggested» left no trace at all, so the counter's one‑time seed can hand it out once
   more. Only «удали всё» — which wipes the ledger too — restarts numbering at #1.
+  **«Покажи файлы» no longer mints numbers (2026‑07‑27):** the files listing lazily
+  assigned a permanent #N to *failed/duplicate* rows — invisible in every note list, so
+  the numbering jumped (#56 → #58) and «убери #57» answered «вне жизненного цикла».
+  Such a file now lists honestly without a number; visible notes keep their lazy #N.
   **Reminder
   numbers are different** — a contiguous 1…N position in the active list (soonest‑due
   first) that **compacts** as reminders fire/cancel; "#N" in reschedule/cancel/undo
@@ -360,6 +373,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   hours/days/the daily proactive cap, and «выключи приглашения» turns it off
   instantly. «X больше не дневник» also deactivates the structured definition —
   the boss's decision wins; existing entries stay readable.
+  **Diary membership follows the category (2026‑07‑27):** «перенеси J#12 в Идеи»
+  now removes the entry row (the note used to stay in the diary forever — listed,
+  counted in the person stats, exported, and even surviving the diary's own purge),
+  moving between two journals moves the entry, and folding a plain category INTO a
+  journal (`merge_categories`) creates the missing entry rows immediately instead of
+  waiting for the next restart's backfill. A confirmed edit of a journal note resets
+  its extracted fields to unstructured (see §10) — «Аня» no longer answers the stats
+  after the text says «Борис».
 - **Overview & stats:** "что у тебя есть?" → a digest (counts, reminders, memory,
   spend); per‑status/category **stats** (`stats`) and the **category list**
   (`categories`).
@@ -479,6 +500,25 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   and a hard not‑found on a note that exists is its own bug), while an id that is
   present but unusable («», «abc») counts as a router artefact — it may fall back
   to a text SEARCH, which can only return a real match, never to "the most recent".
+  **Closed the residual asymmetries (2026‑07‑27):** the PLURAL resolver (delete /
+  lifecycle / recategorize) now has the same artefact‑id search escape the singular
+  one got — «удали заметку про крипту» arriving with a garbled id finds the note by
+  the query instead of a false not‑found; an explicit `#N` beats a stray `count`
+  («убери #7 в архив» routed with `count: 1` no longer archives the newest note);
+  «удали 3 из crypto» is bounded by the named category/query instead of taking the
+  three newest notes overall; «расшифруй голосовое из #12» normalizes «#12» like
+  every other note path (it used to read the newest UNRELATED file as the answer —
+  a garbled non‑empty id now asks which note, only a truly id‑less request keeps
+  the recent‑file fallback); «второе удали» right after a review card resolves
+  against the SNAPSHOT on the delete path exactly as on the archive path; and the
+  snapshot's collective forms now include «всё»/«эти»/«их»/"them" — «всё в архив»
+  used to fall through and archive the newest note in the inbox, unconfirmed.
+  **Accepted residue:** a targetless lifecycle wording the resolver does not
+  recognise («те два в архив», «первые две удали») still falls through to the
+  newest note even while a review card is live — the snapshot lives 24 h, and
+  during all of it «убери последнюю в архив» must keep meaning the newest note,
+  so a blanket "clarify while a snapshot exists" would refuse legitimate commands
+  far more often than it would catch this phrasing.
   A **bulk** archive asks for confirmation first. New notes enter
   as `inbox` on suggestion and become `active`/`reference` on confirm; journal
   entries stay outside note lifecycle. **Real‑use accounting:** opening a note's
@@ -623,9 +663,20 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     kill the series).
   - **Fired‑reminder replies parse absolutely:** «давай завтра в 10 часов» after an
     alarm re‑arms it for **tomorrow 10:00**, not a "10‑hour snooze" (2026‑07‑16).
+    **The meridiem is read too (2026‑07‑27):** «tomorrow at 5 pm» / «завтра в 5
+    вечера» re‑arms at **17:00**, not 05:00 — am/pm and «утра/дня/вечера/ночи» right
+    after the clock time are applied instead of dropped.
   - **"Это напоминание"** binds to the one you were just dealing with; if it's genuinely
     ambiguous she asks which and **remembers what you wanted** — your "второе" / "#2" /
     "про банк" then completes the move/rename on the right one (never a stray close).
+    **Your pick means the card you were shown (2026‑07‑27):** the positions are pinned
+    to the exact ordered list the «какое?» card rendered, like the note‑review snapshot
+    — if a daily fires‑and‑advances (or one expires) between the question and your
+    answer, «первое» still means the first item of that card, and picking one that has
+    since closed is answered «уже закрыто», never applied to a shifted neighbour.
+    A reminder id arriving as «#2» / «2.» is normalized like the note path — «перенеси
+    #2 на 17:00» no longer answers not‑found on a reminder that is right there
+    (2026‑07‑27).
   - **Complete a half‑specified reminder:** an unmistakable time-only command such as
     "напомни в 17:00" is recognized deterministically (no router-confidence gamble) →
     she asks the subject, stitches your typed answer or the next single forwarded text
@@ -1302,11 +1353,20 @@ escape `_` (a single‑character wildcard in `LIKE`) so a prefix matches only it
 snapshot is also written from what the review card actually RENDERED: accepting a
 proactive nudge («Давай») used to rebuild it from the queued ids instead, so a note the
 card had dropped — or every note, when the card was never delivered — could still be hit
-by «второе в архив». Every write to `chunks` bumps a `vec_gen` counter and drops the decoded
+by «второе в архив». **The shown‑today ledger got the same pinning (2026‑07‑27):**
+`note_review_shown:{day}` held bare rowids, so «delete the highest‑rowid shown note,
+save a new one» silently excluded the brand‑new note from every review batch for the
+rest of the day — it now stores `{id, no}` pairs and drops an entry whose `#N` no
+longer matches. Every write to `chunks` bumps a `vec_gen` counter and drops the decoded
 vector cache: the old `(count, max_id, sum_id)` fingerprint collided under rowid reuse,
 and retrieval kept grounding answers in a DELETED note's chunks while the new note stayed
 invisible. (The legacy JSON→blob embedding conversion in `_migrate` bumps it too — it
-rewrites rows without changing an id.) Inbound `conversation` rows carry their Telegram
+rewrites rows without changing an id.) **And since 2026‑07‑27 a category rewrite bumps
+it as well** (`confirm_category`, `merge_categories`): the cached rows carry each
+chunk's category beside the vector, and a messages‑only UPDATE was invisible to the
+chunks‑derived fingerprint — after «перенеси #12 в Крипту», `ask` kept rendering the
+citation head and the grounding block with the OLD category until the next chunk write
+anywhere in the DB. Inbound `conversation` rows carry their Telegram
 `update_id` under a partial unique index, so an at‑least‑once redelivery cannot make the
 boss repeat himself in the history or in prompts — **and since 2026‑07‑26 their
 `tg_message_id` too**, which is what lets an `edited_message` rewrite that exact turn.
@@ -1348,7 +1408,19 @@ And the fast whole‑table note wipe now writes the same `deleted_used`/`deleted
 ledger rows as the per‑id path, so the saved‑to‑used KPI no longer depends on whether a
 journal happens to exist. The emptiness guard in `do_purge` counts the scrub too: a
 database whose only remaining content is dead‑lettered inbox rows must not answer
-«удалять нечего».
+«удалять нечего». **(2026‑07‑27)** Scopes `all` and `reminders` now delete **every**
+reminder row, not only the active ones — a closed reminder keeps its verbatim title
+forever (closing only flips status; no user‑facing path deletes the row), and
+`reminder_events.detail` carries titles too, so «удали всё» left both in the DB and in
+every off‑box backup. The preview discloses the closed count as its own line, the
+emptiness guard counts it too (a DB whose only reminder content is closed rows gets the
+offer, not «удалять нечего» — the exact state the fix targets), the ON
+DELETE CASCADE takes `reminder_events` with the rows, `reminder_events` older than
+`TELEMETRY_RETENTION_DAYS` are now retention‑pruned like the other telemetry (the
+weekly review reads at most a month of them), and the edited‑command pointers of kind
+'reminder' (`turn_artifact_msgs`) are dropped with the rows they describe — an edit of
+the old «напомни…» message after the purge must not claim the deleted reminder kept
+its details.
 
 ---
 
@@ -1626,11 +1698,17 @@ is documented twice. The lists above stay as the short tour; they are not the ca
   rather than going blank; the note is untouched too).
   Also unhandled: turns from **before this change** carry no `tg_message_id`, so their
   edits find no row to rewrite (nothing is invented — the edit is a silent no‑op); a
-  **journal entry's extracted fields** (e.g. gratitude items) are not re‑derived when its
-  text is updated, and a journal row also records no entry in the note‑outcome ledger
+  **journal entry's extracted fields** (e.g. gratitude items) are **reset to
+  unstructured, not re‑derived**, when a confirmed edit lands (2026‑07‑27 — they were
+  extracted from the replaced text, and keeping them meant the stats and person filters
+  kept answering with the old names; re‑extraction would be a model call inside a
+  confirm path), and a journal row also records no entry in the note‑outcome ledger
   (journal entries are outside note lifecycle by design); a confirmed note's **key facts
-  and summary are dropped rather than re‑derived** (that would mean a model call inside a
-  confirm path — renderers fall back to the note's own edited text); and Telegram itself
+  and summary are dropped rather than re‑derived** (same rule — renderers fall back to
+  the note's own edited text); an edited **command** turn gets the honest one‑line
+  notice above only for reminders and remembered facts (2026‑07‑27) — a calendar add or
+  a category correction derived from an edited message still keeps its old details
+  silently; and Telegram itself
   only delivers edits within its own edit window, so a very old message cannot be
   corrected at all.
 - **Compound commands** (two+ distinct actions in one message) are recognised but not

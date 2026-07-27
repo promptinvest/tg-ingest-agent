@@ -75,7 +75,8 @@ def _dispatch_default(s, c):
 
 _DISPATCH = {
     "ingest":              lambda s, c: s.do_ingest(c.chat_id, c.lang, c.msg),
-    "reminder_create":     lambda s, c: s.do_reminder_create(c.chat_id, c.lang, c.params),
+    "reminder_create":     lambda s, c: s.do_reminder_create(c.chat_id, c.lang, c.params,
+                                                             c.msg_id),
     "reminder_list":       lambda s, c: s.reply(c.chat_id, s._reminder_list_body(c.chat_id, c.lang)),
     "reminder_cancel":     lambda s, c: s.do_reminder_cancel(c.chat_id, c.lang, c.params),
     "reminder_reschedule": lambda s, c: s.do_reschedule(c.chat_id, c.lang, c.params, c.text),
@@ -93,7 +94,7 @@ _DISPATCH = {
     "item_detail":         lambda s, c: s.do_item_detail(c.chat_id, c.lang, c.params),
     "merge_categories":    lambda s, c: s.do_merge_categories(c.chat_id, c.lang, c.params),
     "recategorize":        lambda s, c: s.do_recategorize(c.chat_id, c.lang, c.params),
-    "item_delete":         lambda s, c: s.do_item_delete(c.chat_id, c.lang, c.params),
+    "item_delete":         lambda s, c: s.do_item_delete(c.chat_id, c.lang, c.params, c.text),
     "note_lifecycle":      lambda s, c: s.do_note_lifecycle(c.chat_id, c.lang, c.params, c.text),
     "note_review":         lambda s, c: s.do_note_review(c.chat_id, c.lang, c.params),
     "note_edit":           lambda s, c: s.do_note_edit(c.chat_id, c.lang, c.params, c.text),
@@ -119,7 +120,8 @@ _DISPATCH = {
     "boss_query":          lambda s, c: s.do_boss_query(c.chat_id, c.lang),
     "memory_why":          lambda s, c: s.do_memory_why(c.chat_id, c.lang, c.text),
     "proactive_prefs":     lambda s, c: s.do_proactive_prefs(c.chat_id, c.lang, c.params),
-    "boss_memory_update":  lambda s, c: s.do_boss_memory(c.chat_id, c.lang, c.params),
+    "boss_memory_update":  lambda s, c: s.do_boss_memory(c.chat_id, c.lang, c.params,
+                                                         c.msg_id),
     "style_update":        lambda s, c: s.do_style_update(c.chat_id, c.lang, c.params),
     "trace_query":         lambda s, c: s.reply(c.chat_id, s.trace_explain_text(c.lang, c.chat_id)),
     "memory_review":       lambda s, c: s.show_memory_review(c.chat_id, c.lang),
@@ -127,7 +129,7 @@ _DISPATCH = {
     "working_history":     lambda s, c: s.reply(c.chat_id, relationship.render_working_history(s.conn, c.lang)),
     "export":              lambda s, c: s.do_export(c.chat_id, c.lang, c.params),
     "memory":              lambda s, c: s.reply(c.chat_id, s.memory_text(c.lang)),
-    "remember":            lambda s, c: s.do_remember(c.chat_id, c.params, c.lang),
+    "remember":            lambda s, c: s.do_remember(c.chat_id, c.params, c.lang, c.msg_id),
     "forget":              lambda s, c: s.do_forget(c.chat_id, c.params, c.lang),
     "confirm":             lambda s, c: s.resolve_pending(c.chat_id, c.action, c.params, c.pending, c.lang),
     "amend":               lambda s, c: s.resolve_pending(c.chat_id, c.action, c.params, c.pending, c.lang),
@@ -937,6 +939,50 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     _EDIT_REINGEST_STATUSES = (None, "pending", "suggested", "failed")
 
+    # -- routed-turn artifacts (2026-07-27) ------------------------------------
+    # A routed command («напомни завтра в 15:00…», «запомни: …») produces NO
+    # `messages` row, so an edit of it used to rewrite the dialogue record and
+    # return in silence — while the reminder/memory item derived from the OLD
+    # words kept them. The artifacts are not auto-rewritten (a deterministic
+    # re-derive of a reminder from edited prose is exactly the guesswork the
+    # confirm flow exists to avoid); instead the message ids of turns that
+    # produced one are remembered (bounded, like fired_reminder_msgs) and the
+    # edit gets ONE honest line saying the artifact kept the old details.
+    # Recorded only when the artifact durably EXISTS — at reminder confirm /
+    # fact store, never at the draft or staging step: a draft the boss then
+    # declined (or let expire) left a pointer whose honest line asserted a
+    # reminder that was never created. The purge drops 'reminder' pointers
+    # with the rows (store._purge_reminder_kv).
+    _TURN_ARTIFACT_KV = store.TURN_ARTIFACT_KV
+    _TURN_ARTIFACT_KEEP = 50
+
+    def _remember_turn_artifact(self, tg_message_id, kind):
+        """Record that THIS inbound message produced a reminder draft/reminder
+        («reminder») or a remembered fact («memory»)."""
+        if not tg_message_id:
+            return
+        try:
+            data = json.loads(store.kv_get(self.conn, self._TURN_ARTIFACT_KV) or "{}")
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data[str(int(tg_message_id))] = str(kind)
+        for key in sorted(data, key=int)[:-self._TURN_ARTIFACT_KEEP]:
+            del data[key]
+        store.kv_set(self.conn, self._TURN_ARTIFACT_KV, json.dumps(data))
+
+    def _turn_artifact_kind(self, tg_message_id):
+        """'reminder' / 'memory' if this message produced one, else None."""
+        if tg_message_id is None:
+            return None
+        try:
+            data = json.loads(store.kv_get(self.conn, self._TURN_ARTIFACT_KV) or "{}")
+            kind = data.get(str(int(tg_message_id))) if isinstance(data, dict) else None
+        except (TypeError, ValueError):
+            return None
+        return kind if kind in ("reminder", "memory") else None
+
     # Attachments whose stored turn is a TRANSCRIPT, not a caption: his own voice
     # note is transcribed at dispatch and THAT text is what `convo_add` wrote for
     # this tg_message_id. An edit can only carry a CAPTION for such a message, and
@@ -965,12 +1011,24 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         #     message was while the note kept its text — the same divergence this
         #     whole path exists to close, pointing the other way. A removal is a
         #     documented no-op (CARA.md §10), not an erasure.
+        rewritten = False
         if text and not (not msg.get("text")
                          and any(msg.get(k) for k in self._TRANSCRIBED_KINDS)):
-            store.convo_set_text(self.conn, chat_id, tg_message_id, text)
+            rewritten = store.convo_set_text(self.conn, chat_id, tg_message_id, text)
         row = store.message_by_tg_id(self.conn, chat_id, tg_message_id)
         if row is None or not text:
-            return   # a plain turn (already rewritten), or an edit with no text
+            # A plain turn (already rewritten), or an edit with no text. One
+            # exception to the silence: if THIS message produced a reminder or
+            # a remembered fact, rewriting only the dialogue silently diverged
+            # the record from the durable state («напомни завтра в 15:00…»
+            # edited to 16:00 — the readback said 16:00, the alarm fired at
+            # 15:00). The artifact is not auto-rewritten; he gets one honest
+            # line and decides (2026-07-27).
+            if row is None and rewritten:
+                kind = self._turn_artifact_kind(tg_message_id)
+                if kind:
+                    self.reply(chat_id, T(self.lang(), f"edited_turn_{kind}"))
+            return
         if text == (row["raw_text"] or "").strip():
             # Nothing about the note's text actually changed. Telegram emits an
             # `edited_message` for things he would not call an edit at all (and
@@ -1207,6 +1265,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         store.set_urls(self.conn, row_id, urls)     # the body's links, re-synced
         store.set_chunks(self.conn, row_id, [])     # old vectors gone first
         self.index_message(row_id, text)            # re-embedded from the new text
+        # The structured journal payload was extracted from the REPLACED text —
+        # keeping it meant «спасибо Ане…» edited to «спасибо Борису…» still
+        # counted «Аня» in the stats and filtered by her name. Reset to
+        # unstructured (raw text stays authoritative; no model call inside a
+        # confirm path — the same rule as the dropped facts above), exactly the
+        # state the migration backfill uses for entries without an extraction
+        # (2026-07-27).
+        if store.journal_entry_get(self.conn, row_id) is not None:
+            store.journal_entry_update_payload(self.conn, row_id, {},
+                                               "legacy_unstructured")
         store.kv_set(self.conn, f"note_edit:{row_id}", "")
         store.note_outcome_record(self.conn, row_id, "note_edited", source="edit")
         relationship.log_event(
@@ -1655,17 +1723,24 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     # -- action handlers extracted from the old inline dispatch (verbatim behavior) --------
 
-    def do_reminder_create(self, chat_id, lang, params):
+    def do_reminder_create(self, chat_id, lang, params, msg_id=None):
         params = self._note_reminder_title(params)  # "напомни по заметке N"
         if params is None:
             # He named a note that isn't there. Not-found, never another note's
             # subject on a reminder he'd then confirm without seeing the swap.
             self.reply(chat_id, T(lang, "items_empty"))
             return
+        # Both remaining paths derive a reminder (draft or partial) from THIS
+        # message. Its id rides in the draft so the artifact pointer is
+        # written when the reminder is CREATED at confirm — not here: a draft
+        # he declines must leave no pointer claiming a reminder that never
+        # came to exist (2026-07-27).
         draft = reminders.validate_draft(params)
         if not draft:
-            self.start_partial_reminder(chat_id, lang, params)
+            self.start_partial_reminder(chat_id, lang, params, msg_id=msg_id)
             return
+        if msg_id:
+            draft["src_msg_id"] = int(msg_id)
         if params.get("note_msg_id"):
             # note→reminder outcome link (MET-001): proposal now, created at confirm
             draft["note_msg_id"] = params["note_msg_id"]
@@ -1902,6 +1977,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     return
                 if payload.get("note_msg_id"):  # keep the note→reminder link through amends
                     draft["note_msg_id"] = payload["note_msg_id"]
+                if payload.get("src_msg_id"):  # and the source-turn link (edit notice)
+                    draft["src_msg_id"] = payload["src_msg_id"]
                 store.pending_set(self.conn, chat_id, "reminder", draft)
                 self.reply(chat_id, T(
                     lang, "reminder_draft", title=draft["title"],
@@ -1923,6 +2000,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                             "reminder_id": rid})
             store.pending_clear(self.conn, chat_id)
             self._remember_reminder(rid)  # so a follow-up "это напоминание" binds to it
+            # NOW the reminder exists — an edit of the command turn that
+            # produced it gets the honest «осталось со старыми деталями» line.
+            self._remember_turn_artifact(payload.get("src_msg_id"), "reminder")
             self.reply(chat_id, T(
                 lang, "reminder_set", rid=self.reminder_no(chat_id, rid), title=payload["title"],
                 when_local=reminders.fmt_local(payload["due_utc"], self.tz_offset()),
@@ -2029,6 +2109,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             store.pending_clear(self.conn, chat_id)
             if action == "confirm":
                 boss_model.remember_explicit(self.conn, payload["value"], payload["kind"])
+                # Stored only now — the edit notice pointer follows the store.
+                self._remember_turn_artifact(payload.get("src_msg_id"), "memory")
                 self.reply(chat_id, T(lang, "boss_remembered", value=payload["value"]))
             # cancel handled by the generic branch above; an unrelated message
             # leaves the flagged item unsaved, which is the safe default.
@@ -2718,7 +2800,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         reply = (reply or "").strip()
         self.reply(chat_id, reply or boss_model.render_profile(self.conn, lang))
 
-    def do_boss_memory(self, chat_id, lang, params):
+    def do_boss_memory(self, chat_id, lang, params, msg_id=None):
         op = str(params.get("op") or "remember").strip().lower()
         value = params.get("value") or ""
         if op == "forget":
@@ -2740,11 +2822,18 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             sensitivity = boss_model.effective_sensitivity(kind, value)
             if sensitivity == "normal":
                 boss_model.remember_explicit(self.conn, value, kind)
+                # The fact is STORED — an EDIT of the message later gets the
+                # honest «прежняя версия» line (2026-07-27).
+                self._remember_turn_artifact(msg_id, "memory")
                 self.reply(chat_id, T(lang, "boss_remembered", value=value))
             else:
                 # Personal/flagged -> confirm with the boss before storing.
+                # The artifact pointer is written at HIS confirm, not here: a
+                # staged fact he then declines must leave no pointer claiming
+                # a memory that was never stored.
                 store.pending_set(self.conn, chat_id, "boss_sensitive",
-                                  {"value": value, "kind": kind, "sensitivity": sensitivity})
+                                  {"value": value, "kind": kind, "sensitivity": sensitivity,
+                                   "src_msg_id": msg_id})
                 self.reply(chat_id, T(lang, "boss_sensitive_confirm", s=sensitivity))
 
     def do_style_update(self, chat_id, lang, params):
@@ -2807,7 +2896,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                          + (f" — {msg}" if msg else ""))
         return f"cara-trace-{row['trace_id']}.md", "\n".join(lines) + "\n"
 
-    def do_remember(self, chat_id, params, lang):
+    def do_remember(self, chat_id, params, lang, msg_id=None):
         value = str(params.get("value") or "").strip()
         if not value:
             self.reply(chat_id, T(lang, "clarify"))
@@ -2831,6 +2920,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             note_id = int(store.kv_get(self.conn, "note_seq", "0") or 0) + 1
             store.kv_set(self.conn, "note_seq", note_id)
             store.pref_set(self.conn, f"note:{note_id}", value)
+        # This turn stored a fact — an EDIT of it later gets the honest
+        # «память не менялась» line (2026-07-27).
+        self._remember_turn_artifact(msg_id, "memory")
         self.reply(chat_id, T(self.lang(), "remember_saved", value=value))
 
     def _migrate_owner_name(self):
@@ -4052,13 +4144,21 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         voice/audio note, or extract a document's text. (His OWN voice notes are transcribed on
         arrival; forwarded ones are stored unparsed until he asks for the content.) Targets the
         most recent stored file, or the one on note #id if given."""
-        try:
-            # Router params are passed through untyped, so normalize first: a
-            # falsy-but-present id («» / «первая») is NOT a note number, and
-            # interpolating it raw produced «У # нет голосового…».
-            note_no = int(params["id"]) if params.get("id") is not None else None
-        except (TypeError, ValueError):
-            note_no = None
+        # Router params are passed through untyped, so normalize with the SAME
+        # helper every other explicit-note path uses: the id arrives as 7,
+        # «#7», «J#7» or «7.» — a bare int() rejected «#12» and the handler
+        # then read the newest UNRELATED file as if it were the answer to
+        # «расшифруй голосовое из #12» (2026-07-27).
+        raw_id = params.get("id")
+        note_no = store.note_no_value(raw_id)
+        if note_no is None and raw_id not in (None, ""):
+            # Present, non-empty, but UNUSABLE («первая», a stray dict): he
+            # named a target the router garbled. A media read has no search to
+            # fall through to, so ask — never substitute the newest file.
+            # (A falsy «» stays a router artefact meaning «no id»: the
+            # recent-file fallback below is the documented behaviour for it.)
+            self.reply(chat_id, T(lang, "read_media_which"))
+            return
         if note_no is not None:
             # An EXPLICIT note number is a target, not a hint: if it doesn't
             # resolve, or that note carries no file, say so. Falling back to the

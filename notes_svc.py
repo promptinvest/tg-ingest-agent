@@ -465,6 +465,10 @@ class NotesMixin:
         labels = {
             "messages": ("сообщений" if ru else "messages"),
             "reminders": ("напоминаний" if ru else "reminders"),
+            # Closed reminders keep verbatim titles + event history — a purge
+            # that takes them must SAY so (scope 'all'/'reminders', 2026-07-27).
+            "reminders_closed": ("закрытых напоминаний (история)" if ru else
+                                 "closed reminders (history)"),
             "categories": ("категорий" if ru else "categories"),
             "issues": ("записей о проблемах" if ru else "issue records"),
             "feedback": ("поправок" if ru else "corrections"),
@@ -511,7 +515,8 @@ class NotesMixin:
         # cannot see (the scope-'all' inbox scrub) would be skipped on exactly
         # the database that still needs it — «здесь уже пусто» while verbatim
         # copies of his messages stay on disk and in the off-box backups.
-        if not any(info.get(k) for k in ("messages", "reminders", "categories",
+        if not any(info.get(k) for k in ("messages", "reminders",
+                                         "reminders_closed", "categories",
                                          "issues", "feedback", "conversation",
                                          "note_outcomes", "updates_scrubbed")):
             self.reply(chat_id, T(lang, "purge_nothing"))
@@ -552,21 +557,35 @@ class NotesMixin:
             # exactly what it names. Falling through when none matched archived/
             # deleted the NEWEST unrelated note («в архив #7 и #9» with both gone).
             return out
-        count = params.get("count")
-        if count is not None:
-            try:
-                n = max(1, min(int(count), 20))
-            except (TypeError, ValueError):
-                return []   # an unusable count is not a licence to take the newest
-            return store.list_messages(self.conn, limit=n)
         if params.get("id") is not None:
             # A SINGLE explicit #N is the router's canonical form («убери #5 в
             # архив» -> {"id": 5}) and is exactly as explicit as the ids list:
             # resolve it strictly. Falling through to resolve_item took the
             # NEWEST note on a miss, and lifecycle/recategorize act on it
             # immediately — no confirmation to catch the substitution.
+            # Tested BEFORE count: «убери #7 в архив» routed as {"id": 7,
+            # "count": 1} used to hand the newest note to a no-confirmation op.
             row = store.message_by_note_no(self.conn, params.get("id"))
-            return [row] if row is not None else []
+            if row is not None or store.note_no_value(params.get("id")) is not None:
+                return [row] if row is not None else []
+            # Present but UNUSABLE ("", "abc") — a router artefact, not a number
+            # he named (same rule as resolve_item, which was given this escape
+            # by the audit while this resolver kept refusing): it may fall
+            # through, but only to the count/query/category paths below, which
+            # return solely what actually matches — never the newest note.
+            if not (params.get("query") or params.get("category")
+                    or params.get("count")):
+                return []
+        count = params.get("count")
+        if count is not None:
+            try:
+                n = max(1, min(int(count), 20))
+            except (TypeError, ValueError):
+                return []   # an unusable count is not a licence to take the newest
+            # Bounded by the filter he named: «удали 3 из crypto» took the three
+            # newest notes of the WHOLE inbox when the filter was dropped here.
+            return store.list_messages(self.conn, params.get("category"),
+                                       params.get("query"), limit=n)
         row = self.resolve_item(params)
         return [row] if row else []
 
@@ -720,6 +739,18 @@ class NotesMixin:
         # Resolve the TARGET item(s) WITHOUT the destination category (it's where
         # they go, not a filter): explicit ids/count, a single id, "all in <cat>"
         # / a text query (bulk), else the most recent.
+        # An id that is PRESENT but unusable («» / «первая») is a router
+        # artefact, not a number he named (resolve_item's rule): his real
+        # reference is the query, so drop the artefact and let the query branch
+        # run — «удали заметку про крипту» arriving as {"id": "", "query":
+        # "про крипту"} was a hard «ничего не нашла» on a note that exists.
+        # With no query either, fail closed rather than take the newest note.
+        if (params.get("id") is not None
+                and store.note_no_value(params.get("id")) is None):
+            params = {k: v for k, v in params.items() if k != "id"}
+            if not (params.get("query") or params.get("ids") or params.get("count")):
+                self.reply(chat_id, T(lang, "items_empty"))
+                return
         if params.get("ids") or params.get("count"):
             rows = self.resolve_items({k: params[k] for k in ("ids", "count")
                                        if params.get(k) is not None})
@@ -788,7 +819,15 @@ class NotesMixin:
         for r in rows:
             cat = r["category"] or r["suggested_category"] or ("без категории" if ru else "uncategorized")
             name = r["file_name"] or ("файл" if ru else "file")
-            lines.append(f"📎 {name} — #{self.note_no(r['message_id'])} · {cat}")
+            # Only a VISIBLE note (one the #N lists can show) may lazily claim
+            # its number here. `note_no` is a WRITER (ensure_note_no), and
+            # calling it for a failed/duplicate row permanently consumed a #N
+            # that no list ever showed — the boss's numbering jumped #56 → #58
+            # and «убери #57» answered «вне жизненного цикла» (2026-07-27).
+            if r["status"] in ("confirmed", "suggested"):
+                lines.append(f"📎 {name} — #{self.note_no(r['message_id'])} · {cat}")
+            else:
+                lines.append(f"📎 {name} · {cat}")
         lines.append(T(lang, "files_footer"))
         return "\n".join(lines)
 
@@ -885,7 +924,11 @@ class NotesMixin:
         if not slots:
             return None          # no live snapshot at all -> no claim on this text
         t = str(text or "").casefold()
-        if re.search(r"\bвсе\b|\ball\b|\bобе\b|\bоба\b", t):
+        # «всё» is a different string from «все» (ё), and «эти»/«их»/"them" are
+        # how he actually points at the batch — any of them missing here made
+        # «всё в архив» fall through to resolve_items({}) and archive the
+        # NEWEST note in the inbox, unconfirmed (2026-07-27).
+        if re.search(r"\bвс[её]\b|\ball\b|\bthem\b|\bобе\b|\bоба\b|\bэти\b|\bих\b", t):
             return [r for r in slots if r is not None]
         for stem, pos in self._ORDINALS.items():
             if stem in t:
@@ -909,11 +952,31 @@ class NotesMixin:
         ru = lang == "ru"
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         shown_key = f"note_review_shown:{day}"
+        # Shown-today entries are PINNED {id, no} pairs, like the snapshot:
+        # a bare rowid list meant «delete the highest-rowid shown note, save a
+        # new one» silently excluded the BRAND-NEW note from every review batch
+        # for the rest of the day (SQLite reuses the highest rowid). An entry
+        # whose note_no no longer matches (or whose row is gone) is dropped —
+        # it describes a note that no longer answers to that id (2026-07-27).
         try:
-            shown = [int(i) for i in json.loads(
-                store.kv_get(self.conn, shown_key) or "[]")]
+            raw = json.loads(store.kv_get(self.conn, shown_key) or "[]")
         except (TypeError, ValueError):
-            shown = []
+            raw = []
+        shown_pins = {}
+        if isinstance(raw, list):
+            for it in raw:
+                try:
+                    if isinstance(it, dict):
+                        mid, no = int(it["id"]), it.get("no")
+                    else:   # unpinned entry written before this fix, same day
+                        mid, no = int(it), None
+                except (KeyError, TypeError, ValueError):
+                    continue
+                row = store.get_message(self.conn, mid)
+                if row is None or (no is not None and row["note_no"] != no):
+                    continue
+                shown_pins[mid] = no if no is not None else row["note_no"]
+        shown = list(shown_pins)
         if preset_ids:
             batch = []
             for mid in preset_ids[:3]:
@@ -937,7 +1000,11 @@ class NotesMixin:
             return []  # not delivered -> no snapshot, no shown-marking
         ids = [row["id"] for row, _ in batch]
         self._review_snapshot_set(ids, ttl_seconds=24 * 3600)
-        store.kv_set(self.conn, shown_key, json.dumps(sorted(set(shown + ids))))
+        for mid in ids:   # every rendered row got its #N above (self.note_no)
+            row = store.get_message(self.conn, mid)
+            shown_pins[mid] = row["note_no"] if row is not None else None
+        store.kv_set(self.conn, shown_key, json.dumps(
+            [{"id": mid, "no": shown_pins[mid]} for mid in sorted(shown_pins)]))
         events.record_done(self.conn, "note_review_shown", chat_id=chat_id,
                            payload={"ids": ids})
         return ids
@@ -1022,8 +1089,16 @@ class NotesMixin:
                 # journal entries / failed rows live outside note lifecycle
                 self.reply(chat_id, T(lang, "note_lifecycle_na", row_id=no))
 
-    def do_item_delete(self, chat_id, lang, params):
-        rows = self.resolve_items(params)
+    def do_item_delete(self, chat_id, lang, params, text=""):
+        # Same snapshot rule as do_note_lifecycle: right after a review card,
+        # «второе удали» names the second SHOWN note. Skipping this check here
+        # made the ordinal the review card teaches him mean one thing on the
+        # archive path and «the newest note» on the delete path (2026-07-27).
+        rows = None
+        if not any(params.get(k) for k in ("id", "ids", "query", "count")):
+            rows = self._rows_from_review_snapshot(text)
+        if rows is None:
+            rows = self.resolve_items(params)
         if not rows:
             self.reply(chat_id, T(lang, "items_empty"))
         elif len(rows) == 1:

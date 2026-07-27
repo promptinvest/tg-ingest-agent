@@ -590,7 +590,11 @@ def _vec_gen(conn):
 
 def bump_vec_gen(conn):
     """Advance the chunks generation counter — call from every path that writes
-    or deletes `chunks` rows (rowid reuse makes the id fingerprint alone unsafe)."""
+    or deletes `chunks` rows (rowid reuse makes the id fingerprint alone unsafe)
+    AND from every path that rewrites the `messages` columns the cached rows
+    carry (category/suggested_category via confirm_category/merge_categories):
+    the fingerprint is computed over `chunks` only, so a messages-side UPDATE
+    is otherwise invisible and the cache serves the old category (2026-07-27)."""
     conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)",
                  (VEC_GEN_KEY, str(_vec_gen(conn) + 1)))
 
@@ -1777,7 +1781,26 @@ def merge_categories(conn, src, dst):
     for d in journal_defs(conn):
         if (d["category"] or "").casefold() == src_name.casefold():
             journal_def_update(conn, d["slug"], category=dst_name)
+    # Folding a plain category INTO a journal: the moved messages need entry
+    # rows or the diary listing simply doesn't show them until the next
+    # restart's backfill happens to add them. Same shape as that backfill —
+    # confirmed rows, payload {}, 'legacy_unstructured' (2026-07-27).
+    gdef = journal_def_by_category(conn, dst_name)
+    if gdef is not None:
+        now = _now()
+        for m in conn.execute(
+                "SELECT id, received_at FROM messages WHERE status = 'confirmed'"
+                " AND category = ?", (dst_name,)):
+            conn.execute(
+                "INSERT OR IGNORE INTO journal_entries (journal_id, message_id,"
+                " occurred_at, payload_json, extraction_status, created_at, updated_at)"
+                " VALUES (?, ?, ?, '{}', 'legacy_unstructured', ?, ?)",
+                (gdef["id"], m["id"], m["received_at"], now, now))
+    # The decoded-vector cache carries each chunk's category; a whole-category
+    # rename is exactly the messages-only write its fingerprint cannot see.
+    bump_vec_gen(conn)
     conn.commit()
+    invalidate_vector_cache(conn)
     return moved, dst_name
 
 
@@ -2339,9 +2362,12 @@ def message_files(conn, message_id):
 
 def recent_files(conn, limit=20):
     """All stored files (newest first) with their item's id/category, for the
-    'show my files' listing."""
+    'show my files' listing. `status`/`note_no` ride along so the renderer can
+    tell a VISIBLE note (which may lazily claim its #N) from a failed/duplicate
+    row — numbering those minted a permanent #N no list ever shows (2026-07-27)."""
     return conn.execute(
-        "SELECT f.file_name, f.mime_type, f.message_id, m.category, m.suggested_category"
+        "SELECT f.file_name, f.mime_type, f.message_id, m.category, m.suggested_category,"
+        " m.status, m.note_no"
         " FROM files f JOIN messages m ON m.id = f.message_id"
         " ORDER BY f.id DESC LIMIT ?", (limit,),
     ).fetchall()
@@ -2442,14 +2468,25 @@ def confirm_category(conn, message_id, category, journal_payload=None,
             " knowledge_state = NULL WHERE id = ?",
             (category, message_id),
         )
+        # The decoded-vector cache carries this row's category beside its
+        # vectors; a category rewrite is otherwise invisible to the chunks-only
+        # fingerprint, so `ask` kept citing the OLD category (2026-07-27).
+        bump_vec_gen(conn)
         conn.commit()
+        invalidate_vector_cache(conn)
         # Structured journal (plan v1.1 §5.5): the CONFIRM is the write boundary —
         # one entry per source message, created only here (never at suggestion
         # time). The payload is validated derived metadata; raw text stays
         # authoritative. Confirms without an extraction (recategorize into a
         # journal, auto-confirm) still get their entry row, unstructured.
         gdef = journal_def_by_category(conn, category)
+        # Moving between journals (or into a journal without a structured
+        # definition): the entry row is the OLD diary's membership record —
+        # `journal_entry_add` is INSERT OR IGNORE on message_id, so without
+        # this delete the note stayed listed in the diary it left (2026-07-27).
         if gdef is not None:
+            conn.execute("DELETE FROM journal_entries WHERE message_id = ?"
+                         " AND journal_id != ?", (message_id, gdef["id"]))
             row = get_message(conn, message_id)
             journal_entry_add(
                 conn, gdef["id"], message_id,
@@ -2457,6 +2494,10 @@ def confirm_category(conn, message_id, category, journal_payload=None,
                 payload=journal_payload or {},
                 extraction_status=(journal_status or
                                    ("complete" if journal_payload else "unstructured")))
+        else:
+            conn.execute("DELETE FROM journal_entries WHERE message_id = ?",
+                         (message_id,))
+            conn.commit()
         return
     conn.execute(
         "UPDATE messages SET category = ?, status = 'confirmed',"
@@ -2464,7 +2505,17 @@ def confirm_category(conn, message_id, category, journal_payload=None,
         " note_purpose = COALESCE(note_purpose, 'reference') WHERE id = ?",
         (category, message_id),
     )
+    # Recategorised OUT of a journal: the diary must not keep listing it. The
+    # entry row is the diary's membership record and `journal_entries_for`
+    # never re-checks messages.category, so without this manual cascade (the
+    # same one delete_message performs) «перенеси J#12 в Идеи» left the note in
+    # BOTH the diary and the #N lists — and it then survived the diary's own
+    # purge, which walks _messages_in_category (2026-07-27).
+    conn.execute("DELETE FROM journal_entries WHERE message_id = ?", (message_id,))
+    # Category is served by the decoded-vector cache — see the journal branch.
+    bump_vec_gen(conn)
     conn.commit()
+    invalidate_vector_cache(conn)
     ensure_note_no(conn, message_id)  # a confirmed note gets its stable #N now
     note_outcome_record(conn, message_id, "captured", source="confirm")
 
@@ -2857,10 +2908,31 @@ def _purge_all_message_kv(conn):
 # id. They are cleared with the rows they describe.
 REMINDER_KV_KEYS = ("fired_reminder_msgs", "last_reminder_id")
 
+# Message ids of routed-command turns that produced a reminder or a remembered
+# fact (the edited-command honest line reads it; the agent writes it). Named
+# here because the purge must see it: a 'reminder' entry describes a row the
+# purge deletes.
+TURN_ARTIFACT_KV = "turn_artifact_msgs"
+
 
 def _purge_reminder_kv(conn):
     marks = ",".join("?" for _ in REMINDER_KV_KEYS)
     conn.execute(f"DELETE FROM kv WHERE key IN ({marks})", REMINDER_KV_KEYS)
+    # Drop the 'reminder' turn-artifact pointers with the rows they describe:
+    # after «удали напоминания» an edit of the old «напомни…» command must not
+    # claim the (deleted) reminder kept its details. 'memory' entries stay —
+    # boss facts and preferences are never purged, so their claim stays true.
+    # Raw execute (not kv_set) like the sibling sweeps: purge_execute commits
+    # ONCE at the end.
+    try:
+        data = json.loads(kv_get(conn, TURN_ARTIFACT_KV) or "{}")
+    except ValueError:
+        data = {}
+    if isinstance(data, dict):
+        kept = {k: v for k, v in data.items() if v != "reminder"}
+        if kept != data:
+            conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)",
+                         (TURN_ARTIFACT_KV, json.dumps(kept)))
 
 
 def _like_prefix(value):
@@ -2870,10 +2942,13 @@ def _like_prefix(value):
 
 
 def _reset_note_counters(conn):
-    """Only for scope 'all', which also wipes the outcome ledger: with nothing
-    left that a number could collide with, numbering restarts at #1 (what the
-    boss saw before the counter existed). Every other scope keeps the counter —
-    the ledger survives there and its numbers must stay unique."""
+    """Only for scope 'all', which deletes every live note row AND the outcome
+    ledger: with nothing left that a number could collide with, numbering
+    restarts at #1 (what the boss saw before the counter existed). Every other
+    scope keeps the counter, because LIVE `messages` rows keep their note_no
+    there — scope 'stats' wipes the ledger too, but a reissued number would
+    still hand two live notes the same «#N» (`message_by_note_no` is LIMIT 1).
+    The live numbers, not the ledger alone, are what a reset would collide with."""
     conn.execute(r"DELETE FROM kv WHERE key LIKE ? ESCAPE '\'",
                  (_like_prefix("note_no_next") + ":%",))
 
@@ -2955,6 +3030,10 @@ def purge_preview(conn, scope, category=None):
     if scope == "all":
         info["messages"] = count("SELECT COUNT(*) FROM messages")
         info["reminders"] = count("SELECT COUNT(*) FROM reminders WHERE status='active'")
+        # Closed reminders keep their verbatim titles (and their event history)
+        # — «удали всё» must take those too, and the preview must say so.
+        info["reminders_closed"] = count(
+            "SELECT COUNT(*) FROM reminders WHERE status != 'active'")
         info["categories"] = count("SELECT COUNT(*) FROM categories")
         info["issues"] = count("SELECT COUNT(*) FROM issues")
         info["conversation"] = count("SELECT COUNT(*) FROM conversation")
@@ -2972,6 +3051,8 @@ def purge_preview(conn, scope, category=None):
         info["note_outcomes"] = count("SELECT COUNT(*) FROM note_outcomes")
     elif scope == "reminders":
         info["reminders"] = count("SELECT COUNT(*) FROM reminders WHERE status='active'")
+        info["reminders_closed"] = count(
+            "SELECT COUNT(*) FROM reminders WHERE status != 'active'")
     elif scope == "messages":  # all saved notes/messages, keep categories/reminders/settings
         protected = _non_journal_message_ids(conn)  # journals are spared
         info["messages"] = (count("SELECT COUNT(*) FROM messages")
@@ -3004,7 +3085,13 @@ def purge_execute(conn, scope, category=None):
                       "note_outcomes", "messages",
                       "categories", "issue_patterns", "issues", "feedback", "conversation"):
             conn.execute(f"DELETE FROM {table}")
-        conn.execute("DELETE FROM reminders WHERE status='active'")
+        # EVERY reminder row, not just active ones: a closed reminder keeps its
+        # verbatim title forever (there is no user-facing row delete — close
+        # only flips status), and `reminder_events.detail` carries titles too.
+        # «удали всё» leaving those in the DB and in every off-box backup
+        # contradicted the purge promise. The ON DELETE CASCADE takes
+        # reminder_events with the rows (2026-07-27).
+        conn.execute("DELETE FROM reminders")
         conn.execute("DELETE FROM pending_actions")
         # The durable inbox keeps a VERBATIM copy of every update — text
         # included — and only 'done' rows are ever pruned, so a failed one
@@ -3044,7 +3131,10 @@ def purge_execute(conn, scope, category=None):
         for table in ("issue_patterns", "issues", "feedback", "note_outcomes"):
             conn.execute(f"DELETE FROM {table}")
     elif scope == "reminders":
-        conn.execute("DELETE FROM reminders WHERE status='active'")
+        # All rows, like scope 'all': «удали напоминания» closing the active
+        # ones while months of closed titles stayed behind was the same broken
+        # promise one scope over. Cascade takes reminder_events.
+        conn.execute("DELETE FROM reminders")
         _purge_reminder_kv(conn)
     elif scope == "messages":
         protected = _non_journal_message_ids(conn)  # journals are spared
@@ -3225,7 +3315,11 @@ def prune_telemetry(conn, cutoff_iso):
     — the DB's dominant growth term on a small box). Deletes rows older than
     the cutoff: traces (trace_events follow via ON DELETE CASCADE), done/failed
     events and jobs (pending/claimed are live state — never touched), the
-    proactive audit log, and expired model cooldowns. Deliberately NOT pruned:
+    proactive audit log, expired model cooldowns, and reminder_events (the
+    weekly review reads at most a month of them, and `detail` can carry a
+    verbatim title — e.g. on a 'renamed' event — which nothing else ever
+    prunes; the reminder rows themselves are user data and are NOT touched
+    here). Deliberately NOT pruned:
     llm_usage (spend history, never purged), conversation (recall_conversation
     reads it verbatim), issues (weekly review + boss-reported problems), and
     every memory/relationship table. Returns rows deleted (cascade-deleted
@@ -3240,6 +3334,8 @@ def prune_telemetry(conn, cutoff_iso):
     total += conn.execute("DELETE FROM proactive_log WHERE ts < ?",
                           (cutoff_iso,)).rowcount
     total += conn.execute("DELETE FROM model_cooldowns WHERE until_at < ?",
+                          (cutoff_iso,)).rowcount
+    total += conn.execute("DELETE FROM reminder_events WHERE ts < ?",
                           (cutoff_iso,)).rowcount
     # Terminal failures are recovery evidence and remain until explicitly
     # handled; only successfully consumed update payloads are retention data.
@@ -3309,7 +3405,12 @@ def convo_set_text(conn, chat_id, tg_message_id, text):
     He edited it: his chat now shows the NEW text (with Telegram's 'edited'
     mark), so the verbatim record he can have read back must show it too.
     Restricted to 'user' rows — only inbound turns carry a tg_message_id, and
-    Cara's own words are never rewritten. Returns True when a row changed.
+    Cara's own words are never rewritten. Returns True only when the stored
+    text ACTUALLY changed: Telegram emits `edited_message` for things the boss
+    would not call an edit, and the crash replay can re-drive a stored one — a
+    same-value write must not count as a rewrite, or the caller re-sends the
+    honest turn-artifact notice for an edit that changed nothing (the note
+    path has the same guard one layer up).
 
     Same CONVO_TEXT_MAX cap as convo_add, and it has to be: an edit that stored
     less than the original write would make correcting a typo in a long message
@@ -3317,10 +3418,12 @@ def convo_set_text(conn, chat_id, tg_message_id, text):
     """
     if tg_message_id is None:
         return False
+    capped = str(text or "")[:CONVO_TEXT_MAX]
     cur = conn.execute(
         "UPDATE conversation SET text = ?"
-        " WHERE chat_id = ? AND tg_message_id = ? AND role = 'user'",
-        (str(text or "")[:CONVO_TEXT_MAX], chat_id, int(tg_message_id)),
+        " WHERE chat_id = ? AND tg_message_id = ? AND role = 'user'"
+        " AND text IS NOT ?",
+        (capped, chat_id, int(tg_message_id), capped),
     )
     conn.commit()
     return cur.rowcount > 0

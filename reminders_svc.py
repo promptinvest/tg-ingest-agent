@@ -90,12 +90,17 @@ class ReminderMixin:
         self.reply(chat_id, T(lang, "reminder_renamed",
                               rid=self.reminder_no(chat_id, row["id"]), title=new_title))
 
-    def start_partial_reminder(self, chat_id, lang, params):
+    def start_partial_reminder(self, chat_id, lang, params, msg_id=None):
         """A reminder_create missing the subject or the time: keep whatever the
         boss gave and ask for the rest, instead of dropping it to a generic
-        clarify (which lost 'напомни в 17:00' entirely)."""
+        clarify (which lost 'напомни в 17:00' entirely). `msg_id` is the
+        command turn's Telegram message id — it rides the partial into the
+        full draft so the edit-notice pointer is written when the reminder is
+        actually created at confirm (2026-07-27)."""
         now = datetime.now(timezone.utc)
         draft = {"recurrence": "none"}
+        if msg_id:
+            draft["src_msg_id"] = int(msg_id)
         title = str(params.get("title") or "").strip()
         if title:
             draft["title"] = title[:reminders.MAX_TITLE_CHARS]
@@ -125,7 +130,7 @@ class ReminderMixin:
             store.pending_clear(self.conn, chat_id)  # boss moved on to something else
             return False
         draft = {k: v for k, v in pending["payload"].items()
-                 if k in ("title", "due_utc", "recurrence")}
+                 if k in ("title", "due_utc", "recurrence", "src_msg_id")}
         title = str(params.get("title") or "").strip()
         if title and not draft.get("title"):
             draft["title"] = title[:reminders.MAX_TITLE_CHARS]
@@ -141,6 +146,8 @@ class ReminderMixin:
             draft["recurrence"] = rec
         full = reminders.validate_draft(draft)
         if full:
+            if draft.get("src_msg_id"):   # validate_draft strips extra keys
+                full["src_msg_id"] = draft["src_msg_id"]
             store.pending_set(self.conn, chat_id, "reminder", full)
             self.reply(chat_id, T(lang, "reminder_draft", title=full["title"],
                        when_local=reminders.fmt_local(full["due_utc"], self.tz_offset()),
@@ -247,10 +254,22 @@ class ReminderMixin:
 
     def _followup_day_due(self, t, days):
         """UTC ISO for «(после)завтра [в] HH[:MM]» — `days` ahead in LOCAL time,
-        defaulting to 09:00 when the boss named no clock time."""
-        tm = re.search(r"(?:в|на|at)?\s*(\d{1,2})(?::(\d{2}))?\b", t)
+        defaulting to 09:00 when the boss named no clock time.
+
+        The meridiem is read too: «am»/«pm» are follow-up scaffold words
+        (reminders._FOLLOWUP_SCAFFOLD), so «tomorrow at 5 pm» reaches this
+        branch instead of the router — dropping the «pm» re-armed the alarm at
+        05:00, twelve hours early. The Russian twins («в 5 вечера/дня»,
+        «в 12 ночи») are the same trap one language over (2026-07-27)."""
+        tm = re.search(r"(?:в|на|at)?\s*(\d{1,2})(?::(\d{2}))?"
+                       r"(?:\s*(?P<mer>am|pm|утра|ночи|дня|вечера)\b)?\b", t)
         hour = max(0, min(23, int(tm.group(1)))) if tm else 9
         minute = max(0, min(59, int(tm.group(2) or 0))) if tm else 0
+        mer = tm.group("mer") if tm else None
+        if mer in ("pm", "дня", "вечера") and hour < 12:
+            hour += 12
+        elif mer in ("am", "ночи", "утра") and hour == 12:
+            hour = 0
         local_now = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
         local_due = datetime.combine(local_now.date() + timedelta(days=days),
                                      datetime.min.time(), tzinfo=timezone.utc)
@@ -462,11 +481,23 @@ class ReminderMixin:
                  "шест": 6, "седьм": 7, "first": 1, "second": 2, "third": 3,
                  "fourth": 4, "fifth": 5}
 
+    # Sentinel for «he picked a SHOWN position whose reminder is gone» — a
+    # not-found, never a shifted substitute (and never «not a pick», which
+    # would silently abandon the remembered op and re-route the message).
+    _PICK_GONE = object()
+
     def _parse_reminder_selector(self, text, rows):
         """Map the boss's disambiguation answer to one of `rows` (display order):
-        a number / '#2', an ordinal word ('второе'), or a title word ('про банк')."""
+        a number / '#2', an ordinal word ('второе'), or a title word ('про банк').
+
+        `rows` is POSITIONAL and may carry None slots (a shown reminder that
+        has since fired-and-advanced or closed): «первое» must mean the first
+        item of the card he was SHOWN, exactly like the notes snapshot — the
+        old re-queried list re-numbered itself when a daily advanced, and his
+        answer landed on a different reminder. A pick of a gone slot returns
+        `_PICK_GONE` (2026-07-27)."""
         t = (text or "").strip().casefold()
-        if not t or not rows:
+        if not t or not any(r is not None for r in rows):
             return None
         # Only a BARE or #-prefixed number is a PICK. «давай лучше в 2 часа» is a
         # fresh TIME during the disambiguation, not a choice of reminder #2 — a
@@ -487,11 +518,13 @@ class ReminderMixin:
                     continue                       # «2 часа», «2 дня», «2:30»
             n = int(m.group(2))
             if 1 <= n <= len(rows):
-                return rows[n - 1]
+                return rows[n - 1] if rows[n - 1] is not None else self._PICK_GONE
         for stem, n in self._ORDINALS.items():
             if stem in t and 1 <= n <= len(rows):
-                return rows[n - 1]
+                return rows[n - 1] if rows[n - 1] is not None else self._PICK_GONE
         for r in rows:  # a word of the title appearing in his answer ('про банк')
+            if r is None:
+                continue
             words = [w for w in re.split(r"\W+", r["title"].casefold()) if len(w) >= 3]
             if any(w in t for w in words):
                 return r
@@ -503,11 +536,22 @@ class ReminderMixin:
         pick (caller then abandons the pending and routes the message normally)."""
         payload = pending["payload"]
         ids = payload.get("ids") or []
-        rows = [r for r in store.reminders_active(self.conn, chat_id) if r["id"] in ids]
+        # PIN the positions to the ORDER the «какое?» card showed (the stored
+        # ids list): re-deriving them from a live re-query re-numbered the list
+        # when a recurring reminder fired-and-advanced (or one expired) between
+        # the question and his answer, so «первое» landed on a different
+        # reminder. A gone id keeps its slot as None — exactly the notes
+        # snapshot's rule — and picking it is a not-found, never a substitute
+        # (2026-07-27).
+        active = {r["id"]: r for r in store.reminders_active(self.conn, chat_id)}
+        rows = [active.get(i) for i in ids]
         row = self._parse_reminder_selector(text, rows)
         if row is None:
             return False
         store.pending_clear(self.conn, chat_id)
+        if row is self._PICK_GONE:
+            self.reply(chat_id, T(lang, "reminder_already_closed"))
+            return True
         op = payload.get("op")
         if op == "reschedule":
             due = reminders.parse_iso_utc(payload.get("due_utc"))

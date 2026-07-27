@@ -16234,9 +16234,11 @@ class EditedMessages20260726Tests(unittest.TestCase):
 
     def test_editing_a_journal_entrys_source_message(self):
         """A journal row takes a different confirm path (knowledge_state stays
-        NULL), so `note_outcome_record` is a no-op there — and its extracted
-        fields are NOT re-derived. Both are declared limits in CARA.md §10; this
-        pins them so a future reader knows they were chosen, not overlooked."""
+        NULL), so `note_outcome_record` is a no-op there. Its extracted fields
+        are RESET to unstructured on a confirmed edit (2026-07-27) — they were
+        derived from the replaced text, and keeping them meant the person stats
+        and filters kept answering with the old values; re-extraction stays out
+        (no model call inside a confirm path, CARA.md §10)."""
         store.journal_def_ensure(self.conn, "gratitude", "Благодарность",
                                  "gratitude", "Благодарность")
         canonical = store.ensure_category(self.conn, "Благодарность")
@@ -16256,8 +16258,11 @@ class EditedMessages20260726Tests(unittest.TestCase):
                          "спасибо Ане за помощь с переездом")
         self.assertTrue(any("Готово" in s for s in sent), sent)
         entry = self.conn.execute(
-            "SELECT payload_json FROM journal_entries WHERE message_id = ?", (rid,)).fetchone()
-        self.assertIn("пирог", entry["payload_json"])   # the KNOWN limit, pinned
+            "SELECT payload_json, extraction_status FROM journal_entries"
+            " WHERE message_id = ?", (rid,)).fetchone()
+        # The stale extraction («пирог») must NOT survive the text it came from.
+        self.assertNotIn("пирог", entry["payload_json"])
+        self.assertEqual(entry["extraction_status"], "legacy_unstructured")
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) AS n FROM note_outcomes").fetchone()["n"], 0)
 
@@ -18328,6 +18333,714 @@ class PerfAndSmallCorrectness20260726Tests(unittest.TestCase):
         self.assertEqual(len(slept), 1)     # one slice, not 120 seconds of waiting
         self.assertLessEqual(slept[0], 5.0)
         self.assertEqual(self.mod.Agent.POLL_RATE_LIMIT_MAX_SECONDS, 120)
+
+
+class ResolutionDataFixes20260727Tests(unittest.TestCase):
+    """2026-07-27 post-programme review — resolution + data batch.
+
+    One rule from WP5, finally applied everywhere: an EXPLICIT target resolves
+    to what it names or to a not-found — never to the newest note/file/reminder.
+    Plus the data seams: journal rows must die (or be born) with the category
+    they belong to, purges must take what they promise, and derived caches/kv
+    must not outlive the rows they describe.
+    """
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "rd27.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        store.invalidate_vector_cache(self.conn)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    # -- helpers ---------------------------------------------------------------
+
+    def _note(self, tg_id, text, category="Разное"):
+        """A confirmed note (knowledge_state 'active', stable #N assigned)."""
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        canonical = store.ensure_category(self.conn, category)
+        store.set_suggestion(self.conn, rid, canonical, text, "m")
+        store.confirm_category(self.conn, rid, canonical)
+        return rid
+
+    def _suggested(self, tg_id, text):
+        """An inbox note (status 'suggested', knowledge_state 'inbox')."""
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": store._now(), "raw_text": text})
+        store.set_suggestion(self.conn, rid, "Разное", text, "m")
+        return rid
+
+    def _no(self, rid):
+        return store.get_message(self.conn, rid)["note_no"]
+
+    def _file(self, rid, name, file_id, mime="text/plain"):
+        self.conn.execute(
+            "INSERT INTO files (message_id, tg_file_id, tg_file_unique_id,"
+            " file_name, mime_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (rid, file_id, file_id + "-u", name, mime, store._now()))
+        self.conn.commit()
+
+    def _reminder(self, title, hours_ahead):
+        due = (datetime.now(timezone.utc)
+               + timedelta(hours=hours_ahead)).isoformat()
+        return store.reminder_add(self.conn, 1, title, due)
+
+    # -- do_read_media: «#N» is a target, not garbage --------------------------
+
+    def _read_media(self, params):
+        """Run do_read_media with the network mocked; returns (sent, downloads)."""
+        sent, downloads = [], []
+
+        def fake_download(file_id, unique_id, ext):
+            downloads.append(file_id)
+            p = Path(self.tmp.name) / f"dl-{file_id}{ext}"
+            p.write_text(f"содержимое {file_id}", encoding="utf-8")
+            return str(p)
+
+        with mock.patch.object(self.agent, "download_file",
+                               side_effect=fake_download), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply_chunks",
+                                  side_effect=lambda cid, txt: sent.append(txt)), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, txt, *a, **k:
+                                  sent.append(txt) or True):
+            self.agent.do_read_media(1, "ru", params)
+        return sent, downloads
+
+    def test_read_media_hash_n_reads_the_named_note_not_the_newest_file(self):
+        """«расшифруй из #N» arriving as {"id": "#N"} used to int()-fail and
+        read the newest UNRELATED file as if it were the answer."""
+        older = self._note(1, "старая заметка с файлом")
+        self._file(older, "target.txt", "file-old")
+        newer = self._note(2, "свежая заметка с другим файлом")
+        self._file(newer, "other.txt", "file-new")
+        sent, downloads = self._read_media({"id": f"#{self._no(older)}"})
+        self.assertEqual(downloads, ["file-old"])       # never the newest file
+        self.assertTrue(any("содержимое file-old" in s for s in sent), sent)
+
+    def test_read_media_unusable_id_asks_instead_of_substituting(self):
+        newer = self._note(3, "заметка с файлом")
+        self._file(newer, "doc.txt", "file-x")
+        sent, downloads = self._read_media({"id": "первая"})
+        self.assertEqual(downloads, [])                  # nothing was opened
+        self.assertTrue(any("#N" in s for s in sent), sent)  # read_media_which
+
+    def test_read_media_empty_id_keeps_the_recent_file_fallback(self):
+        """A falsy «» id is the documented router artefact meaning «no id» —
+        the recent-file behaviour for it is deliberate and stays."""
+        rid = self._note(4, "заметка с файлом")
+        self._file(rid, "doc.txt", "file-y")
+        sent, downloads = self._read_media({"id": ""})
+        self.assertEqual(downloads, ["file-y"])
+
+    # -- resolve_items: same escape hatch as resolve_item ----------------------
+
+    def test_unusable_id_with_query_falls_through_to_search(self):
+        rid = self._note(5, "пост про криптовалюту")
+        self._note(6, "совсем другая заметка")
+        rows = self.agent.resolve_items({"id": "", "query": "криптовалюту"})
+        self.assertEqual([r["id"] for r in rows], [rid])
+
+    def test_unusable_id_without_query_stays_fail_closed(self):
+        self._note(7, "какая-то заметка")
+        self.assertEqual(self.agent.resolve_items({"id": ""}), [])
+
+    def test_explicit_id_beats_a_stray_count(self):
+        """«убери #7 в архив» routed as {"id": 7, "count": 1} archived the
+        NEWEST note — the count branch ran first and ignored the id."""
+        target = self._note(8, "целевая заметка")
+        self._note(9, "самая свежая заметка")
+        rows = self.agent.resolve_items({"id": self._no(target), "count": 1})
+        self.assertEqual([r["id"] for r in rows], [target])
+
+    def test_count_is_bounded_by_the_named_category(self):
+        a = self._note(10, "крипто раз", category="crypto")
+        b = self._note(11, "крипто два", category="crypto")
+        self._note(12, "новее, но не крипто", category="news")
+        rows = self.agent.resolve_items({"count": 2, "category": "crypto"})
+        self.assertEqual({r["id"] for r in rows}, {a, b})
+
+    def test_recategorize_with_artefact_id_still_finds_by_query(self):
+        """{"id": "", "query": …} — the id branch used to eat the dispatch and
+        answer «ничего не нашла» although the query matches."""
+        rid = self._note(13, "заметка про криптовалюту")
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, txt, *a, **k:
+                               sent.append(txt) or True), \
+                mock.patch.object(self.agent, "edit_suggestion_message"):
+            self.agent.do_recategorize(1, "ru", {
+                "id": "", "query": "криптовалюту", "category": "Идеи"})
+        self.assertEqual(store.get_message(self.conn, rid)["category"], "Идеи")
+
+    def test_recategorize_with_artefact_id_and_no_query_fails_closed(self):
+        rid = self._note(14, "свежайшая заметка")
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, txt, *a, **k:
+                               sent.append(txt) or True):
+            self.agent.do_recategorize(1, "ru", {"id": "", "category": "Идеи"})
+        self.assertEqual(store.get_message(self.conn, rid)["category"], "Разное")
+        self.assertTrue(sent)                        # items_empty, not silence
+
+    # -- review snapshot: collectives + the delete path ------------------------
+
+    def test_vsyo_with_yo_acts_on_the_shown_batch_not_the_newest(self):
+        shown = [self._note(20 + i, f"заметка {i}") for i in range(3)]
+        newest = self._note(23, "не показанная свежая заметка")
+        self.agent._review_snapshot_set(shown, ttl_seconds=3600)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_note_lifecycle(1, "ru", {"operation": "archive"},
+                                         "всё в архив")
+        pend = store.pending_get(self.conn, 1)
+        self.assertIsNotNone(pend)                   # bulk archive asks first
+        self.assertEqual(pend["kind"], "note_archive")
+        self.assertEqual(sorted(pend["payload"]["row_ids"]), sorted(shown))
+        row = store.get_message(self.conn, newest)
+        self.assertEqual(row["knowledge_state"], "active")   # untouched
+
+    def test_item_delete_ordinal_targets_the_shown_note(self):
+        shown = [self._note(30 + i, f"заметка {i}") for i in range(3)]
+        self._note(33, "самая свежая, не в ревью")
+        self.agent._review_snapshot_set(shown, ttl_seconds=3600)
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, txt, *a, **k:
+                               sent.append(txt) or True):
+            self.agent.do_item_delete(1, "ru", {}, "второе удали")
+        pend = store.pending_get(self.conn, 1)
+        self.assertEqual(pend["kind"], "delete")
+        self.assertEqual(pend["payload"]["row_ids"], [shown[1]])
+        self.assertIn(f"#{self._no(shown[1])}", sent[-1])
+
+    # -- reminders: «#N» normalization + pinned disambiguation -----------------
+
+    def test_reminder_find_by_query_accepts_hash_forms(self):
+        for i in range(3):
+            self._reminder(f"дело {i}", hours_ahead=i + 1)
+        rows = store.reminders_active(self.conn, 1)
+        self.assertEqual(reminders.find_by_query(rows, {"id": "#2"})["id"],
+                         rows[1]["id"])
+        self.assertEqual(reminders.find_by_query(rows, {"id": "2."})["id"],
+                         rows[1]["id"])
+
+    def test_disambiguation_pick_means_the_position_he_was_shown(self):
+        """Between «какое?» and his answer a reminder can fire-and-advance,
+        re-ordering the live list — «первое» must still mean the first item of
+        the card, not the first of a re-derived list."""
+        first = self._reminder("благодарности", hours_ahead=1)
+        second = self._reminder("банк", hours_ahead=3)
+        third = self._reminder("созвон", hours_ahead=8)
+        shown_ids = [r["id"] for r in store.reminders_active(self.conn, 1)]
+        self.assertEqual(shown_ids, [first, second, third])
+        new_due = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        pending = {"kind": "reminder_op", "payload": {
+            "op": "reschedule", "due_utc": new_due, "ids": shown_ids}}
+        # The daily fires and auto-advances past the others.
+        store.reminder_update_due(
+            self.conn, first,
+            (datetime.now(timezone.utc) + timedelta(hours=30)).isoformat(),
+            reason="recurrence_advanced")
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            handled = self.agent._resolve_reminder_op(1, "ru", pending, "первое")
+        self.assertTrue(handled)
+        self.assertEqual(store.reminder_get(self.conn, first)["due_utc"], new_due)
+        self.assertNotEqual(store.reminder_get(self.conn, second)["due_utc"],
+                            new_due)                 # the bank was NOT moved
+
+    def test_disambiguation_pick_of_a_gone_slot_is_not_found_not_a_shift(self):
+        first = self._reminder("аптека", hours_ahead=1)
+        second = self._reminder("банк", hours_ahead=3)
+        shown_ids = [first, second]
+        new_due = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        pending = {"kind": "reminder_op", "payload": {
+            "op": "reschedule", "due_utc": new_due, "ids": shown_ids}}
+        store.reminder_close(self.conn, first, "done")
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, txt, *a, **k:
+                               sent.append(txt) or True):
+            handled = self.agent._resolve_reminder_op(1, "ru", pending, "первое")
+        self.assertTrue(handled)                     # it WAS a pick — answered
+        self.assertNotEqual(store.reminder_get(self.conn, second)["due_utc"],
+                            new_due)                 # never the shifted №2
+        self.assertIn(texts.T("ru", "reminder_already_closed"), sent)
+
+    # -- «tomorrow at 5 pm» keeps its meridiem ---------------------------------
+
+    def test_followup_meridiem_en(self):
+        parsed = self.agent._parse_fired_followup("tomorrow at 5 pm")
+        self.assertEqual(parsed[0], "amend")
+        due = reminders.parse_iso_utc(parsed[1]["due_utc"])
+        local = due + timedelta(hours=self.agent.tz_offset())
+        self.assertEqual((local.hour, local.minute), (17, 0))
+
+    def test_followup_meridiem_ru_vechera(self):
+        parsed = self.agent._parse_fired_followup("отложи на завтра в 5 вечера")
+        due = reminders.parse_iso_utc(parsed[1]["due_utc"])
+        local = due + timedelta(hours=self.agent.tz_offset())
+        self.assertEqual((local.hour, local.minute), (17, 0))
+
+    def test_followup_without_meridiem_is_unchanged(self):
+        parsed = self.agent._parse_fired_followup("отложи на завтра в 5")
+        due = reminders.parse_iso_utc(parsed[1]["due_utc"])
+        local = due + timedelta(hours=self.agent.tz_offset())
+        self.assertEqual((local.hour, local.minute), (5, 0))
+
+    # -- journal_entries follow the category -----------------------------------
+
+    def test_recategorize_out_of_a_journal_removes_the_entry_row(self):
+        store.set_category_kind(self.conn, "Благодарность", "journal")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": 40,
+            "received_at": store._now(), "raw_text": "спасибо Ане за отчёт"})
+        store.confirm_category(self.conn, rid, "Благодарность")
+        self.assertIsNotNone(store.journal_entry_get(self.conn, rid))
+        store.confirm_category(self.conn, rid, "Идеи")
+        self.assertIsNone(store.journal_entry_get(self.conn, rid))
+        self.assertEqual(store.get_message(self.conn, rid)["knowledge_state"],
+                         "active")                   # a normal note again
+
+    def test_recategorize_between_journals_moves_the_entry_row(self):
+        """journal→journal is the same dangling-membership bug one case over:
+        `journal_entry_add` is INSERT OR IGNORE, so the old diary kept the note."""
+        store.set_category_kind(self.conn, "Благодарность", "journal")
+        store.set_category_kind(self.conn, "Рабочий дневник", "journal")
+        wdef = store.journal_def_ensure(self.conn, "workj", "Рабочий дневник",
+                                        "gratitude", "Рабочий дневник")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": 44,
+            "received_at": store._now(), "raw_text": "спасибо Ане за отчёт"})
+        store.confirm_category(self.conn, rid, "Благодарность")
+        old = store.journal_entry_get(self.conn, rid)
+        store.confirm_category(self.conn, rid, "Рабочий дневник")
+        entry = store.journal_entry_get(self.conn, rid)
+        self.assertEqual(entry["journal_id"], wdef["id"])
+        self.assertNotEqual(entry["journal_id"], old["journal_id"])
+
+    def test_merge_into_a_journal_creates_the_missing_entry_rows(self):
+        store.set_category_kind(self.conn, "Благодарность", "journal")
+        a = self._note(41, "спасибо Пете", category="Спасибо")
+        b = self._note(42, "спасибо Маше", category="Спасибо")
+        moved, dst = store.merge_categories(self.conn, "Спасибо", "Благодарность")
+        self.assertEqual((moved, dst), (2, "Благодарность"))
+        for rid in (a, b):
+            entry = store.journal_entry_get(self.conn, rid)
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry["extraction_status"], "legacy_unstructured")
+
+    def test_confirmed_edit_resets_the_journal_payload(self):
+        """The payload was extracted from the REPLACED text — «Аня» must not
+        keep answering person filters after the note now names Борис."""
+        store.set_category_kind(self.conn, "Благодарность", "journal")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": 43,
+            "received_at": store._now(), "raw_text": "спасибо Ане за отчёт"})
+        store.confirm_category(self.conn, rid, "Благодарность",
+                               journal_payload={"people": ["Аня"]},
+                               journal_status="complete")
+        self.agent._stage_note_edit(rid, "спасибо Борису за отчёт", [])
+        with mock.patch.object(self.agent, "reply", return_value=True), \
+                mock.patch.object(self.agent, "index_message"):
+            self.assertTrue(self.agent.apply_note_edit(1, rid, "ru"))
+        entry = store.journal_entry_get(self.conn, rid)
+        self.assertEqual(store.journal_entry_payload(entry), {})
+        self.assertEqual(entry["extraction_status"], "legacy_unstructured")
+        self.assertEqual(store.get_message(self.conn, rid)["raw_text"],
+                         "спасибо Борису за отчёт")
+
+    # -- purges take closed reminders (and their events) too -------------------
+
+    def test_purge_all_deletes_closed_reminders_and_their_events(self):
+        active = self._reminder("живое", hours_ahead=1)
+        closed = self._reminder("позвонить в клинику по анализам", hours_ahead=2)
+        store.reminder_close(self.conn, closed, "done")
+        info = store.purge_preview(self.conn, "all")
+        self.assertEqual(info["reminders_closed"], 1)    # disclosed
+        store.purge_execute(self.conn, "all")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM reminders").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
+        self.assertIn("закрытых напоминаний",
+                      self.agent._purge_impact_text("ru", info))
+        del active
+
+    def test_purge_reminders_scope_takes_closed_rows_too(self):
+        closed = self._reminder("старое дело", hours_ahead=1)
+        store.reminder_close(self.conn, closed, "done")
+        info = store.purge_preview(self.conn, "reminders")
+        self.assertEqual(info["reminders_closed"], 1)
+        store.purge_execute(self.conn, "reminders")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM reminders").fetchone()[0], 0)
+
+    def test_prune_telemetry_sweeps_old_reminder_events(self):
+        rid = self._reminder("дело", hours_ahead=1)
+        old = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
+        self.conn.execute("UPDATE reminder_events SET ts = ? WHERE reminder_id = ?",
+                          (old, rid))
+        store.reminder_event(self.conn, rid, "fired")     # a recent one stays
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        store.prune_telemetry(self.conn, cutoff)
+        events_left = [r["event"] for r in self.conn.execute(
+            "SELECT event FROM reminder_events WHERE reminder_id = ?", (rid,))]
+        self.assertEqual(events_left, ["fired"])
+
+    # -- note_review_shown survives rowid reuse --------------------------------
+
+    def test_review_shown_does_not_exclude_a_new_note_after_rowid_reuse(self):
+        a = self._suggested(50, "первая версия")
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            shown = self.agent.do_note_review(1, "ru")
+        self.assertEqual(shown, [a])
+        store.delete_message(self.conn, a)          # the highest rowid is freed
+        b = self._suggested(51, "совсем новая заметка")
+        self.assertEqual(b, a)                       # SQLite reuses the rowid
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            shown2 = self.agent.do_note_review(1, "ru")
+        self.assertEqual(shown2, [b])   # the NEW note is not silently excluded
+
+    # -- vector cache must not serve a stale category --------------------------
+
+    def test_ask_grounding_sees_a_recategorized_note_immediately(self):
+        rid = self._note(60, "пост про рынок", category="News")
+        store.set_chunks(self.conn, rid, [("пост про рынок", [0.1, 0.2])])
+        rows = store.all_embedded_chunks(self.conn)      # populate the cache
+        self.assertEqual(rows[0]["category"], "News")
+        store.confirm_category(self.conn, rid, "Крипта")  # messages-only write
+        rows = store.all_embedded_chunks(self.conn)
+        self.assertEqual(rows[0]["category"], "Крипта")
+
+    def test_merge_categories_is_visible_to_the_vector_cache(self):
+        rid = self._note(61, "ещё пост", category="Крипта")
+        store.set_chunks(self.conn, rid, [("ещё пост", [0.1, 0.2])])
+        store.all_embedded_chunks(self.conn)
+        store.merge_categories(self.conn, "Крипта", "Идеи")
+        rows = store.all_embedded_chunks(self.conn)
+        self.assertEqual(rows[0]["category"], "Идеи")
+
+    # -- «покажи файлы» must not mint numbers for invisible rows ---------------
+
+    def test_files_text_does_not_claim_a_note_no_for_a_failed_row(self):
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": 70,
+            "received_at": store._now(), "raw_text": "битый PDF"})
+        store.mark_failed(self.conn, rid)
+        self._file(rid, "contract.pdf", "file-f", mime="application/pdf")
+        text = self.agent.files_text("ru")
+        self.assertIn("contract.pdf", text)          # still listed, honestly
+        line = next(ln for ln in text.splitlines() if "contract.pdf" in ln)
+        self.assertNotIn("#", line)                  # but numberless
+        self.assertIsNone(store.get_message(self.conn, rid)["note_no"])
+
+    def test_files_text_still_numbers_visible_notes(self):
+        rid = self._note(71, "заметка с файлом")
+        self._file(rid, "notes.txt", "file-v")
+        text = self.agent.files_text("ru")
+        self.assertIn(f"#{self._no(rid)}", text)
+
+    # -- an edited routed command gets one honest line -------------------------
+
+    def _edit_turn(self, tg_id, new_text):
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, txt, *a, **k:
+                               sent.append(txt) or True):
+            self.agent.handle_edited_message({
+                "chat": {"id": 1}, "from": {"id": 1},
+                "message_id": tg_id, "text": new_text})
+        return sent
+
+    def _draft_reminder(self, tg_id, text, due, title="созвон"):
+        """Command turn → draft card (pending 'reminder'), NOT yet confirmed."""
+        store.convo_add(self.conn, 1, "user", text, tg_message_id=tg_id)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_reminder_create(1, "ru", {
+                "title": title, "due_utc": due, "recurrence": "none"},
+                msg_id=tg_id)
+        return store.pending_get(self.conn, 1)
+
+    def test_edited_reminder_command_says_the_reminder_kept_the_old_details(self):
+        """The happy path — AND the claim the line makes is pinned as real:
+        the reminders row still holds the OLD due after the edit."""
+        due = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
+        pending = self._draft_reminder(80, "напомни завтра в 15:00 про созвон", due)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
+        sent = self._edit_turn(80, "напомни завтра в 16:00 про созвон")
+        self.assertTrue(any("Напоминание" in s for s in sent), sent)
+        row = self.conn.execute(
+            "SELECT text FROM conversation WHERE tg_message_id = 80").fetchone()
+        self.assertEqual(row["text"], "напомни завтра в 16:00 про созвон")
+        rows = store.reminders_active(self.conn, 1)
+        self.assertEqual([(r["title"], r["due_utc"]) for r in rows],
+                         [("созвон", due)])       # kept the OLD details — really
+
+    def test_a_declined_reminder_draft_earns_no_artifact_line_on_edit(self):
+        """The line used to be recorded at DRAFT time: «нет» to the card, then
+        an edit, and she asserted a reminder that never came to exist."""
+        due = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
+        pending = self._draft_reminder(83, "напомни завтра в 15:00 про созвон", due)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.resolve_pending(1, "cancel", {}, pending, "ru")
+        sent = self._edit_turn(83, "напомни завтра в 16:00 про созвон")
+        self.assertEqual(sent, [])              # rewritten silently, no false claim
+        self.assertEqual(store.reminders_active(self.conn, 1), [])
+
+    def test_a_confirmed_draft_amended_in_between_still_links_the_source_turn(self):
+        """src_msg_id must survive the amend round-trip (validate_draft strips
+        unknown keys) and the partial flow — the pointer lands at confirm."""
+        due = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
+        later = (datetime.now(timezone.utc) + timedelta(hours=22)).isoformat()
+        pending = self._draft_reminder(84, "напомни завтра в 15:00 про созвон", due)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.resolve_pending(1, "amend", {"due_utc": later}, pending, "ru")
+            self.agent.resolve_pending(1, "confirm", {},
+                                       store.pending_get(self.conn, 1), "ru")
+        sent = self._edit_turn(84, "напомни завтра в 17:00 про созвон")
+        self.assertTrue(any("Напоминание" in s for s in sent), sent)
+
+    def test_a_partial_reminder_completed_and_confirmed_gets_the_line_too(self):
+        due = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
+        store.convo_add(self.conn, 1, "user", "напомни завтра в 17:00",
+                        tg_message_id=85)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_reminder_create(1, "ru", {"due_utc": due}, msg_id=85)
+            self.agent.continue_partial_reminder(
+                1, "ru", store.pending_get(self.conn, 1), "amend",
+                {"title": "позвонить"})
+            self.agent.resolve_pending(1, "confirm", {},
+                                       store.pending_get(self.conn, 1), "ru")
+        self.assertEqual([r["title"] for r in store.reminders_active(self.conn, 1)],
+                         ["позвонить"])
+        sent = self._edit_turn(85, "напомни завтра в 18:00")
+        self.assertTrue(any("Напоминание" in s for s in sent), sent)
+
+    def test_an_abandoned_partial_reminder_earns_no_artifact_line_on_edit(self):
+        due = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
+        store.convo_add(self.conn, 1, "user", "напомни завтра в 17:00",
+                        tg_message_id=89)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_reminder_create(1, "ru", {"due_utc": due}, msg_id=89)
+            # He moves on to something else — the partial is abandoned.
+            self.agent.continue_partial_reminder(
+                1, "ru", store.pending_get(self.conn, 1), "reminder_list", {})
+        sent = self._edit_turn(89, "напомни завтра в 18:00")
+        self.assertEqual(sent, [])
+
+    def test_edited_remember_command_says_the_memory_kept_the_old_version(self):
+        store.convo_add(self.conn, 1, "user", "запомни: код от офиса 4321",
+                        tg_message_id=81)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_remember(1, {"value": "код от офиса 4321"}, "ru",
+                                   msg_id=81)
+        sent = self._edit_turn(81, "запомни: код от офиса 9876")
+        self.assertTrue(any("памяти" in s for s in sent), sent)
+
+    def test_a_declined_sensitive_fact_earns_no_memory_line_on_edit(self):
+        """do_boss_memory used to record BEFORE the sensitive-confirm staging —
+        a declined fact left a pointer to a memory that was never stored."""
+        store.convo_add(self.conn, 1, "user", "запомни: пароль от сейфа 4321",
+                        tg_message_id=86)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_boss_memory(1, "ru", {
+                "op": "remember", "value": "пароль от сейфа 4321"}, msg_id=86)
+            pending = store.pending_get(self.conn, 1)
+            self.assertEqual(pending["kind"], "boss_sensitive")  # it was staged
+            self.agent.resolve_pending(1, "cancel", {}, pending, "ru")
+        sent = self._edit_turn(86, "запомни: пароль от сейфа 9876")
+        self.assertEqual(sent, [])
+
+    def test_a_confirmed_sensitive_fact_gets_the_memory_line_on_edit(self):
+        store.convo_add(self.conn, 1, "user", "запомни: пароль от сейфа 4321",
+                        tg_message_id=87)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_boss_memory(1, "ru", {
+                "op": "remember", "value": "пароль от сейфа 4321"}, msg_id=87)
+            self.agent.resolve_pending(1, "confirm", {},
+                                       store.pending_get(self.conn, 1), "ru")
+        sent = self._edit_turn(87, "запомни: пароль от сейфа 9876")
+        self.assertTrue(any("памяти" in s for s in sent), sent)
+
+    def test_purging_reminders_drops_the_pointer_but_keeps_the_memory_one(self):
+        """After «удали напоминания» an edit of the old command must not claim
+        the DELETED reminder kept its details; a remembered fact survives the
+        reminders purge, so ITS pointer (and honest line) stays."""
+        due = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
+        pending = self._draft_reminder(90, "напомни завтра в 15:00 про анализы",
+                                       due, title="анализы")
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
+        store.convo_add(self.conn, 1, "user", "запомни: код домофона 55",
+                        tg_message_id=91)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_remember(1, {"value": "код домофона 55"}, "ru",
+                                   msg_id=91)
+            self.agent.do_purge(1, "ru", {"scope": "reminders"})
+            self.agent.resolve_purge(1, "ru", store.pending_get(self.conn, 1),
+                                     texts.T("ru", "purge_phrase_reminders"))
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM reminders").fetchone()[0], 0)
+        self.assertEqual(self._edit_turn(90, "напомни завтра в 16:00 про анализы"),
+                         [])                     # no claim about a purged reminder
+        sent = self._edit_turn(91, "запомни: код домофона 66")
+        self.assertTrue(any("памяти" in s for s in sent), sent)  # fact still real
+
+    def test_a_replayed_identical_edit_does_not_resend_the_notice(self):
+        """Telegram emits edited_message for non-edits and the crash replay can
+        re-drive a stored one — a same-text «edit» must not repeat the line
+        (the note path has this guard; the no-row path lacked it)."""
+        due = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
+        pending = self._draft_reminder(92, "напомни завтра в 15:00 про созвон", due)
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
+        first = self._edit_turn(92, "напомни завтра в 16:00 про созвон")
+        self.assertTrue(any("Напоминание" in s for s in first), first)
+        replay = self._edit_turn(92, "напомни завтра в 16:00 про созвон")
+        self.assertEqual(replay, [])
+
+    def test_edited_plain_turn_stays_a_silent_correction(self):
+        store.convo_add(self.conn, 1, "user", "как дела?", tg_message_id=82)
+        sent = self._edit_turn(82, "как дела сегодня?")
+        self.assertEqual(sent, [])
+
+    # -- purge emptiness guard sees closed reminders ---------------------------
+
+    def test_purge_reminders_is_offered_when_only_closed_rows_remain(self):
+        """0 active + N closed is EXACTLY the state the closed-rows fix
+        targets — the guard tuple missing `reminders_closed` answered
+        «удалять нечего» and the verbatim titles survived the purge."""
+        closed = self._reminder("позвонить в клинику по анализам", hours_ahead=1)
+        store.reminder_close(self.conn, closed, "done")
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, txt, *a, **k:
+                               sent.append(txt) or True):
+            self.agent.do_purge(1, "ru", {"scope": "reminders"})
+        self.assertNotIn(texts.T("ru", "purge_nothing"), sent)
+        pend = store.pending_get(self.conn, 1)
+        self.assertIsNotNone(pend)               # the offer was made
+        self.assertEqual(pend["kind"], "purge")
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.resolve_purge(1, "ru", pend,
+                                     texts.T("ru", "purge_phrase_reminders"))
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM reminders").fetchone()[0], 0)
+
+    # -- meridiem: the hour==12 branch and «дня» -------------------------------
+
+    def test_followup_meridiem_ru_12_nochi_is_midnight(self):
+        parsed = self.agent._parse_fired_followup("отложи на завтра в 12 ночи")
+        self.assertEqual(parsed[0], "amend")
+        due = reminders.parse_iso_utc(parsed[1]["due_utc"])
+        local = due + timedelta(hours=self.agent.tz_offset())
+        self.assertEqual((local.hour, local.minute), (0, 0))
+
+    def test_followup_meridiem_en_12_pm_stays_noon_and_12_am_is_midnight(self):
+        parsed = self.agent._parse_fired_followup("tomorrow at 12 pm")
+        due = reminders.parse_iso_utc(parsed[1]["due_utc"])
+        local = due + timedelta(hours=self.agent.tz_offset())
+        self.assertEqual((local.hour, local.minute), (12, 0))
+        parsed = self.agent._parse_fired_followup("tomorrow at 12 am")
+        due = reminders.parse_iso_utc(parsed[1]["due_utc"])
+        local = due + timedelta(hours=self.agent.tz_offset())
+        self.assertEqual((local.hour, local.minute), (0, 0))
+
+    def test_followup_meridiem_ru_dnya(self):
+        parsed = self.agent._parse_fired_followup("отложи на завтра в 2 дня")
+        due = reminders.parse_iso_utc(parsed[1]["due_utc"])
+        local = due + timedelta(hours=self.agent.tz_offset())
+        self.assertEqual((local.hour, local.minute), (14, 0))
+
+    # -- every collective form is pinned, not just «всё» -----------------------
+
+    def test_every_collective_form_acts_on_the_shown_batch(self):
+        shown = [self._note(170 + i, f"заметка {i}") for i in range(2)]
+        newest = self._note(173, "не показанная свежая заметка")
+        for phrase in ("всё в архив", "все в архив", "эти в архив", "удали их",
+                       "archive them", "archive all", "обе в архив",
+                       "оба в архив"):
+            with self.subTest(phrase=phrase):
+                self.agent._review_snapshot_set(shown, ttl_seconds=3600)
+                store.pending_clear(self.conn, 1)
+                with mock.patch.object(self.agent, "reply", return_value=True):
+                    self.agent.do_note_lifecycle(1, "ru",
+                                                 {"operation": "archive"}, phrase)
+                pend = store.pending_get(self.conn, 1)
+                self.assertIsNotNone(pend, phrase)
+                self.assertEqual(sorted(pend["payload"]["row_ids"]),
+                                 sorted(shown), phrase)
+        self.assertEqual(store.get_message(self.conn, newest)["knowledge_state"],
+                         "active")               # the newest was never touched
+
+    # -- resolve_items escape: the count and category-only fall-throughs -------
+
+    def test_unusable_id_with_count_still_takes_the_counted_newest(self):
+        """«удали 2 заметки» routed as {"id": "первая", "count": 2}: the id is
+        an artefact, the count is his — a [] here is a false «ничего не нашла»,
+        the exact usability bug class the escape exists to close.
+        HONEST LABEL: passes pre-fix too (the OLD code reached count before id
+        — the very bug test_explicit_id_beats_a_stray_count pins). This one
+        guards the escape's `or params.get("count")` clause: dropping it would
+        fail-close this combo, and no other test would notice."""
+        self._note(180, "старая")
+        b = self._note(181, "вторая")
+        c = self._note(182, "третья, самая свежая")
+        rows = self.agent.resolve_items({"id": "первая", "count": 2})
+        self.assertEqual({r["id"] for r in rows}, {b, c})
+
+    def test_unusable_id_with_category_falls_through_to_the_category(self):
+        rid = self._note(183, "пост про биткоин", category="crypto")
+        self._note(184, "новее, но не крипто", category="news")
+        rows = self.agent.resolve_items({"id": "", "category": "crypto"})
+        self.assertEqual([r["id"] for r in rows], [rid])
+
+    # -- note_review_shown: the legacy bare-int branch -------------------------
+
+    def test_legacy_bare_int_shown_entry_still_excludes_todays_shown_note(self):
+        """Deploy-transition day: an entry written by the PRE-fix code (a bare
+        rowid) meets the new reader. It must keep excluding the note it named
+        and get upgraded to a pinned {id, no} pair on the next write. (A
+        rowid-reused replacement CANNOT be told apart by a pinless legacy
+        entry — that residue is accepted and self-heals at UTC midnight.)"""
+        a = self._suggested(190, "уже показана сегодня")
+        b = self._suggested(191, "ещё не показана")
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        store.kv_set(self.conn, f"note_review_shown:{day}", json.dumps([a]))
+        with mock.patch.object(self.agent, "reply", return_value=True):
+            shown = self.agent.do_note_review(1, "ru")
+        self.assertEqual(shown, [b])             # a excluded, b surfaces
+        raw = json.loads(store.kv_get(self.conn, f"note_review_shown:{day}"))
+        self.assertTrue(all(isinstance(it, dict) for it in raw), raw)
+        self.assertEqual({it["id"] for it in raw}, {a, b})
+
+    def test_files_text_does_not_claim_a_note_no_for_a_duplicate_row(self):
+        """'duplicate' is the OTHER invisible status sharing the whitelist
+        branch — the dedupe path produces it, and the #N-jump is equally
+        reachable through it."""
+        orig = self._note(195, "оригинальный пост")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": 196,
+            "received_at": store._now(), "raw_text": "оригинальный пост"})
+        store.mark_duplicate(self.conn, rid, store.get_message(self.conn, orig))
+        self._file(rid, "copy.pdf", "file-d", mime="application/pdf")
+        text = self.agent.files_text("ru")
+        self.assertIn("copy.pdf", text)          # still listed, honestly
+        line = next(ln for ln in text.splitlines() if "copy.pdf" in ln)
+        self.assertNotIn("#", line)              # but numberless
+        self.assertIsNone(store.get_message(self.conn, rid)["note_no"])
 
 
 if __name__ == "__main__":

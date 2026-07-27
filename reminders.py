@@ -3,6 +3,7 @@
 import re
 from datetime import datetime, timedelta, timezone
 
+import store
 from texts import T
 
 RECURRENCES = ("none", "daily", "weekly")
@@ -259,12 +260,11 @@ def find_by_query(rows, params):
     """Find a reminder by its display number (1..N position in `rows`, the
     boss-facing active list) or title substring. `rows` MUST be in display order
     (store.reminders_active) so the position matches what the boss sees."""
-    pos = params.get("id")
-    if pos is not None:
-        try:
-            pos = int(pos)
-        except (TypeError, ValueError):
-            pos = None
+    # Same normalization as the note path (store.note_no_value): the router
+    # emits «#2» / «2.» / « 2 » for reminders too, and a bare int() turned
+    # «перенеси #2 на 17:00» into a false not-found on a reminder that is
+    # right there in the list (2026-07-27).
+    pos = store.note_no_value(params.get("id"))
     if pos is not None:
         return rows[pos - 1] if 1 <= pos <= len(rows) else None
     query = str(params.get("title_query") or params.get("title") or "").strip().casefold()
