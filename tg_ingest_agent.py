@@ -190,6 +190,19 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # the boss has already been told about THIS stall (see _db_stall).
         self._db_stall_streak = 0
         self._db_stall_alerted = False
+        # {reminder id -> due_utc} of the OCCURRENCE whose fired notification WAS
+        # delivered but whose post-send bookkeeping (conversation row /
+        # last_fired_at stamp) hit a sqlite error. In-memory on purpose — the
+        # database is the thing that is broken, so there is nowhere durable to
+        # write this; a restart re-fires such a reminder once more, the
+        # documented at-least-once choice. While the process lives it stops a
+        # write outage from re-sending the same alarm every poll cycle. Keyed to
+        # the occurrence, not the id alone: the store helpers commit one by one,
+        # so an outage striking AFTER reminder_update_due advanced the row left
+        # an id-only marker stale — and the reminder's NEXT legitimate firing
+        # was swallowed as bookkeeping-only, one alarm silently consumed
+        # (see fire_due_reminders, 2026-07-27).
+        self._reminder_stamp_owed = {}
         self.stop = False
         self.last_sweep = 0.0
         self.last_model_health = 0.0  # check model reachability soon after start
@@ -417,14 +430,39 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         """Re-handle inbox rows left 'pending' by a crash — e.g. album parts
         buffered but not yet flushed. The poll offset has already moved past
         them, so Telegram will never redeliver; the durable inbox is the only
-        source. Attempts still increment per replay, so a poison update
-        dead-letters at the usual cap. Called once at startup, before polling."""
+        source. Called once at startup, before polling.
+
+        The dead-letter cap is enforced HERE too (2026-07-27), because the
+        exception path cannot see a death: an update that kills the PROCESS
+        (watchdog SIGABRT inside an opaque wait, the OOM killer) raises nothing,
+        so `process_update_batch`'s terminal branch never ran — the row stayed
+        'pending' with attempts already counted, and every restart re-drove it
+        into the same death, forever, with `systemctl` never settling. A row
+        that has already spent `UPDATE_MAX_ATTEMPTS` is dead-lettered (same
+        ledger writes minus the trace rows — no trace exists at startup — and
+        the same notice) instead of being re-driven. Keyed on
+        ATTEMPTS, not age: buffered album parts also sit 'pending' across a
+        restart and must keep replaying while they still have attempts left."""
         rows = store.telegram_updates_pending(self.conn)
         if not rows:
             return
         log(f"replaying {len(rows)} pending update(s) from the durable inbox")
         updates = []
         for row in rows:
+            if (row["attempts"] or 0) >= self.cfg.update_max_attempts:
+                log(f"update {row['update_id']} spent its {row['attempts']} attempts"
+                    " across process deaths — dead-lettering instead of replaying")
+                store.telegram_update_fail(
+                    self.conn, row["update_id"],
+                    "attempts exhausted across restarts (process died mid-handling)",
+                    terminal=True)
+                store.issue_add(self.conn, row["chat_id"], "telegram_update_failed",
+                                f"update_id={row['update_id']}; process-death replay cap")
+                events.record_done(self.conn, "telegram_message_received",
+                                   chat_id=row["chat_id"], status="failed",
+                                   error="process-death replay cap")
+                self._notify_dead_letter(row["chat_id"])
+                continue
             try:
                 updates.append(json.loads(row["payload"]))
             except (TypeError, ValueError):
@@ -535,6 +573,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if self.stop:
                 break
             self.watchdog_ping()   # progress marker: one more update actually started
+            tid = None             # this update's trace, for the containment handler
             try:
                 update_id = int(update["update_id"])
                 chat_id = self._update_chat_id(update)
@@ -612,6 +651,18 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 log(f"database unavailable handling update {update.get('update_id')}:"
                     f" {exc!r} — pausing {self.DB_STALL_BACKOFF_SECONDS}s,"
                     f" offset not advanced (Telegram redelivers)")
+                # This was the one exit that left the inbound trace CURRENT
+                # (2026-07-27): until the next trace.start, scheduler-tick spend,
+                # issues and the daily-curator job were all stamped with a dead
+                # trace that has no ending status — during the very incident the
+                # traces exist to explain. finish() clears the module global;
+                # its own DB write can fail on the same broken database, so the
+                # global is cleared by hand on that path.
+                if tid is not None:
+                    try:
+                        trace.finish(self.conn, tid, "failed", "database unavailable")
+                    except sqlite3.Error:
+                        common.set_current_trace(None)
                 self._db_stall(exc)
                 self._sleep(self.DB_STALL_BACKOFF_SECONDS)
                 break
@@ -641,7 +692,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         boss's silence reveals it. These coarse call sites (loop top, each scheduler
         tick, each update) are the cheap ones; the invariant that makes the budget a
         real number is the FINE pings inside the long primitives — `llm.chat`,
-        `llm.embed`, `llm.transcribe`, each `runtime.drain` job — so the longest
+        `llm.embed`, `llm.transcribe`, between each `runtime.drain` job, between the
+        phases of the backup job bodies (whose openssl runs also carry a subprocess
+        timeout), and per hop/chunk of a link fetch (2026-07-27) — so the longest
         un-pinged span is one bounded network/subprocess wait rather than a whole
         update (router + converse + embed, each with failover, is minutes).
         Outside systemd (tests, a manual run) sd_notify is a silent no-op."""
@@ -662,7 +715,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         EVERY ping-to-ping wait counts: a transcription (STT_LOCAL_TIMEOUT_SECONDS),
         one model request (LLM_TIMEOUT_SECONDS — `llm.chat` pings once and then
         blocks on the socket) and one inline link fetch (FETCH_TIMEOUT_SECONDS —
-        `fetch.fetch` contains no ping at all and spans DEADLINE_FACTOR × the knob).
+        modelled conservatively as its whole DEADLINE_FACTOR × the knob budget;
+        since 2026-07-27 `fetch.fetch` pings per hop and per body chunk, so the
+        real un-pinged span is one hop's opaque `opener.open()`. What this model
+        deliberately does NOT cover — because no env knob bounds it — is a server
+        that dribbles response-HEADER bytes inside one hop, which fetch.py's note
+        says the deadline cannot interrupt: that ends in a watchdog kill, and the
+        kill loop it used to cause is contained by replay_pending_updates'
+        attempts cap instead).
         Warning about only the STT one left a raised LLM_TIMEOUT_SECONDS silently
         over budget; warning about only the LARGEST would make the operator lower
         one knob and restart to discover the next."""
@@ -687,12 +747,27 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     def _tick(self, name, fn):
         """Run one scheduler tick, isolating an UNEXPECTED failure so it can't exit the poll
         loop (a systemd crash-loop if the condition persists). ShutdownInterrupt is re-raised
-        so a graceful stop still propagates; everything else is logged and swallowed."""
+        so a graceful stop still propagates; everything else is logged and swallowed.
+
+        A sqlite error is swallowed too, but COUNTED (2026-07-27): `_db_stall`'s
+        streak was fed only by the inbound path, so a write outage that struck
+        while no updates arrived — the volume remounts read-only at 03:00, the
+        boss asleep — was completely silent: `db_stalled` (whose text is about
+        the DATABASE, not about updates) could never fire, while every tick
+        retried into the same wall. The streak is still reset only by an update
+        handled end to end — the one event that PROVES writes work again; a
+        clean tick proves nothing (most read or no-op), and on a healthy single-
+        connection SQLite a tick-side sqlite error is not an expected event at
+        all, so a slow accumulation toward the alert is itself signal."""
         self.watchdog_ping()
         try:
             fn()
         except ShutdownInterrupt:
             raise
+        except sqlite3.Error as exc:
+            log(f"scheduler tick {name} failed: {exc!r}"
+                " — counting toward the db-stall alert")
+            self._db_stall(exc)
         except Exception as exc:  # noqa: BLE001 — a bad tick must never kill the loop
             log(f"scheduler tick {name} failed: {exc!r}")
 

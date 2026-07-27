@@ -328,10 +328,6 @@ TEXTS = {
         "ru": "Пока нечего предложить — ничего нового не накопилось 🌿",
         "en": "Nothing to propose yet — nothing new has built up 🌿",
     },
-    "memory_review_hint": {
-        "ru": "Нажми кнопку под каждым пунктом — «Запомнить» или «Пропустить».",
-        "en": "Tap a button under each item — \"Remember\" or \"Skip\".",
-    },
     "memory_candidate_kept": {"ru": "Запомнила ✅", "en": "Remembered ✅"},
     "memory_candidate_skipped": {"ru": "Пропустила.", "en": "Skipped."},
     "mc_remember": {"ru": "✅ Запомнить", "en": "✅ Remember"},
@@ -409,11 +405,6 @@ TEXTS = {
     "overview_spend": {
         "ru": "Расходы AI: сегодня ${day:.3f}, за месяц ${month:.3f}",
         "en": "AI spend: today ${day:.3f}, this month ${month:.3f}",
-    },
-    "items_header": {"ru": "🗂 Заметки{filter} · {n}", "en": "🗂 Notes{filter} · {n}"},
-    "items_footer": {
-        "ru": "Подробнее — «детали #N», файл — «покажи файл #N».",
-        "en": "More — \"details #N\", file — \"show file #N\".",
     },
     "items_filter_category": {"ru": " (категория: {category})", "en": " (category: {category})"},
     "items_filter_query": {"ru": " (по запросу: {query})", "en": " (matching: {query})"},

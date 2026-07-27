@@ -24,11 +24,10 @@ from urllib.request import urlopen
 ENV = Path("/etc/tg-ingest-agent.env")
 SERVICE = "tg-ingest-agent"
 PAGE_LIMIT = 100
-MAX_PAGES = 10
 DEEP_FLAG = "--deep-read"
 USAGE = ("usage: bootstrap_chat_id.py [--deep-read] <expected_numeric_chat_id>\n"
-         "       (no id = list candidates; --deep-read reaches the END of a flooded "
-         "queue and DISCARDS everything older — see fetch_updates)")
+         "       (no id = list candidates; --deep-read additionally reads the NEWEST "
+         f"{PAGE_LIMIT} updates and DISCARDS everything older — see fetch_updates)")
 
 
 def api_get(token, method, params, opener=urlopen):
@@ -40,7 +39,7 @@ def api_get(token, method, params, opener=urlopen):
     return payload
 
 
-def fetch_updates(token, opener=urlopen, limit=PAGE_LIMIT, max_pages=MAX_PAGES, deep=False):
+def fetch_updates(token, opener=urlopen, limit=PAGE_LIMIT, deep=False):
     """Read the pending queue with the call that is guaranteed not to consume it.
 
     getUpdates documents both halves of this in one paragraph: an update is
@@ -54,45 +53,49 @@ def fetch_updates(token, opener=urlopen, limit=PAGE_LIMIT, max_pages=MAX_PAGES, 
     update are returned"), so that is the default here: one page, no offset.
 
     That page holds the OLDEST `limit` updates, so a deeper queue hides the
-    newest ones. The caller is told (`truncated`) instead of being shown a
-    silent subset. `deep=True` — the operator's explicit --deep-read — pages
-    backwards with negative offsets to reach the END of a flooded queue and
-    will permanently discard everything older than the window it reads.
+    newest ones. The caller is told (`gap`) instead of being shown a silent
+    subset. `deep=True` — the operator's explicit --deep-read — additionally
+    reads the NEWEST `limit` updates with ONE `offset=-limit` call, which
+    permanently discards everything older than that window. One call is all
+    the API can give (2026-07-27): the first destructive read leaves only the
+    newest `limit` updates in the queue, so a second, deeper offset has
+    nothing older left to address — the previous "pager" here re-read the same
+    window on page two and could never reach further back, while its usage
+    text promised ten pages.
 
-    Returns (updates ordered by update_id, truncated); `truncated` means the
-    queue may hold pending updates this read did not list.
+    Returns (updates ordered by update_id, gap). `gap` means pending updates
+    existed that this read did not list: for the default read, a queue deeper
+    than one page (still on the server); after a deep read, updates BETWEEN
+    the oldest page and the newest window — which Telegram has now forgotten,
+    so they were neither listed nor kept (update_ids are sequential, so a tail
+    window starting more than one id past the first page proves the middle
+    was destroyed unseen).
     """
     seen = {}
 
     def absorb(batch):
-        fresh = 0
         for update in batch:
             update_id = update.get("update_id")
             if update_id is None:
                 continue
-            if int(update_id) not in seen:
-                fresh += 1
             seen[int(update_id)] = update
-        return fresh
 
     payload = api_get(token, "getUpdates", {"timeout": 0, "limit": limit}, opener)
     batch = payload.get("result") or []
     absorb(batch)
     # A full page means "there may be more"; there is no non-destructive way to
     # find out, which is exactly why this is reported rather than papered over.
-    truncated = len(batch) >= limit
-    if truncated and deep:
-        for page in range(1, max_pages + 1):
-            payload = api_get(token, "getUpdates",
-                              {"timeout": 0, "limit": limit, "offset": -(page * limit)}, opener)
-            batch = payload.get("result") or []
-            fresh = absorb(batch)
-            # A short page is the start of the queue; no new ids means the window
-            # stopped moving (fewer updates exist than this offset skips back).
-            if len(batch) < limit or not fresh:
-                truncated = False
-                break
-    return [seen[key] for key in sorted(seen)], truncated
+    gap = len(batch) >= limit
+    if gap and deep:
+        head_max = max(seen) if seen else None
+        payload = api_get(token, "getUpdates",
+                          {"timeout": 0, "limit": limit, "offset": -limit}, opener)
+        tail = payload.get("result") or []
+        absorb(tail)
+        tail_ids = [int(u["update_id"]) for u in tail if u.get("update_id") is not None]
+        gap = (bool(tail_ids) and head_max is not None
+               and min(tail_ids) > head_max + 1)
+    return [seen[key] for key in sorted(seen)], gap
 
 
 def candidates(updates):
@@ -240,8 +243,8 @@ def main(argv=None):
               "\"all previous updates will be forgotten\", so pending updates older than "
               "the window just read are gone.")
     if truncated and deep:
-        print(f"WARNING: the deep read stopped after {MAX_PAGES * PAGE_LIMIT} updates; "
-              "anything older was neither listed nor kept.")
+        print("WARNING: the queue was deeper than two pages — updates between the "
+              "oldest page and the newest window were neither listed nor kept.")
     elif truncated:
         print(f"WARNING: listed only the OLDEST {PAGE_LIMIT} pending updates — that is the "
               "deepest read Telegram guarantees is non-destructive, so a recent message from "

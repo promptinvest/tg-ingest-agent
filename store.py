@@ -861,15 +861,6 @@ def candidate_match(conn, text, kind=None):
     return best
 
 
-def candidate_exists(conn, text, kind=None):
-    """True if a same-text candidate already exists in ANY resolved state
-    (Cyrillic-safe), so the curator doesn't re-propose it. Includes 'merged'
-    and 'superseded' — consolidation folds a candidate into those states, and
-    excluding them made the curator re-propose the identical text on its next
-    pass, paying another LLM call to fold it again, forever."""
-    return candidate_match(conn, text, kind) is not None
-
-
 def candidate_add(conn, kind, text, *, reason=None, sensitivity="normal", confidence=0.6,
                   target="boss_profile", source_table=None, source_id=None, evidence=None):
     now = _now()
@@ -981,18 +972,6 @@ def life_set_status(conn, life_id, status):
     return cur.rowcount > 0
 
 
-def life_delete(conn, life_id):
-    """HARD delete of one life fact — a deliberate removal, not a fold.
-
-    Consolidation stopped using this on 2026-07-26 (it demotes to 'merged'
-    instead, which is reversible). It stays for a genuine removal, where the
-    row must not keep blocking UNIQUE(text) — `life_add` treats a folded row as
-    already known, so a fold is deliberately not re-learnable."""
-    cur = conn.execute("DELETE FROM cara_life WHERE id = ?", (life_id,))
-    conn.commit()
-    return cur.rowcount > 0
-
-
 def life_count(conn):
     """How many life rows EXIST — deliberately including folded ones.
 
@@ -1047,15 +1026,6 @@ def proactive_key_sent_today(conn, day, check_name):
         "SELECT COUNT(*) AS n FROM proactive_log WHERE day = ? AND check_name = ?"
         " AND sent_message = 1", (day, check_name),
     ).fetchone()["n"] > 0
-
-
-def proactive_key_sent_count(conn, day, check_name):
-    """How many times a specific proactive check actually sent on a given day
-    (same caller-owned calendar as proactive_sent_count)."""
-    return conn.execute(
-        "SELECT COUNT(*) AS n FROM proactive_log WHERE day = ? AND check_name = ?"
-        " AND sent_message = 1", (day, check_name),
-    ).fetchone()["n"]
 
 
 # -- model cooldowns (failover) ----------------------------------------------
@@ -1970,13 +1940,6 @@ def note_mark_used(conn, message_id):
     return cur.rowcount > 0
 
 
-def notes_by_state(conn, state, limit=50):
-    return conn.execute(
-        "SELECT * FROM messages WHERE knowledge_state = ?"
-        " ORDER BY id DESC LIMIT ?", (state, int(limit)),
-    ).fetchall()
-
-
 def notes_review_candidates(conn, now=None, limit=3, exclude_ids=()):
     """Deterministic review batch (plan v1.1 §9.1), priority order:
     review-due → temporary expiring (due or within 7 days) → actionable with
@@ -2526,14 +2489,6 @@ def find_by_suggestion_message(conn, chat_id, suggestion_message_id):
     return conn.execute(
         "SELECT * FROM messages WHERE chat_id = ? AND suggestion_message_id = ? LIMIT 1",
         (chat_id, suggestion_message_id),
-    ).fetchone()
-
-
-def latest_suggested(conn, chat_id):
-    return conn.execute(
-        "SELECT * FROM messages WHERE chat_id = ? AND status = 'suggested'"
-        " ORDER BY id DESC LIMIT 1",
-        (chat_id,),
     ).fetchone()
 
 

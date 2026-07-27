@@ -32,7 +32,11 @@ def drain(conn, ctx, *, max_jobs=5):
     One drain runs up to max_jobs jobs on the poll loop's only thread, and a single
     job (the memory consolidation, the encrypted backup) can be minutes long — so
     the systemd watchdog is pinged BETWEEN jobs; the whole drain is never one
-    un-pinged span."""
+    un-pinged span. A job BODY with no model calls must ping for itself: the
+    backup pair does (between its snapshot/encrypt/offsite and decrypt/gunzip/
+    integrity phases, with its openssl runs subprocess-time-bounded, 2026-07-27) —
+    without that, one job was one un-pinged span and the unit's WatchdogSec
+    arithmetic did not hold for it."""
     processed = 0
     while processed < max_jobs:
         common.watchdog_ping()

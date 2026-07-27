@@ -5595,16 +5595,18 @@ class StoreRetentionTests(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM llm_usage").fetchone()[0], 1)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0], 1)
 
-    def test_candidate_exists_covers_merged_and_superseded(self):
+    def test_candidate_dedup_covers_merged_and_superseded(self):
         # Regression: consolidation folds a candidate to 'merged'/'superseded';
         # excluding those states made the curator re-propose the identical text
-        # every pass, paying an LLM call to re-fold it forever.
+        # every pass, paying an LLM call to re-fold it forever. Pinned on the
+        # LIVE path (`candidate_add` refusing the insert) — the old
+        # `candidate_exists` wrapper it used to assert was dead code the
+        # production dedup no longer shared (2026-07-27 sweep).
         self.conn.execute(
             "INSERT INTO memory_candidates (target, kind, proposed_text, status, created_at)"
             " VALUES ('boss_profile', 'fact', 'Иван Доронин — его знакомый', 'merged', ?)",
             (store._now(),))
         self.conn.commit()
-        self.assertTrue(store.candidate_exists(self.conn, "Иван Доронин — его знакомый"))
         self.assertIsNone(store.candidate_add(
             self.conn, "fact", "Иван Доронин — его знакомый"))  # not re-proposed
 
@@ -5687,6 +5689,65 @@ class InstallerModulesTests(unittest.TestCase):
             missing,
             f"imported by installed code but NOT in the installer MODULES list "
             f"(would ModuleNotFound-crash the service): {missing}")
+
+    def test_the_backup_prune_is_scoped_to_this_tools_own_dirs(self):
+        # /root/codex-hardening-backups is a FLEET-SHARED convention: the
+        # nightly-updater installer, TLS/nginx one-shots and other Codex tools
+        # park their pre-change state in sibling dirs of the same root. The
+        # unscoped `find … | tail -n +11 | xargs rm -rf` deleted EVERY tool's
+        # rollback material as soon as ten Cara deploys had passed (2026-07-27).
+        repo = Path(__file__).resolve().parent
+        installer = (repo / "install-tg-ingest-agent-pilot-remote.sh").read_text(
+            encoding="utf-8")
+        prune = [line for line in installer.splitlines()
+                 if "codex-hardening-backups" in line or
+                 ("find " in line and "$BACKUP_ROOT" in line)]
+        find_lines = [line for line in prune if line.lstrip().startswith("find ")]
+        self.assertTrue(find_lines, "the retention prune must still exist")
+        for line in find_lines:
+            self.assertIn("-name '*-tg-ingest-agent'", line,
+                          "the prune must only ever match this tool's own dirs")
+        # ...and the dirs this script creates really do carry that suffix, or
+        # the filter above would silently stop pruning anything at all.
+        self.assertIn('BACKUP_DIR="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-tg-ingest-agent"',
+                      installer)
+
+    def test_the_prune_pipeline_actually_spares_sibling_dirs_when_run(self):
+        # The text pin above cannot catch quoting damage, a wrong `cut` field or
+        # a reordered `sort | tail`: run the installer's EXACT pipeline against
+        # a temp root and watch what survives (2026-07-27). Skipped off-POSIX —
+        # the suite's real home is the Linux verify box, where GNU find exists.
+        import subprocess as sp
+        if os.name != "posix" or not shutil.which("bash") or not shutil.which("find"):
+            self.skipTest("needs the GNU userland the installer runs under")
+        repo = Path(__file__).resolve().parent
+        lines = (repo / "install-tg-ingest-agent-pilot-remote.sh").read_text(
+            encoding="utf-8").splitlines()
+        idx = next(i for i, line in enumerate(lines)
+                   if line.startswith("find ") and "$BACKUP_ROOT" in line)
+        pipeline = lines[idx] + "\n" + lines[idx + 1]   # the find line + its continuation
+        with tempfile.TemporaryDirectory() as root:
+            rootp = Path(root)
+            own = []
+            for i in range(11):                          # one over the keep window
+                d = rootp / f"202601{i + 10:02d}T000000Z-tg-ingest-agent"
+                d.mkdir()
+                (d / "tg-ingest-agent.env.bak").write_text("secrets", encoding="utf-8")
+                os.utime(d, (1_700_000_000 + i, 1_700_000_000 + i))
+                own.append(d.name)
+            sibling = rootp / "20260101T000000Z-nightly-updates"
+            sibling.mkdir()
+            (sibling / "rollback.tar").write_text("keep me", encoding="utf-8")
+            os.utime(sibling, (1_600_000_000, 1_600_000_000))   # oldest of ALL
+            res = sp.run(["bash", "-c", f'BACKUP_ROOT="{root}"\n{pipeline}\n'],
+                         capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            left = sorted(p.name for p in rootp.iterdir())
+            # The sibling tool's rollback material survives even as the oldest
+            # dir in the root; OUR dirs prune to the newest 10 (oldest goes).
+            self.assertIn(sibling.name, left)
+            self.assertEqual([n for n in left if n.endswith("-tg-ingest-agent")],
+                             sorted(own[1:]))
 
 
 class PersonaSourceAndResearchToolTests(unittest.TestCase):
@@ -6308,6 +6369,143 @@ class BackupAndDiskHardeningTests(unittest.TestCase):
             with self.assertRaises(sqlite3.OperationalError):
                 backup.run(cfg, conn)
         self.assertEqual(len([p for p in d.iterdir() if p.name.endswith(".db.gz")]), 2)
+
+    # -- 2026-07-27 review: rotation vs the current run, error masking,
+    #    openssl hangs, and the watchdog inside the job bodies -----------------
+
+    def test_rotation_never_deletes_the_archive_this_run_just_wrote(self):
+        # "Newest" is the NAME's UTC stamp and the wall clock is not monotonic:
+        # a droplet booting with a skewed RTC (before NTP steps it) stamps
+        # "today" in the past, so the just-written archive sorted below the keep
+        # window — rotate() deleted the snapshot run() had just taken, and run()
+        # then crashed on gz.stat() after a technically successful backup,
+        # retrying into the same delete until the job went terminal.
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        cfg.backup_keep = 2
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        for i in range(1, 4):                      # three archives "from the future"
+            (d / f"ingest-2099010{i}T000000Z.db.gz").write_bytes(b"x")
+        result = backup.run(cfg, conn)             # today's stamp sorts below them all
+        self.assertTrue((d / result["file"]).is_file(), "today's archive must survive")
+        self.assertEqual(result["bytes"], (d / result["file"]).stat().st_size)
+        # ...and retention still pruned the set it was allowed to touch.
+        self.assertEqual(len(list(d.glob("ingest-2099*.db.gz"))), cfg.backup_keep)
+
+    def test_a_failed_snapshots_retention_sweep_never_masks_the_original_error(self):
+        # A read-only remount fails snapshot() AND the recovery rotate(); the
+        # job row and the boss's backup_failed notice quote what escapes run(),
+        # so it must be the diagnosis, not the sweep's own OSError on top of it.
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        original = sqlite3.OperationalError("attempt to write a readonly database")
+        with mock.patch.object(backup, "snapshot", side_effect=original), \
+                mock.patch.object(backup, "rotate",
+                                  side_effect=OSError(30, "Read-only file system")):
+            with self.assertRaises(sqlite3.OperationalError) as ctx:
+                backup.run(cfg, conn)
+        self.assertIs(ctx.exception, original)
+
+    def test_openssl_runs_are_time_bounded_and_a_hang_is_a_backup_error(self):
+        # Neither openssl invocation had a timeout=: openssl blocking on a
+        # stalled volume or a key "file" that blocks on read hung the job body —
+        # which emits no ping of its own — until WatchdogSec killed the live
+        # assistant mid-backup. A hang is now a job failure with a retry.
+        import subprocess as sp
+        import backup
+        cfg = self.agent.cfg
+        key = Path(self.tmp.name) / "backup.key"
+        key.write_bytes(b"k" * 32)
+        cfg.backup_encryption_key_file = str(key)
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        gz = d / "ingest-20260101T000000Z.db.gz"
+        gz.write_bytes(b"x")
+        calls = []
+
+        def hung_openssl(cmd, **kwargs):
+            calls.append(dict(kwargs))
+            raise sp.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout") or 0)
+
+        with mock.patch.object(backup.subprocess, "run", side_effect=hung_openssl):
+            with self.assertRaises(backup.BackupEncryptionError):
+                backup.encrypt_snapshot(cfg, gz)
+            with self.assertRaises(backup.BackupRestoreError):
+                backup._decrypt_snapshot(cfg, Path(str(gz) + ".enc"),
+                                         d / "restored.db.gz")
+        # Per CALL, not one merged dict (2026-07-27): the decrypt call's kwargs
+        # used to overwrite the encrypt call's, so dropping timeout= from
+        # encrypt_snapshot ALONE kept this test green.
+        self.assertEqual([c.get("timeout") for c in calls],
+                         [backup.OPENSSL_TIMEOUT_SECONDS] * 2)
+
+    def test_backup_job_bodies_ping_the_watchdog_between_phases(self):
+        # runtime.drain pings BETWEEN jobs, so a job body with no model calls was
+        # one un-pinged span in its entirety — the exact arithmetic the unit's
+        # WatchdogSec=900 comment rests on did not hold for the two backup jobs.
+        # PLACEMENT is asserted, not a count (2026-07-27): the per-chunk pings
+        # inside snapshot()/_gunzip() made a bare `call_count >= 3` hold only by
+        # accident of the fixture DB gzipping in one chunk — a larger DB would
+        # have masked the removal of every phase ping in run()/verify_restore().
+        import backup
+        cfg, conn = self.agent.cfg, self.agent.conn
+        cfg.fleet_notify_token, cfg.fleet_notify_chat_id = "t", "5"
+        d = backup.backups_dir(cfg)
+        d.mkdir(parents=True, exist_ok=True)
+        gz = d / "ingest-20260101T000000Z.db.gz"
+        gz.write_bytes(b"x")
+        enc = Path(str(gz) + ".enc")
+        seq = []
+
+        def phase(name, result):
+            def body(*_args, **_kwargs):
+                seq.append(name)
+                return result
+            return body
+
+        with mock.patch.object(backup.common, "watchdog_ping",
+                               side_effect=lambda: seq.append("ping")), \
+                mock.patch.object(backup, "snapshot",
+                                  side_effect=phase("snapshot", gz)), \
+                mock.patch.object(backup, "rotate", side_effect=phase("rotate", 0)), \
+                mock.patch.object(backup, "encrypt_snapshot",
+                                  side_effect=phase("encrypt", enc)), \
+                mock.patch.object(backup, "offsite",
+                                  side_effect=phase("offsite", "telegram:fleet")):
+            backup.run(cfg, conn)
+        # A ping between each adjacent phase pair (rotate is quick file ops and
+        # deliberately unpinned — filtered out rather than pinned in place).
+        self.assertEqual([e for e in seq if e != "rotate"],
+                         ["ping", "snapshot", "ping", "encrypt", "ping", "offsite"])
+
+        enc.write_bytes(b"e")               # newest stamp, encrypted form preferred
+        seq.clear()
+
+        def fake_decrypt(_cfg, _src, out_path):
+            seq.append("decrypt")
+            out_path.write_bytes(b"gz")
+
+        def fake_gunzip(_src, dst, _max_bytes):
+            seq.append("gunzip")
+            dst.write_bytes(b"db")
+            return 2
+
+        def fake_integrity(_path):
+            seq.append("integrity")
+            return 12
+
+        with mock.patch.object(backup.common, "watchdog_ping",
+                               side_effect=lambda: seq.append("ping")), \
+                mock.patch.object(backup, "_decrypt_snapshot",
+                                  side_effect=fake_decrypt), \
+                mock.patch.object(backup, "_gunzip", side_effect=fake_gunzip), \
+                mock.patch.object(backup, "integrity_check",
+                                  side_effect=fake_integrity):
+            result = backup.verify_restore(cfg, conn)
+        self.assertEqual(result["integrity"], "ok")
+        self.assertEqual(seq, ["ping", "decrypt", "ping", "gunzip",
+                               "ping", "integrity"])
 
     def test_sweep_spares_hand_made_backups(self):
         # Caught on the live box: the backups dir also holds deliberate
@@ -9963,6 +10161,210 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
                 self.assertIsNone(
                     self.agent.process_update_batch([self._update(990 + offset)]))
 
+    # -- 2026-07-27 review: the stall alert must cover the SCHEDULER too -------
+
+    def test_a_scheduler_side_db_outage_feeds_the_stall_alert(self):
+        # The streak was fed only by the inbound path, so the identical write
+        # outage striking while no updates arrive (read-only remount at 03:00,
+        # the boss asleep) was completely silent: `db_stalled` — the alert
+        # written for exactly the «active (running) while permanently deaf»
+        # state — could never fire from a scheduler tick.
+        sent = []
+
+        def fake_tg_call(token, method, payload=None, **kwargs):
+            sent.append((method, payload))
+            return {"message_id": 1}
+
+        with mock.patch.object(self.mod, "tg_call", side_effect=fake_tg_call):
+            for _ in range(self.agent.DB_STALL_ALERT_AFTER * 2):
+                self.agent._tick("fire_due_reminders",
+                                 mock.Mock(side_effect=self._readonly_db))
+        self.assertEqual([m for m, _ in sent], ["sendMessage"])   # once, latched
+        self.assertEqual(sent[0][1]["chat_id"], 111)
+        self.assertEqual(sent[0][1]["text"], texts.T("ru", "db_stalled"))
+
+    def test_a_non_db_tick_failure_stays_out_of_the_stall_streak(self):
+        # The carve-out is sqlite-only: an ordinary tick bug must neither alert
+        # nor creep the counter toward a false «база перестала принимать записи».
+        with mock.patch.object(self.mod, "tg_call") as call:
+            for _ in range(self.agent.DB_STALL_ALERT_AFTER * 2):
+                self.agent._tick("check_proactive",
+                                 mock.Mock(side_effect=ValueError("tick bug")))
+        self.assertEqual(self.agent._db_stall_streak, 0)
+        call.assert_not_called()
+
+    def test_the_containment_break_finishes_the_inbound_trace(self):
+        # Every other exit finishes its trace; this one left the dead inbound
+        # trace CURRENT, so scheduler-tick spend, issues and the daily-curator
+        # job were filed under it — during the very incident the traces exist
+        # to explain (2026-07-27).
+        with mock.patch.object(self.agent, "handle_update",
+                               side_effect=self._disk_full), \
+                mock.patch.object(self.agent, "_sleep"):
+            self.assertIsNone(self.agent.process_update_batch([self._update(940)]))
+        self.assertIsNone(common.current_trace())
+        rows = self.agent.conn.execute(
+            "SELECT status FROM traces WHERE kind = 'inbound'").fetchall()
+        self.assertEqual([r["status"] for r in rows], ["failed"])
+
+    def test_a_containment_break_on_a_dead_db_still_clears_the_current_trace(self):
+        # The branch that runs in the REAL incident: containment fires because
+        # the DB stopped taking writes, so trace.finish's own UPDATE raises too
+        # and the module global is cleared by hand — a typo in that fallback (or
+        # a narrowed except) would silently reintroduce the leaked-trace bug in
+        # exactly the scenario the fix exists for (2026-07-27). No traces-row
+        # assertion: the finishing write failed by construction.
+        with mock.patch.object(self.agent, "handle_update",
+                               side_effect=self._readonly_db), \
+                mock.patch.object(tracing, "finish",
+                                  side_effect=self._readonly_db), \
+                mock.patch.object(self.agent, "_sleep"):
+            self.assertIsNone(self.agent.process_update_batch([self._update(942)]))
+        self.assertIsNone(common.current_trace())
+
+    def test_replay_dead_letters_a_row_whose_attempts_died_with_the_process(self):
+        # A watchdog SIGABRT / OOM kill raises nothing, so the exception path's
+        # terminal branch never ran: the row stayed 'pending' with attempts
+        # already counted, and every restart re-drove it into the same death —
+        # an indefinite kill loop with no dead-letter notice (2026-07-27).
+        poison = self._update(950)
+        store.telegram_update_receive(self.agent.conn, poison, 111)
+        for _ in range(self.cfg.update_max_attempts):          # one per past death
+            store.telegram_update_attempt(self.agent.conn, 950)
+        survivor = self._update(951)
+        store.telegram_update_receive(self.agent.conn, survivor, 111)
+        # The BOUNDARY, not a free pass (2026-07-27): attempts == cap-1 must
+        # still replay — only >= cap dead-letters.
+        for _ in range(self.cfg.update_max_attempts - 1):
+            store.telegram_update_attempt(self.agent.conn, 951)
+        handled, sent = [], []
+        with mock.patch.object(self.agent, "handle_update",
+                               side_effect=lambda u: handled.append(u["update_id"])), \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, text, *a, **k: sent.append(text)):
+            self.agent.replay_pending_updates()
+        self.assertEqual(handled, [951])                # the poison row is NOT re-driven
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 950)["status"],
+                         "failed")
+        self.assertEqual(store.telegram_update_get(self.agent.conn, 951)["status"],
+                         "done")
+        self.assertIn(texts.T("ru", "update_dead_letter"), sent)
+        n = self.agent.conn.execute(
+            "SELECT COUNT(*) FROM issues WHERE kind = 'telegram_update_failed'"
+        ).fetchone()[0]
+        self.assertEqual(n, 1)
+        # The events ledger sees the startup dead-letter too (2026-07-27): the
+        # in-batch terminal branch writes a failed telegram_message_received
+        # event, and «same ledger writes» must mean it here as well (minus the
+        # trace rows — no trace exists at startup).
+        ev = self.agent.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE kind = 'telegram_message_received'"
+            " AND status = 'failed'").fetchone()[0]
+        self.assertEqual(ev, 1)
+
+    def test_a_write_outage_does_not_rebroadcast_a_delivered_reminder(self):
+        # fire_due_reminders SENDS first and stamps afterwards: with the
+        # conversation write failing, the row was re-selected and re-sent every
+        # poll cycle — the identical alarm roughly every 50 seconds for the
+        # whole outage. Only the BOOKKEEPING is owed after a delivered send.
+        now = datetime.now(timezone.utc)
+        rid = store.reminder_add(self.agent.conn, 111, "позвонить в клинику",
+                                 (now - timedelta(minutes=1)).isoformat(), "daily")
+        sends = []
+
+        def fake_tg_call(token, method, payload=None, **kwargs):
+            if method == "sendMessage":
+                sends.append(payload["text"])
+            return {"message_id": len(sends)}
+
+        with mock.patch.object(self.mod, "tg_call", side_effect=fake_tg_call):
+            with mock.patch.object(store, "convo_add", side_effect=self._readonly_db), \
+                    mock.patch.object(store, "pending_get", side_effect=self._readonly_db):
+                # Telegram accepted the send; the turn record then failed.
+                with self.assertRaises(sqlite3.OperationalError):
+                    self.agent.fire_due_reminders()
+                # Later poll cycles during the SAME outage: the alarm is owed
+                # its bookkeeping, never another delivery.
+                for _ in range(3):
+                    with self.assertRaises(sqlite3.OperationalError):
+                        self.agent.fire_due_reminders()
+            self.agent.fire_due_reminders()             # outage over: stamp lands
+            self.agent.fire_due_reminders()             # ...and stays quiet
+        self.assertEqual(len(sends), 1)                 # ONE alarm on his screen
+        row = store.reminder_get(self.agent.conn, rid)
+        self.assertIsNotNone(row["last_fired_at"])      # stamped after recovery
+        self.assertGreater(row["due_utc"], now.isoformat())   # recurrence advanced
+
+    def test_a_restart_during_the_outage_refires_once_then_stamps(self):
+        # The owed map is in-memory BY DESIGN — the database is the broken
+        # component, so there is nowhere durable to write it. The documented
+        # other half of that choice (code comment + CARA.md) was untested: a
+        # process death during the outage loses the map, and the new process
+        # re-fires the delivered-but-unstamped alarm exactly ONCE
+        # (at-least-once), then stamps (2026-07-27).
+        now = datetime.now(timezone.utc)
+        rid = store.reminder_add(self.agent.conn, 111, "позвонить в клинику",
+                                 (now - timedelta(minutes=1)).isoformat(), "none")
+        sends = []
+
+        def fake_tg_call(token, method, payload=None, **kwargs):
+            if method == "sendMessage":
+                sends.append(payload["text"])
+            return {"message_id": len(sends)}
+
+        with mock.patch.object(self.mod, "tg_call", side_effect=fake_tg_call):
+            with mock.patch.object(store, "convo_add", side_effect=self._readonly_db), \
+                    mock.patch.object(store, "pending_get", side_effect=self._readonly_db):
+                with self.assertRaises(sqlite3.OperationalError):
+                    self.agent.fire_due_reminders()   # delivered, stamp owed
+            # The process dies here; the in-memory owed map dies with it.
+            second = self.mod.Agent(self.cfg)
+            try:
+                second.fire_due_reminders()           # ONE more send...
+                second.fire_due_reminders()           # ...then the stamp holds
+                row = store.reminder_get(second.conn, rid)
+            finally:
+                second.conn.close()
+        self.assertEqual(len(sends), 2)               # at-least-once, no broadcast
+        self.assertIsNotNone(row["last_fired_at"])
+
+    def test_a_stale_owed_marker_never_swallows_the_next_occurrence(self):
+        # The owed marker is scoped to the OCCURRENCE (id + due_utc): the store
+        # helpers commit one by one, so when the outage begins only after
+        # reminder_update_due committed, an id-only marker went stale — and the
+        # reminder's NEXT legitimate firing was treated as bookkeeping-only:
+        # send skipped, the log claiming «stamp recovered» — one alarm silently
+        # consumed, the outcome the design calls worse than a duplicate
+        # (2026-07-27).
+        now = datetime.now(timezone.utc)
+        rid = store.reminder_add(self.agent.conn, 111, "утренние благодарности",
+                                 (now - timedelta(minutes=1)).isoformat(), "daily")
+        sends = []
+
+        def fake_tg_call(token, method, payload=None, **kwargs):
+            if method == "sendMessage":
+                sends.append(payload["text"])
+            return {"message_id": len(sends)}
+
+        with mock.patch.object(self.mod, "tg_call", side_effect=fake_tg_call):
+            # The outage strikes BETWEEN the bookkeeping writes: the recurrence
+            # advance commits, the fired stamp does not.
+            with mock.patch.object(store, "reminder_touch_fired",
+                                   side_effect=self._readonly_db):
+                with self.assertRaises(sqlite3.OperationalError):
+                    self.agent.fire_due_reminders()
+            self.assertEqual(len(sends), 1)           # today's alarm was delivered
+            # "Tomorrow" arrives: the ADVANCED occurrence comes due. It was
+            # never delivered — the stale marker must not swallow it.
+            self.agent.conn.execute(
+                "UPDATE reminders SET due_utc = ? WHERE id = ?",
+                ((now - timedelta(seconds=30)).isoformat(), rid))
+            self.agent.conn.commit()
+            self.agent.fire_due_reminders()
+        self.assertEqual(len(sends), 2)               # tomorrow's alarm reached him
+        row = store.reminder_get(self.agent.conn, rid)
+        self.assertIsNotNone(row["last_fired_at"])    # ...and its stamp landed
+
     def test_sleep_returns_at_once_when_a_stop_was_already_requested(self):
         self.agent.stop = True
         with mock.patch.object(self.mod.time, "sleep") as slept:
@@ -10195,9 +10597,11 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
     def test_tea_rebalance_does_not_resurrect_a_deleted_life_fact(self):
         # The one-time tea rebalance re-ran its three INSERT OR IGNOREs on every
         # start. Steady state was zero-write (text is UNIQUE), but the moment the
-        # boss legitimately removed one of those rows — consolidation's
-        # life_delete, or a purge — the next start silently put it back,
-        # overruling a deliberate deletion.
+        # boss legitimately removed one of those rows — a purge, an operator
+        # DELETE — the next start silently put it back, overruling a deliberate
+        # deletion. (The removal is a direct DELETE here: the old `life_delete`
+        # helper had no production caller and was removed in the 2026-07-27
+        # dead-code sweep; consolidation demotes to 'merged' instead.)
         path = self._steady_state_db()
         conn = store.open_db(path)
         try:
@@ -10206,7 +10610,8 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
                 .fetchone())                                  # marker stamped once
             row = conn.execute("SELECT id, text FROM cara_life WHERE kind='food'").fetchone()
             self.assertIsNotNone(row)
-            store.life_delete(conn, row["id"])
+            conn.execute("DELETE FROM cara_life WHERE id = ?", (row["id"],))
+            conn.commit()
         finally:
             conn.close()
         conn = store.open_db(path)
@@ -12049,6 +12454,29 @@ class IngestMediaFetch20260725Tests(unittest.TestCase):
         self.assertEqual(opener.timeouts[0], 20)     # hop 1 had the whole budget
         self.assertLess(opener.timeouts[1], 20)      # hop 2 only what was left
         self.assertAlmostEqual(opener.timeouts[1], 3.0, places=6)
+
+    def test_fetch_pings_the_watchdog_per_hop_and_per_body_chunk(self):
+        """fetch runs INLINE on the poll loop's only thread and used to contain
+        no watchdog ping at all, so one fetch was one un-pinged span — the unit
+        file's arithmetic covered every long primitive except this one
+        (2026-07-27). The deadline still bounds the total; the pings make each
+        NORMAL span one socket wait. (The header-dribble hop the module note
+        disclaims stays unreachable to both — contained by the replay cap.)"""
+        clock = _FakeClock(per_read=0.05)
+        chunks = [b"<html><head><title>Cheap Flights</title>",
+                  b"</head><body><p>Ufa 9800</p>",
+                  b"</body></html>"]
+        opener = _FakeOpener(_FakeHTTPResponse(chunks, url="https://ok.example/x",
+                                               clock=clock), clock,
+                             redirects=[(1.0, "https://ok.example/x")])
+        with mock.patch.object(fetch.socket, "getaddrinfo", return_value=self.PUBLIC_ADDRINFO), \
+                mock.patch.object(fetch, "build_opener", return_value=opener), \
+                mock.patch.object(fetch.time, "monotonic", side_effect=clock.monotonic), \
+                mock.patch.object(fetch.common, "watchdog_ping") as ping:
+            _final, title, _text = fetch.fetch("https://first.example/x", timeout=20)
+        self.assertEqual(title, "Cheap Flights")
+        # two hops + one ping per body-chunk read (three chunks + the EOF read)
+        self.assertGreaterEqual(ping.call_count, 2 + len(chunks))
 
     # -- T6.9 an unknown charset must not lose the page ------------------------
 
@@ -14780,6 +15208,58 @@ class AuditFixes20260726Tests(unittest.TestCase):
             self.assertTrue(pdftext._is_decompression_bomb(data))
         self.assertLessEqual(sum(fed), 4 * len(data), sum(fed))
 
+    # -- 2026-07-27 review: the regex SEARCH itself must be bounded ------------
+
+    def test_a_stream_flood_with_no_endstream_never_reaches_the_regex(self):
+        """`_STREAM`'s terminator starts with `\\r?` — an optional repeat, not a
+        literal — so CPython cannot literal-skip and every FAILED attempt walks
+        `.*?` one position at a time to end-of-file. With N `stream\\n` markers
+        and no `endstream` that is N × filesize work for ZERO matches, the guard
+        concluding «not a bomb» after freezing the poll thread past WatchdogSec
+        — followed by a restart and a replay of the same PDF. The memchr
+        precheck must settle it before the regex engine is ever entered."""
+        calls = []
+        real = pdftext._STREAM
+
+        class SpyPattern:
+            def finditer(self, data):
+                calls.append(len(data))
+                return real.finditer(data)
+
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+        flood = b"stream\n" * 40_000                   # ~280 KB stands in for 20 MB
+        with mock.patch.object(pdftext, "_STREAM", SpyPattern()):
+            self.assertTrue(pdftext._is_decompression_bomb(flood))
+            with mock.patch.object(pdftext, "_pdfminer_extract", None):
+                self.assertEqual(pdftext.extract_text(flood), "")
+            # The belt-and-braces copy of the guard at the top of _extract must
+            # hold on a DIRECT call too (2026-07-27): extract_text refuses the
+            # flood before _extract ever runs, so only this call reaches it —
+            # without it, deleting _extract's own guard kept the suite green.
+            self.assertEqual(pdftext._extract(flood, 4000), "")
+            # ...and the OTHER marker form _STREAM matches: the counted
+            # `stream\r\n` variant had no flood test at all.
+            self.assertTrue(pdftext._is_decompression_bomb(b"stream\r\n" * 40_000))
+        self.assertEqual(calls, [])                    # the scan never ran at all
+
+    def test_orphan_stream_markers_after_the_last_endstream_are_refused(self):
+        """All the quadratic failed-attempt work lives past the LAST `endstream`
+        (before it every attempt matches, and the scan telescopes). A tail whose
+        markers would cost more scanning than MAX_SCAN_MATCH_WORK is
+        unverifiable-by-construction — a well-formed PDF ends in xref/trailer
+        and has nothing stream-like there."""
+        import zlib
+        good = b"%PDF-1.4\nstream\n" + zlib.compress(b"ok") + b"\nendstream\n"
+        data = good + b"stream\n" * 300 + b"%%EOF"
+        with mock.patch.object(pdftext, "MAX_SCAN_MATCH_WORK", 1000):
+            self.assertTrue(pdftext._is_decompression_bomb(data))
+        # ...and with the real budget this small file passes in both directions:
+        # the bound refuses quadratic WORK, not documents with a wordy tail.
+        self.assertFalse(pdftext._is_decompression_bomb(data))
+        self.assertFalse(pdftext._is_decompression_bomb(good))
+
     # -- a snapshot may only name what the card actually listed ----------------
 
     def _queue_note_review_nudge(self, ids):
@@ -16701,22 +17181,31 @@ class OwnerBindingHardening20260726Tests(unittest.TestCase):
         self.assertTrue(truncated)          # a full page means "there may be more"
         self.assertEqual(len(updates), 100)
 
-    def test_the_deep_read_is_opt_in_and_pages_backwards(self):
+    def _destructive_queue(self, depth, seen_urls):
+        """A fake opener that models what the Bot API actually does: a negative
+        offset serves the NEWEST `limit` updates and FORGETS everything older,
+        so a second, deeper negative offset has nothing older left to address.
+        The old test here served distinct pages for offset=-200 — the exact
+        false premise the pager was built on."""
         import re as remod
-        pages = {
-            None: [self._private(i, 9, name="Oldest") for i in range(1, 101)],
-            -100: [self._private(i, 7) for i in range(101, 201)],
-            -200: [self._private(i, 8, name="Older") for i in range(1, 101)],
-            -300: [self._private(i, 8, name="Older") for i in range(1, 101)],   # clamped
-        }
-        seen_urls = []
+        queue = {"ids": list(range(1, depth + 1))}
 
         def fake(url, timeout=None):
             seen_urls.append(url)
             found = remod.search(r"offset=(-?\d+)", url)
+            if found is None:
+                ids = queue["ids"][:100]                    # oldest page, kept
+            else:
+                self.assertLess(int(found.group(1)), 0)
+                ids = queue["ids"][-100:]                   # newest page...
+                queue["ids"] = ids                          # ...older FORGOTTEN
             return self._Resp({"ok": True,
-                               "result": pages[int(found.group(1)) if found else None]})
+                               "result": [self._private(i, 7) for i in ids]})
+        return fake
 
+    def test_the_deep_read_is_opt_in_and_makes_one_destructive_call(self):
+        seen_urls = []
+        fake = self._destructive_queue(900, seen_urls)
         # Not without asking: the default never sends an offset, so the newest
         # updates behind a full first page stay unreachable (and undamaged).
         self.mod.fetch_updates("tok", opener=fake)
@@ -16724,12 +17213,36 @@ class OwnerBindingHardening20260726Tests(unittest.TestCase):
         self.assertNotIn("offset", seen_urls[0])
 
         seen_urls.clear()
-        updates, truncated = self.mod.fetch_updates("tok", opener=fake, deep=True)
-        self.assertFalse(truncated)
-        self.assertEqual(len(updates), 200)          # first page + the backward pages
+        updates, gap = self.mod.fetch_updates("tok", opener=fake, deep=True)
+        # ONE negative-offset call: after it, everything older is already gone,
+        # so paging "deeper" would only re-read the same window forever. The
+        # pre-fix pager promised MAX_PAGES=10 pages and could never leave page 1.
+        self.assertEqual(len(seen_urls), 2)
         self.assertNotIn("offset", seen_urls[0])     # the safe page still comes first
-        self.assertTrue(all("offset=-" in url for url in seen_urls[1:]), seen_urls)
-        self.assertGreater(len(seen_urls), 1)
+        self.assertIn(f"offset=-{self.mod.PAGE_LIMIT}", seen_urls[1])
+        self.assertEqual(len(updates), 200)          # oldest 100 + newest 100
+        self.assertTrue(gap)                         # ids 101..800 destroyed unseen
+
+    def test_a_deep_read_that_covers_the_whole_queue_reports_no_gap(self):
+        seen_urls = []
+        fake = self._destructive_queue(150, seen_urls)
+        updates, gap = self.mod.fetch_updates("tok", opener=fake, deep=True)
+        self.assertEqual(len(updates), 150)          # 1..100 and 51..150 overlap
+        self.assertFalse(gap)                        # nothing was lost unseen
+
+    def test_the_deep_read_gap_warning_reaches_the_operator(self):
+        updates = [self._private(1, 7, name="Boss", username="boss")]
+        with mock.patch.object(self.mod, "ENV", self.env), \
+                mock.patch.object(self.mod, "service_is_active", return_value=False), \
+                mock.patch.object(self.mod, "fetch_updates",
+                                  return_value=(updates, True)):
+            code, out = self._run_main(["--deep-read", "7"])
+        self.assertIsNone(code)
+        # Pin the NEW wording (2026-07-27): the pre-fix, unreachable warning
+        # also contained «neither listed nor kept», so that substring alone
+        # discriminated nothing about the one-destructive-call gap semantics.
+        self.assertIn("between the oldest page and the newest window", out)
+        self.assertIn("neither listed nor kept", out)
 
     def test_the_deep_read_says_what_it_destroys(self):
         updates = [self._private(1, 7, name="Boss", username="boss")]
@@ -17703,7 +18216,7 @@ class PerfAndSmallCorrectness20260726Tests(unittest.TestCase):
             "INSERT INTO memory_candidates (kind, proposed_text, status, created_at)"
             " VALUES ('fact', 'Босс любит горы', 'pending', ?)", (store._now(),))
         self.conn.commit()
-        self.assertTrue(store.candidate_exists(self.conn, "босс любит горы", "fact"))
+        self.assertIsNotNone(store.candidate_match(self.conn, "босс любит горы", "fact"))
         self.assertIsNone(store.candidate_add(self.conn, "fact", "Босс любит горы"))
 
     def test_similarity_dedup_is_unchanged_and_still_kind_scoped(self):

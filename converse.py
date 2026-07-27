@@ -126,11 +126,6 @@ def seed_life(conn):
             store.life_add(conn, kind, text)
 
 
-def remember_life(conn, text, kind="moment"):
-    """Persist a new detail of Cara's life so she stays consistent later."""
-    return store.life_add(conn, kind, text)
-
-
 def _lang_name(lang):
     return "Russian" if lang == "ru" else "English"
 

@@ -30,11 +30,17 @@ done
 
 # Pre-install backups: each one holds a copy of the env file (secrets), and they
 # used to accumulate forever — disk growth plus a widening secrets footprint.
-# Keep the newest 10 dirs, and keep the root private.
+# Keep the newest 10 of THIS tool's dirs, and keep the root private.
+# `-name '*-tg-ingest-agent'` is load-bearing (2026-07-27): the root is a
+# FLEET-SHARED convention — other tools' one-shots (nightly-updater installs,
+# TLS/nginx hardening) park their own pre-change state in sibling dirs, and an
+# unscoped prune deleted the operator's rollback material for unrelated
+# subsystems as soon as ten Cara deploys had passed. Prune only what this
+# script itself creates (the $BACKUP_DIR stamp below carries the suffix).
 BACKUP_ROOT=/root/codex-hardening-backups
 mkdir -p "$BACKUP_ROOT"
-chmod 700 "$BACKUP_ROOT"
-find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
+chmod 700 "$BACKUP_ROOT"   # every writer here runs as root; the copies hold secrets
+find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-tg-ingest-agent' -printf '%T@ %p\n' 2>/dev/null \
   | sort -rn | tail -n +11 | cut -d' ' -f2- | xargs -r rm -rf -- || true
 
 BACKUP_DIR="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-tg-ingest-agent"

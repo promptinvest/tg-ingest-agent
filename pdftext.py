@@ -50,6 +50,19 @@ _SCAN_INPUT_CHUNK = 64 * 1024
 # well-formed PDF never spends any of this: its streams end where they say they
 # do, and zlib reports that within the regex's own group.
 MAX_SCAN_TAIL_BYTES = 16 * 1024 * 1024
+# ...and the regex SEARCH itself is bounded BEFORE it runs (2026-07-27).
+# `_STREAM`'s terminator starts with `\r?` — an optional repeat, not a literal —
+# so CPython's literal-skip optimisation does not apply and each failed match
+# walks `.*?` one position at a time to end-of-file. A failed attempt happens
+# exactly at the `stream\n` markers with NO `endstream` anywhere after them,
+# i.e. past the LAST `endstream`: a 20 MB forward of `stream\n` repeats made
+# `finditer` itself the bomb (millions of full-buffer scans, zero matches, the
+# guard concluding «not a bomb») — poll thread frozen past WatchdogSec, restart,
+# replay, again. `bytes.count`/`rfind` are memchr-fast, and a well-formed PDF
+# has nothing stream-like after its last `endstream` (only xref/trailer), so a
+# tail whose failed-attempt work would exceed this budget is unverifiable by
+# construction and refused like a bomb.
+MAX_SCAN_MATCH_WORK = 64 * 1024 * 1024
 _TJ = re.compile(r"\((?:\\.|[^()\\])*\)\s*Tj")
 _TJ_ARRAY = re.compile(r"\[(.*?)\]\s*TJ", re.DOTALL)
 _PAREN = re.compile(r"\((?:\\.|[^()\\])*\)")
@@ -129,10 +142,38 @@ def _inflated_bytes(view, start, stop, budget, tail_budget):
     return seen, tail_used
 
 
+def _scan_work_excessive(data):
+    """True when merely SEARCHING for stream markers would freeze the thread.
+
+    A failed `_STREAM` attempt walks `.*?` to end-of-file, and failed attempts
+    happen exactly at the `stream\\n` markers with no `endstream` after them —
+    i.e. past the LAST `endstream` (everywhere, when there is none). The
+    product below is that failed-attempt work, prechecked with memchr-fast
+    byte counts before any regex runs. A well-formed PDF ends in xref/trailer
+    and spends none of it."""
+    if b"endstream" not in data:
+        tail_start = 0
+    else:
+        tail_start = data.rfind(b"endstream") + len(b"endstream")
+    tail_len = len(data) - tail_start
+    orphan_starts = (data.count(b"stream\n", tail_start)
+                     + data.count(b"stream\r\n", tail_start))
+    return orphan_starts * tail_len > MAX_SCAN_MATCH_WORK
+
+
 def _is_decompression_bomb(data):
     """True when the document's FlateDecode streams inflate past
     MAX_INFLATED_BYTES in total. Counting stops at the ceiling, so the check
-    itself is bounded in both time and memory."""
+    itself is bounded in both time and memory — including the regex SEARCH
+    (2026-07-27, see MAX_SCAN_MATCH_WORK): the match-finding cost is prechecked
+    with memchr-fast byte counts before `finditer` is allowed to run at all."""
+    if _scan_work_excessive(data):
+        return True  # unverifiable-by-construction: refused like a bomb
+    if b"endstream" not in data:
+        # Nothing the regex could ever match (it needs the terminator): the
+        # same «found no streams» verdict finditer would reach, at memchr
+        # price instead of one failed end-of-file scan per `stream\n` marker.
+        return False
     budget = MAX_INFLATED_BYTES
     tail_budget = MAX_SCAN_TAIL_BYTES
     view = memoryview(data)
@@ -166,6 +207,11 @@ def _inflate_bounded(raw, limit):
 
 
 def _extract(data, max_chars):
+    # Same regex, same search-cost bomb as the pre-scan (2026-07-27): the
+    # production path is already guarded by _is_decompression_bomb, but this
+    # keeps a direct call — and any future reordering — bounded too.
+    if _scan_work_excessive(data):
+        return ""
     chunks = []
     total = 0
     for streams, m in enumerate(_STREAM.finditer(data)):

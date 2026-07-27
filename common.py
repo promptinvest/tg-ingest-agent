@@ -28,10 +28,6 @@ def build_multipart(fields, file_field, filename, file_bytes, content_type):
     return b"".join(parts), boundary
 
 
-def utcnow_iso():
-    return datetime.now(timezone.utc).isoformat()
-
-
 def watchdog_usec():
     """systemd's configured watchdog interval in microseconds (0 = not armed).
     Set by the service manager alongside NOTIFY_SOCKET when WatchdogSec= is used."""

@@ -23,6 +23,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+import common
 from common import log
 import storage
 import store
@@ -36,6 +37,13 @@ TG_UPLOAD_WARN = 35 * 1024 * 1024
 # — distinct from '' ("nothing configured"), which is a different warning.
 OFFBOX_BLOCKED = "blocked:size"
 PBKDF2_ITERATIONS = 200_000
+# Wall-clock cap on one openssl run (2026-07-27). AES-256-CBC over a tens-of-MB
+# archive plus the PBKDF2 derivation is seconds; a stalled volume or a key
+# "file" that blocks on read used to hang the subprocess forever — and a backup
+# job body emits no watchdog ping of its own, so the 900 s WatchdogSec killed a
+# live assistant mid-backup instead of failing one job. Generous on purpose:
+# hitting it means openssl is stuck, not slow.
+OPENSSL_TIMEOUT_SECONDS = 120
 
 
 class BackupEncryptionError(RuntimeError):
@@ -77,6 +85,7 @@ def snapshot(cfg, conn):
         with open(raw, "rb") as f_in, os.fdopen(gz_fd, "wb") as gz_raw, \
                 gzip.GzipFile(fileobj=gz_raw, mode="wb") as f_out:
             while True:
+                common.watchdog_ping()  # one un-pinged span = one 1 MB chunk
                 chunk = f_in.read(1 << 20)
                 if not chunk:
                     break
@@ -136,19 +145,28 @@ def sweep_stray(cfg):
     return removed
 
 
-def rotate(cfg):
+def rotate(cfg, keep_name=None):
     """Keep only the newest cfg.backup_keep local snapshots (name-sortable
     UTC stamps); returns how many stale ones were removed.
 
     Counts and prunes ONLY snapshots this module made. A hand-made copy in the
     same directory is neither deleted nor counted against backup_keep.
-    """
+
+    `keep_name` names the archive the CURRENT run just wrote: rotation must
+    never delete it, whatever it sorts like (2026-07-27). "Newest" here is the
+    NAME's UTC stamp, and the wall clock is not monotonic — a droplet booting
+    with a skewed RTC before NTP steps it stamps "today" in the past, so the
+    just-written archive sorted below the keep window, rotate() deleted it, and
+    `run()` then crashed on `gz.stat()` after a technically successful backup —
+    retrying into the same delete until the job went terminal."""
     sweep_stray(cfg)
     files = sorted((p for p in backups_dir(cfg).iterdir()
                     if p.is_file() and _OWN_ARCHIVE.match(p.name)),
                    key=lambda p: p.name, reverse=True)
     removed = 0
     for stale in files[cfg.backup_keep:]:
+        if keep_name is not None and stale.name == keep_name:
+            continue  # the current run's file is never this run's garbage
         stale.unlink(missing_ok=True)
         Path(str(stale) + ".enc").unlink(missing_ok=True)
         removed += 1
@@ -177,11 +195,14 @@ def encrypt_snapshot(cfg, gz_path):
              str(PBKDF2_ITERATIONS), "-in", str(gz_path), "-out", str(tmp_path),
              "-pass", f"file:{key_path}"],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            timeout=OPENSSL_TIMEOUT_SECONDS,
         )
         if stat.S_IMODE(tmp_path.stat().st_mode) != 0o600:
             os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, enc_path)
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
+        # SubprocessError, not CalledProcessError: TimeoutExpired must land
+        # here too — a hung openssl is a failed encryption, not a process kill.
         tmp_path.unlink(missing_ok=True)
         detail = getattr(exc, "stderr", b"")
         if isinstance(detail, bytes):
@@ -243,19 +264,35 @@ def offsite(cfg, encrypted_path, conn=None):
 
 
 def run(cfg, conn):
-    """The daily backup job body; returns a result dict for the job log."""
+    """The daily backup job body; returns a result dict for the job log.
+
+    Pings the watchdog between its phases (2026-07-27): `runtime.drain` pings
+    only BETWEEN jobs, so without these the whole backup — online-backup copy,
+    gzip, openssl, the off-box upload — was one un-pinged span, and the unit's
+    "one bounded wait" arithmetic did not hold for it."""
+    common.watchdog_ping()
     try:
         gz = snapshot(cfg, conn)
     except Exception:
         # Retention must not depend on THIS attempt succeeding. On a nearly full
         # disk snapshot() is precisely what fails, and skipping rotation there
         # leaves the disk full — the feedback loop this module exists to break.
-        rotate(cfg)
+        # The sweep itself does filesystem work that fails on the SAME broken
+        # volume (read-only remount, missing dir), and its exception must not
+        # REPLACE the diagnosis (2026-07-27): the job row and the boss's
+        # backup_failed notice quote whatever escapes here.
+        try:
+            rotate(cfg)
+        except Exception as sweep_exc:  # noqa: BLE001 — keep the original error
+            log(f"retention sweep after a failed snapshot also failed: {sweep_exc!r}")
         raise
     # Rotate BEFORE encryption/off-box: a raised BackupEncryptionError used to skip
     # retention entirely, so a broken key file grew the backups dir without bound.
-    removed = rotate(cfg)
+    # keep_name: today's archive is never rotation's to delete (clock skew).
+    removed = rotate(cfg, keep_name=gz.name)
+    common.watchdog_ping()
     upload_path = encrypt_snapshot(cfg, gz) if offsite_configured(cfg) else gz
+    common.watchdog_ping()
     where = offsite(cfg, upload_path, conn)
     blocked = where == OFFBOX_BLOCKED
     if blocked:
@@ -360,8 +397,9 @@ def _decrypt_snapshot(cfg, enc_path, out_path):
              str(PBKDF2_ITERATIONS), "-in", str(enc_path), "-out", str(out_path),
              "-pass", f"file:{key_path}"],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            timeout=OPENSSL_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         detail = getattr(exc, "stderr", b"")
         if isinstance(detail, bytes):
             detail = detail.decode("utf-8", errors="replace")
@@ -377,6 +415,7 @@ def _gunzip(src, dst, max_bytes):
         fd = os.open(dst, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "wb") as f_out:
             while True:
+                common.watchdog_ping()  # one un-pinged span = one 1 MB chunk
                 chunk = f_in.read(1 << 20)
                 if not chunk:
                     break
@@ -458,18 +497,23 @@ def verify_restore(cfg, conn=None):
         scratch.mkdir(parents=True)
         os.chmod(scratch, 0o700)
         gz_path = scratch / "restored.db.gz"
+        # Phase pings (2026-07-27): drain pings between JOBS only, and decrypt /
+        # gunzip / integrity_check are each a long blocking step of this one.
+        common.watchdog_ping()
         if encrypted:
             _decrypt_snapshot(cfg, src, gz_path)
         else:
             shutil.copyfile(src, gz_path)
         os.chmod(gz_path, 0o600)
         db_path = scratch / "restored.db"
+        common.watchdog_ping()
         try:
             written = _gunzip(gz_path, db_path, max_bytes)
         except BackupRestoreError:
             raise
         except (OSError, EOFError) as exc:  # BadGzipFile is an OSError
             raise BackupRestoreError(f"gunzip failed: {exc}") from exc
+        common.watchdog_ping()
         tables = integrity_check(db_path)
         log(f"backup restore self-check OK: {src.name} -> {written} bytes, "
             f"{tables} tables")

@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 import boss_model
 import common
 import store
-from texts import T
 
 # score gate (spec §9.1): only confident, low-sensitivity, useful kinds surface
 USEFUL_KINDS = {"workflow", "tone", "quality_bar", "avoidance", "category_preference"}
@@ -274,17 +273,6 @@ def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
 
     return {"life": life_added, "boss": boss_added, "corrections": corrections_added,
             "learned": learned, "proposed": proposed, "unresolved": unresolved}
-
-
-def render_review(conn, lang, limit=8):
-    pending = store.candidates_pending(conn, limit)
-    if not pending:
-        return T(lang, "memory_review_empty")
-    lines = [T(lang, "memory_review_header")]
-    for c in pending:
-        lines.append(f"#{c['id']} {c['proposed_text']}")
-    lines.append(T(lang, "memory_review_hint"))
-    return "\n".join(lines)
 
 
 def confirm_candidate(conn, candidate_id, accept):

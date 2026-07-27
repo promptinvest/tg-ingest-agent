@@ -25,6 +25,8 @@ from urllib.parse import urlparse
 from urllib.request import (HTTPRedirectHandler, HTTPHandler, HTTPSHandler, ProxyHandler,
                             Request, build_opener)
 
+import common
+
 METADATA_IPS = {"169.254.169.254", "100.100.100.200", "fd00:ec2::254"}
 MAX_TEXT_CHARS = 8000
 MAX_REDIRECTS = 5
@@ -45,6 +47,13 @@ READ_CHUNK = 64 * 1024
 # operation timeout. A server that dribbles header bytes just under that timeout
 # can still outlive the budget within one hop; closing that would need a
 # socket-level deadline (a custom handler/connection class).
+# The systemd watchdog is pinged at the same points the deadline is checked
+# (each hop start, each body chunk — 2026-07-27): fetch runs INLINE on the poll
+# thread and used to be one un-pinged span the startup budget warning modelled
+# as bounded while this note says it is not. The header-dribble hop above stays
+# the one span neither the deadline nor a ping can reach; the watchdog kill it
+# earns is contained by the startup replay's dead-letter cap (the same update is
+# re-driven only while it has attempts left), not prevented here.
 DEADLINE_FACTOR = 2
 
 
@@ -245,6 +254,7 @@ def _read_bounded(response, max_bytes, deadline):
     chunks = []
     total = 0
     while total <= max_bytes:
+        common.watchdog_ping()  # one un-pinged span = one socket read
         if deadline is not None and time.monotonic() > deadline:
             raise FetchError("fetch deadline exceeded", "fetch_failed")
         chunk = read(min(READ_CHUNK, max_bytes + 1 - total))
@@ -313,10 +323,13 @@ def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
     followed manually so every hop is independently validated AND pinned.
     The hop chain and the body are capped at DEADLINE_FACTOR × `timeout`
     seconds; inside one hop (DNS, connect, TLS, response headers) only the
-    per-socket-operation timeout applies — see the module note."""
+    per-socket-operation timeout applies — see the module note. The watchdog
+    is pinged per hop and per body chunk (2026-07-27): this runs inline on the
+    poll loop's only thread."""
     url = normalize_tme(url)
     deadline = time.monotonic() + DEADLINE_FACTOR * max(1, int(timeout or 1))
     for _ in range(MAX_REDIRECTS + 1):
+        common.watchdog_ping()  # one un-pinged span = one hop's opener.open()
         kind, value = _fetch_one(url, timeout, max_bytes, deadline)
         if kind == "ok":
             final_url, html = value

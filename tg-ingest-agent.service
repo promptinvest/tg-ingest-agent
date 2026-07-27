@@ -23,11 +23,19 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 # deliberately NOT Type=notify, whose missing READY=1 would be a startup failure and
 # a crash loop.
 # The budget must exceed the longest UN-PINGED span. Pings sit inside the long
-# primitives (every llm.chat/embed/transcribe, each whisper-server attempt, each
-# runtime.drain job), so that span is ONE bounded wait, and the largest of those is
-# a cold transcription: STT_LOCAL_TIMEOUT_SECONDS (600) + ffmpeg conversion.
-# Raising STT_LOCAL_TIMEOUT_SECONDS above ~780 invalidates this number — the agent
-# logs a startup warning if it does.
+# primitives (every llm.chat/embed/transcribe, each whisper-server attempt, between
+# each runtime.drain job, between the backup jobs' snapshot/encrypt/offsite and
+# decrypt/gunzip/integrity phases — their openssl runs carry their own subprocess
+# timeout — and per hop/chunk of a link fetch), so that span is ONE bounded wait,
+# and the largest of those is a cold transcription: STT_LOCAL_TIMEOUT_SECONDS (600)
+# + ffmpeg conversion. Raising STT_LOCAL_TIMEOUT_SECONDS above ~780 invalidates
+# this number — the agent logs a startup warning if it does. Known residuals: a
+# server that dribbles response-HEADER bytes keeps one fetch hop opaque to both
+# the deadline and the pings (fetch.py's module note), and the backup's off-box
+# upload is ONE tg_send_document POST (up to 45 MB) whose 60 s timeout is per
+# SOCKET OPERATION, not a transfer bound — a dribbling upload is one un-pinged
+# span too. The kill that follows either is contained by the startup replay's
+# dead-letter cap rather than prevented.
 NotifyAccess=main
 WatchdogSec=900
 # Sandbox. This process parses untrusted content all day (forwarded posts, fetched

@@ -67,7 +67,9 @@ the disposable stage dir without installing; `--pull` deploys `origin/main`;
 `--rollback <sha|branch>` checks that ref out on the box and reinstalls.
 
 The installer is idempotent: it backs up replaced files to
-`/root/codex-hardening-backups/<ts>-tg-ingest-agent/` (newest 10 kept), installs
+`/root/codex-hardening-backups/<ts>-tg-ingest-agent/` (newest 10 of its OWN
+`*-tg-ingest-agent` dirs kept — the root is fleet-shared, so the prune never
+touches other tools' backups), installs
 the tracked `tg-ingest-agent.service` and — only when `/etc/tg-ingest-agent.env`
 does not yet exist — seeds it from `tg-ingest-agent.env.example`, gates on
 `py_compile`, and leaves the service stopped while any `REPLACE_ME` placeholder
@@ -85,9 +87,12 @@ while the service is polling and rewrites the env file atomically (keeping a
 `.bak`). It reads the queue with a plain no-offset `getUpdates`, the only form
 the Bot API guarantees consumes nothing; that returns the OLDEST 100 pending
 updates, so on a deeper queue it says so rather than hiding the rest. The
-opt-in `--deep-read` reaches the END of a flooded queue with negative offsets
-and, per the API ("all previous updates will be forgotten"), DISCARDS everything
-older — it prints that warning before you use it.
+opt-in `--deep-read` additionally reads the NEWEST 100 with ONE negative-offset
+call and, per the API ("all previous updates will be forgotten"), DISCARDS
+everything older — it prints that warning, and reports a gap when updates
+between the two pages were destroyed unseen. One call is all the API can give:
+the first destructive read leaves only the newest page in the queue, so there
+is nothing older left for a deeper offset to address.
 
 ## Layout on the VPS
 

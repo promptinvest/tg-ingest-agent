@@ -10,6 +10,7 @@ helpers stay in `reminders.py`; the thin create/list/cancel/calendar handlers st
 """
 import json
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import reminders
@@ -670,41 +671,73 @@ class ReminderMixin:
             # defer it indefinitely — "never lost to a long evening"; 0 disables the valve).
             if recent_msg and not (defer_cutoff and (row["due_utc"] or "") < defer_cutoff):
                 continue
-            lang = self.lang()
-            delivered = self.reply(row["chat_id"], T(lang, "reminder_fired",
-                                                      name=self.owner_name(), title=row["title"]))
-            if not delivered:
-                # Prefer at-least-once delivery to silently consuming an alarm.
-                # Telegram may have accepted an ambiguously timed-out request, so
-                # this can duplicate a reminder; losing it is the worse outcome.
-                log(f"reminder #{row['id']} delivery failed; left due for retry")
-                continue
-            # Remember the notification's message id: a TG Reply to it names
-            # THIS exact reminder for close/snooze, beating recency binding.
-            if isinstance(delivered, dict):
-                self._remember_fired_message(delivered.get("message_id"), row["id"])
-            # The pending slot is single (PK = chat_id). A firing reminder must NOT
-            # clobber a confirmation the boss is mid-way through (a reminder draft,
-            # an ingest suggestion, a typed purge phrase): his next "да" would then
-            # ack THIS reminder instead of confirming what he was asked — the draft
-            # silently lost. If a pending exists, keep it; the fired reminder stays
-            # addressable via last_reminder_id ("готово"/"закрой её" still lands).
-            existing = store.pending_get(self.conn, row["chat_id"])
-            if existing is None or existing.get("kind") == "reminder_fired":
-                store.pending_set(
-                    self.conn, row["chat_id"], "reminder_fired",
-                    {"reminder_id": row["id"], "title": row["title"]}, ttl_seconds=1800,
-                )
-            following = reminders.next_due(row["due_utc"], row["recurrence"])
-            if following:
-                store.reminder_update_due(
-                    self.conn, row["id"], following, reason="recurrence_advanced")
-            # B5: a fired ONE-SHOT is NOT auto-closed — it stays active/visible until the
-            # boss explicitly acks ('готово') or cancels it; last_fired_at stops it
-            # re-firing. (Old behavior closed it here, which read as 'why did you close it'.)
-            store.reminder_touch_fired(self.conn, row["id"])
-            self._remember_reminder(row["id"])  # "готово/перенеси это" binds to the just-fired one
-            log(f"reminder #{row['id']} fired")
+            rid = row["id"]
+            # A row in the owed map was already DELIVERED on an earlier pass whose
+            # post-send bookkeeping hit a sqlite error (2026-07-27): the DB kept
+            # re-selecting it (last_fired_at never stamped) and each poll cycle
+            # re-sent the identical alarm — a write outage turned one reminder
+            # into a ~50-second broadcast for as long as the outage lasted. Only
+            # the BOOKKEEPING is owed now; the send is not repeated. Matched on
+            # (id, due_utc), not the id alone: the store helpers commit one by
+            # one, so when the outage began only after reminder_update_due had
+            # committed, an id-only marker went stale — and the NEXT legitimate
+            # occurrence was swallowed as bookkeeping-only, one alarm silently
+            # consumed (the outcome the comment below calls worse than a
+            # duplicate). A mismatched due is a NEW occurrence: send normally;
+            # the stale entry dies with the pop below or is overwritten by a
+            # fresh failure.
+            owed = self._reminder_stamp_owed.get(rid) == row["due_utc"]
+            delivered = None
+            if not owed:
+                lang = self.lang()
+                try:
+                    delivered = self.reply(row["chat_id"], T(lang, "reminder_fired",
+                                                             name=self.owner_name(),
+                                                             title=row["title"]))
+                except sqlite3.Error:
+                    # reply() records the conversation turn AFTER Telegram accepted
+                    # the send — a sqlite error here means the alarm IS (or may
+                    # well be) on his screen. Treat it as delivered-but-unstamped;
+                    # re-raise so _tick counts the stall.
+                    self._reminder_stamp_owed[rid] = row["due_utc"]
+                    raise
+                if not delivered:
+                    # Prefer at-least-once delivery to silently consuming an alarm.
+                    # Telegram may have accepted an ambiguously timed-out request, so
+                    # this can duplicate a reminder; losing it is the worse outcome.
+                    log(f"reminder #{rid} delivery failed; left due for retry")
+                    continue
+            try:
+                # Remember the notification's message id: a TG Reply to it names
+                # THIS exact reminder for close/snooze, beating recency binding.
+                if isinstance(delivered, dict):
+                    self._remember_fired_message(delivered.get("message_id"), rid)
+                # The pending slot is single (PK = chat_id). A firing reminder must NOT
+                # clobber a confirmation the boss is mid-way through (a reminder draft,
+                # an ingest suggestion, a typed purge phrase): his next "да" would then
+                # ack THIS reminder instead of confirming what he was asked — the draft
+                # silently lost. If a pending exists, keep it; the fired reminder stays
+                # addressable via last_reminder_id ("готово"/"закрой её" still lands).
+                existing = store.pending_get(self.conn, row["chat_id"])
+                if existing is None or existing.get("kind") == "reminder_fired":
+                    store.pending_set(
+                        self.conn, row["chat_id"], "reminder_fired",
+                        {"reminder_id": rid, "title": row["title"]}, ttl_seconds=1800,
+                    )
+                following = reminders.next_due(row["due_utc"], row["recurrence"])
+                if following:
+                    store.reminder_update_due(
+                        self.conn, rid, following, reason="recurrence_advanced")
+                # B5: a fired ONE-SHOT is NOT auto-closed — it stays active/visible until the
+                # boss explicitly acks ('готово') or cancels it; last_fired_at stops it
+                # re-firing. (Old behavior closed it here, which read as 'why did you close it'.)
+                store.reminder_touch_fired(self.conn, rid)
+                self._remember_reminder(rid)  # "готово/перенеси это" binds to the just-fired one
+            except sqlite3.Error:
+                self._reminder_stamp_owed[rid] = row["due_utc"]
+                raise
+            self._reminder_stamp_owed.pop(rid, None)
+            log(f"reminder #{rid} fired" + (" (stamp recovered)" if owed else ""))
 
     def check_reminder_expiry(self):
         """Auto-close fired one-shot reminders left unacked past the expiry window, so the

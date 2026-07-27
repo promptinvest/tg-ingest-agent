@@ -835,9 +835,22 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   companions). **Rotation now runs before encryption**, so a missing key file can no
   longer skip local retention forever, **and it also runs when the snapshot itself fails**
   (2026‑07‑26) — a nearly full disk is exactly what makes `conn.backup`/gzip raise, i.e.
-  retention was skipped precisely when it was needed. Retention likewise counts and prunes
+  retention was skipped precisely when it was needed; on that failure path the sweep's own
+  error can no longer REPLACE the original diagnosis in the job row and the boss's notice
+  (2026‑07‑27). Retention likewise counts and prunes
   ONLY `ingest-<stamp>.db.gz`: on the live box two hand‑made pre‑change copies were
-  occupying 2 of the 7 slots, so five automated snapshots survived instead of seven. An off‑box copy blocked by the Telegram 45 MB cap logs a
+  occupying 2 of the 7 slots, so five automated snapshots survived instead of seven.
+  Rotation also **never deletes the archive the current run just wrote** (2026‑07‑27):
+  the stamp is wall clock, and a skewed RTC before NTP steps it made "today" sort below
+  the keep window — rotate() ate the fresh snapshot and the run then crashed on its own
+  success log. Both openssl invocations (encrypt and the restore‑check decrypt) carry a
+  subprocess `timeout` (120 s), and the job bodies **ping the watchdog between their
+  phases** and per gzip/gunzip chunk (2026‑07‑27) — `runtime.drain` pings only between
+  jobs, so each backup body used to be one un‑pinged span that WatchdogSec=900 could
+  kill mid‑backup. Honest residual: the off‑box upload itself is still ONE un‑pinged
+  POST whose 60 s timeout is per socket operation, not per transfer — a dribbling
+  upload remains the one span of the backup the pings cannot see (2026‑07‑27). An
+  off‑box copy blocked by the Telegram 45 MB cap logs a
   `backup_offbox_blocked` issue and reports the blocked state in the job result instead
   of looking green (plus a one‑time `backup_offbox_near_limit` warning past ~35 MB), and
   a **terminally failed backup tells the boss** once a day, then holds the retry for an
@@ -931,7 +944,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   the only symptom. The pings are at two levels: coarse ones at the loop top, each
   scheduler tick and each update, and — the ones that make the budget a real number —
   **fine ones inside the long primitives**: every `llm.chat`/`llm.embed`/`llm.transcribe`,
-  each whisper‑server attempt and its CLI fallback, and each job inside `runtime.drain`.
+  each whisper‑server attempt and its CLI fallback, between each job inside
+  `runtime.drain`, between the phases of the two backup job bodies (whose openssl runs
+  also carry their own 120 s subprocess timeout) and per hop/body‑chunk of a link fetch
+  (both 2026‑07‑27 — before that, one backup or one fetch was one un‑pinged span and the
+  arithmetic below did not hold for them).
   So the budget has to exceed the longest **un‑pinged span**, which is ONE bounded wait
   (the largest being a cold transcription: `STT_LOCAL_TIMEOUT_SECONDS` + ffmpeg) — not a
   whole update or scheduler tick, which nobody can put a number on (a routed turn is
@@ -939,10 +956,16 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   one drain runs up to 5 durable jobs). **Honest limits:** raising
   `STT_LOCAL_TIMEOUT_SECONDS` above ~780 breaks the arithmetic — she logs a startup
   WARNING naming both numbers when you do, and since 2026‑07‑26 the same check covers
-  `LLM_TIMEOUT_SECONDS` **and `FETCH_TIMEOUT_SECONDS`** (an inline link fetch carries no
-  progress ping at all and spans 2× that knob), naming EVERY knob that is over budget
-  rather than only the largest — and a kill mid‑update would still be a
-  SIGABRT, i.e. no dead‑letter (the same update replays after restart). Outside systemd
+  `LLM_TIMEOUT_SECONDS` **and `FETCH_TIMEOUT_SECONDS`**, naming EVERY knob that is over
+  budget rather than only the largest. Two spans remain out of reach of deadline and
+  ping alike (2026‑07‑27): a server that dribbles response‑HEADER bytes inside one fetch
+  hop (`opener.open()` is a single opaque call — fetch.py's note), and the backup's
+  off‑box upload — ONE `tg_send_document` POST of up to 45 MB whose 60 s timeout is per
+  socket operation, not a transfer bound. A kill mid‑update is
+  still a SIGABRT, i.e. no exception and no dead‑letter from the handler — but since
+  2026‑07‑27 the startup replay enforces the SAME attempts cap, so an update that keeps
+  killing the process dead‑letters (with the usual notice) after `UPDATE_MAX_ATTEMPTS`
+  instead of replaying into the same death forever. Outside systemd
   the notify helper is a silent no‑op.
 
 ---
@@ -1175,7 +1198,21 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   until an update goes through again. Without that, a *persistent* non‑disk‑full
   failure — a read‑only remount, lost file permissions, a corrupted image — left
   `systemctl is-active` reporting `active (running)` while she was permanently deaf
-  and completely silent.
+  and completely silent. **The scheduler side counts too (2026‑07‑27):** a sqlite
+  error caught by `_tick` feeds the same streak (the identical outage striking while
+  no updates arrive used to be invisible — the alert could only ever be triggered by
+  an inbound message the boss had not sent); the streak still resets only on an
+  update handled end to end. A containment break also FINISHES its inbound trace
+  now, so stall‑time spend/issues/jobs are no longer filed under a dead trace. And
+  `fire_due_reminders` can no longer broadcast during such an outage: it sends
+  first and stamps afterwards, so a failed post‑send write used to re‑select and
+  re‑send the identical alarm every poll cycle — a delivered‑but‑unstamped reminder
+  is now remembered in memory, keyed to its exact OCCURRENCE (id + due time,
+  2026‑07‑27: the store helpers commit one by one, so an id‑only marker went stale
+  when the outage struck after the recurrence had already advanced, and the NEXT
+  legitimate firing would have been silently consumed as bookkeeping‑only), and
+  later passes retry only the BOOKKEEPING (a restart re‑fires once: at‑least‑once,
+  the documented choice).
 - **Startup writes nothing at steady state (2026‑07‑25):** `open_db` used to rewrite
   every `memory_candidates` row and the gratitude category row on EVERY start, and
   `Agent.__init__` then re‑stamped every seeded self‑fact — so a full disk blocked
@@ -1201,7 +1238,12 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   stranger's chat; the notice now goes only to allowed chats (the update is dead‑lettered
   either way). The disk‑full alert's send loop likewise survives a non‑JSON HTTP reply
   (captive portal / proxy error page) instead of replacing the honest disk‑full exit with
-  a traceback.
+  a traceback. **The cap also holds across process DEATHS (2026‑07‑27):** a kill
+  (watchdog SIGABRT, OOM) raises nothing, so the terminal branch never ran and the row
+  replayed into the same death after every restart, forever; `replay_pending_updates`
+  now dead‑letters (with the same notice) any pending row that already spent
+  `UPDATE_MAX_ATTEMPTS` — keyed on attempts, not age, so crash‑interrupted album parts
+  keep replaying while they have attempts left.
 - **A redelivered save repairs itself (2026‑07‑25):** filing a forward writes the
   message row first and downloads its media afterwards, so a crash in between left a
   text‑only note — and the redelivery hit `ON CONFLICT DO NOTHING`, was logged as
@@ -1493,8 +1535,12 @@ its details.
   run while the service is polling and rewrites the env file atomically with a `.bak`. It
   reads the queue with a plain NO-offset `getUpdates` — the only form the Bot API promises
   consumes nothing — and reports honestly when the queue is deeper than that one page;
-  the opt-in `--deep-read` reaches the end of a flooded queue with negative offsets and
-  warns that, per the API, everything older is then forgotten.
+  the opt-in `--deep-read` additionally reads the NEWEST page with ONE negative-offset
+  call and warns that, per the API, everything older is then forgotten (2026-07-27: one
+  call is all the API can give — the first destructive read leaves only that window in
+  the queue, so the old multi-page loop re-read the same page and could never go deeper;
+  a gap between the oldest page and the newest window — updates neither listed nor
+  kept — is detected via the sequential update ids and reported).
   `apply_token.py`/`apply_do_key.py` validate the staged secret against the API BEFORE
   touching the env, append the line when it is missing (the old `re.sub` was a silent
   no‑op that still reported success), and keep the staged file when anything fails.
@@ -1624,7 +1670,10 @@ is documented twice. The lists above stay as the short tour; they are not the ca
 - **Footprint:** tens of MB RSS; disk a small fraction of the 48 GB volume. Free space is
   now monitored (2026‑07‑25): below `DISK_ALERT_MIN_FREE_PCT` Cara says so once and
   logs a `disk_low` issue; install‑time backups under `/root/codex-hardening-backups`
-  are pruned to the newest 10 (each holds an env/secrets copy) and the root is `chmod 700`.
+  are pruned to the newest 10 **of this tool's own `*-tg-ingest-agent` dirs** (each holds
+  an env/secrets copy) and the root is `chmod 700` — the root is a fleet‑shared
+  convention, and the unscoped prune used to delete other tools' pre‑change backups
+  after ten Cara deploys (2026‑07‑27).
 
 ---
 
@@ -1651,8 +1700,14 @@ is documented twice. The lists above stay as the short tour; they are not the ca
   tiny valid streams would have frozen the single thread for tens of minutes and then been
   killed by the watchdog. Input now reaches zlib in 64 KB windows, the past‑marker read
   only happens when a stream really does run on (a well‑formed PDF never does), and that
-  read has its own 16 MB per‑document allowance. Honest limits: the pre‑scan reads the
-  streams the stdlib regex can find, so a
+  read has its own 16 MB per‑document allowance. **2026‑07‑27:** the regex SEARCH itself
+  is bounded too — `stream\n` markers with no `endstream` after them each cost a failed
+  scan to end‑of‑file (the terminator's `\r?` head defeats CPython's literal‑skip), so a
+  marker‑flood froze the thread inside `finditer` with the guard concluding «not a
+  bomb»; a memchr‑fast precheck now refuses (as unverifiable) any document whose
+  failed‑attempt work would exceed 64 MB of scanning — all of it lives past the LAST
+  `endstream`, where a well‑formed PDF has only xref/trailer. Honest limits: the
+  pre‑scan reads the streams the stdlib regex can find, so a
   PDF that hides them from it still reaches pdfminer unbounded; a document that exhausts
   the past‑marker allowance is unverifiable and refused; and a genuinely huge PDF
   may be refused («не смогла прочитать») or read only up to the cap.

@@ -158,11 +158,6 @@ def known(action):
     return action in SKILLS
 
 
-def confirmation_for(action):
-    """The confirmation mode a skill requires: False | True | 'typed_phrase'."""
-    return get_policy(action)["requires_confirmation"]
-
-
 def assert_covers(actions):
     """Every router action MUST have a declared policy. Called at startup so
     drift (a new router action with no manifest entry) crashes immediately
