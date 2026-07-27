@@ -152,7 +152,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 ### Inbox: ingest, files, retrieval
 - **What gets filed vs talked about:** only **forwards** (content from other channels/
   people) and bare typed notes are auto‑saved as inbox items. Your **own** photos/files
-  are **conversation**, not notes — a caption is *context* (she reads + reacts to the
+  are **conversation**, not notes, except for the explicit confirm-before-store
+  movie/book catalog flow below — a caption is *context* (she reads + reacts to the
   photo via vision, e.g. "одобряешь мой выбор?" → an opinion in her voice). Your own
   **photos are never stored** (retired 2026‑07‑16): even an explicit «сохрани эти фото»
   gets an honest decline with a hint (send it as text/a file or forward the post). Your
@@ -168,21 +169,30 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   subject (see referential saves below). Her conversation memory in free‑form
   chat now spans the last **20 turns** (was 12); deeper reads stay behind
   `recall_conversation` («перечитай наш разговор за вчера»).
-- **Media capture from your photos (2026‑07‑27, plan B1+B2).** A picture‑only message you
+- **Media capture from your photos (2026‑07‑27, plan B1+B2; core accuracy repair
+  2026‑07‑27).** A picture‑only message you
   send is vision‑CLASSIFIED first (media / document / other). A photo **about movies or
   books** — a poster, a cover, a shelf, a screenshot with a list — gets a second,
-  separate EXTRACT pass that reads the titles **verbatim** off the photo (multi‑title
-  lists supported, kind 🎬/📚 per title, visible comment text captured with an explicit
-  «на фото: …» provenance label — extraction stores only what was actually SEEN).
-  **Enrichment (B2)** then fills creator/year/genre per entry BEFORE the card renders,
-  each field tagged with where it came from: keyless **lookups** — OpenLibrary for
+  separate EXTRACT pass that reads the titles **verbatim** off the photo, keeps a
+  translated/localized title printed on the SAME cover/poster as an **alias of one
+  work**, and preserves visible creator/year/genre plus useful identification context
+  (multi‑title lists supported, kind 🎬/📚 per title; every visible value has explicit
+  «на фото: …» provenance). Visible photo evidence is authoritative: enrichment can
+  fill gaps but cannot replace it.
+  **Enrichment (B2)** then fills missing creator/year/genre per entry BEFORE the card
+  renders, each field tagged with where it came from: keyless **lookups** — OpenLibrary for
   books, the Wikipedia opensearch+summary APIs (wiki chosen by the title's script) for
   movies and books, all through the same SSRF‑guarded fetch — render as «(нашла)», the
   **model‑knowledge fallback** (ONE budgeted chat call per batch for whatever the
   lookups left) as «(по памяти)», and a field NEITHER source yields is listed honestly
-  under «не нашла: …» — never invented (an OpenLibrary/Wikipedia hit must also MATCH
-  the normalized title exactly: honest‑missing beats the wrong book's year presented
-  as found). There is deliberately **no general web‑search API** (owner decision).
+  under «не нашла: …» — never invented. Same‑title lookup candidates are selected only
+  when the photo's visible creator/year/context identifies one (for example Netflix
+  NOWHERE 2023 rather than an older film with the same title); an unresolved ambiguity
+  is rejected and passed, with the same evidence, to the model fallback. Lookup
+  discovery tolerates only safe title presentation variants — a leading article
+  (`Frighteners` / `The Frighteners`) or spacing (`Brain Dead` / `Braindead`) — while
+  storage dedup stays strict. Unicode creator names such as `Albert Pintó` remain
+  intact. There is deliberately **no general web‑search API** (owner decision).
   Lookups run inline on the one thread, so they are budgeted twice — a short per‑call
   timeout and a per‑batch call cap (10), with fail‑fast after 2 consecutive transport
   failures; a 20‑title screenshot enriches its first titles by lookup and hands the
@@ -194,12 +204,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   stores **only on your yes**:
   one confirmed NOTE per entry — summary = the title (RU stays RU), category **`Movies`**
   or **`Books`** (auto‑created, English names by owner decision), purpose `reference`,
-  facts with provenance prefixes (`photo:` comments, `lookup:`/`model:`
-  author/director/year/genre), chunked+embedded so «ask» finds them.
-  **Dedup** on (category, normalized title): re‑capturing a known title refreshes the
-  existing note's facts and says so — never a duplicate row (a fresh enrichment fact
-  REPLACES the old fact for the same field, so no contradictory year pair survives;
-  photo comments append). **Md export:** «дай md по Movies» / «экспорт категории
+  facts with provenance prefixes (`photo:` aliases/comments and visible
+  author/director/year/genre, `lookup:`/`model:` enriched fields), chunked+embedded so
+  «ask» finds them. **Dedup** on category plus the normalized title **or an explicit
+  same‑work alias**: re‑capturing a known/localized title refreshes the existing
+  note's facts and says so — never a duplicate row (a fresh enrichment fact REPLACES
+  the old fact for the same field, so no contradictory year pair survives; photo
+  context appends). **Md export:** «дай md по Movies» / «экспорт категории
   Books» (`export what="category"`) sends an md catalog table of that category's
   confirmed notes — title, creator, year, genre, comments, added date, missing fields
   dashed — and works for ANY category (a generic note's facts ride the comments
@@ -221,19 +232,23 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   hid, and the cap/unread/truncation/caption disclosures survive a correction
   re‑showing the card. Reply‑corrections are deliberately STRICT (2026‑07‑27 review
   fix): they require an explicit entry reference («№2», an in‑range bare number,
-  «это книга» on a single‑entry card) and never fire on messages naming another
-  object — «удали напоминание №2» removes the reminder, «посоветуй фильм на вечер»
-  reaches the router; a mis‑parse fails safe (card intact, message routed). When
+  «это книга» on a single‑entry card), except that an unambiguous natural contrast on
+  a one‑entry card — «Не книга, а фильм» — also corrects that sole entry. They never
+  fire on messages naming another object — «удали напоминание №2» removes the
+  reminder, «посоветуй фильм на вечер» reaches the router; a mis‑parse fails safe
+  (card intact, message routed). When
   another confirmation already holds the single pending slot, the card's footer
   offers the **buttons only** (a text reply would resolve against the other pending);
   the buttons work off the stash regardless and keep working after the pending row's
   1h TTL — the note‑edit precedent. A photographed **document** keeps the existing
   guidance (send it as text/a file); anything else is conversation as before,
   informed by the same classify description (no second paid vision pass), and stores
-  nothing. Known trade‑off: while the card is offered, a caption on a *media* photo
-  is not routed as a separate command — but it is not silently dropped either
-  (2026‑07‑27 review fix): the card shows the caption and says it was not acted on
-  («если что‑то нужно, напиши отдельным сообщением»); captions on non‑media photos
+  nothing. A media caption's small, deterministic in‑flow intent is honored:
+  «Фильм»/«Книга» is a **weak kind hint** (visible evidence wins on conflict) and
+  «Найди этот фильм/эту книгу» is treated as the identification request the card
+  answers. Other media captions are still not routed as separate commands while the
+  card is offered; the card shows them and explicitly says they were not acted on
+  («если что‑то нужно, напиши отдельным сообщением»). Captions on non‑media photos
   route exactly as before.
 - **You edit a message, she follows (2026‑07‑26).** Telegram edits are now requested
   (`allowed_updates` included `edited_message` for the first time) and handled:

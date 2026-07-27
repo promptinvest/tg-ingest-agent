@@ -4089,8 +4089,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     # the photo is downloaded to a TMP dir and deleted in try/finally on every
     # path (no images/files rows — the 2026-07-16 own-photo retirement is intact);
     # nothing is stored before his explicit confirm; entries are ordinary notes in
-    # the English categories Movies/Books; dedup on (category, normalized title)
-    # refreshes the existing note instead of duplicating it.
+    # the English categories Movies/Books; dedup on category plus normalized
+    # canonical title/explicit alias refreshes instead of duplicating.
     #
     # The parsed entries are staged in kv (`media_capture:<chat_id>`), NOT in the
     # pending payload: the payload is rendered into the router's system prompt,
@@ -4110,6 +4110,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         answered the turn; descs carries classify descriptions (neutralized) for
         the conversational fallback so vision isn't paid twice."""
         lang = self.lang()
+        caption_intent = media.caption_intent(text)
         photos = [p for p in parts if self._picture_part(p)]
         if not photos:
             return False, None
@@ -4133,8 +4134,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     if c["kind"] != "media":
                         continue
                     try:
-                        entries.extend(media.extract(self.cfg, self.conn,
-                                                     c["path"], lang))
+                        entries.extend(media.extract(
+                            self.cfg, self.conn, c["path"], lang,
+                            kind_hint=(caption_intent or {}).get("kind")))
                     except llm.BudgetExceeded:
                         raise
                     except llm.LLMError as exc:
@@ -4148,8 +4150,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                           else "media_nothing_extracted"))
                     return True, None
                 # B2: creator/year/genre BEFORE the card renders, so the card
-                # shows every field with its provenance (lookup/model) and says
-                # honestly what neither source yielded. Never raises: lookups
+                # shows every field with provenance (photo/lookup/model) and says
+                # honestly what no source yielded. Never raises: lookups
                 # are contained per call, the model fallback degrades.
                 media.enrich_entries(self.cfg, self.conn, entries)
                 notes = []
@@ -4161,11 +4163,19 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     # must never imply it covers photos she couldn't read.
                     notes.append(T(lang, "media_card_photo_unread", n=unread))
                 if text:
-                    # His caption is NOT routed while the card is offered (the
-                    # documented trade-off) — but it must not vanish silently:
-                    # the card shows it and says it was not acted on.
-                    notes.append(T(lang, "media_card_caption_note",
-                                   caption=" ".join(text.split())[:200]))
+                    if caption_intent:
+                        hint = caption_intent["kind"]
+                        if all(entry.get("kind") != hint for entry in entries):
+                            notes.append(T(
+                                lang, "media_card_hint_conflict",
+                                caption=" ".join(text.split())[:200]))
+                        elif caption_intent.get("identify"):
+                            notes.append(T(lang, "media_card_identified"))
+                    else:
+                        # State-changing/other captions still cannot bypass the
+                        # closed router while the media card owns the turn.
+                        notes.append(T(lang, "media_card_caption_note",
+                                       caption=" ".join(text.split())[:200]))
                 # Entry-count AND rendered-length budgeting (staged == shown)
                 # happens inside _stage_media_card.
                 self._stage_media_card(chat_id, lang, entries, notes)
@@ -4308,6 +4318,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         label = T(lang, "media_kind_movie" if e["kind"] == "movie"
                   else "media_kind_book")
         bits = [f"{i}. {media.KIND_EMOJI[e['kind']]} «{e['title']}» — {label}"]
+        if e.get("aliases"):
+            aliases = ", ".join(f"«{value}»" for value in e["aliases"])
+            bits.append(T(lang, "media_aliases", aliases=aliases))
         missing = []
         for f in media.FIELDS:
             suffix = (f + "_" + ("book" if e["kind"] == "book" else "movie")
@@ -4315,7 +4328,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if e.get(f):
                 piece = T(lang, "media_field_" + suffix, value=e[f])
                 src = e.get(f + "_src")
-                if src in ("lookup", "model"):
+                if src in ("photo", "lookup", "model"):
                     piece += " (" + T(lang, "media_src_" + src) + ")"
                 bits.append(piece)
             else:
@@ -4384,9 +4397,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     def _media_store_entries(self, chat_id, lang, entries):
         """One confirmed note per entry: summary = the title (RU stays RU),
         category = Movies/Books (auto-created, English), purpose 'reference',
-        facts with provenance prefixes (`photo:` comments, `lookup:`/`model:`
-        creator/year/genre — media.entry_facts), chunked+embedded for `ask`. A
-        (category, normalized-title) match MERGES into the existing note —
+        facts with provenance prefixes (`photo:` aliases/context/visible fields,
+        `lookup:`/`model:` enriched fields — media.entry_facts), chunked+embedded
+        for `ask`. A category + normalized-title/explicit-alias match MERGES —
         media.merge_facts refreshes same-field enrichment facts (fresh capture
         wins, no contradictory year pair survives), appends the rest, re-indexes,
         never a duplicate row."""
@@ -4396,7 +4409,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             emoji = media.KIND_EMOJI[kind]
             category = store.ensure_category(self.conn, media.CATEGORY_BY_KIND[kind])
             facts_new = media.entry_facts(e)
-            existing = media.find_existing(self.conn, category, e["title"])
+            existing = media.find_existing(
+                self.conn, category, e["title"], e.get("aliases") or ())
             if existing is not None:
                 row_id = existing["id"]
                 old = [r["fact"] for r in store.message_facts(self.conn, row_id)]

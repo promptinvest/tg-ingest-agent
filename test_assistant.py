@@ -19605,6 +19605,44 @@ class MediaModuleTests(unittest.TestCase):
         self.assertEqual(len(out), 2)                        # movie+book stay distinct
         self.assertEqual(out[0]["comment"], "топ · ещё")     # comments joined, not lost
 
+    def test_dedup_entries_collapses_localized_title_alias(self):
+        out = media.dedup_entries([
+            {"title": "NOWHERE", "aliases": ["«В никуда»"],
+             "kind": "movie", "comment": "A NETFLIX FILM"},
+            {"title": "«В никуда»", "aliases": ["NOWHERE"],
+             "kind": "movie", "comment": ""},
+        ])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["title"], "NOWHERE")
+        self.assertEqual(out[0]["aliases"], ["«В никуда»"])
+
+    def test_caption_intent_honors_kind_and_find_without_routing_commands(self):
+        self.assertEqual(media.caption_intent("Фильм"),
+                         {"kind": "movie", "identify": False})
+        self.assertEqual(media.caption_intent("Найди этот фильм"),
+                         {"kind": "movie", "identify": True})
+        self.assertEqual(media.caption_intent("what book is this"),
+                         {"kind": "book", "identify": True})
+        self.assertIsNone(media.caption_intent(
+            "поставь напоминание посмотреть фильм в субботу"))
+        self.assertIsNone(media.caption_intent(
+            "Найди этот фильм и напомни посмотреть завтра"))
+
+    def test_extract_prompt_demands_aliases_visible_evidence_and_weak_hint(self):
+        prompt = media.extract_prompt("movie")
+        self.assertIn('"aliases"', prompt)
+        self.assertIn('"creator"', prompt)
+        self.assertIn("SAME cover/poster", prompt)
+        self.assertIn("only as a HINT", prompt)
+
+    def test_extract_ignores_non_list_alias_shape(self):
+        raw = ('{"entries": [{"title": "NOWHERE", "aliases": "В никуда", '
+               '"kind": "movie", "creator": "", "year": "", "genre": "", '
+               '"comment": ""}]}')
+        with mock.patch.object(llm, "vision_chat", return_value=raw):
+            entries = media.extract(mock.Mock(vision_model="vision"), None, "x.jpg")
+        self.assertEqual(entries[0]["aliases"], [])
+
     def test_creator_from_en_publisher_by_is_not_a_creator(self):
         # "published/distributed by <Company>" is not authorship: honest-missing
         # beats a publisher presented as «нашла» (review fix — the bare "by"
@@ -19662,10 +19700,24 @@ class MediaModuleTests(unittest.TestCase):
         self.assertEqual(chat.call_count, 1)
         self.assertGreaterEqual(chat.call_args.kwargs["max_tokens"], 1800)
 
+    def test_model_fill_receives_visible_context_for_disambiguation(self):
+        entry = {"title": "Brain Dead", "kind": "movie",
+                 "aliases": ["Braindead"],
+                 "comment": "П. Джексон; снят четырьмя годами раньше"}
+        with mock.patch.object(llm, "chat", return_value='{"items": []}') as chat:
+            media._model_fill(mock.Mock(do_model="m"), None, [entry])
+        payload = chat.call_args.args[3][0]["content"]
+        self.assertIn("Brain Dead", payload)
+        self.assertIn("Braindead", payload)
+        self.assertIn("Джексон", payload)
+
     def test_parse_correction_kind_flip_respects_negation(self):
         self.assertEqual(media.parse_correction("№2 — фильм, не книга", 3), ("movie", [2]))
         self.assertEqual(media.parse_correction("№2 — книга, не фильм", 3), ("book", [2]))
         self.assertEqual(media.parse_correction("#3 is a book, not a movie", 3), ("book", [3]))
+        # Exact live regression: a single-entry card is already the referent;
+        # the natural contrast must not require the artificial word «это».
+        self.assertEqual(media.parse_correction("Не книга, а фильм", 1), ("movie", [1]))
 
     def test_parse_correction_remove(self):
         self.assertEqual(media.parse_correction("убери №3", 3), ("remove", [3]))
@@ -19711,6 +19763,9 @@ class MediaModuleTests(unittest.TestCase):
             ("media_card_cap_note", {"cap": 4, "total": 5}),
             ("media_card_photo_unread", {"n": 1}),
             ("media_card_caption_note", {"caption": "сохрани"}),
+            ("media_card_identified", {}),
+            ("media_card_hint_conflict", {"caption": "Фильм"}),
+            ("media_aliases", {"aliases": "«В никуда»"}),
             ("media_saved", {"lines": "x"}),
             ("media_line_merged", {"emoji": "📚", "title": "Дюна",
                                    "category": "Books", "row_id": 7}),
@@ -19726,6 +19781,7 @@ class MediaModuleTests(unittest.TestCase):
             ("media_field_genre", {"value": "фантастика"}),
             ("media_src_lookup", {}),
             ("media_src_model", {}),
+            ("media_src_photo", {}),
             ("media_fields_missing", {"fields": "год, жанр"}),
             ("media_fname_creator_book", {}),
             ("media_fname_creator_movie", {}),
@@ -19743,11 +19799,13 @@ class MediaModuleTests(unittest.TestCase):
 
     def test_entry_facts_carry_provenance_prefixes(self):
         e = {"title": "Дюна", "kind": "book", "comment": "топ",
+             "aliases": ["Dune"],
              "creator": "Frank Herbert", "creator_src": "lookup",
              "year": "1965", "year_src": "lookup",
              "genre": "фантастика", "genre_src": "model"}
         self.assertEqual(media.entry_facts(e), [
             "photo: топ",
+            "photo: alias: Dune",
             "lookup: author: Frank Herbert",
             "lookup: year: 1965",
             "model: genre: фантастика",
@@ -19783,13 +19841,11 @@ class MediaModuleTests(unittest.TestCase):
         fields2, comments2 = media.parse_catalog_facts(["обычная заметка"])
         self.assertEqual(fields2, {"creator": "", "year": "", "genre": ""})
         self.assertEqual(comments2, ["обычная заметка"])
-        # a PHOTO comment that reads like a field label stays a comment — a
-        # cover transcription must never displace the verified lookup value
-        # from the export's field column (review fix, mirrors _FACT_FIELD_RE)
+        # Structured photo evidence is authoritative and fills the field column.
         fields3, comments3 = media.parse_catalog_facts(
             ["photo: author: Ф. Герберт", "lookup: year: 1965"])
-        self.assertEqual(fields3, {"creator": "", "year": "1965", "genre": ""})
-        self.assertEqual(comments3, ["author: Ф. Герберт"])
+        self.assertEqual(fields3, {"creator": "Ф. Герберт", "year": "1965", "genre": ""})
+        self.assertEqual(comments3, [])
 
     def test_catalog_markdown_escapes_pipes_and_dashes_missing(self):
         md = media.catalog_markdown("Movies", [
@@ -19866,7 +19922,7 @@ class MediaEnrichLookupTests(unittest.TestCase):
         with mock.patch.object(fetch, "fetch_json", return_value=payload):
             return media.lookup_openlibrary(title, budget)
 
-    def _wiki(self, kind, responses, title="Дюна"):
+    def _wiki(self, kind, responses, title="Дюна", entry=None):
         responses = list(responses)
         calls = []
 
@@ -19879,7 +19935,7 @@ class MediaEnrichLookupTests(unittest.TestCase):
 
         budget = media._LookupBudget()
         with mock.patch.object(fetch, "fetch_json", side_effect=fake):
-            out = media.lookup_wikipedia(title, kind, budget)
+            out = media.lookup_wikipedia(entry or title, kind, budget)
         self.assertFalse(responses, f"unused scripted lookups: {responses}")
         return out, calls
 
@@ -19895,6 +19951,29 @@ class MediaEnrichLookupTests(unittest.TestCase):
         out = self._ol({"docs": [{"title": "Дюна 2", "author_name": ["X"],
                                   "first_publish_year": 2000}]})
         self.assertEqual(out, {})
+
+    def test_openlibrary_same_title_uses_visible_author_not_first_hit(self):
+        payload = {"docs": [
+            {"title": "Empty World", "author_name": ["Sam Youd"],
+             "first_publish_year": 1977, "subject": ["Science fiction"]},
+            {"title": "Empty World", "author_name": ["Zach Bohannon"],
+             "first_publish_year": 2018, "subject": ["Horror"]},
+        ]}
+        entry = {"title": "EMPTY WORLD", "kind": "book",
+                 "creator": "ZACH BOHANNON", "creator_src": "photo",
+                 "comment": ""}
+        out = self._ol(payload, title=entry)
+        self.assertEqual(out, {"creator": "Zach Bohannon", "year": "2018",
+                               "genre": "horror"})
+
+    def test_openlibrary_single_same_title_that_misses_visible_context_is_refused(self):
+        payload = {"docs": [
+            {"title": "Empty World", "author_name": ["Sam Youd"],
+             "first_publish_year": 1977, "subject": ["Science fiction"]},
+        ]}
+        entry = {"title": "EMPTY WORLD", "kind": "book",
+                 "comment": "ZACH BOHANNON"}
+        self.assertEqual(self._ol(payload, title=entry), {})
 
     def test_openlibrary_garbage_shapes_yield_nothing(self):
         for payload in (None, [], "x", 7, {"docs": "x"}, {"docs": [None, 5, []]},
@@ -19923,6 +20002,55 @@ class MediaEnrichLookupTests(unittest.TestCase):
         self.assertEqual(out, {"year": "2021", "genre": "фантастика"})
         from urllib.parse import quote
         self.assertIn(quote("Дюна_(фильм,_2021)"), calls[1])
+
+    def test_wikipedia_same_title_uses_netflix_context(self):
+        entry = {"title": "NOWHERE", "kind": "movie", "aliases": ["«В никуда»"],
+                 "comment": "A NETFLIX FILM"}
+        out, calls = self._wiki("movie", [
+            ["Nowhere", ["Nowhere (1997 film)", "Nowhere (2023 film)"], [], []],
+            {"title": "Nowhere (1997 film)",
+             "description": "1997 American drama film directed by Gregg Araki",
+             "extract": ""},
+            {"title": "Nowhere (2023 film)",
+             "description": "2023 Spanish survival drama film",
+             "extract": "A Netflix film directed by Albert Pintó."},
+        ], title="NOWHERE", entry=entry)
+        self.assertEqual(out, {"creator": "Albert Pintó", "year": "2023",
+                               "genre": "drama"})
+        self.assertEqual(len(calls), 3)
+
+    def test_wikipedia_article_and_spacing_variants_use_context(self):
+        frighteners, _ = self._wiki("movie", [
+            ["Frighteners", ["The Frighteners"], [], []],
+            {"title": "The Frighteners",
+             "description": "1996 supernatural comedy horror film",
+             "extract": "The film was directed by Peter Jackson."},
+        ], title="Frighteners")
+        self.assertEqual(frighteners, {"creator": "Peter Jackson", "year": "1996",
+                                       "genre": "comedy"})
+
+        brain = {"title": "Brain Dead", "kind": "movie",
+                 "creator": "Peter Jackson", "creator_src": "photo",
+                 "comment": "filmed four years before The Frighteners"}
+        braindead, _ = self._wiki("movie", [
+            ["Brain Dead", ["Brain Dead (2007 film)", "Braindead (film)"], [], []],
+            {"title": "Brain Dead (2007 film)",
+             "description": "2007 horror comedy film directed by Kevin S. Tenney",
+             "extract": ""},
+            {"title": "Braindead",
+             "description": "1992 New Zealand zombie comedy film",
+             "extract": "The film was directed by Peter Jackson."},
+        ], title="Brain Dead", entry=brain)
+        self.assertEqual(braindead, {"creator": "Peter Jackson", "year": "1992",
+                                    "genre": "comedy"})
+
+    def test_wikipedia_ambiguous_same_title_without_context_refuses_first_hit(self):
+        out, _ = self._wiki("movie", [
+            ["Nowhere", ["Nowhere (1997 film)", "Nowhere (2023 film)"], [], []],
+            {"description": "1997 American drama film", "extract": ""},
+            {"description": "2023 Spanish survival drama film", "extract": ""},
+        ], title="Nowhere")
+        self.assertEqual(out, {})
 
     def test_wikipedia_en_creator_patterns(self):
         out, _ = self._wiki("book", [
@@ -20258,6 +20386,19 @@ class MediaCaptureGoldenTests(unittest.TestCase):
             "SELECT summary, category FROM messages").fetchall()}
         self.assertEqual(cats, {"Дюна": "Movies", "Мастер и Маргарита": "Books"})
 
+    def test_single_entry_natural_not_book_but_movie_correction(self):
+        self.drive({"message": self._photo_msg(124)}, vision=[
+            '{"kind": "media", "description": "обложка"}',
+            '{"entries": [{"title": "EMPTY WORLD", "aliases": [], "kind": "book",'
+            ' "creator": "ZACH BOHANNON", "year": "2018", "genre": "horror",'
+            ' "comment": ""}]}',
+        ], enrich=[])
+        sent = self.drive({"message": self._msg(125, "Не книга, а фильм")},
+                          enrich=['{"items": []}'])
+        card = "\n".join(sent)
+        self.assertIn("🎬 «EMPTY WORLD» — фильм", card)
+        self.assertNotIn(texts.T("ru", "media_correction_unclear"), card)
+
     def test_correction_removes_entry(self):
         self.drive({"message": self._photo_msg(131)}, vision=[
             '{"kind": "media", "description": "полка"}',
@@ -20326,6 +20467,28 @@ class MediaCaptureGoldenTests(unittest.TestCase):
         facts = [r["fact"] for r in store.message_facts(self.conn, rid)]
         self.assertEqual(facts, ["photo: старая пометка", "photo: новое издание"])
         self.assertIn("уже есть", " ".join(sent))                    # the ack says it merged
+
+    def test_recapture_by_localized_alias_merges_existing_work(self):
+        movies = store.ensure_category(self.conn, "Movies")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": -1,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": "NOWHERE"})
+        store.set_suggestion(self.conn, rid, movies, "NOWHERE", "m")
+        store.set_facts(self.conn, rid, ["photo: alias: «В никуда»"])
+        store.confirm_category(self.conn, rid, movies)
+
+        self.drive({"message": self._photo_msg(1701)}, vision=[
+            '{"kind": "media", "description": "постер"}',
+            '{"entries": [{"title": "«В никуда»", "aliases": ["NOWHERE"],'
+            ' "kind": "movie", "creator": "", "year": "", "genre": "",'
+            ' "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        sent = self.drive({"message": self._msg(1702, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) c FROM messages").fetchone()["c"], 1)
+        self.assertIn("уже есть", " ".join(sent))
 
     def test_non_media_photo_converses_and_stores_nothing(self):
         sent = self.drive({"message": self._photo_msg(171)}, vision=[
@@ -20574,6 +20737,73 @@ class MediaCaptureGoldenTests(unittest.TestCase):
         self.assertEqual(self._counts(), (0, 0, 0))
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) c FROM reminders").fetchone()["c"], 0)
+
+    def test_find_movie_caption_is_honored_and_localized_title_is_one_note(self):
+        # Exact live NOWHERE regression: the caption is the identify intent,
+        # Russian title is an alias on the SAME poster, and Netflix context
+        # disambiguates 2023 from the same-titled 1997 film.
+        sent = self.drive(
+            {"message": self._photo_msg(501, caption="Найди этот фильм")},
+            vision=[
+                '{"kind": "media", "description": "постер фильма"}',
+                '{"entries": [{"title": "NOWHERE", "aliases": ["«В никуда»"],'
+                ' "kind": "movie", "creator": "", "year": "", "genre": "",'
+                ' "comment": "A NETFLIX FILM"}]}',
+            ],
+            lookups=[
+                ["Nowhere", ["Nowhere (1997 film)", "Nowhere (2023 film)"], [], []],
+                {"title": "Nowhere (1997 film)",
+                 "description": "1997 American drama film directed by Gregg Araki",
+                 "extract": ""},
+                {"title": "Nowhere (2023 film)",
+                 "description": "2023 Spanish survival drama film",
+                 "extract": "A Netflix film directed by Albert Pintó."},
+            ],
+            enrich=[],
+        )
+        card = "\n".join(sent)
+        self.assertEqual(len(re.findall(r"(?m)^\d+\. ", card)), 1)
+        self.assertIn("«NOWHERE»", card)
+        self.assertIn("«В никуда»", card)
+        self.assertIn("Albert Pintó", card)
+        self.assertIn("2023", card)
+        self.assertIn(texts.T("ru", "media_card_identified"), card)
+        self.assertNotIn("как команду её тут не выполняла", card)
+        extract_request = json.dumps(self.llm_requests[1], ensure_ascii=False)
+        self.assertIn("only as a HINT", extract_request)
+
+        self.drive({"callback_query": {
+            "id": "cb-nowhere", "from": {"id": 1}, "data": "mcap|y",
+            "message": {"chat": {"id": 1}, "message_id": 5001},
+        }})
+        rows = self.conn.execute("SELECT * FROM messages").fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["summary"], "NOWHERE")
+        facts = [r["fact"] for r in store.message_facts(self.conn, rows[0]["id"])]
+        self.assertIn("photo: alias: «В никуда»", facts)
+        self.assertIn("lookup: director: Albert Pintó", facts)
+        self.assertIn("lookup: year: 2023", facts)
+
+    def test_bare_movie_hint_does_not_override_visible_book_evidence(self):
+        # Exact live EMPTY WORLD shape: the boss called it «Фильм», but the
+        # cover visibly names an author. Evidence wins and the disagreement is
+        # disclosed instead of silently ignoring the caption.
+        sent = self.drive(
+            {"message": self._photo_msg(502, caption="Фильм")},
+            vision=[
+                '{"kind": "media", "description": "обложка"}',
+                '{"entries": [{"title": "EMPTY WORLD", "aliases": [],'
+                ' "kind": "book", "creator": "ZACH BOHANNON", "year": "2018",'
+                ' "genre": "horror", "comment": ""}]}',
+            ],
+            enrich=[],
+        )
+        card = "\n".join(sent)
+        self.assertIn("📚 «EMPTY WORLD» — книга", card)
+        self.assertIn("автор: ZACH BOHANNON (на фото)", card)
+        self.assertIn(texts.T("ru", "media_card_hint_conflict", caption="Фильм"), card)
+        self.assertNotIn("Sam Youd", card)
+        self.assertNotIn("как команду её тут не выполняла", card)
 
     def test_card_with_foreign_pending_keeps_slot_and_buttons_store(self):
         # Another confirmation holds the single pending slot: the card must not

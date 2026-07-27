@@ -163,8 +163,12 @@ TEXTS = {
     },
     "media_kind_movie": {"ru": "фильм", "en": "movie"},
     "media_kind_book": {"ru": "книга", "en": "book"},
-    # Provenance label: everything on the B1 card was read OFF the photo.
+    # Provenance label for visible free context read OFF the photo.
     "media_from_photo": {"ru": "на фото: {comment}", "en": "in the photo: {comment}"},
+    "media_aliases": {
+        "ru": "другое название: {aliases}",
+        "en": "alternate title: {aliases}",
+    },
     "media_card_footer": {
         "ru": ("Сохранить в каталог? Если что-то не так — ответь, например: "
                "«№2 — книга, не фильм» или «убери №3» 🙂"),
@@ -196,13 +200,23 @@ TEXTS = {
         "ru": "Не смогла прочитать {n} фото — в карточке только то, что разобрала.",
         "en": "I couldn't read {n} of the photos — the card has only what I could make out.",
     },
-    # A caption on a MEDIA photo is not routed while the card is offered (the
-    # documented trade-off) — but it must not vanish silently either.
+    # Media captions outside the small recognized kind/identify contract are not
+    # routed while the card is offered, but must not vanish silently either.
     "media_card_caption_note": {
         "ru": ("Подпись «{caption}» вижу, но как команду её тут не выполняла — "
                "если что-то нужно, напиши отдельным сообщением."),
         "en": ("I can see the caption \"{caption}\", but I didn't run it as a "
                "command — if you need something, send it as its own message."),
+    },
+    "media_card_identified": {
+        "ru": "Подобрала наиболее вероятное совпадение по фото и видимому контексту.",
+        "en": "I matched the most likely work using the photo and its visible context.",
+    },
+    "media_card_hint_conflict": {
+        "ru": ("Подпись «{caption}» учла как подсказку, но видимые признаки ей "
+               "противоречат — проверь тип перед сохранением."),
+        "en": ("I used the caption “{caption}” as a hint, but the visible evidence "
+               "conflicts with it — check the type before saving."),
     },
     # NB: no final verbs — nothing was stored, and she says what she could NOT do.
     "media_nothing_extracted": {
@@ -226,14 +240,14 @@ TEXTS = {
         "en": "I didn't catch the correction 🤔 Say e.g. \"#2 is a book\" or \"remove #3\".",
     },
     # -- B2 enrichment: per-field provenance on the card -----------------------
-    # «(нашла)» = a keyless lookup (OpenLibrary/Wikipedia) said so; «(по памяти)»
-    # = the model's own knowledge; «на фото: …» stays the photo label. A field NO
-    # source yielded is listed under «не нашла: …» — honestly missing, never
-    # invented (action-truth discipline).
+    # «на фото» = visible structured evidence; «(нашла)» = a keyless lookup
+    # (OpenLibrary/Wikipedia); «(по памяти)» = model knowledge. A field NO source
+    # yielded is listed under «не нашла: …» — honestly missing, never invented.
     "media_field_creator_book": {"ru": "автор: {value}", "en": "author: {value}"},
     "media_field_creator_movie": {"ru": "режиссёр: {value}", "en": "director: {value}"},
     "media_field_year": {"ru": "год: {value}", "en": "year: {value}"},
     "media_field_genre": {"ru": "жанр: {value}", "en": "genre: {value}"},
+    "media_src_photo": {"ru": "на фото", "en": "in the photo"},
     "media_src_lookup": {"ru": "нашла", "en": "found"},
     "media_src_model": {"ru": "по памяти", "en": "from memory"},
     "media_fields_missing": {"ru": "не нашла: {fields}", "en": "couldn't find: {fields}"},
