@@ -1133,6 +1133,39 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   second row — duplicating on every redelivery is the one thing this path must not do).
   The saved counts also describe the note itself now, so an uncompressed image sent as a
   **document** is finally reported («фото: 1») instead of as nothing at all.
+- **Performance & small‑correctness sweep (2026‑07‑26):** eleven small things that only
+  bite once the numbers grow or a dependency misbehaves. A «#N» lookup has its own
+  `note_no` index (the composite one leads with `chat_id`, so every note reference was a
+  full table scan — and a bulk «удали #3 #7 #12» ran one per id). Journal sizes are
+  COUNTed in SQL: `len()` of the row helper capped at 200, so past that every digest and
+  page header said exactly «200» forever — and opening a journal now fetches its page
+  ONCE instead of twice (the render still costs that one Python scan of the confirmed
+  notes; only the duplicates were removed). Candidate dedup gained an indexed `norm_text`
+  fast path, so re‑proposing something already stored tokenizes nothing; a genuinely new
+  proposal still walks the rows of its own `kind` (memory is never pruned, by policy).
+  A `message_reaction` update now records its chat id (its chat sits
+  at the top level, so those inbox/event rows were written with `chat_id` NULL). A
+  calendar token Google refuses is dropped and re‑minted ONCE instead of
+  failing from cache for the rest of its ~58‑minute life — a 401 always, a 403 only when
+  Google's own words do not say the problem is volume, because throwing away a good token
+  on a rate‑limit 403 would quadruple the traffic aimed at a service that just asked for
+  less. Calendar errors now carry Google's own (secret‑scrubbed, bounded) description.
+  `events.py` gained jobs.py's startup reclaim, an error recorded on `fail()`, a retry
+  backoff so one blip cannot burn both attempts at once, and a claimed‑row dict that
+  describes the claim — before Stage C moves live dispatch onto it; `jobs.claim_next`
+  got the same corrected dict. The optional Space upload
+  wraps bare `TimeoutError`/`ConnectionResetError`/`IncompleteRead` (they are not
+  `URLError`, and this sits on the LIVE save path), and `offload` now logs and files
+  ONE issue per failing save (not one per photo — a 10‑photo album would have flushed
+  the bounded recent‑issues list) instead of costing the boss his save — while still
+  re‑raising a `sqlite3` failure, which belongs to the crash‑loop containment guard.
+  `sendDocument`/`sendPhoto` — and the file DOWNLOAD on the ingest path, where «file is
+  too big» is the line that matters — report Telegram's `description` and `retry_after`
+  like every other call. The weekly review's "exact median" is a real median (it took the
+  upper‑middle of an even sample). The retired 1..N numbering helper is deleted, and so
+  is the capped journal row helper that nothing but a test still called. And the
+  409/rate‑limit poll backoffs wait in ≤1 s slices that check the stop flag, so a SIGTERM
+  during a Telegram incident is noticed at once instead of up to two minutes later.
 - **Per‑turn context dies with its turn (2026‑07‑25):** the quoted/replied‑to message,
   the reply‑bound reminder and the reply language are cleared in a `finally` at the end
   of every update. They used to survive until the *next* inbound message, so a
@@ -1245,6 +1278,18 @@ boss repeat himself in the history or in prompts — **and since 2026‑07‑26 
 `cara_life` gained a `status` column the same day: consolidation folds a duplicate beat
 to `merged` instead of DELETEing it (all readers filter `status='active'`; the seed
 marker `life_count` deliberately still counts every row).
+
+**Two lookup indexes and one derived column (2026‑07‑26).** `idx_messages_note_no_only`
+serves the owner‑global «#N» lookup (`idx_messages_note_no` leads with `chat_id` and could
+not); `memory_candidates.norm_text` (casefolded/stripped copy of `proposed_text`, backfilled
+once on upgrade, indexed) is the dedup fast path. Both are additive — no data moves, and a
+row written without `norm_text` stays visible to dedup through the scanned arm — which is
+also why the fast path is only that: an EXACT‑duplicate hit that lets the scan stop early.
+Journal sizes now come from `COUNT(*)` helpers (`journal_count`,
+`journal_entries_count_for` — which keeps the row helper's `JOIN messages` so an orphaned
+entry could never make the header out‑count the listing) rather than `len()` of a capped
+row fetch. Memory rows are still **never pruned**, by policy — the fix here is the cost per
+lookup, not the size of the table.
 
 **A purge deletes what it says, and only that (2026‑07‑25).** `categories.kind` is the
 single source of truth for journal protection, so scope `stats` now deletes only

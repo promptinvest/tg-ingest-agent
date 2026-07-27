@@ -11,6 +11,7 @@ from the database.
 from datetime import datetime, timedelta, timezone
 import json
 import re
+import statistics
 
 import llm
 import store
@@ -43,7 +44,9 @@ def journal_digest(conn, lang, days=7):
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     parts = []
     for name in journals:
-        n = len(store.journal_entries(conn, name, since))
+        # COUNT, not len(rows): the row helper caps at 200, so a busy journal
+        # reported exactly «200» in every digest once it passed that.
+        n = store.journal_count(conn, name, since)
         if n:
             parts.append(f"{name} — {n}")
     if not parts:
@@ -377,14 +380,15 @@ def collect_note_outcomes(conn, since, now):
         saved_at = _parse_iso(captured.get(key))
         if used_at and saved_at and used_at >= saved_at:
             deltas.append((used_at - saved_at).total_seconds() / 3600)
-    out["median_first_use_hours"] = (sorted(deltas)[len(deltas) // 2]
-                                     if deltas else None)
+    # A real median: `sorted(x)[n // 2]` is the UPPER-middle element for an even
+    # sample ([1, 100] -> 100), which is not what "exact median" means.
+    out["median_first_use_hours"] = statistics.median(deltas) if deltas else None
     # journal entries per journal this period (structured journals by entries,
     # remaining journal categories by dated messages)
     per_journal = []
     seen = set()
     for d in store.journal_defs(conn):
-        n = len(store.journal_entries_for(conn, d["id"], since_iso=since))
+        n = store.journal_entries_count_for(conn, d["id"], since_iso=since)
         name = d["category"] or d["display_name"]
         seen.add(name.casefold())
         if n:
@@ -392,7 +396,7 @@ def collect_note_outcomes(conn, since, now):
     for name in store.journal_categories(conn):
         if name.casefold() in seen:
             continue
-        n = len(store.journal_entries(conn, name, since))
+        n = store.journal_count(conn, name, since)   # exact, uncapped
         if n:
             per_journal.append((name, n))
     out["journal_entries_period"] = per_journal

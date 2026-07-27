@@ -30,6 +30,31 @@ class TelegramError(Exception):
         self.retry_after = retry_after
 
 
+def http_error(method, exc):
+    """One HTTPError → TelegramError translation for EVERY sender.
+
+    Telegram puts the actual cause in the JSON body (`description`: "file is too
+    big", "wrong file identifier") and the wait in `parameters.retry_after`. The
+    multipart senders parsed neither, so a failed .ics or photo send logged a
+    bare "HTTP 400" — the one line that says what went wrong was thrown away,
+    and a 429 from them carried no retry hint although the caller knows how to
+    read one.
+    """
+    description = ""
+    retry_after = None
+    try:
+        body = json.loads(exc.read().decode("utf-8"))
+        description = body.get("description") or ""
+        retry_after = (body.get("parameters") or {}).get("retry_after")
+    except Exception:  # noqa: BLE001 — the body is a bonus, never a second failure
+        pass
+    return TelegramError(
+        f"{method} failed with HTTP {exc.code}: {description}",
+        status=exc.code,
+        retry_after=retry_after,
+    )
+
+
 def tg_call(token, method, params=None, timeout=35):
     url = f"https://api.telegram.org/bot{token}/{method}"
     data = {}
@@ -49,19 +74,7 @@ def tg_call(token, method, params=None, timeout=35):
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        description = ""
-        retry_after = None
-        try:
-            body = json.loads(exc.read().decode("utf-8"))
-            description = body.get("description") or ""
-            retry_after = (body.get("parameters") or {}).get("retry_after")
-        except Exception:
-            pass
-        raise TelegramError(
-            f"{method} failed with HTTP {exc.code}: {description}",
-            status=exc.code,
-            retry_after=retry_after,
-        ) from exc
+        raise http_error(method, exc) from exc
     except URLError as exc:
         raise TelegramError(f"{method} failed: {exc.reason}") from exc
     except TRANSPORT_ERRORS as exc:
@@ -88,7 +101,7 @@ def tg_send_document(token, chat_id, filename, content_bytes, caption=None,
         with urlopen(request, timeout=60) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise TelegramError(f"sendDocument failed with HTTP {exc.code}", status=exc.code) from exc
+        raise http_error("sendDocument", exc) from exc
     except URLError as exc:
         raise TelegramError(f"sendDocument failed: {exc.reason}") from exc
     except TRANSPORT_ERRORS as exc:
@@ -138,7 +151,7 @@ def tg_send_photo(token, chat_id, photo, caption=None, by_file_id=True):
         with urlopen(request, timeout=60) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise TelegramError(f"sendPhoto failed with HTTP {exc.code}", status=exc.code) from exc
+        raise http_error("sendPhoto", exc) from exc
     except URLError as exc:
         raise TelegramError(f"sendPhoto failed: {exc.reason}") from exc
     except TRANSPORT_ERRORS as exc:
@@ -153,8 +166,14 @@ def tg_download(token, file_path, dest):
     try:
         with urlopen(Request(url), timeout=120) as response:
             Path(dest).write_bytes(response.read())
-    except (HTTPError, URLError) as exc:
-        reason = getattr(exc, "code", None) or getattr(exc, "reason", exc)
-        raise TelegramError(f"file download failed: {reason}") from exc
+    except HTTPError as exc:
+        # The last sender that reported a bare status. It is on the LIVE ingest
+        # path, and "file is too big" — the 20 MB cap the voice reply text
+        # exists for — is exactly what Telegram puts in `description`; the
+        # status alone made the boss's voice note fail with «не получилось»
+        # instead of the sentence that says why.
+        raise http_error("file download", exc) from exc
+    except URLError as exc:
+        raise TelegramError(f"file download failed: {exc.reason}") from exc
     except TRANSPORT_ERRORS as exc:
         raise TelegramError(f"file download failed: {exc!r}") from exc

@@ -127,8 +127,8 @@ class NotesMixin:
         if params.get("stats"):
             self.reply(chat_id, self._journal_stats_text(lang, canonical, period))
             return
-        _rows, total = self._journal_rows(canonical, period, person, tag,
-                                          0, self.JOURNAL_PAGE_SIZE)
+        rows, total = self._journal_rows(canonical, period, person, tag,
+                                         0, self.JOURNAL_PAGE_SIZE)
         if not total:
             self.reply(chat_id, T(lang, "journal_empty", category=canonical))
             return
@@ -139,8 +139,14 @@ class NotesMixin:
             {"view": "journal", "category": canonical, "period": period,
              "person": person, "tag": tag},
         )
+        # Hand the page we already hold to the renderer. Opening a journal used
+        # to run `_journal_rows` TWICE — once for this emptiness check, once
+        # inside `_journal_page` — and each one is a full Python scan of every
+        # confirmed categorized message (`journal_entries_page`). Same query,
+        # same offset, same filters: fetching it a second time bought nothing.
         text, keyboard, _ = self._journal_page(lang, canonical, period, 0, token,
-                                               person=person, tag=tag)
+                                               person=person, tag=tag,
+                                               prefetched=(rows, total))
         self.reply(chat_id, text, reply_markup=keyboard)
 
     def _journal_rows(self, canonical, period, person, tag, offset, limit):
@@ -175,15 +181,19 @@ class NotesMixin:
         return [(r, {}) for r in page], total
 
     def _journal_page(self, lang, canonical, period, offset, token,
-                      person=None, tag=None):
+                      person=None, tag=None, prefetched=None):
         """Render one oldest-first journal page with a stable filter. Entries of
         a structured journal carry the J#-prefixed stable number (§5.6 — the
-        linked message's lazy note number, never a second counter)."""
+        linked message's lazy note number, never a second counter).
+
+        `prefetched` is `(entries, total)` for THIS offset/filter when the
+        caller has already fetched it (see `do_journal_show`) — the page fetch
+        is a full Python scan, so it must not run twice for one render."""
         ru = lang == "ru"
         gdef = store.journal_def_by_category(self.conn, canonical, active_only=False)
         prefix = "J#" if gdef is not None else "#"
-        entries, total = self._journal_rows(canonical, period, person, tag,
-                                            offset, self.JOURNAL_PAGE_SIZE)
+        entries, total = prefetched if prefetched is not None else self._journal_rows(
+            canonical, period, person, tag, offset, self.JOURNAL_PAGE_SIZE)
         plabel = {"day": ("за сегодня", "today"), "week": ("за неделю", "this week"),
                   "month": ("за месяц", "this month"),
                   "all": ("за всё время", "all time")}[period][0 if ru else 1]
@@ -191,8 +201,16 @@ class NotesMixin:
             plabel += (f", про {person}" if ru else f", about {person}")
         if tag:
             plabel += (f", тег «{tag}»" if ru else f", tag \"{tag}\"")
-        all_total = (len(store.journal_entries_for(self.conn, gdef["id"]))
-                     if gdef is not None else store.journal_count(self.conn, canonical))
+        # The all-time total beside the filtered one. When the page IS the
+        # all-time unfiltered view the number already in hand is that total —
+        # otherwise count it in SQL rather than fetching every entry again just
+        # to call len() on it (this renders on every page turn).
+        if period == "all" and not person and not tag:
+            all_total = total
+        elif gdef is not None:
+            all_total = store.journal_entries_count_for(self.conn, gdef["id"])
+        else:
+            all_total = store.journal_count(self.conn, canonical)
         lines = [T(lang, "journal_header", category=canonical, n=total,
                    period=plabel, total=all_total)]
         last_day = None

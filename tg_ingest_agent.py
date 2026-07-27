@@ -174,6 +174,12 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         requeued, dead = jobs.reclaim_stale(self.conn)
         if requeued or dead:
             log(f"reclaimed stale jobs after restart: {requeued} requeued, {dead} failed")
+        # Same for the event queue — inert while Stage A only records events, in
+        # place before Stage C moves live dispatch onto it.
+        ev_requeued, ev_dead = events.reclaim_stale(self.conn)
+        if ev_requeued or ev_dead:
+            log(f"reclaimed stale events after restart: {ev_requeued} requeued,"
+                f" {ev_dead} failed")
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         # Consecutive sqlite containment breaks in the inbound path, and whether
         # the boss has already been told about THIS stall (see _db_stall).
@@ -224,8 +230,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     @staticmethod
     def _update_chat_id(update):
+        # `message_reaction` is one of the allowed_updates we ask Telegram for,
+        # and it carries its chat at the TOP level (no nested message). Leaving
+        # it out of the chain stored every reaction's durable-inbox row — and its
+        # observability event — with chat_id NULL, so the inbox could not be
+        # filtered by chat and the dead-letter notice had nowhere to go.
         msg = (update.get("message") or update.get("edited_message")
-               or (update.get("callback_query") or {}).get("message") or {})
+               or (update.get("callback_query") or {}).get("message")
+               or update.get("message_reaction") or {})
         return (msg.get("chat") or {}).get("id")
 
     # -- preferences-backed settings
@@ -433,6 +445,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     # this many consecutive breaks — about a minute of retries — say it out loud.
     DB_STALL_ALERT_AFTER = 12
 
+    # Poll backoffs. Long, but never one uninterruptible block (see _sleep): a
+    # conflicting poller means every getUpdates fails until it goes away, and
+    # Telegram's own retry_after is honoured up to this ceiling.
+    POLL_CONFLICT_BACKOFF_SECONDS = 30
+    POLL_RATE_LIMIT_MAX_SECONDS = 120
+    # No wait between two `self.stop` checks may exceed this.
+    SLEEP_SLICE_SECONDS = 1.0
+
     def _sleep(self, seconds):
         """Sleep in short slices so a SIGTERM during a backoff is still prompt."""
         deadline = time.time() + seconds
@@ -440,7 +460,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             remaining = deadline - time.time()
             if remaining <= 0:
                 break
-            time.sleep(min(1.0, remaining))
+            time.sleep(min(self.SLEEP_SLICE_SECONDS, remaining))
 
     def _db_stall(self, exc):
         """Count one containment break and, once the streak says the database is
@@ -733,18 +753,25 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 )
                 errors = 0
             except TelegramError as exc:
+                # Every poll backoff goes through `self._sleep`, which waits in
+                # ≤1 s slices and checks `self.stop`. A bare `time.sleep(120)`
+                # made a SIGTERM during a Telegram incident take up to two
+                # minutes to be noticed — and the `continue` below re-enters the
+                # loop at the TOP, so the scheduler ticks (due reminders, the
+                # morning brief) run once per backoff instead of waiting out the
+                # whole incident. Sending still works while getUpdates does not.
                 if exc.status == 409:
                     log(f"getUpdates conflict (another poller or webhook active): {exc}")
-                    time.sleep(30)
+                    self._sleep(self.POLL_CONFLICT_BACKOFF_SECONDS)
                     continue
                 if exc.retry_after:
                     log(f"rate limited, sleeping {exc.retry_after}s")
-                    time.sleep(min(int(exc.retry_after), 120))
+                    self._sleep(min(int(exc.retry_after), self.POLL_RATE_LIMIT_MAX_SECONDS))
                     continue
                 errors += 1
                 delay = min(60, 5 * (2 ** min(errors - 1, 4)))
                 log(f"getUpdates failed ({exc}), retrying in {delay}s")
-                time.sleep(delay)
+                self._sleep(delay)
                 continue
             processed_max = self.process_update_batch(updates)
             if processed_max is not None:

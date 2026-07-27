@@ -383,6 +383,7 @@ CREATE TABLE IF NOT EXISTS memory_candidates (
   target TEXT NOT NULL DEFAULT 'boss_profile',
   kind TEXT NOT NULL,
   proposed_text TEXT NOT NULL,
+  norm_text TEXT,
   reason TEXT,
   sensitivity TEXT NOT NULL DEFAULT 'normal',
   confidence REAL NOT NULL DEFAULT 0.5,
@@ -800,20 +801,60 @@ def _candidate_tokens(text):
 def _candidate_similar(a, b):
     ta, tb = _candidate_tokens(a), _candidate_tokens(b)
     if not ta or not tb:
-        return str(a or "").casefold().strip() == str(b or "").casefold().strip()
+        return candidate_norm(a) == candidate_norm(b)
     return len(ta & tb) / min(len(ta), len(tb)) >= 0.8
 
 
+def candidate_norm(text):
+    """The stored `norm_text` form of a candidate: casefolded and stripped.
+    One function so the column, the INSERT and the lookup can never disagree."""
+    return str(text or "").casefold().strip()
+
+
+_CANDIDATE_LIVE_STATUSES = "('pending','confirmed','rejected','merged','superseded')"
+
+
 def candidate_match(conn, text, kind=None):
-    wanted = str(text or "").casefold().strip()
+    """The stored candidate this text already stands for, or None.
+
+    Honestly scoped: this is an indexed EXACT-match fast path plus a
+    kind-restricted scan, not a bounded lookup.
+      · The exact hit reads the indexed `norm_text` column, and when it exists
+        the scan below stops at its id — so a re-proposal of something already
+        stored (the common case for a recurring habit) tokenizes nothing.
+      · The fuzzy pass still WALKS. It is restricted in SQL to the same `kind`
+        (plus legacy NULL-`norm_text` rows), which changes no outcome —
+        `_candidate_similar` was only ever consulted when `kind == row["kind"]`
+        already held — so what it saves is the other kinds' rows, not the
+        tokenizing. A genuinely NEW proposal has no exact hit and therefore
+        still costs O(rows of that kind); `(kind = ? OR norm_text IS NULL)` is
+        an OR no index can serve. Memory is never pruned by policy, so that
+        arm grows with the table; bounding it would be its own task.
+    Rows written before `norm_text` existed, or by a raw INSERT, carry NULL and
+    stay in the scanned arm, so no candidate can become invisible to dedup.
+
+    The row returned is the SAME one the linear scan returned: the lowest id
+    satisfying either predicate.
+    """
+    wanted = candidate_norm(text)
+    kind_clause = "kind IS NULL" if kind is None else "kind = ?"
+    args = () if kind is None else (kind,)
+    best = conn.execute(
+        "SELECT * FROM memory_candidates WHERE norm_text = ? AND status IN"
+        f" {_CANDIDATE_LIVE_STATUSES} ORDER BY id LIMIT 1",
+        (wanted,),
+    ).fetchone()
     for row in conn.execute(
-        "SELECT * FROM memory_candidates WHERE status IN"
-        " ('pending','confirmed','rejected','merged','superseded') ORDER BY id"
+        f"SELECT * FROM memory_candidates WHERE ({kind_clause} OR norm_text IS NULL)"
+        f" AND status IN {_CANDIDATE_LIVE_STATUSES} ORDER BY id",
+        args,
     ):
-        existing = (row["proposed_text"] or "").casefold().strip()
+        if best is not None and row["id"] >= best["id"]:
+            break     # ordered by id: nothing further can beat the exact hit
+        existing = candidate_norm(row["proposed_text"])
         if wanted == existing or (kind == row["kind"] and _candidate_similar(text, existing)):
             return row
-    return None
+    return best
 
 
 def candidate_exists(conn, text, kind=None):
@@ -840,12 +881,13 @@ def candidate_add(conn, kind, text, *, reason=None, sensitivity="normal", confid
             conn.commit()
         return None
     cur = conn.execute(
-        "INSERT INTO memory_candidates (target, kind, proposed_text, reason, sensitivity,"
-        " confidence, source_table, source_id, source_trace_id, evidence, recurrence_count,"
-        " first_seen_at, last_seen_at, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'pending', ?)",
-        (target, kind, text, reason, sensitivity, confidence, source_table, source_id,
-         _trace_id(), str(evidence or "").strip() or None, now, now, now),
+        "INSERT INTO memory_candidates (target, kind, proposed_text, norm_text, reason,"
+        " sensitivity, confidence, source_table, source_id, source_trace_id, evidence,"
+        " recurrence_count, first_seen_at, last_seen_at, status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'pending', ?)",
+        (target, kind, text, candidate_norm(text), reason, sensitivity, confidence,
+         source_table, source_id, _trace_id(), str(evidence or "").strip() or None,
+         now, now, now),
     )
     conn.commit()
     return cur.lastrowid
@@ -1096,6 +1138,12 @@ def _migrate_steps(conn):
     # one just got it above). Created here, not in SCHEMA, so executescript can't reference
     # note_no before _migrate adds it to a pre-existing messages table.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_note_no ON messages(chat_id, note_no)")
+    # ...and a note_no-ONLY index beside it. `message_by_note_no` is owner-global
+    # (no chat_id in the WHERE), so the composite above — whose leading column is
+    # chat_id — cannot serve it and every «#N» lookup was a full table scan.
+    # `resolve_items` runs one such lookup PER id in a list, so a bulk «удали
+    # #3 #7 #12» scanned the whole messages table three times.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_note_no_only ON messages(note_no)")
     if "knowledge_state" not in columns:
         # Notes lifecycle (2026-07-17, notes/journals plan NTE-001): a knowledge
         # dimension beside the ingest `status`. Deterministic backfill, no LLM:
@@ -1211,6 +1259,20 @@ def _migrate_steps(conn):
         conn.execute("ALTER TABLE memory_candidates ADD COLUMN first_seen_at TEXT")
     if "last_seen_at" not in candidate_columns:
         conn.execute("ALTER TABLE memory_candidates ADD COLUMN last_seen_at TEXT")
+    if "norm_text" not in candidate_columns:
+        # Casefolded/stripped copy of proposed_text: the dedup lookup's indexed
+        # fast path (see candidate_match). Backfilled ONCE here, in Python,
+        # because SQLite's lower() is ASCII-only and every candidate Cara
+        # proposes is Russian. Guarded by the column check, so a steady-state
+        # start still writes nothing.
+        conn.execute("ALTER TABLE memory_candidates ADD COLUMN norm_text TEXT")
+        for row in conn.execute("SELECT id, proposed_text FROM memory_candidates").fetchall():
+            conn.execute("UPDATE memory_candidates SET norm_text = ? WHERE id = ?",
+                         (candidate_norm(row["proposed_text"]), row["id"]))
+    # Created here, not in SCHEMA, so executescript can't reference norm_text
+    # before the ALTER above adds it to a pre-existing table.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_norm"
+                 " ON memory_candidates(norm_text)")
     # WHERE-guarded: without it this rewrote every candidate row on EVERY start,
     # so a full disk failed here and startup could never limp back up.
     conn.execute(
@@ -1544,6 +1606,19 @@ def kv_get(conn, key, default=None):
 def kv_set(conn, key, value):
     conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
+
+
+def kv_delete(conn, *keys):
+    """Drop kv rows by exact key; returns how many existed. Every other module
+    reads and writes kv through kv_get/kv_set — the SQL belongs in here, so a
+    caller that has to INVALIDATE something (gcal's cached access token) does
+    not become the one place outside store.py that knows the table's shape."""
+    if not keys:
+        return 0
+    marks = ",".join("?" for _ in keys)
+    removed = conn.execute(f"DELETE FROM kv WHERE key IN ({marks})", keys).rowcount
+    conn.commit()
+    return removed
 
 
 # -- durable Telegram update inbox ------------------------------------------
@@ -1920,28 +1995,24 @@ def notes_lifecycle_counts(conn):
     return counts
 
 
-def journal_entries(conn, category, since_iso=None, limit=200):
-    """Confirmed entries in a journal category, oldest→newest (a diary reads
-    forward), optionally only those received since since_iso. Filtered in
-    Python because category matching must be Cyrillic-casefold-aware."""
-    target = str(category or "").casefold()
-    entries = []
-    for row in conn.execute(
-        "SELECT id, received_at, tg_date, forward_date, raw_text, summary, category"
-        " FROM messages WHERE status = 'confirmed' AND category IS NOT NULL ORDER BY id ASC"
-    ):
-        if row["category"].casefold() != target:
-            continue
-        if since_iso and (row["received_at"] or "") < since_iso:
-            continue
-        entries.append(row)
-        if len(entries) >= limit:
-            break
-    return entries
+# `journal_entries(category, since, limit=200)` lived here until 2026-07-26.
+# It was the ROW helper for a plain journal category, and `len()` of it was how
+# three callers counted a journal — which silently saturated at its default cap,
+# so a diary past 200 entries reported exactly «200» forever. Those callers now
+# use `journal_count` (exact, aggregated in SQL) and the page render uses
+# `journal_entries_page`; nothing but one test still called it, and keeping a
+# helper whose DEFAULT is the very trap this package was filed about is the same
+# shape as the retired `display_ids` deleted below.
 
 
 def journal_entries_page(conn, category, since_iso=None, offset=0, limit=5):
-    """Return one stable oldest-first journal page and its filtered total."""
+    """Return one stable oldest-first journal page and its filtered total.
+
+    The one reader of a plain journal category's rows. Still a Python scan of
+    every confirmed categorized message per call (Cyrillic casefolding is not
+    SQLite's `lower()`), so a page render costs one — callers that only need a
+    NUMBER must use `journal_count`, and a caller that needs both must fetch
+    once and pass the result on (see `NotesMixin._journal_page`)."""
     target = str(category or "").casefold()
     matched = []
     for row in conn.execute(
@@ -1958,14 +2029,32 @@ def journal_entries_page(conn, category, since_iso=None, offset=0, limit=5):
     return matched[start:start + size], len(matched)
 
 
-def journal_count(conn, category):
+def journal_count(conn, category, since_iso=None):
+    """How many confirmed entries a journal category holds (optionally only
+    those received since since_iso) — the EXACT number, with no cap.
+
+    Aggregated in SQL and matched over the handful of DISTINCT category names
+    rather than row by row in Python: this runs on every journal page render,
+    every «сохранила в дневник» ack and every digest line, and it used to be a
+    full per-row scan each time. The Python step remains because category
+    matching must be Cyrillic-casefold-aware, which SQLite's ASCII `lower()`
+    is not.
+    """
     target = str(category or "").casefold()
-    n = 0
-    for row in conn.execute(
-        "SELECT category FROM messages WHERE status = 'confirmed' AND category IS NOT NULL"):
-        if row["category"].casefold() == target:
-            n += 1
-    return n
+    sql = ("SELECT category, COUNT(*) AS n FROM messages"
+           " WHERE status = 'confirmed' AND category IS NOT NULL")
+    args = []
+    if since_iso:
+        # Same comparison the row filter used: a NULL received_at sorts before
+        # any real timestamp, so such a row is outside every «since» window.
+        sql += " AND COALESCE(received_at, '') >= ?"
+        args.append(since_iso)
+    sql += " GROUP BY category"
+    total = 0
+    for row in conn.execute(sql, tuple(args)):
+        if (row["category"] or "").casefold() == target:
+            total += row["n"]
+    return total
 
 
 # -- structured journal definitions/entries (plan v1.1 §5.4/§5.5) -------------
@@ -2089,6 +2178,30 @@ def journal_entries_for(conn, journal_id, since_iso=None, until_iso=None):
             continue
         out.append(r)
     return out
+
+
+def journal_entries_count_for(conn, journal_id, since_iso=None, until_iso=None):
+    """How many entries one structured journal holds in a window — counted in
+    SQL, without materializing every entry's text just to call len() on the
+    list. Same rows as `journal_entries_for`, same window comparisons.
+
+    The JOIN is kept even though nothing is selected from `messages`, because
+    in the row helper it is also a FILTER: an entry whose source message is
+    gone is invisible there. The `journal_entries.message_id` FK has no
+    ON DELETE CASCADE (the schema comment says the cascade is MANUAL), so
+    counting the table alone would over-report the page header and the digest
+    the day some path deletes a message without it — the two helpers must not
+    be able to disagree."""
+    sql = ("SELECT COUNT(*) AS n FROM journal_entries je"
+           " JOIN messages m ON m.id = je.message_id WHERE je.journal_id = ?")
+    args = [journal_id]
+    if since_iso:
+        sql += " AND COALESCE(je.occurred_at, '') >= ?"
+        args.append(since_iso)
+    if until_iso:
+        sql += " AND COALESCE(je.occurred_at, '') < ?"
+        args.append(until_iso)
+    return conn.execute(sql, tuple(args)).fetchone()["n"]
 
 
 # -- messages ----------------------------------------------------------------
@@ -2533,25 +2646,13 @@ def status_counts(conn):
 
 
 # -- display numbering -------------------------------------------------------
-# LIVE scheme: the stable per-chat `note_no` (ensure_note_no below) — assigned
-# once, monotonic, never reused; gaps on delete are intentional. display_ids()
-# is the LEGACY compacting 1..N scheme, retired 2026-06-29: kept only because a
-# legacy test still exercises it — do not use it for anything user-facing.
-
-def display_ids(conn):
-    """Visible-note ids in display order (oldest first); position = number. A CONFIRMED
-    journal entry lives in its dated journal (journal_show), so it's excluded from the
-    #N notes list/numbering; a still-suggested one (category not yet set) stays for its card."""
-    journals = {n.casefold() for n in journal_categories(conn)}
-    out = []
-    for r in conn.execute(
-            "SELECT id, category FROM messages WHERE status IN ('confirmed', 'suggested')"
-            " ORDER BY id ASC"):
-        if journals and (r["category"] or "").casefold() in journals:
-            continue
-        out.append(r["id"])
-    return out
-
+# ONE scheme: the stable per-chat `note_no` (ensure_note_no below) — assigned
+# once, monotonic, never reused; gaps on delete are intentional. The legacy
+# compacting 1..N scheme (`display_ids`) was retired 2026-06-29 and DELETED
+# 2026-07-26: it survived only for one test, computed DIFFERENT numbers than the
+# live path, and a contributor reading it could easily have taken it for the
+# numbering the boss actually sees. Which notes are visible in the #N lists is
+# `list_messages` (confirmed journal entries live in their dated journal).
 
 def note_no_counter_key(chat_id):
     return f"note_no_next:{chat_id}"

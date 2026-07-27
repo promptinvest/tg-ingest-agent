@@ -75,6 +75,18 @@ def reclaim_stale(conn):
 
 
 def claim_next(conn, now_iso=None):
+    """Claim the next due, retryable pending job. Returns the row dict or None.
+
+    The dict describes the row AFTER the claim. It used to be the raw SELECT
+    that PRECEDED the claiming UPDATE, so it reported `status='pending'` and
+    the pre-increment `attempts` — a handler asking "is this my last attempt?"
+    was off by one. Same shape as events.claim_next; no handler reads either
+    field today, which is why fixing it is free.
+
+    The UPDATE's `AND status = 'pending'` rowcount is deliberately not checked:
+    one process, one thread, one connection, so nothing can claim the row
+    between the SELECT and the UPDATE. If that invariant ever changes, this is
+    the line that has to change with it."""
     now_iso = now_iso or _now()
     row = conn.execute(
         "SELECT * FROM jobs WHERE status = 'pending' AND available_at <= ?"
@@ -89,7 +101,10 @@ def claim_next(conn, now_iso=None):
         (now_iso, row["id"]),
     )
     conn.commit()
-    return dict(row)
+    claimed = dict(row)
+    claimed.update(status="claimed", claimed_at=now_iso,
+                   attempts=(row["attempts"] or 0) + 1)
+    return claimed
 
 
 def complete(conn, job_id, result=None):

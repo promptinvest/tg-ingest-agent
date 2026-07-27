@@ -528,6 +528,69 @@ Budget warnings and the weekly digest keep their own dedicated notifiers.
   media cleanup, expiring abandoned pending actions) run as jobs that survive
   restart, retry on failure, and run under their own traces. The live
   request→reply path stays synchronous by design (single-user, low volume).
+  **Parity before Stage C (2026-07-26):** `events` mirrors `jobs` — a startup
+  `reclaim_stale` (a row left `claimed` by a crash belongs to a runner that no
+  longer exists, and `claim_next` only selects `pending`, so it would be stuck
+  forever), an `error` recorded by `fail()` (the column existed and stayed NULL,
+  which is the opposite of what an audit primitive is for), a `RETRY_DELAY_SECONDS`
+  backoff on that retry (without moving `available_at` both attempts burn inside
+  the same drain pass — the lesson `jobs.py` had already paid for, and a parity
+  fix that skipped it would have left the expensive half undone), and a
+  claimed-row dict that reflects the claim instead of the SELECT that preceded
+  it. The parity runs BOTH ways: `jobs.claim_next` had the same off-by-one dict
+  and got the same patch, so a Stage C reader is not left comparing two shapes.
+  The events side is inert while Stage A only *records* events — which is exactly
+  why it is cheaper to add now than to discover from a wedged queue afterwards.
+  Two deliberate asymmetries remain, both documented in the code: `events.fail`'s
+  `error` stays optional (its only failure path is a `COALESCE`-preserving retry,
+  and a later reason-less failure must not blank the first reason), and neither
+  `claim_next` checks the claiming UPDATE's rowcount — one process, one thread,
+  one connection, so nothing can race it.
+- **Performance & small-correctness sweep (2026-07-26).** The design decisions
+  worth keeping from it: (1) counting belongs in SQL — `len()` of the journal row
+  helper silently saturated at its 200-row cap, so a busy diary reported «200»
+  forever; the count helpers are exact, one of them keeps the row helper's
+  `JOIN messages` because that join is also a FILTER (the FK cascade is manual,
+  so a count without it could out-report the listing), and the page render both
+  reuses the rows it already holds when the page IS the all-time view and takes
+  the page `do_journal_show` already fetched — opening a journal used to run the
+  same full scan twice. What is NOT claimed: that scan still happens once per
+  render; bounding it would mean teaching SQLite Cyrillic casefolding, which is
+  its own task. (2) An index must match the QUERY, not the table:
+  `(chat_id, note_no)` cannot serve an owner-global `note_no` lookup. And an
+  index that serves an EXACT match does not bound a fuzzy one: the candidate
+  fast path is honestly scoped as "a duplicate proposal costs nothing", while a
+  brand-new proposal still walks its own `kind`. (3) A cached credential needs an
+  invalidation path — a calendar token Google has started refusing is dropped and
+  re-minted once, and the retry is bounded to one so a genuine permission problem
+  is reported (with Google's own words, scrubbed and truncated) rather than
+  retried in a loop. But an invalidation path needs a NARROW trigger: Google
+  answers 403 for "not you" *and* for "not so fast" (`rateLimitExceeded`,
+  `quotaExceeded`), and destroying a valid token on the second turns one call
+  into two mints plus two calls and re-mints for the rest of the quota window —
+  the fix would have been worse than the bug on exactly the branch where the
+  dependency asked for less traffic. So 401 always re-mints; 403 only when the
+  parsed message does not name a limit. (4) The transport-error taxonomy
+  (`TimeoutError` / `http.client.HTTPException`
+  / `OSError` / `ValueError`, after `HTTPError`/`URLError`) now covers
+  `storage.py` too — it is not dormant infrastructure once `SPACES_*` is set, it
+  is on the live save path — and `offload` treats itself as a durability EXTRA:
+  a Space that fails is logged and filed as an issue, never charged to the boss's
+  save. One issue per CALL, not per object: `recent_issues` is a bounded list and
+  `issues` is never pruned, so a 10-photo album filed ten rows would have pushed
+  every other real problem out of the window. With one deliberate exception to
+  the swallowing: a `sqlite3.Error` is re-raised, because a
+  database that cannot take the object key is not the Space misbehaving — it is
+  what WP2's containment guard exists for, and swallowing it would make this the
+  one place on the inbound path where a full disk passes silently. (5) `sorted(x)[n // 2]` is not a median. (6) Dead code that computes
+  *different* numbers than the live path (the retired 1..N `display_ids`) is
+  deleted rather than kept for a test — and so is dead code whose DEFAULT is the
+  trap the package was filed about (the capped journal row helper, whose only
+  remaining callers were tests). (7) One module owns the SQLite schema: the
+  calendar's token invalidation goes through a new `store.kv_delete` rather than
+  becoming the first non-store `DELETE FROM kv`. **Not done, deliberately:**
+  pruning `memory_candidates`. Memory is never pruned by policy; the cost fixed
+  here is the per-call scan, via an indexed `norm_text` column.
 
 ---
 

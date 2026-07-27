@@ -3696,12 +3696,12 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
                                       "received_at": "2026-06-21T10:00:00Z",
                                       "raw_text": "спасибо за тёплый день"})
         store.confirm_category(c, j1, store.ensure_category(c, "Благодарность"))
-        ids = store.display_ids(c)
-        self.assertIn(n1, ids)
-        self.assertNotIn(j1, ids)                       # journal entry out of #N numbering
         listed = [r["id"] for r in store.list_messages(c)]   # general notes list
-        self.assertNotIn(j1, listed)
-        self.assertTrue(any(e["id"] == j1 for e in store.journal_entries(c, "Благодарность")))
+        self.assertIn(n1, listed)
+        self.assertNotIn(j1, listed)        # journal entry out of the #N notes list
+        page, total = store.journal_entries_page(c, "Благодарность", limit=50)
+        self.assertEqual(total, 1)
+        self.assertTrue(any(e["id"] == j1 for e in page))
 
     def test_relational_message_detection(self):
         f = self.agent._is_relational_message
@@ -4868,9 +4868,15 @@ class EventJobTests(unittest.TestCase):
         self.assertIsNone(events.claim_next(self.conn))
 
     def test_event_retry_then_terminal(self):
-        events.add_event(self.conn, "retry_failed_job", max_attempts=2)
+        eid = events.add_event(self.conn, "retry_failed_job", max_attempts=2)
         c1 = events.claim_next(self.conn)
         events.fail(self.conn, c1["id"])  # attempts=1 < 2 -> back to pending
+        # ...but not claimable again in the SAME pass: the retry moves
+        # available_at forward (jobs.py's lesson — one blip must not spend the
+        # whole retry budget in a second).
+        self.assertIsNone(events.claim_next(self.conn))
+        self.conn.execute("UPDATE events SET available_at = ? WHERE id = ?",
+                          (store._now(), eid))
         c2 = events.claim_next(self.conn)
         self.assertEqual(c2["id"], c1["id"])
         events.fail(self.conn, c2["id"])  # attempts=2 == max -> terminal failed
@@ -10437,7 +10443,7 @@ class PurgeSemantics20260725Tests(unittest.TestCase):
         self.assertTrue(store.is_journal(self.conn, "Благодарности"))
         self.assertNotIn("Разное", store.known_categories(self.conn))  # stats still reset
         # the two things `kind='journal'` alone protects:
-        self.assertNotIn(entry, store.display_ids(self.conn))   # stays out of the #N lists
+        self.assertNotIn(entry, [r["id"] for r in store.list_messages(self.conn)])
         store.purge_execute(self.conn, "messages")              # «удали все заметки»
         self.assertIsNotNone(store.get_message(self.conn, entry))
         self.assertIsNotNone(store.journal_entry_get(self.conn, entry))
@@ -16417,6 +16423,904 @@ class ConversationVerbatimReadbackTests(unittest.TestCase):
         self.assertEqual(len(stored), store.CONVO_TEXT_MAX)
         self.assertTrue(transcript.startswith(stored))
         self.assertNotIn("КОНЕЦ-9", stored)      # the end of what he dictated is gone
+
+
+class PerfAndSmallCorrectness20260726Tests(unittest.TestCase):
+    """WP13 — performance and small-correctness sweep (T13.1–T13.11).
+
+    None of this changes what Cara says in an ordinary turn. What it changes is
+    what she does once the numbers get big (a journal past the 200-row read cap,
+    a candidate table that only ever grows, a «#N» lookup that scanned the whole
+    messages table) and what she does when a dependency misbehaves (a revoked
+    calendar token cached for another 58 minutes, a Space that times out on the
+    live save path, a Telegram conflict during which the scheduler must keep
+    ticking and a SIGTERM must still be prompt).
+    """
+
+    JOURNAL = "Дневник"
+
+    def setUp(self):
+        import tg_ingest_agent
+        from urllib.error import HTTPError
+        self.mod = tg_ingest_agent
+        self.HTTPError = HTTPError
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1",
+                               DB_PATH=str(Path(self.tmp.name) / "wp13.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        store.invalidate_vector_cache(self.conn)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    # -- helpers ---------------------------------------------------------------
+
+    def _note(self, tg_id, text="заметка", category="Разное", received_at=None):
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": tg_id,
+            "received_at": received_at or store._now(), "raw_text": text})
+        store.confirm_category(self.conn, rid, store.ensure_category(self.conn, category))
+        return rid
+
+    def _plans_of(self, call):
+        """`(sql, plan)` for every SELECT the REAL call issues.
+
+        EXPLAINing a hand-retyped copy of a query pins the INDEX's existence,
+        not that the live lookup uses it — re-add a `chat_id` to
+        `message_by_note_no`'s WHERE, or drop the exact arm of
+        `candidate_match`, and such a test stays green while the lookup goes
+        back to a full scan. So capture what the function actually sent:
+        sqlite3's trace callback hands back the EXPANDED statement, which
+        EXPLAINs without needing the parameters."""
+        seen = []
+        self.conn.set_trace_callback(seen.append)
+        try:
+            call()
+        finally:
+            self.conn.set_trace_callback(None)
+        out = []
+        for sql in seen:
+            if not sql.lstrip().upper().startswith("SELECT"):
+                continue
+            try:
+                rows = self.conn.execute("EXPLAIN QUERY PLAN " + sql).fetchall()
+            except sqlite3.Error:               # not re-explainable on its own
+                continue
+            out.append((sql, " ".join(str(r["detail"]) for r in rows)))
+        return out
+
+    def _days_ago(self, days):
+        return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    # -- T13.1 a note_no lookup must not scan the whole inbox -------------------
+
+    def test_a_note_no_lookup_uses_an_index_not_a_full_scan(self):
+        """`message_by_note_no` is owner-global — no chat_id in the WHERE — so
+        the (chat_id, note_no) index cannot serve it and every «#N» was a full
+        scan of `messages`. `resolve_items` runs one lookup PER id, so «удали
+        #3 #7 #12» scanned the table three times."""
+        for tg_id in range(1, 6):
+            self._note(tg_id)
+        plans = [(sql, plan) for sql, plan in
+                 self._plans_of(lambda: store.message_by_note_no(self.conn, 3))
+                 if "note_no" in sql and "messages" in sql]
+        self.assertEqual(len(plans), 1, plans)
+        sql, plan = plans[0]
+        self.assertIn("idx_messages_note_no_only", plan, sql)
+        self.assertNotIn("SCAN messages", plan, sql)
+        self.assertEqual(store.message_by_note_no(self.conn, 3)["note_no"], 3)
+
+    # -- T13.2 journal counts: exact, uncapped, and not a Python scan -----------
+
+    def test_a_journal_past_two_hundred_entries_reports_its_real_size(self):
+        """`len(journal_entries(...))` saturated at the helper's 200-row cap, so
+        every digest and every page header said exactly «200» forever after."""
+        store.set_category_kind(self.conn, self.JOURNAL, "journal")
+        for tg_id in range(1, 206):
+            self._note(tg_id, f"запись {tg_id}", self.JOURNAL)
+        self.assertEqual(store.journal_count(self.conn, self.JOURNAL), 205)
+        self.assertIn(f"{self.JOURNAL} — 205", review.journal_digest(self.conn, "ru"))
+        data = review.collect_note_outcomes(self.conn, self._days_ago(1),
+                                            datetime.now(timezone.utc))
+        self.assertIn((self.JOURNAL, 205), data["journal_entries_period"])
+
+    def test_journal_count_honours_the_since_window(self):
+        store.set_category_kind(self.conn, self.JOURNAL, "journal")
+        self._note(1, "старая", self.JOURNAL, received_at=self._days_ago(30))
+        self._note(2, "свежая", self.JOURNAL)
+        self._note(3, "не дневник", "Разное")          # another category entirely
+        self.assertEqual(store.journal_count(self.conn, self.JOURNAL), 2)
+        self.assertEqual(store.journal_count(self.conn, self.JOURNAL, self._days_ago(7)), 1)
+        self.assertEqual(store.journal_count(self.conn, "нетакого"), 0)
+
+    def test_structured_journal_counts_match_the_row_helper(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        gdef = store.journal_def_by_category(self.conn, "Благодарности", active_only=False)
+        self.assertIsNotNone(gdef)
+        for tg_id, when in ((1, self._days_ago(30)), (2, self._days_ago(1)), (3, None)):
+            self._note(tg_id, "спасибо", "Благодарности", received_at=when)
+        since = self._days_ago(7)
+        for kwargs in ({}, {"since_iso": since}, {"until_iso": since}):
+            self.assertEqual(
+                store.journal_entries_count_for(self.conn, gdef["id"], **kwargs),
+                len(store.journal_entries_for(self.conn, gdef["id"], **kwargs)), kwargs)
+        self.assertEqual(store.journal_entries_count_for(self.conn, gdef["id"]), 3)
+
+    def test_the_structured_count_cannot_out_report_the_listing(self):
+        """`journal_entries_for` INNER JOINs `messages`, so the join is also a
+        FILTER: an entry whose source message is gone is invisible to it. The
+        FK has no ON DELETE CASCADE (the cascade is MANUAL, by design), so a
+        COUNT over `journal_entries` alone would make the page header and the
+        digest over-report the day some path forgets it. FK enforcement is
+        switched off for one statement to manufacture exactly that orphan."""
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        gdef = store.journal_def_by_category(self.conn, "Благодарности", active_only=False)
+        rids = [self._note(tg_id, "спасибо", "Благодарности") for tg_id in (1, 2)]
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys=OFF")
+        self.conn.execute("DELETE FROM messages WHERE id = ?", (rids[0],))
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0], 2)
+        self.assertEqual(store.journal_entries_count_for(self.conn, gdef["id"]),
+                         len(store.journal_entries_for(self.conn, gdef["id"])))
+        self.assertEqual(store.journal_entries_count_for(self.conn, gdef["id"]), 1)
+
+    def test_the_journal_page_header_counts_the_whole_journal(self):
+        """Pins EXISTING behaviour — green before the fix too, and deliberately
+        so: «(всего N)» was always the all-time size and WP13 only changed what
+        it costs. What this guards is that the new `all_total = total` shortcut
+        can never become the FILTERED count."""
+        store.set_category_kind(self.conn, self.JOURNAL, "journal")
+        for tg_id in (1, 2):
+            self._note(tg_id, "давняя запись", self.JOURNAL,
+                       received_at=self._days_ago(30))
+        for tg_id in (3, 4, 5):
+            self._note(tg_id, "сегодняшняя запись", self.JOURNAL)
+        with mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_journal_show(1, "ru", {"category": self.JOURNAL,
+                                                 "period": "day"})
+        out = rep.call_args[0][1]
+        self.assertIn("3 записей", out)
+        self.assertIn("(всего 5)", out)
+
+    def test_opening_a_journal_scans_the_notes_once(self):
+        """The measurable half of T13.2. Opening a plain journal used to fetch
+        the same page TWICE — once for `do_journal_show`'s emptiness check,
+        once inside `_journal_page` — and each fetch is a full Python scan of
+        every confirmed categorized message. Plus a third scan for the all-time
+        total before WP13. One render, one scan."""
+        store.set_category_kind(self.conn, self.JOURNAL, "journal")
+        for tg_id in range(1, 8):
+            self._note(tg_id, f"запись {tg_id}", self.JOURNAL)
+        real = store.journal_entries_page
+        fetches = []
+
+        def counted(*args, **kwargs):
+            fetches.append(args[1])
+            return real(*args, **kwargs)
+
+        with mock.patch.object(store, "journal_entries_page", side_effect=counted), \
+                mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_journal_show(1, "ru", {"category": self.JOURNAL,
+                                                 "period": "all"})
+        self.assertEqual(len(fetches), 1, fetches)
+        out = rep.call_args[0][1]
+        self.assertIn("(всего 7)", out)          # all seven, uncapped
+        listed = [ln for ln in out.splitlines() if ln.startswith("  #")]
+        self.assertEqual(len(listed), self.agent.JOURNAL_PAGE_SIZE)   # still one page
+
+    def test_opening_a_structured_journal_fetches_its_entries_once(self):
+        """Same for a definition-backed journal, whose rows come from
+        `journal_entries_for`; its header takes the COUNT arm (`gdef is not
+        None`) instead of re-fetching every entry to call len() on it."""
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        for tg_id in range(1, 8):
+            self._note(tg_id, f"спасибо {tg_id}", "Благодарности")
+        real_rows = store.journal_entries_for
+        rows_calls, count_calls = [], []
+
+        def counted_rows(*args, **kwargs):
+            rows_calls.append(args[1])
+            return real_rows(*args, **kwargs)
+
+        real_count = store.journal_entries_count_for
+
+        def counted_count(*args, **kwargs):
+            count_calls.append(args[1])
+            return real_count(*args, **kwargs)
+
+        with mock.patch.object(store, "journal_entries_for", side_effect=counted_rows), \
+                mock.patch.object(store, "journal_entries_count_for",
+                                  side_effect=counted_count), \
+                mock.patch.object(self.agent, "reply") as rep:
+            self.agent.do_journal_show(1, "ru", {"category": "Благодарности",
+                                                 "period": "day"})
+        self.assertEqual(len(rows_calls), 1, rows_calls)
+        self.assertEqual(len(count_calls), 1, count_calls)
+        self.assertIn("(всего 7)", rep.call_args[0][1])
+
+    def test_an_all_time_header_with_a_filter_still_reports_the_whole_journal(self):
+        """The `all_total = total` shortcut is valid ONLY for the unfiltered
+        all-time page. With a person filter the header must still say how big
+        the journal is — five entries here, none of them about «Аня».
+
+        Pins existing behaviour — green before the fix too, deliberately: the
+        number was never meant to change, only what it costs (see
+        `test_opening_a_structured_journal_fetches_its_entries_once`). This is
+        the guard that keeps the shortcut from ever widening to a filtered
+        page."""
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        for tg_id in range(1, 6):
+            self._note(tg_id, f"спасибо {tg_id}", "Благодарности")
+        text, _keyboard, total = self.agent._journal_page(
+            "ru", "Благодарности", "all", 0, "tok", person="Аня")
+        self.assertEqual(total, 0)               # the filter matched nothing...
+        self.assertIn("(всего 5)", text)         # ...and the journal is still five
+
+    # -- T13.3 candidate dedup must not re-tokenize the whole table -------------
+
+    def test_candidate_dedup_has_an_indexed_exact_path(self):
+        store.candidate_add(self.conn, "fact", "Босс живёт в Москве")
+        exact = [(sql, plan) for sql, plan in self._plans_of(
+            lambda: store.candidate_match(self.conn, "Босс живёт в Москве", "fact"))
+            if "norm_text =" in sql]
+        self.assertEqual(len(exact), 1, exact)   # the arm the live call takes
+        self.assertNotIn("SCAN memory_candidates", exact[0][1], exact[0][0])
+        self.assertIn("idx_candidates_norm", exact[0][1], exact[0][0])
+        # ...and the dedup itself still behaves: a case/space variant folds in.
+        self.assertIsNone(store.candidate_add(self.conn, "fact", "  БОСС ЖИВЁТ В МОСКВЕ  "))
+        row = store.candidate_match(self.conn, "босс живёт в москве", "fact")
+        self.assertEqual(row["recurrence_count"], 2)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM memory_candidates").fetchone()[0], 1)
+
+    def test_a_candidate_row_without_norm_text_is_still_deduped(self):
+        """The scanned arm keeps NULL `norm_text` rows visible, so nothing
+        written before the column existed becomes invisible to dedup and gets
+        re-proposed (and re-billed) forever.
+
+        A COMPATIBILITY pin — green before the fix too (there the column did
+        not exist and the linear scan found the row anyway). Its job is to stay
+        green if someone later moves the exact arm's predicate into the scan."""
+        self.conn.execute(
+            "INSERT INTO memory_candidates (kind, proposed_text, status, created_at)"
+            " VALUES ('fact', 'Босс любит горы', 'pending', ?)", (store._now(),))
+        self.conn.commit()
+        self.assertTrue(store.candidate_exists(self.conn, "босс любит горы", "fact"))
+        self.assertIsNone(store.candidate_add(self.conn, "fact", "Босс любит горы"))
+
+    def test_similarity_dedup_is_unchanged_and_still_kind_scoped(self):
+        first = store.candidate_add(self.conn, "workflow", "Босс просит короткие ответы утром")
+        self.assertIsNotNone(first)
+        self.assertIsNone(store.candidate_add(  # near-duplicate, same kind -> folded
+            self.conn, "workflow", "Босс просит утром короткие ответы"))
+        self.assertIsNotNone(store.candidate_add(  # same words, other kind -> its own row
+            self.conn, "fact", "Босс просит утром короткие ответы"))
+        self.assertIsNone(store.candidate_match(self.conn, "что-то совсем другое", "fact"))
+
+    def test_the_oldest_match_still_wins_over_a_later_exact_one(self):
+        """Semantics pinned: the linear scan returned the LOWEST id satisfying
+        either predicate, and the indexed fast path must not quietly promote a
+        later exact row over an earlier fuzzy one."""
+        older = store.candidate_add(self.conn, "fact", "Босс ездит в Москву каждый месяц")
+        self.conn.execute(
+            "INSERT INTO memory_candidates (kind, proposed_text, norm_text, status, created_at)"
+            " VALUES ('fact', 'Босс каждый месяц ездит в Москву',"
+            " 'босс каждый месяц ездит в москву', 'pending', ?)", (store._now(),))
+        self.conn.commit()
+        match = store.candidate_match(self.conn, "Босс каждый месяц ездит в Москву", "fact")
+        self.assertEqual(match["id"], older)
+
+    def test_the_norm_text_column_is_backfilled_on_upgrade(self):
+        path = Path(self.tmp.name) / "old.db"
+        raw = sqlite3.connect(str(path))
+        raw.execute(
+            "CREATE TABLE memory_candidates (id INTEGER PRIMARY KEY,"
+            " target TEXT NOT NULL DEFAULT 'boss_profile', kind TEXT NOT NULL,"
+            " proposed_text TEXT NOT NULL, reason TEXT,"
+            " sensitivity TEXT NOT NULL DEFAULT 'normal',"
+            " confidence REAL NOT NULL DEFAULT 0.5, source_table TEXT, source_id INTEGER,"
+            " status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,"
+            " decided_at TEXT)")
+        raw.execute("INSERT INTO memory_candidates (kind, proposed_text, created_at)"
+                    " VALUES ('fact', '  Босс Живёт В Москве  ',"
+                    " '2026-01-01T00:00:00+00:00')")
+        raw.commit()
+        raw.close()
+        conn = store.open_db(path)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT norm_text FROM memory_candidates").fetchone()["norm_text"],
+                "босс живёт в москве")
+            self.assertIsNotNone(store.candidate_match(conn, "БОСС ЖИВЁТ В МОСКВЕ", "fact"))
+        finally:
+            conn.close()
+
+    # -- T13.4 a reaction update carries a chat id ------------------------------
+
+    def test_a_reaction_update_records_its_chat_id(self):
+        """`message_reaction` is one of the allowed_updates we ask for, and its
+        chat sits at the TOP level — so the inbox row and the observability
+        event were both written with chat_id NULL."""
+        update = {"update_id": 700, "message_reaction": {
+            "chat": {"id": 1}, "user": {"id": 1}, "message_id": 5,
+            "new_reaction": [{"type": "emoji", "emoji": "👍"}]}}
+        self.assertEqual(self.mod.Agent._update_chat_id(update), 1)
+        self.agent.process_update_batch([update])
+        self.assertEqual(store.telegram_update_get(self.conn, 700)["chat_id"], 1)
+        event = self.conn.execute(
+            "SELECT chat_id FROM events WHERE kind = 'telegram_message_received'"
+            " ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertEqual(event["chat_id"], 1)
+
+    # -- T13.5 a rejected calendar token is dropped, not cached for an hour -----
+
+    def _gcal_cfg(self):
+        key = Path(self.tmp.name) / "sa.json"
+        key.write_text(json.dumps({"client_email": "sa@p.iam.gserviceaccount.com",
+                                   "private_key": "PEM"}), encoding="utf-8")
+        cfg = make_config()
+        cfg.gcal_calendar_id = "me@gmail.com"
+        cfg.gcal_key_file = str(key)
+        return cfg
+
+    @staticmethod
+    def _json_response(payload):
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(payload).encode("utf-8")
+        return _Response()
+
+    def _http_error(self, code, body):
+        import io
+        return self.HTTPError("https://www.googleapis.com/calendar/v3/x", code,
+                              "err", {}, io.BytesIO(json.dumps(body).encode("utf-8")))
+
+    EVENT = {"title": "созвон", "start_utc": "2026-08-01T10:00:00+00:00",
+             "duration_minutes": 30}
+
+    def _drive_calendar(self, insert_faults):
+        """Run insert_event against a scripted Google. `insert_faults` is what
+        each calendar POST does: an exception to raise, or None for success.
+        Returns (result_or_error, minted_tokens, bearers_used)."""
+        cfg = self._gcal_cfg()
+        minted, bearers = [], []
+
+        def fake_urlopen(request, timeout=None):
+            if request.full_url == gcal.GOOGLE_TOKEN_URI:
+                minted.append(f"T{len(minted) + 1}")
+                return self._json_response({"access_token": minted[-1], "expires_in": 3600})
+            bearers.append(request.headers.get("Authorization"))
+            fault = insert_faults[len(bearers) - 1]
+            if fault is not None:
+                raise fault()
+            return self._json_response({"id": "e1", "htmlLink": "https://cal/e1"})
+
+        with mock.patch.object(gcal, "_sign_rs256", return_value=b"sig"), \
+                mock.patch.object(gcal, "urlopen", side_effect=fake_urlopen):
+            try:
+                return gcal.insert_event(cfg, self.conn, self.EVENT), minted, bearers
+            except gcal.CalendarError as exc:
+                return exc, minted, bearers
+
+    def test_a_rejected_calendar_token_is_reminted_once_and_the_event_lands(self):
+        result, minted, bearers = self._drive_calendar([
+            lambda: self._http_error(401, {"error": {"message": "Invalid Credentials"}}),
+            None,
+        ])
+        self.assertEqual(result, "https://cal/e1")
+        self.assertEqual(minted, ["T1", "T2"])              # the cache was dropped
+        self.assertEqual(bearers, ["Bearer T1", "Bearer T2"])
+        self.assertEqual(store.kv_get(self.conn, "gcal_token"), "T2")
+
+    def test_a_persistent_permission_failure_reports_googles_own_words(self):
+        leaked = "ya29c0ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef"
+        forbidden = {"error": {"message":
+                               f"The caller does not have permission ({leaked})"}}
+        result, minted, _bearers = self._drive_calendar([
+            lambda: self._http_error(403, forbidden),
+            lambda: self._http_error(403, forbidden),
+        ])
+        self.assertIsInstance(result, gcal.CalendarError)
+        self.assertIn("The caller does not have permission", str(result))
+        self.assertNotIn(leaked, str(result))               # scrub_secrets ran
+        self.assertEqual(len(minted), 2)                    # exactly ONE retry
+        self.assertIsNone(store.kv_get(self.conn, "gcal_token"))
+        self.assertIsNone(store.kv_get(self.conn, "gcal_token_exp"))
+
+    def test_a_non_auth_calendar_failure_is_not_retried(self):
+        result, minted, bearers = self._drive_calendar([
+            lambda: self._http_error(404, {"error": {"message": "Not Found"}}),
+        ])
+        self.assertIsInstance(result, gcal.CalendarError)
+        self.assertIn("Not Found", str(result))
+        self.assertEqual((len(minted), len(bearers)), (1, 1))
+        self.assertEqual(store.kv_get(self.conn, "gcal_token"), "T1")   # still valid
+
+    def test_a_rate_limited_403_keeps_the_cached_token(self):
+        """Calendar v3 answers 403 for «not you» AND for «not so fast»
+        (rateLimitExceeded / userRateLimitExceeded / dailyLimitExceeded /
+        quotaExceeded). Treating the second as a credential failure destroyed a
+        perfectly good cached token, re-minted, retried with no backoff, failed
+        and dropped it AGAIN: four calls where there was one, plus a re-mint for
+        every later call in that quota window — the fix worse than the bug, on
+        the one branch where the dependency had just asked for less traffic."""
+        for message in ("Rate Limit Exceeded", "User Rate Limit Exceeded",
+                        "Calendar usage limits exceeded.",
+                        "Quota exceeded for quota metric 'Queries'"):
+            store.kv_delete(self.conn, *gcal.TOKEN_KV_KEYS)
+            result, minted, bearers = self._drive_calendar([
+                lambda: self._http_error(403, {"error": {"message": message}}),
+            ])
+            self.assertIsInstance(result, gcal.CalendarError, message)
+            self.assertNotIsInstance(result, gcal._AuthRejected, message)
+            self.assertIn(message.rstrip("."), str(result))
+            self.assertEqual((len(minted), len(bearers)), (1, 1), message)
+            self.assertEqual(store.kv_get(self.conn, "gcal_token"), "T1", message)
+
+    def test_a_token_request_failure_carries_googles_own_description(self):
+        """The OAuth token endpoint uses the OTHER body shape: `error` is a
+        plain string and the sentence worth reading is `error_description`.
+        Nothing exercised that arm — every gcal test raised from the calendar
+        POST."""
+        import io
+        cfg = self._gcal_cfg()
+        body = {"error": "invalid_grant",
+                "error_description": "Invalid JWT Signature."}
+        failure = self.HTTPError(gcal.GOOGLE_TOKEN_URI, 400, "Bad Request", {},
+                                 io.BytesIO(json.dumps(body).encode("utf-8")))
+        with mock.patch.object(gcal, "_sign_rs256", return_value=b"sig"), \
+                mock.patch.object(gcal, "urlopen", side_effect=failure):
+            with self.assertRaises(gcal.CalendarError) as caught:
+                gcal.get_access_token(cfg, self.conn)
+        self.assertIn("HTTP 400", str(caught.exception))
+        self.assertIn("invalid_grant", str(caught.exception))
+        self.assertIn("Invalid JWT Signature", str(caught.exception))
+
+    def test_a_huge_or_unparseable_error_body_is_bounded(self):
+        """The detail is a bounded slice, never the whole document: an error
+        page reaches the boss, the issue row and the journal."""
+        import io
+        cfg = self._gcal_cfg()
+        prefix = "calendar insert failed with HTTP 404: "
+
+        def _fail_with(raw):
+            failure = self.HTTPError("https://www.googleapis.com/calendar/v3/x",
+                                     404, "err", {}, io.BytesIO(raw))
+            with mock.patch.object(gcal, "_sign_rs256", return_value=b"sig"), \
+                    mock.patch.object(gcal, "urlopen", side_effect=failure):
+                with self.assertRaises(gcal.CalendarError) as caught:
+                    gcal._insert_once(cfg, "T1", self.EVENT)
+            message = str(caught.exception)
+            self.assertTrue(message.startswith(prefix), message)
+            return message[len(prefix):]
+
+        detail = _fail_with(json.dumps({"error": {"message": "сбой " * 400}}).encode("utf-8"))
+        self.assertEqual(len(detail), gcal.ERROR_BODY_CHARS)   # ~2 KB body, 200 chars kept
+        self.assertTrue(detail.startswith("сбой"))
+        # ...and a body that is not JSON at all still reaches the boss as itself.
+        self.assertIn("502 Bad Gateway",
+                      _fail_with(b"<html><body>502 Bad Gateway</body></html>"))
+
+    # -- T13.6 events.py parity with jobs.py -----------------------------------
+
+    def test_events_reclaim_stale_mirrors_jobs(self):
+        events.add_event(self.conn, "proactive_tick", max_attempts=2)
+        crashed = events.claim_next(self.conn)
+        self.assertIsNone(events.claim_next(self.conn))      # wedged: nobody owns it
+        self.assertEqual(events.reclaim_stale(self.conn), (1, 0))
+        again = events.claim_next(self.conn)
+        self.assertEqual(again["id"], crashed["id"])
+        self.assertEqual(events.reclaim_stale(self.conn), (0, 1))   # budget spent
+        row = self.conn.execute("SELECT status, error FROM events WHERE id = ?",
+                                (crashed["id"],)).fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("reclaimed", row["error"])
+        self.assertEqual(events.reclaim_stale(self.conn), (0, 0))   # idempotent
+
+    def _reclaimable_now(self, event_id):
+        """Undo the retry backoff so the next claim happens in this test."""
+        self.conn.execute("UPDATE events SET available_at = ? WHERE id = ?",
+                          (store._now(), event_id))
+        self.conn.commit()
+
+    def test_events_fail_records_the_reason(self):
+        eid = events.add_event(self.conn, "retry_failed_job", max_attempts=2)
+        events.claim_next(self.conn)
+        self.assertFalse(events.fail(self.conn, eid, "ConnectionResetError()"))
+        row = self.conn.execute("SELECT status, error FROM events WHERE id = ?",
+                                (eid,)).fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertIn("ConnectionResetError", row["error"])
+        self._reclaimable_now(eid)
+        events.claim_next(self.conn)
+        self.assertTrue(events.fail(self.conn, eid, "boom, terminally"))
+        row = self.conn.execute("SELECT status, error, finished_at FROM events"
+                                " WHERE id = ?", (eid,)).fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("terminally", row["error"])
+        self.assertIsNotNone(row["finished_at"])
+
+    def test_an_event_retry_waits_instead_of_burning_both_attempts_at_once(self):
+        """jobs.py's most expensive lesson, mirrored: without moving
+        `available_at` the retry is claimable again in the SAME drain pass, so
+        one network blip spends the whole retry budget in a second. Landing the
+        twin without this would be a parity fix that skipped the costly half."""
+        eid = events.add_event(self.conn, "retry_failed_job", max_attempts=2)
+        events.claim_next(self.conn)
+        self.assertFalse(events.fail(self.conn, eid, "network blip"))
+        row = self.conn.execute("SELECT status, available_at FROM events WHERE id = ?",
+                                (eid,)).fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertGreater(row["available_at"], datetime.now(timezone.utc).isoformat())
+        self.assertIsNone(events.claim_next(self.conn))     # not in this pass
+        self._reclaimable_now(eid)
+        self.assertEqual(events.claim_next(self.conn)["id"], eid)
+        self.assertEqual(events.RETRY_DELAY_SECONDS, jobs.RETRY_DELAY_SECONDS)
+
+    def test_a_reasonless_event_failure_keeps_the_first_reason(self):
+        """`error = COALESCE(?, error)`: a later failure that carries no reason
+        must PRESERVE the one already recorded, not blank it. That branch is
+        why `error` stays optional here while jobs.fail requires it."""
+        eid = events.add_event(self.conn, "retry_failed_job", max_attempts=3)
+        events.claim_next(self.conn)
+        events.fail(self.conn, eid, "ConnectionResetError('reset by peer')")
+        self._reclaimable_now(eid)
+        events.claim_next(self.conn)
+        events.fail(self.conn, eid)                         # no reason this time
+        row = self.conn.execute("SELECT status, error FROM events WHERE id = ?",
+                                (eid,)).fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertIn("reset by peer", row["error"])
+
+    def test_a_claimed_event_row_describes_the_claim(self):
+        """The dict came from the SELECT that PRECEDED the claiming UPDATE, so
+        it reported 'pending' and the pre-increment attempt count."""
+        events.add_event(self.conn, "proactive_tick", max_attempts=3)
+        claimed = events.claim_next(self.conn)
+        self.assertEqual(claimed["status"], "claimed")
+        self.assertEqual(claimed["attempts"], 1)
+        self.assertIsNotNone(claimed["claimed_at"])
+        stored = self.conn.execute("SELECT status, attempts FROM events WHERE id = ?",
+                                   (claimed["id"],)).fetchone()
+        self.assertEqual((stored["status"], stored["attempts"]), ("claimed", 1))
+
+    def test_a_claimed_job_row_describes_the_claim_too(self):
+        """Parity runs BOTH ways. The same off-by-one dict lived in the LIVE
+        queue — fixing only the dormant twin would have left `events` and
+        `jobs` diverging in the opposite direction from the task's own goal."""
+        jobs.add_job(self.conn, "maintenance", "media_cleanup", max_attempts=3)
+        claimed = jobs.claim_next(self.conn)
+        self.assertEqual(claimed["status"], "claimed")
+        self.assertEqual(claimed["attempts"], 1)
+        self.assertIsNotNone(claimed["claimed_at"])
+        self.assertEqual(jobs.payload_of(claimed), {})      # still a usable job dict
+        stored = self.conn.execute("SELECT status, attempts FROM jobs WHERE id = ?",
+                                   (claimed["id"],)).fetchone()
+        self.assertEqual((stored["status"], stored["attempts"]), ("claimed", 1))
+
+    def test_startup_reclaims_stale_events(self):
+        events.add_event(self.conn, "proactive_tick", max_attempts=2)
+        events.claim_next(self.conn)                        # "crash" mid-run
+        self.conn.close()
+        agent = self.mod.Agent(self.cfg)                    # restart
+        try:
+            row = agent.conn.execute("SELECT status FROM events LIMIT 1").fetchone()
+            self.assertEqual(row["status"], "pending")
+        finally:
+            self.conn = agent.conn                          # tearDown closes it
+
+    # -- T13.7 the Space is on the live message path ---------------------------
+
+    def _spaces_cfg(self):
+        return make_config(STORAGE_BACKEND="spaces", SPACES_KEY="k", SPACES_SECRET="s",
+                           SPACES_BUCKET="b", SPACES_ENDPOINT="https://fra1.example",
+                           DB_PATH=str(Path(self.tmp.name) / "wp13.db"),
+                           MEDIA_DIR=str(Path(self.tmp.name) / "media"))
+
+    def test_put_object_wraps_bare_transport_faults(self):
+        import http.client
+        cfg = self._spaces_cfg()
+        for fault in (TimeoutError("read timed out"), ConnectionResetError("reset"),
+                      http.client.IncompleteRead(b"half"), ValueError("bad body")):
+            with mock.patch.object(storage, "urlopen", side_effect=fault):
+                with self.assertRaises(storage.StorageError, msg=repr(fault)):
+                    storage.put_object(cfg, "media/x.jpg", b"bytes")
+
+    def _plant_images(self, rid, n):
+        for i in range(1, n + 1):
+            path = Path(self.tmp.name) / f"photo{i}.jpg"
+            path.write_bytes(b"JPEG" + bytes([i]))
+            store.insert_image(self.conn, rid, i,
+                               {"file_id": f"F{i}", "file_unique_id": f"U{i}"}, str(path))
+
+    def test_offload_never_costs_the_boss_his_save(self):
+        cfg = self._spaces_cfg()
+        rid = self._note(1, "заметка с фото")
+        self._plant_images(rid, 1)
+        with mock.patch.object(storage, "put_object",
+                               side_effect=RuntimeError("something nobody predicted")):
+            self.assertEqual(storage.offload(cfg, self.conn, rid), 0)
+        issues = [r["kind"] for r in self.conn.execute("SELECT kind FROM issues")]
+        self.assertIn("storage_offload_failed", issues)
+        self.assertIsNone(store.message_images(self.conn, rid)[0]["object_key"])
+        # ...but a BROKEN DATABASE is not a Spaces problem. It must still reach
+        # the inbound path's sqlite3 containment guard (WP2) — which pauses and
+        # lets Telegram redeliver — instead of becoming the one place on that
+        # path where a full disk passes silently. (This half pins behaviour that
+        # was already there: the pre-WP13 `except StorageError` let an
+        # OperationalError escape anyway. It guards the new blanket catch.)
+        with mock.patch.object(storage, "put_object", return_value="media/photo.jpg"), \
+                mock.patch.object(store, "set_image_object_key",
+                                  side_effect=sqlite3.OperationalError("disk is full")):
+            with self.assertRaises(sqlite3.OperationalError):
+                storage.offload(cfg, self.conn, rid)
+
+    def test_one_bad_object_neither_stops_the_album_nor_floods_the_issue_log(self):
+        """Two things a single-image fixture cannot see. (1) A failure must
+        `continue`, not abandon the rest of a 10-photo album. (2) ONE issue row
+        per call: `recent_issues` is a bounded LIMIT list and `issues` is never
+        pruned, so an album filing one row per photo would push every other real
+        problem out of the operator's window."""
+        cfg = self._spaces_cfg()
+        rid = self._note(1, "альбом из трёх фото")
+        self._plant_images(rid, 3)
+        attempted = []
+
+        def flaky(_cfg, key, _data, _content_type="application/octet-stream"):
+            attempted.append(key)
+            if len(attempted) == 1:
+                raise storage.StorageError("Spaces PUT failed: timed out")
+            if len(attempted) == 2:
+                raise TimeoutError("read timed out")
+            return key
+
+        with mock.patch.object(storage, "put_object", side_effect=flaky):
+            self.assertEqual(storage.offload(cfg, self.conn, rid), 1)
+        self.assertEqual(len(attempted), 3)          # the album was not abandoned
+        keys = [img["object_key"] for img in store.message_images(self.conn, rid)]
+        self.assertEqual([keys[0], keys[1]], [None, None])
+        self.assertIsNotNone(keys[2])
+        rows = self.conn.execute(
+            "SELECT detail FROM issues WHERE kind = 'storage_offload_failed'").fetchall()
+        self.assertEqual(len(rows), 1, [r["detail"] for r in rows])
+        self.assertIn("2 of 3", rows[0]["detail"])
+        self.assertIn("timed out", rows[0]["detail"])
+
+    def test_a_dead_space_does_not_cost_the_boss_his_confirmation(self):
+        """The update level, not just the helper: a Space refusing every PUT
+        must not turn a saved note into an error. `finalize` runs the offload
+        on the ordinary save path, so if it raised, the whole update would go
+        to the dead-letter road with the note already written."""
+        self.agent.cfg.storage_backend = "spaces"
+        self.agent.cfg.spaces_key = "k"
+        self.agent.cfg.spaces_secret = "s"
+        self.agent.cfg.spaces_bucket = "cara-media"
+        local = Path(self.tmp.name) / "forwarded.jpg"
+        local.write_bytes(b"\xff\xd8jpeg")
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 910,
+               "caption": "разбор поста",
+               "forward_origin": {"type": "channel", "title": "Chan"},
+               "photo": [{"file_id": "F9", "file_unique_id": "U9",
+                          "width": 90, "height": 90}]}
+        with mock.patch.object(self.agent, "download_file", return_value=str(local)), \
+                mock.patch.object(self.agent, "suggest_row", return_value=None) as card, \
+                mock.patch.object(storage, "put_object",
+                                  side_effect=storage.StorageError("Spaces PUT failed")), \
+                mock.patch.object(self.mod, "tg_call", return_value={"message_id": 7}):
+            self.agent.finalize([msg])
+        self.assertTrue(card.called)                 # the boss still gets his card
+        row = self.conn.execute(
+            "SELECT id FROM messages WHERE tg_message_id = 910").fetchone()
+        self.assertIsNotNone(row)                    # ...and the note is stored
+        self.assertEqual(len(store.message_images(self.conn, row["id"])), 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM issues WHERE kind = 'storage_offload_failed'"
+        ).fetchone()[0], 1)
+
+    # -- T13.8 the multipart senders must report what Telegram said ------------
+
+    def _telegram_400(self):
+        import io
+        body = {"ok": False, "description": "Bad Request: PHOTO_INVALID_DIMENSIONS",
+                "parameters": {"retry_after": 7}}
+        return self.HTTPError("https://api.telegram.org/botX/sendPhoto", 400,
+                              "Bad Request", {},
+                              io.BytesIO(json.dumps(body).encode("utf-8")))
+
+    def test_multipart_senders_carry_the_description_and_retry_after(self):
+        for call in (lambda: tg_api.tg_send_document("t", 1, "cal.ics", b"BEGIN"),
+                     lambda: tg_api.tg_send_photo("t", 1, ("p.jpg", b"JPEG"),
+                                                  by_file_id=False)):
+            with mock.patch.object(tg_api, "urlopen", side_effect=self._telegram_400()):
+                with self.assertRaises(tg_api.TelegramError) as caught:
+                    call()
+            self.assertIn("PHOTO_INVALID_DIMENSIONS", str(caught.exception))
+            self.assertEqual(caught.exception.status, 400)
+            self.assertEqual(caught.exception.retry_after, 7)
+
+    def test_an_unreadable_error_body_still_yields_the_status(self):
+        """Pins existing behaviour — the old code reported the status on an
+        unparseable body too. It guards the extracted helper's `except`."""
+        import io
+        broken = self.HTTPError("https://api.telegram.org/botX/sendDocument", 502,
+                                "Bad Gateway", {}, io.BytesIO(b"<html>nginx"))
+        with mock.patch.object(tg_api, "urlopen", side_effect=broken):
+            with self.assertRaises(tg_api.TelegramError) as caught:
+                tg_api.tg_send_document("t", 1, "cal.ics", b"BEGIN")
+        self.assertEqual(caught.exception.status, 502)
+        self.assertIsNone(caught.exception.retry_after)
+
+    def test_tg_call_itself_reports_the_description_and_retry_after(self):
+        """The body parsing `http_error` was factored OUT of had no test of its
+        own anywhere in the suite — and `tg_call`'s `retry_after` is what feeds
+        the poll loop's rate-limit backoff, so the refactor's own regression
+        window sat under the one branch T13.11 is about.
+
+        Green before the fix too, necessarily: it pins behaviour the refactor
+        was supposed to PRESERVE. Its value is that the extraction now has a
+        direct test instead of only transitive coverage through the senders."""
+        import io
+        body = {"ok": False, "description": "Too Many Requests: retry later",
+                "parameters": {"retry_after": 17}}
+        failure = self.HTTPError("https://api.telegram.org/botX/getUpdates", 429,
+                                 "Too Many Requests", {},
+                                 io.BytesIO(json.dumps(body).encode("utf-8")))
+        with mock.patch.object(tg_api, "urlopen", side_effect=failure):
+            with self.assertRaises(tg_api.TelegramError) as caught:
+                tg_api.tg_call("t", "getUpdates", {"offset": 1})
+        self.assertIn("getUpdates failed with HTTP 429", str(caught.exception))
+        self.assertIn("retry later", str(caught.exception))
+        self.assertEqual(caught.exception.status, 429)
+        self.assertEqual(caught.exception.retry_after, 17)
+
+    def test_a_refused_file_download_says_why(self):
+        """`tg_download` was the last sender reporting a bare status — and it
+        is on the LIVE ingest path, where «file is too big» is the line the
+        voice reply text exists for (`"too big" in str(exc).lower()`)."""
+        import io
+        body = {"ok": False, "description": "Bad Request: file is too big"}
+        failure = self.HTTPError("https://api.telegram.org/file/botX/voice/f.oga", 400,
+                                 "Bad Request", {},
+                                 io.BytesIO(json.dumps(body).encode("utf-8")))
+        dest = str(Path(self.tmp.name) / "voice.oga")
+        with mock.patch.object(tg_api, "urlopen", side_effect=failure):
+            with self.assertRaises(tg_api.TelegramError) as caught:
+                tg_api.tg_download("t", "voice/f.oga", dest)
+        self.assertIn("too big", str(caught.exception).lower())
+        self.assertEqual(caught.exception.status, 400)
+
+    # -- T13.9 an "exact median" that is a median ------------------------------
+
+    def test_median_capture_to_first_use_is_a_real_median(self):
+        """`sorted(x)[n // 2]` is the UPPER-middle for an even sample: two notes
+        used after 1 h and 100 h reported 100 h as the median."""
+        for tg_id, hours in ((1, 1), (2, 100)):
+            rid = self._note(tg_id, f"заметка {tg_id}")
+            used = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+            self.assertTrue(store.note_outcome_record(self.conn, rid, "first_used",
+                                                      occurred_at=used))
+        data = review.collect_note_outcomes(self.conn, self._days_ago(1),
+                                            datetime.now(timezone.utc))
+        self.assertAlmostEqual(data["median_first_use_hours"], 50.5, places=2)
+
+    # -- T13.10 the retired numbering scheme is gone ---------------------------
+
+    def test_the_legacy_display_ids_scheme_is_deleted(self):
+        """It computed DIFFERENT numbers than the live `note_no` and survived
+        only for one test — exactly the shape a contributor mistakes for the
+        live path."""
+        self.assertFalse(hasattr(store, "display_ids"))
+
+    # -- T13.11 a Telegram incident must not stall the scheduler ---------------
+
+    def test_a_poll_conflict_backs_off_in_slices_and_keeps_ticking(self):
+        """30 s and 120 s were one uninterruptible `time.sleep`: a SIGTERM during
+        a Telegram incident went unnoticed for up to two minutes. The backoff now
+        waits in ≤ SLEEP_SLICE_SECONDS steps that check `self.stop`, and the
+        `continue` re-enters the loop at the TOP so the scheduler ticks (due
+        reminders, the morning brief) run once per backoff — sending works even
+        while getUpdates does not."""
+        slept, ticks, polls = self._drive_failing_poll(
+            lambda: tg_api.TelegramError("Conflict", status=409))
+        self.assertEqual(len(polls), 2)
+        self.assertTrue(slept)
+        # The behavioural bound first (WP13 asks for ≤ 5 s waits), then the knob:
+        # a missing constant must not be what this test reports.
+        self.assertLessEqual(max(slept), 5.0)
+        self.assertLessEqual(max(slept), self.mod.Agent.SLEEP_SLICE_SECONDS)
+        self.assertEqual(sum(slept), 30)                    # the whole backoff waited
+        self.assertEqual(self.mod.Agent.POLL_CONFLICT_BACKOFF_SECONDS, 30)
+        self.assertIn("fire_due_reminders", ticks)          # the ticks kept running
+        self.assertGreaterEqual(ticks.count("fire_due_reminders"), 2)
+
+    def test_a_rate_limit_backoff_is_sliced_and_capped(self):
+        """The branch that can wait TWO MINUTES, and the one the 409 test does
+        not reach. Telegram's retry_after is honoured up to the ceiling, and
+        the wait is spent in ≤1 s slices that check `self.stop` — a bare
+        `time.sleep(120)` here is what made a deploy's SIGTERM take two minutes
+        to land, with every scheduler tick frozen behind it."""
+        slept, ticks, polls = self._drive_failing_poll(
+            lambda: tg_api.TelegramError("Too Many Requests", status=429,
+                                         retry_after=300))
+        self.assertEqual(len(polls), 2)
+        self.assertLessEqual(max(slept), 5.0)               # never one long block
+        self.assertLessEqual(max(slept), self.mod.Agent.SLEEP_SLICE_SECONDS)
+        self.assertEqual(sum(slept), 120)                   # 300 capped to the ceiling
+        self.assertEqual(self.mod.Agent.POLL_RATE_LIMIT_MAX_SECONDS, 120)
+        self.assertGreaterEqual(ticks.count("fire_due_reminders"), 2)
+
+    def test_a_generic_poll_failure_backs_off_in_slices_too(self):
+        """The third backoff — the exponential one for an ordinary getUpdates
+        error. Its 5→60 s waits were the same uninterruptible block."""
+        slept, ticks, polls = self._drive_failing_poll(
+            lambda: tg_api.TelegramError("connection reset"))
+        self.assertEqual(len(polls), 2)
+        self.assertEqual(len(slept), 5)                     # 5 s of 1 s slices...
+        self.assertLess(max(slept), 5.0)                    # ...not one 5 s sleep
+        self.assertEqual(sum(slept), 5)
+        self.assertGreaterEqual(ticks.count("fire_due_reminders"), 2)
+
+    def _drive_failing_poll(self, make_error):
+        """Run the poll loop against a getUpdates that always raises, on a fake
+        clock. Two polls, then `stop` — so the FIRST backoff is waited out in
+        full and the second is cut short by the shutdown. Returns
+        (slept slices, tick names, polls)."""
+        slept, ticks, polls = [], [], []
+        clock = {"now": 10_000.0}       # a fake clock: the slices must ADVANCE it,
+                                        # or a no-op sleep would never reach the
+                                        # deadline and this test would hang.
+
+        def fake_sleep(seconds):
+            slept.append(seconds)
+            clock["now"] += max(0.0, seconds)
+
+        def failing(token, method, params=None, timeout=None):
+            if method != "getUpdates":
+                return {}
+            polls.append(method)
+            if len(polls) >= 2:
+                self.agent.stop = True
+            raise make_error()
+
+        with mock.patch.object(self.mod, "tg_call", side_effect=failing), \
+                mock.patch.object(self.mod.time, "sleep", fake_sleep), \
+                mock.patch.object(self.mod.time, "time", lambda: clock["now"]), \
+                mock.patch.object(self.agent, "announce_deploy_if_changed"), \
+                mock.patch.object(self.agent, "replay_pending_updates"), \
+                mock.patch.object(self.agent, "_tick",
+                                  side_effect=lambda name, fn: ticks.append(name)):
+            self.agent.run()
+        return slept, ticks, polls
+
+    def test_a_backoff_stops_the_moment_a_shutdown_is_requested(self):
+        """Pins PRE-EXISTING behaviour plus the new constant: `_sleep` already
+        sliced at 1 s and already checked `self.stop` before WP13 (the diff
+        only swapped the literal for `SLEEP_SLICE_SECONDS`). What WP13 changed
+        is that the poll backoffs now GO through it — which is what the three
+        tests above assert."""
+        slept = []
+
+        def stop_during(seconds):
+            slept.append(seconds)
+            self.agent.stop = True          # SIGTERM lands inside the backoff
+
+        with mock.patch.object(self.mod.time, "sleep", side_effect=stop_during):
+            self.agent._sleep(120)
+        self.assertEqual(len(slept), 1)     # one slice, not 120 seconds of waiting
+        self.assertLessEqual(slept[0], 5.0)
+        self.assertEqual(self.mod.Agent.POLL_RATE_LIMIT_MAX_SECONDS, 120)
 
 
 if __name__ == "__main__":

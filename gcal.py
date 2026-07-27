@@ -25,6 +25,7 @@ timeouts — which escape urlopen as OSError, not URLError) so the caller's
 import base64
 import http.client
 import json
+import re
 import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -34,14 +35,77 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import store
-from common import log
+from common import log, scrub_secrets
 
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 
+TOKEN_KV_KEYS = ("gcal_token", "gcal_token_exp")
+# How much of Google's error body is carried into the message the boss/journal
+# sees. Enough to name the cause ("Request had insufficient authentication
+# scopes"), never the whole document.
+ERROR_BODY_CHARS = 200
+# Calendar v3 answers 403 for TWO unrelated things: "your credentials are not
+# accepted" and "you are sending too much" (rateLimitExceeded,
+# userRateLimitExceeded, dailyLimitExceeded, quotaExceeded — messages like
+# «Rate Limit Exceeded», «Calendar usage limits exceeded»). Only the first is a
+# token problem. Dropping a perfectly good cached token on a quota 403 would
+# re-mint, retry with no backoff, fail again and drop it a SECOND time: four
+# calls where there was one, the cache destroyed for the rest of the quota
+# window, and two extra 30 s urlopen timeouts inside a single update — all aimed
+# at a service that just asked for less traffic. Google's own wording is already
+# parsed by `_error_detail`, so use it.
+RATE_LIMITED_HINT = re.compile(r"rate limit|quota|usage limit|too many|daily limit",
+                               re.IGNORECASE)
+
 
 class CalendarError(Exception):
     pass
+
+
+class _AuthRejected(CalendarError):
+    """Google refused the ACCESS TOKEN itself (401/403) — retryable exactly once,
+    with a freshly minted token. A CalendarError subclass, so it still lands in
+    every caller's `except CalendarError` .ics fallback if it escapes."""
+
+
+def _error_detail(exc):
+    """A bounded, secret-scrubbed slice of an HTTPError body. Google puts the
+    real cause in `error.message` ("Not Found", "The caller does not have
+    permission"); reporting only the numeric status threw it away and left the
+    boss — and the issue row — with an HTTP code and nothing to act on.
+
+    Two body shapes, because two endpoints: the Calendar API answers
+    `{"error": {"message": …}}`, the OAuth token endpoint
+    `{"error": "invalid_grant", "error_description": …}` — where `error` is a
+    plain string and the sentence worth reading is the description. Anything
+    else (or an unparseable body) falls back to the raw text.
+    """
+    try:
+        raw = exc.read().decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 — a diagnostic must never mask the failure
+        return ""
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        parts = [(err.get("message") if isinstance(err, dict) else err) or "",
+                 payload.get("error_description") or ""]
+        detail = ": ".join(str(p) for p in parts if p)
+    else:
+        detail = raw
+    return scrub_secrets(" ".join(str(detail).split()))[:ERROR_BODY_CHARS]
+
+
+def _suffix(detail):
+    return f": {detail}" if detail else ""
+
+
+def invalidate_token(conn):
+    """Drop the cached access token so the next call mints a fresh one."""
+    store.kv_delete(conn, *TOKEN_KV_KEYS)
 
 
 def configured(cfg):
@@ -159,7 +223,8 @@ def get_access_token(cfg, conn):
         with urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise CalendarError(f"google token request failed with HTTP {exc.code}") from exc
+        raise CalendarError(f"google token request failed with HTTP {exc.code}"
+                            f"{_suffix(_error_detail(exc))}") from exc
     except URLError as exc:
         raise CalendarError(f"google token request failed: {exc.reason}") from exc
     except (TimeoutError, http.client.HTTPException, OSError, ValueError) as exc:
@@ -188,9 +253,7 @@ def build_event_payload(event):
     return payload
 
 
-def insert_event(cfg, conn, event):
-    """Insert into Google Calendar; returns the event htmlLink."""
-    token = get_access_token(cfg, conn)
+def _insert_once(cfg, token, event):
     from urllib.parse import quote
     url = (f"https://www.googleapis.com/calendar/v3/calendars/"
            f"{quote(cfg.gcal_calendar_id)}/events")
@@ -204,10 +267,41 @@ def insert_event(cfg, conn, event):
         with urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise CalendarError(f"calendar insert failed with HTTP {exc.code}") from exc
+        detail = _error_detail(exc)
+        message = f"calendar insert failed with HTTP {exc.code}{_suffix(detail)}"
+        # 401 is always the token. 403 is the token UNLESS Google says the
+        # problem is volume (see RATE_LIMITED_HINT) — throwing away a valid
+        # cached token there costs four calls instead of one and re-mints for
+        # every later call in the same quota window.
+        if exc.code == 401 or (exc.code == 403 and not RATE_LIMITED_HINT.search(detail)):
+            raise _AuthRejected(message) from exc
+        raise CalendarError(message) from exc
     except URLError as exc:
         raise CalendarError(f"calendar insert failed: {exc.reason}") from exc
     except (TimeoutError, http.client.HTTPException, OSError, ValueError) as exc:
         raise CalendarError(f"calendar insert failed: {exc!r}") from exc
     log(f"calendar event created: {payload.get('id')}")
     return payload.get("htmlLink") or ""
+
+
+def insert_event(cfg, conn, event):
+    """Insert into Google Calendar; returns the event htmlLink.
+
+    The access token is cached in kv for its full lifetime (~58 min). When
+    Google stops accepting it — the service-account key was rotated, the
+    account disabled, the calendar unshared — a 401/403 came back, the cached
+    token was kept, and EVERY calendar_add for the rest of that hour failed the
+    same way while the .ics fallback quietly covered it. Drop the cached token
+    and retry ONCE with a freshly minted one; if that is refused too, the
+    problem is permissions, not the token, and Google's own description is
+    carried out with the error.
+    """
+    for attempt in (0, 1):
+        token = get_access_token(cfg, conn)
+        try:
+            return _insert_once(cfg, token, event)
+        except _AuthRejected as exc:
+            invalidate_token(conn)
+            if attempt:
+                raise CalendarError(f"{exc} (after re-minting the access token)") from exc
+            log(f"calendar token rejected ({exc}); re-minting and retrying once")
