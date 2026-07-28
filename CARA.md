@@ -128,6 +128,91 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   fabricated confirmation. This is enforced in code as well as the prompt: a free-form reply
   that claims a current close/move/save/delete or says a queue is clean is blocked, logged as
   `converse_action_claim`, and replaced with an honest no-state-changed response.
+  **The contract, in his terms: she never reports an action she did not perform, and when
+  she cannot do something she says so and names the route that can.**
+  **Rebuilt 2026‑07‑28** after four fabricated confirmations reached the boss in one
+  exchange — a save, a replacement, a restore and a renumbering, none of which happened.
+  The guard was wired correctly (every `converse` reply is checked); its PATTERN was what
+  failed, so it is now several things instead of one regex:
+  * **Punctuation and markdown are folded first.** She wrote «Готово — сохранила» with an
+    EM DASH while the optional «готово» prefix allowed only an ASCII hyphen. Every dash
+    variant, exotic space and zero‑width joiner is normalised before matching, and markdown
+    emphasis is folded too (`_` is a word character, so italics used to break `\b`), so
+    typography cannot defeat it.
+  * **The verb set covers the completed forms she actually writes** — `добавила`,
+    `восстановила`, `вернула`, `заменила`, `обновила`, `исправила`, `переместила`,
+    `привязала`, `назначила`, `отметила`, plus `added/restored/replaced/updated/fixed` —
+    and their short passives in EVERY gender, because the subjects here («запись»,
+    «заметка», «задача», «категория») are feminine and «Запись #51 обновлена» is a likelier
+    shape than «обновлено». Future and infinitive forms («могу добавить», «добавлю») stay
+    OUT on purpose: an offer to do the thing is the reply we want instead — but a COMPLETED
+    auxiliary («успела/удалось/смогла добавить») is a completion, not an offer, and is in.
+  * **Position is not the anchor, the DATA OBJECT is.** A verb no longer has to sit behind
+    «готово»/«я»/a note noun («Ок, сохранила», «Поняла! Уже добавила его в Movies» used to
+    walk straight through). Verbs that also have an innocent narrative meaning in her
+    shared‑world voice — `поставила`, `вернула`, `отметила`, `обновила`, `переместила` —
+    fire only when the sentence also names one of HIS data objects (a `#N`, a note/task/
+    reminder/file/category, «Movies», «Books») or sits under a «Готово» header. So
+    «Поставила чайник» and «Вернула книгу на полку» stay stories; «Поставила напоминание»
+    is a claim.
+  * **Verb‑less completion SHAPES are matched in their own right** — «#51 теперь «X»»
+    (with or without «вместо»), «теперь под #51 …», «#52 is in Movies now», «Готово:»
+    introducing a per‑item outcome list with ANY marker (`-`, `•`, `1.`, `✅`), and an
+    enumerated line whose outcome verb sits at the end («- #52 — «X» (2022) — добавила»).
+  It stays deliberately narrower than `FINAL_VERBS`, and three carve‑outs keep the honest
+  reply honest, each with its own test: a real QUESTION («а #51 ты сохранила?» — decided on
+  the clause the verb sits in, so a confirmation closed by an offer question is still a
+  claim), an honest DENIAL («я её не добавила» — the negation has to be adjacent to the
+  verb, so «не волнуйся, я добавила #52» is not one), and a truthful reference to an
+  EARLIER real action («вчера я сохранила это в Movies под #51»), because denying a save
+  that really happened is the same lie with the sign flipped.
+- **A blocked reply is honest AND useful (2026‑07‑28)** — it used to become a flat «я не
+  выполнила это действие», which is true but a dead end: he still wants the thing done.
+  Blocking now spends one more model call (the owner's explicit budget relaxation for
+  communication quality) on a reply that says plainly she has not done it AND names the
+  concrete route that would — «могу добавить «X» (2022) в Movies отдельной записью —
+  добавить?» — grounded only in what the app can really perform. The rewrite runs IN
+  CHARACTER (her persona prompt is prepended; she never breaks it) and on the same real
+  catalog grounding the first pass had, so it can tell «never existed» from «exists, saved
+  earlier» instead of confidently denying a real save — and it may name only numbers from
+  HIS message or from that block, never one the rejected draft invented. If that second
+  pass claims an action too, the deterministic template wins; the guard is never traded for
+  fluency. Both attempts are logged (`converse_action_claim` + `converse_action_repaired` /
+  `converse_action_claim_retry` / `converse_action_repair_failed`) so the pattern stays
+  visible in the issue reports, and every one of those kinds has a Russian/English label so
+  «покажи проблемы» never shows him a raw slug.
+- **Never learns a rule from a fabrication (2026‑07‑28)** — the same exchange ended with
+  «Запомнила: Не удаляй существующие записи при добавлении новой», a durable behavioural
+  rule minted from a deletion that never happened, and announced as remembered. A turn that
+  trips the action‑ or artifact‑truth guard now records WHICH exchange it was, and the
+  memory‑curation pass is skipped for as long as the curator's own evidence window still
+  reaches it (it mines conversation ROWS, ~six exchanges — a gate counted in replies
+  expired while the fabrication‑provoked instruction was still quotable). Nothing is
+  stored, and she says nothing about remembering. The gate clears itself once that
+  exchange has scrolled out, so real corrections are still learned. It is
+  forward‑looking only — rules already stored this way are left alone rather than
+  rewritten under him.
+- **Catalog answers are read from the database, not remembered (2026‑07‑28)** — she told
+  him «нет записи #52. Последняя пронумерованная, которую я вижу, — #28» while #49, #50 and
+  #51 existed, because `converse` was reasoning about his notes from the chat window. When
+  his message is about the catalog (a `#N`, a count, «последняя запись», a category) the real
+  facts are fetched and injected as AUTHORITATIVE: how many notes are visible, the highest
+  number ever issued (counting numbers whose note was since deleted), the newest `#N` with
+  their categories, and every `#N` he just named looked up one by one — EXISTS, with its
+  category and whether it is archived, or NO SUCH NOTE. That last part is the other half of
+  the same failure: an archived note is invisible to the ordinary listing, and telling him a
+  note he has is gone is as false as inventing one he doesn't. If he names a TITLE instead of
+  a number («какой номер у заметки про ремонт?») that note is looked up too, so the rule
+  doesn't turn an answerable question into a dead end. The prompt then forbids stating any
+  note number or count that is not in that block, and forbids denying one it marks EXISTS —
+  a number she cannot ground, she does not say; if the one he means isn't there she says
+  she'll look it up. And because a prompt can only ASK, there is a deterministic mirror:
+  a reply that names a note number ABOVE the highest ever issued, which he did not mention
+  himself, is blocked and rewritten exactly like a fabricated action
+  (`converse_ungrounded_number`). The trigger is word‑bounded, so «Категорически не
+  согласен», «Сколько ты меня любишь?» and «я записался к врачу» no longer drag his catalog
+  into turns that never asked, and an emotional message gets at most the numbers he named —
+  never his note titles or category histogram.
 
 ---
 
@@ -1334,7 +1419,7 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ skill_manifest.py permission registry (risk · confirmation · proactive)
    ├─ trace.py         one trace per update/tick; staged events
    ├─ events.py/jobs.py/runtime.py  update audit log (events) + durable job queue + drain
-   ├─ action_truth.py  final-verb / state wording guard
+   ├─ action_truth.py  final-verb / state wording guard + free-form completion-claim guard
    ├─ sysinfo.py       read-only host stats (/proc, statvfs)
    ├─ fetch.py         SSRF-guarded URL reader
    ├─ storage.py       binary backend (local; DO Spaces S3 SigV4, dormant)

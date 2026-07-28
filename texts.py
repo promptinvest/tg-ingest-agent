@@ -776,6 +776,26 @@ TEXTS = {
         "ru": "заблокированные выдуманные файлы",
         "en": "blocked fabricated file claims",
     },
+    "issue_kind_converse_action_repaired": {
+        "ru": "ответы, которые я переписала честно",
+        "en": "replies I rewrote honestly",
+    },
+    "issue_kind_converse_action_claim_retry": {
+        "ru": "повторные ложные подтверждения (нужна правка кода)",
+        "en": "repeat false confirmations (needs a code fix)",
+    },
+    "issue_kind_converse_action_repair_failed": {
+        "ru": "неудавшиеся честные переписывания",
+        "en": "honest rewrites that failed",
+    },
+    "issue_kind_curation_skipped_after_fabrication": {
+        "ru": "пропущенное обучение после выдуманного действия",
+        "en": "learning skipped after a fabricated action",
+    },
+    "issue_kind_converse_ungrounded_number": {
+        "ru": "заблокированные несуществующие номера заметок",
+        "en": "blocked note numbers that don't exist",
+    },
     "review_weekly_intro": {
         "ru": "📊 {name}, моя еженедельная сводка — как я поработала:",
         "en": "📊 {name}, my weekly check-in — how I did:",

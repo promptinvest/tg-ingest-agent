@@ -2938,6 +2938,49 @@ def ensure_note_no(conn, message_id, *, commit=True):
     return nxt
 
 
+def note_no_max(conn):
+    """The highest note number EVER ISSUED — including numbers whose note was later
+    deleted or archived. «Такого номера не существует» about a number that WAS used is
+    the same class of lie as inventing one, so this reads all three places a number can
+    survive: the live rows, the outcome ledger (which keeps a deleted note's number) and
+    the per-chat counter. 0 when nothing has ever been numbered.
+    Owner-only bot, so the number space is effectively global."""
+    best = 0
+    for sql in ("SELECT COALESCE(MAX(note_no), 0) FROM messages",
+                "SELECT COALESCE(MAX(note_no), 0) FROM note_outcomes"):
+        best = max(best, conn.execute(sql).fetchone()[0] or 0)
+    # ESCAPE, like _purge_all_message_kv: LIKE's '_' is a single-character
+    # wildcard, so an unescaped literal prefix silently matches keys it doesn't own.
+    for row in conn.execute(r"SELECT value FROM kv WHERE key LIKE ? ESCAPE '\'",
+                            (_like_prefix("note_no_next") + ":%",)):
+        try:                       # the counter holds the NEXT number to hand out
+            best = max(best, int(row["value"]) - 1)
+        except (TypeError, ValueError):
+            continue
+    return best
+
+
+def visible_category_counts(conn):
+    """({category: n}, total) over the notes the ordinary listing shows — the same
+    view as `list_messages_filtered` with no filters (confirmed/suggested, archived
+    hidden, journal categories hidden), but as ONE aggregate instead of a full row
+    scan. The converse catalog-grounding block runs on the poll loop's single thread
+    and only needs the shape of the inbox, not its contents."""
+    journals = {n.casefold() for n in journal_categories(conn)}
+    counts = {}
+    for row in conn.execute(
+            "SELECT category, suggested_category, knowledge_state, COUNT(*) AS n"
+            " FROM messages WHERE status IN ('confirmed', 'suggested')"
+            " GROUP BY category, suggested_category, knowledge_state"):
+        if row["knowledge_state"] == "archived":
+            continue
+        if (row["category"] or "").casefold() in journals:
+            continue
+        name = (row["category"] or row["suggested_category"] or "?").strip() or "?"
+        counts[name] = counts.get(name, 0) + row["n"]
+    return counts, sum(counts.values())
+
+
 def note_no_value(n):
     """The integer #N a router-supplied note reference names, or None.
 
@@ -3595,6 +3638,25 @@ def convo_recent(conn, chat_id, limit=10):
         (chat_id, limit),
     ).fetchall()
     return list(reversed(rows))
+
+
+def convo_last_id(conn, chat_id):
+    """Row id of the newest conversation turn in this chat, or 0. Used to mark
+    exactly WHICH exchange a fabricated claim happened in, so the memory paths can
+    be closed for as long as the curator's window would still reach that turn — a
+    turn COUNT cannot express that, because the curator mines rows, not replies."""
+    row = conn.execute(
+        "SELECT COALESCE(MAX(id), 0) AS last FROM conversation WHERE chat_id = ?",
+        (chat_id,)).fetchone()
+    return row["last"] if row else 0
+
+
+def convo_rows_after(conn, chat_id, row_id):
+    """How many conversation rows this chat has recorded since `row_id`."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM conversation WHERE chat_id = ? AND id > ?",
+        (chat_id, row_id)).fetchone()
+    return row["n"] if row else 0
 
 
 def convo_row_source(row):

@@ -140,8 +140,15 @@ def collect(conn, period):
     ).fetchone()["n"]
     data["issue_counts"] = store.issue_counts(conn, since)
     data["issue_examples"] = store.issues_recent(conn, since, limit=10)
+    # `converse_action_claim_retry` and `_repair_failed` belong here for the same
+    # reason as the claim itself: a model that claims an action TWICE in one turn,
+    # or a repair pass that cannot produce an honest reply, is the strongest signal
+    # there is that the guard is misfiring — and it is exactly what the weekly
+    # pattern list exists to surface.
     actionable = ("unclear_request", "out_of_scope", "stt_failed", "ingest_failed",
-                  "converse_artifact_claim", "converse_action_claim", "correction_unresolved")
+                  "converse_artifact_claim", "converse_action_claim",
+                  "converse_action_claim_retry", "converse_action_repair_failed",
+                  "converse_ungrounded_number", "correction_unresolved")
     data["open_issue_patterns"] = store.issue_open_patterns(conn, actionable, limit=20)
     data["resolved_issue_patterns"] = store.issues_resolved(conn, since, limit=20)
     data["spend_by_skill"] = conn.execute(

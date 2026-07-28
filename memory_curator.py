@@ -142,7 +142,14 @@ def _supported_item(item, source_texts):
     return bool(_evidence_stems(evidence) & _evidence_stems(text))
 
 
-def curate_conversation(conn, cfg, chat_id, limit=12, correction_mode=False):
+# How many conversation ROWS one curation pass mines (~6 exchanges). Named because
+# the fabrication gate in tg_ingest_agent has to close the memory paths for exactly
+# this window: anything still inside it can still be quoted as evidence, and a gate
+# expressed in "converse turns" cannot say that.
+CONVO_WINDOW = 12
+
+
+def curate_conversation(conn, cfg, chat_id, limit=CONVO_WINDOW, correction_mode=False):
     """One small LLM pass over recent free chat. Returns counts plus the lists of
     newly-`learned` corrections (stored and ACTIVE), `proposed` ones (sensitive →
     a confirm-first candidate, NOT in force yet) and `unresolved` ones (a
