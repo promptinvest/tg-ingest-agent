@@ -404,7 +404,13 @@ class NotesMixin:
         return "\n".join(item)
 
     def _notes_page(self, lang, category, query, offset, token, state=None):
-        """Render one page of notes + its ◀/▶ keyboard. Returns (text, keyboard, total)."""
+        """Render one page of notes + its ◀/▶ keyboard.
+
+        Returns (text, keyboard, total, rows) — `rows` is exactly what this page
+        RENDERS, in display order, so the caller can pin it as "the list he is
+        looking at" once it is actually delivered (C3, 2026-07-28). Re-deriving
+        that list from a second query is what «покажи год каждого» must never do:
+        the answer has to be about the notes on his screen."""
         rows, total = store.list_messages_page(self.conn, category, query, offset,
                                                self.NOTES_PAGE_SIZE, state=state)
         filter_part = ""
@@ -422,7 +428,8 @@ class NotesMixin:
                     start=start, end=offset + len(rows), total=total)]
         for row in rows:
             blocks.append(self._note_line(lang, row))
-        return "\n\n".join(blocks), self._notes_page_keyboard(lang, token, offset, total), total
+        return ("\n\n".join(blocks),
+                self._notes_page_keyboard(lang, token, offset, total), total, rows)
 
     def _notes_page_keyboard(self, lang, token, offset, total, page_size=None):
         """A ◀ Back · X/Y · Next ▶ row — or None when it all fits on one page."""
@@ -462,8 +469,12 @@ class NotesMixin:
                                (datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
         token = store.list_view_add(self.conn, chat_id,
                                     {"category": category, "query": query, "state": state})
-        text, keyboard, _ = self._notes_page(lang, category, query, 0, token, state=state)
-        self.reply(chat_id, text, reply_markup=keyboard)
+        text, keyboard, _, rows = self._notes_page(lang, category, query, 0, token,
+                                                   state=state)
+        if self.reply(chat_id, text, reply_markup=keyboard):
+            # Delivered — so this IS the list he is looking at, and a follow-up
+            # («покажи год каждого») answers about exactly these notes (C3).
+            self._shown_list_set([r["id"] for r in rows])
 
     def do_show_media(self, chat_id, lang, params):
         row = self.resolve_item(params)
@@ -869,7 +880,21 @@ class NotesMixin:
     def do_note_edit(self, chat_id, lang, params, text):
         """Fix a saved note's SUMMARY in place (the LLM-written line shown in lists and the
         detail card) — 'исправь заметку #11 на …', 'поменяй краткое #3 на …'. The original
-        message text (raw_text, used for KB search) is preserved; only the summary changes."""
+        message text (raw_text, used for KB search) is preserved; only the summary changes.
+
+        C4 (2026-07-28) — this is also how a stale CATALOG title gets fixed. Note
+        #44's summary is a whole paragraph («Форвард кинофильма "The Ledge" …»)
+        because it predates the forwarded-poster routing, and the listing reads
+        it back verbatim. Retitling it here fixes the list line, the detail card
+        and the catalog dedup index (all three read `summary or raw_text`) while
+        the note's stored FACTS — its year, its director — are left alone: they
+        describe the same work, and a title fix is not a claim about them.
+
+        C2 — it ASKS first. Replacing the text of an entry that already exists is
+        the operation the live failure claimed to have performed («#51 теперь
+        «Всё везде и сразу» вместо «Я устал от тебя»»), and it is not additive:
+        the old text does not survive it. So the confirmation NAMES the note and
+        shows both versions, and nothing is written until he says yes."""
         row = self.resolve_item(params)
         if row is None:
             self.reply(chat_id, T(lang, "items_empty"))
@@ -878,9 +903,132 @@ class NotesMixin:
         if not new_summary:
             self.reply(chat_id, T(lang, "note_edit_unclear"))
             return
-        store.message_update_summary(self.conn, row["id"], new_summary[:600])
-        self.reply(chat_id, T(lang, "note_edited", row_id=self.note_no(row["id"]),
+        new_summary = new_summary[:600]
+        # ONE pending slot per chat, and a bare «да» resolves whatever is in it.
+        # Taking a slot that belongs to another question would point his next yes
+        # at a TEXT REPLACEMENT he was not answering — a media card's ✅ landing
+        # on «исправь заметку #11 на …» is exactly the accident C2 forbids. The
+        # media card's own discipline, applied here (review fix 2026-07-28): the
+        # open question keeps the slot and she asks him to finish it first.
+        existing = store.pending_get(self.conn, chat_id)
+        if existing is not None and existing.get("kind") != "note_retitle":
+            self.reply(chat_id, T(lang, "note_edit_slot_busy"))
+            return
+        old = (row["summary"] or row["raw_text"] or "").strip()
+        note_no = self.note_no(row["id"])
+        store.pending_set(self.conn, chat_id, "note_retitle",
+                          {"row_id": row["id"], "note_no": note_no,
+                           "new_summary": new_summary})
+        self.reply(chat_id, T(
+            lang, "note_edit_confirm", row_id=note_no,
+            category=row["category"] or row["suggested_category"] or "?",
+            old=self._ellipsize(old.replace("\n", " "), 200) or "—",
+            new=self._ellipsize(new_summary.replace("\n", " "), 200)))
+
+    def apply_note_retitle(self, chat_id, lang, payload):
+        """His yes to the note_edit confirmation: the summary is replaced.
+
+        Re-resolved and re-checked against the note he was SHOWN: the pending
+        carries the stable #N beside the rowid (SQLite reuses rowids), so a
+        confirmation can never land the new text on a different note than the one
+        the question named."""
+        row = store.get_message(self.conn, payload.get("row_id"))
+        if row is None or (payload.get("note_no") is not None
+                           and row["note_no"] != payload.get("note_no")):
+            self.reply(chat_id, T(lang, "items_empty"))
+            return
+        new_summary = str(payload.get("new_summary") or "")[:600]
+        if not new_summary:
+            self.reply(chat_id, T(lang, "note_edit_unclear"))
+            return
+        store.message_update_summary(self.conn, row["id"], new_summary)
+        # The semantic index was built from the OLD text. Leaving it stale would
+        # let `ask` answer out of a title he just replaced — the same divergence
+        # apply_note_edit re-embeds away. Best-effort: `index_message` swallows
+        # its own LLM/budget failures, and the durable text is already correct.
+        facts = [f["fact"] for f in store.message_facts(self.conn, row["id"])]
+        store.set_chunks(self.conn, row["id"], [])
+        self.index_message(row["id"], "\n".join([new_summary, *facts]))
+        store.note_outcome_record(self.conn, row["id"], "note_edited", source="edit")
+        self.reply(chat_id, T(lang, "note_edited",
+                              row_id=self.note_no(row["id"]),
                               summary=new_summary[:200]))
+        log(f"note #{row['id']} summary replaced by operator")
+
+    # -- C3: ONE field across the list she just showed --------------------------
+    #
+    # «Покажи год каждого» right after a 3-item Movies listing returned ONE
+    # note's full detail card (production, 2026-07-28 05:49). The request is a
+    # follow-up ABOUT THAT LIST, and the only honest way to answer it is from the
+    # pinned list — not from a fresh "most recent" query, which would answer
+    # about notes he never saw.
+    #
+    # It reads STORED facts only (media.parse_catalog_facts / facts_fields — the
+    # same reader the listing and the md export use). It never looks a value up
+    # to fill a gap: a looked-up year printed in a list of HIS data would read as
+    # something he has on file. Where nothing is stored it says so, per item.
+    _LIST_FIELDS = ("year", "creator", "genre")
+    # WORD-BOUNDED, never bare substrings — the lesson the catalog-grounding cues
+    # already paid for: «в чём выгода?» contains «года» and «Категорически» contains
+    # «категор».
+    #
+    # …and a stem + \w* is only half of that lesson (review fix 2026-07-28):
+    # `год\w*` is word-bounded and still matches «годовщина», «годится»,
+    # «годный». `_list_field_name` falls back to the RAW MESSAGE when the router
+    # names no field, so an unrelated word would silently pick one. The year cue
+    # is therefore spelled out as the inflections he actually uses; the other two
+    # keep the stem, where every inflection really is the same word.
+    _LIST_FIELD_PATTERNS = (
+        ("year", re.compile(r"\b(?:years?|год|года|году|годом|годе|"
+                            r"годы|годов|годам|годами|годах)\b")),
+        ("creator", re.compile(r"\b(?:creators?|directors?|authors?|"
+                               r"режисс\w*|автор\w*|чей|чьи|чь[её])\b")),
+        ("genre", re.compile(r"\b(?:genres?|жанр\w*)\b")),
+    )
+
+    def _list_field_name(self, params, text):
+        """The field he asked for: the router's `field` param, else the word in
+        his own message («а режиссёры?»). '' when neither names one."""
+        for source in (params.get("field"), text):
+            low = " ".join(str(source or "").casefold().split())
+            if not low:
+                continue
+            for field, pattern in self._LIST_FIELD_PATTERNS:
+                if low == field or pattern.search(low):
+                    return field
+        return ""
+
+    def do_list_field(self, chat_id, lang, params, text=""):
+        """«Покажи год каждого» / «а режиссёры?» — one field for EVERY item of
+        the list she just showed."""
+        import media
+        field = self._list_field_name(params, text)
+        if field not in self._LIST_FIELDS:
+            self.reply(chat_id, T(lang, "list_field_which"))
+            return
+        slots = self._shown_list_slots()
+        if not slots:
+            # No list was shown (or it aged out). She says that, and does NOT
+            # substitute a recomputed one — the substitution this whole
+            # mechanism exists to prevent.
+            self.reply(chat_id, T(lang, "list_field_no_list"))
+            return
+        lines = [T(lang, "list_field_header", field=T(lang, "list_field_name_" + field))]
+        for slot in slots:
+            row = slot["row"]
+            if row is None:
+                lines.append(f"#{slot['no'] if slot['no'] is not None else '?'} — "
+                             + T(lang, "list_field_gone"))
+                continue
+            title = self._ellipsize(
+                (row["summary"] or row["raw_text"] or "").replace("\n", " "), 70)
+            trio = media.facts_fields(
+                [f["fact"] for f in store.message_facts(self.conn, row["id"])]
+            ).get(field)
+            value = str(trio[1]).strip() if trio and len(trio) > 1 else ""
+            lines.append(f"#{self.note_no(row['id'])} {title} — "
+                         + (value or T(lang, "list_field_unknown")))
+        self.reply_chunks(chat_id, "\n".join(lines))
 
     # -- note review (deterministic ≤3-item batch + stable snapshot, §9) -------
 
@@ -895,30 +1043,38 @@ class NotesMixin:
         "old_unused": ("давно лежит без дела", "old and never used"),
     }
 
-    def _review_snapshot_set(self, ids, ttl_seconds):
-        """Remember WHICH notes were shown — each with its stable identity.
+    def _pin_shown(self, key, ids, ttl_seconds):
+        """Remember WHICH notes were shown, under `key` — each with its stable
+        identity.
 
         `messages.id` is a plain rowid and SQLite REUSES the highest one after a
         delete, so a bare id list could point at a note he was never shown (WP3
         closed that for kv KEYS; the VALUE had the same hole). The `note_no` is
         stored beside the id and re-checked on resolve: it is claimed once and
-        never reused, so a mismatch means the shown note is gone."""
+        never reused, so a mismatch means the shown note is gone.
+
+        Two snapshots use this now (2026-07-28): the review batch, and the LIST
+        she just showed — «покажи год каждого» has to answer about the three
+        notes on his screen, not about the three newest notes in the table.
+        Every key written here belongs in store.NOTE_REF_KV_KEYS, which is what
+        makes a purge drop it with the rows it describes."""
         items = []
         for i in ids:
             row = store.get_message(self.conn, i)
             items.append({"id": int(i),
                           "no": row["note_no"] if row is not None else None})
-        store.kv_set(self.conn, "note_review_snapshot", json.dumps(
-            {"items": items, "ids": ids,
+        store.kv_set(self.conn, key, json.dumps(
+            {"items": items, "ids": list(ids),
              "ts": datetime.now(timezone.utc).isoformat(),
              "ttl": int(ttl_seconds)}, ensure_ascii=False))
 
-    def _review_snapshot_rows(self, keep_gaps=False):
-        """Live snapshot rows (ordinal follow-ups resolve against WHAT WAS SHOWN,
-        never a recomputed list). Empty when absent/expired. With `keep_gaps` the
-        list stays POSITIONAL — a since-deleted row keeps its slot as None, so
-        «третье» still means the third item he was shown."""
-        raw = store.kv_get(self.conn, "note_review_snapshot")
+    def _shown_slots(self, key):
+        """[{'id','no','row'}] for a pinned snapshot, in DISPLAY order. `row` is
+        None when that note is gone (deleted, or its rowid reused by another
+        note) — the slot survives so the caller can say so per item instead of
+        quietly showing a shorter list than he was given. Empty list = no live
+        snapshot at all."""
+        raw = store.kv_get(self.conn, key)
         try:
             snap = json.loads(raw or "")
             ts = datetime.fromisoformat(snap["ts"])
@@ -933,15 +1089,52 @@ class NotesMixin:
             items = [{"id": int(it["id"]), "no": it.get("no")} for it in items]
         except (KeyError, TypeError, ValueError):
             return []
-        rows = []
+        slots = []
         for item in items:
             row = store.get_message(self.conn, item["id"])
             # Rowid reuse: the row answering to this id now may be a DIFFERENT
             # note. He named a shown item — a substitute is never the answer.
             if row is not None and item["no"] is not None and row["note_no"] != item["no"]:
                 row = None
-            rows.append(row)
+            slots.append({"id": item["id"], "no": item["no"], "row": row})
+        return slots
+
+    def _review_snapshot_set(self, ids, ttl_seconds):
+        """Pin the review batch (see `_pin_shown`)."""
+        self._pin_shown("note_review_snapshot", ids, ttl_seconds)
+
+    def _review_snapshot_rows(self, keep_gaps=False):
+        """Live snapshot rows (ordinal follow-ups resolve against WHAT WAS SHOWN,
+        never a recomputed list). Empty when absent/expired. With `keep_gaps` the
+        list stays POSITIONAL — a since-deleted row keeps its slot as None, so
+        «третье» still means the third item he was shown."""
+        rows = [slot["row"] for slot in self._shown_slots("note_review_snapshot")]
         return rows if keep_gaps else [r for r in rows if r is not None]
+
+    # -- C3: the list she JUST showed ------------------------------------------
+    # «Покажи год каждого» right after a 3-item Movies listing answered with ONE
+    # note's full detail card. A field follow-up has to be answered against the
+    # list ON HIS SCREEN, so the listing pins what it rendered — the review
+    # snapshot's mechanism, second customer. Only a DELIVERED list is pinned:
+    # answering about a list that never arrived is the same substitution.
+    #
+    # It describes the list ON HIS SCREEN, so it is short-lived and it is DROPPED
+    # the moment another view replaces it (review fix 2026-07-28 — a journal
+    # page, a reminder list or a detail card used to leave an hour-old notes pin
+    # live, and `list_field` would then answer about it under a header that says
+    # «по каждому из последнего списка»). Ten minutes is "just now"; past that,
+    # `list_field_no_list` is the honest answer.
+    SHOWN_LIST_TTL_SECONDS = 600
+
+    def _shown_list_set(self, ids):
+        self._pin_shown("shown_list_snapshot", ids, self.SHOWN_LIST_TTL_SECONDS)
+
+    def _shown_list_clear(self):
+        """Another view took the screen — there is no "last list" any more."""
+        store.kv_set(self.conn, "shown_list_snapshot", "")
+
+    def _shown_list_slots(self):
+        return self._shown_slots("shown_list_snapshot")
 
     def _rows_from_review_snapshot(self, text):
         """Resolve «второе / первую / все» against the live review snapshot.
@@ -1027,6 +1220,12 @@ class NotesMixin:
             return []  # not delivered -> no snapshot, no shown-marking
         ids = [row["id"] for row, _ in batch]
         self._review_snapshot_set(ids, ttl_seconds=24 * 3600)
+        # A review card IS a list on his screen, so «а годы?» right after one
+        # answers about these three notes (C3). Its own snapshot lives a day
+        # (ordinals must survive «второе в архив» tomorrow); the shown-list pin
+        # is short-lived on purpose — it only ever answers an immediate
+        # follow-up, and a stale one would answer about yesterday's screen.
+        self._shown_list_set(ids)
         for mid in ids:   # every rendered row got its #N above (self.note_no)
             row = store.get_message(self.conn, mid)
             shown_pins[mid] = row["note_no"] if row is not None else None

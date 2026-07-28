@@ -101,6 +101,8 @@ _DISPATCH = {
     "note_lifecycle":      lambda s, c: s.do_note_lifecycle(c.chat_id, c.lang, c.params, c.text),
     "note_review":         lambda s, c: s.do_note_review(c.chat_id, c.lang, c.params),
     "note_edit":           lambda s, c: s.do_note_edit(c.chat_id, c.lang, c.params, c.text),
+    "catalog_add":         lambda s, c: s.do_catalog_add(c.chat_id, c.lang, c.params),
+    "list_field":          lambda s, c: s.do_list_field(c.chat_id, c.lang, c.params, c.text),
     "show_media":          lambda s, c: s.do_show_media(c.chat_id, c.lang, c.params),
     "read_media":          lambda s, c: s.do_read_media(c.chat_id, c.lang, c.params),
     "discard":             lambda s, c: s.do_discard(c.chat_id, c.lang, c.pending),
@@ -140,6 +142,18 @@ _DISPATCH = {
     "recall_conversation": lambda s, c: s.do_recall_conversation(c.chat_id, c.lang, c.params, c.text),
     "clarify":             lambda s, c: s.do_clarify(c.chat_id, c.lang, c.text, c.msg_id),
 }
+
+# Actions that put a DIFFERENT view on his screen, so the C3 "list she just
+# showed" pin stops describing anything (review fix 2026-07-28). `list_items`,
+# `note_review` and the paging callback are absent on purpose: each one re-pins
+# what it actually delivered. Free-form conversation is absent too — talking
+# about a list does not replace it.
+_LIST_REPLACING_ACTIONS = frozenset({
+    "journal_show", "reminder_list", "list_files", "categories", "overview",
+    "stats", "item_detail", "show_media", "read_media", "issues_report",
+    "spend", "export", "working_history", "memory", "memory_review",
+    "help", "review", "ask", "vps_stats", "trace_query", "recall_conversation",
+})
 
 
 class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixin):
@@ -357,15 +371,21 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
     def edit_message(self, chat_id, message_id, text, reply_markup=None):
         """Edit a message's text (and keyboard) in place — used to page a notes list without
-        sending new messages."""
+        sending new messages.
+
+        Returns True only when the edit actually landed. The paging path pins the
+        page he is looking at (C3), and a page that never reached Telegram is not
+        a list he was shown."""
         if not message_id:
-            return
+            return False
         try:
             tg_call(self.cfg.token, "editMessageText", {
                 "chat_id": chat_id, "message_id": message_id,
                 "text": text[:4000], "reply_markup": reply_markup})
         except TelegramError as exc:
             log(f"editMessageText (page) failed: {exc}")
+            return False
+        return True
 
     def edit_suggestion_message(self, chat_id, message_id, row):
         if not message_id:
@@ -1419,6 +1439,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         self.turn_reply_suggestion_id = None
         self._own_photo_turn = False
         self._own_media_parts = None
+        # True for the one turn where his message names a work the OPEN card does
+        # not show. It is deterministic proof that the turn is not a «да» to that
+        # card, and it holds the write boundary shut if the router says confirm
+        # anyway (C2, 2026-07-28). `_turn_other_work` is the work he named in it,
+        # so the refusal can offer THAT entry instead of asking for a title he
+        # already typed.
+        self._turn_names_other_work = False
+        self._turn_other_work = {}
 
     def handle_update(self, update):
         self._reset_turn_state()
@@ -2013,6 +2041,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if self.continue_partial_reminder(chat_id, lang, pending, action, params):
                 return
 
+        # C3's pin describes the list ON HIS SCREEN. Every action that puts a
+        # DIFFERENT view there invalidates it, and answering «а годы?» about a
+        # list two views back — under a header that calls it «последний список» —
+        # is the very substitution the pin exists to prevent (review fix
+        # 2026-07-28). The listing paths re-pin themselves right after they
+        # deliver, so dropping it here is safe for them too.
+        if action in _LIST_REPLACING_ACTIONS:
+            self._shown_list_clear()
+
         # Table dispatch: one handler per action (see module-level `_DISPATCH`). Unknown or
         # converse-family actions fall through to warm free-form Cara (`_dispatch_default`).
         _DISPATCH.get(action, _dispatch_default)(
@@ -2067,6 +2104,28 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 # BEFORE the router) — an amend that reached here anyway gets the
                 # hint instead of a guess over untrusted photo-read titles.
                 self.reply(chat_id, T(lang, "media_correction_unclear"))
+                return
+            # Read ONCE and consumed: the flag describes THIS message, and a
+            # guard that could latch would refuse every later confirm too.
+            names_other = getattr(self, "_turn_names_other_work", False)
+            other_work = dict(getattr(self, "_turn_other_work", None) or {})
+            self._turn_names_other_work = False
+            self._turn_other_work = {}
+            if names_other:
+                # «Это другой фильм — "везде всё и сразу" 2022» is not a yes to
+                # the card in front of him, whatever the router made of it: he
+                # named a work the card does not show. The write boundary stays
+                # shut and the staged set is never stored on this turn (C2,
+                # 2026-07-28).
+                #
+                # It carries the work he NAMED into the new card (review fix
+                # 2026-07-28): the refusal used to pass empty params, so she
+                # answered «Что добавить в каталог? Напиши название…» to the
+                # message whose quotes hold that very title. With no quoted
+                # title she still asks — that is the honest end of the road,
+                # not the default one.
+                log("media confirm refused: the message names another work")
+                self.do_catalog_add(chat_id, lang, other_work)
                 return
             if not self._media_confirm(chat_id, lang):
                 store.pending_clear(self.conn, chat_id)
@@ -2228,6 +2287,17 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             else:
                 self.decline_note_edit(chat_id, row_id, lang,
                                        note_no=payload.get("note_no"))
+        elif kind == "note_retitle":
+            # Replacing a saved note's TEXT (C2, 2026-07-28). Additive work needs
+            # no permission; this is not additive — the old text does not survive
+            # it — so it happens only on an explicit yes, and anything else
+            # leaves the note exactly as it was.
+            store.pending_clear(self.conn, chat_id)
+            if action == "confirm":
+                self.apply_note_retitle(chat_id, lang, payload)
+            else:
+                self.reply(chat_id, T(lang, "note_edit_declined",
+                                      row_id=payload.get("note_no") or "?"))
         elif kind == "journal_prompt":
             # Opt-in journal prompt (plan v1.1 §D-06/JRN-006): enabled ONLY on
             # an explicit yes; anything else leaves prompts off.
@@ -4201,12 +4271,13 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         is_journal = filt.get("view") == "journal"
         page_size = self.JOURNAL_PAGE_SIZE if is_journal else self.NOTES_PAGE_SIZE
         offset = page * page_size
+        rows = []
         if is_journal:
             text, keyboard, total = self._journal_page(
                 lang, filt.get("category"), filt.get("period") or "month", offset, token,
                 person=filt.get("person"), tag=filt.get("tag"))
         else:
-            text, keyboard, total = self._notes_page(
+            text, keyboard, total, rows = self._notes_page(
                 lang, filt.get("category"), filt.get("query"), offset, token,
                 state=filt.get("state"))
         if total and offset >= total:   # clamp a now-out-of-range page (notes removed since)
@@ -4216,10 +4287,15 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     lang, filt.get("category"), filt.get("period") or "month", offset, token,
                     person=filt.get("person"), tag=filt.get("tag"))
             else:
-                text, keyboard, total = self._notes_page(
+                text, keyboard, total, rows = self._notes_page(
                     lang, filt.get("category"), filt.get("query"), offset, token,
                     state=filt.get("state"))
-        self.edit_message(chat_id, msg.get("message_id"), text, reply_markup=keyboard)
+        edited = self.edit_message(chat_id, msg.get("message_id"), text,
+                                   reply_markup=keyboard)
+        # Paging REPLACES the list on his screen, so the pin follows it — «а
+        # годы?» after a ▶ must answer about page 2, not about page 1 (C3).
+        if edited and not is_journal:
+            self._shown_list_set([r["id"] for r in rows])
         self.answer_callback(callback_id, "")
 
     # A reply to a suggestion card is only a CATEGORY when it plausibly IS one:
@@ -4708,7 +4784,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 log(f"editMessageReplyMarkup (media card) failed: {exc}")
         store.kv_set(self.conn, f"media_capture:{chat_id}", "")
 
-    def _stage_media_card(self, chat_id, lang, entries, notes=()):
+    def _stage_media_card(self, chat_id, lang, entries, notes=(), header=None):
         """One confirmation card per batch (single live stash per chat — a new
         photo replaces the previous unanswered card, buttons retired). The
         STAGED set is exactly the DISPLAYED set: the card is budgeted by entry
@@ -4718,10 +4794,17 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
 
         Returns True when a card was actually sent and staged, False when the
         send failed — the forwarded path keys on that to leave the post to the
-        ordinary ingest flow instead of consuming it for a card he never saw."""
+        ordinary ingest flow instead of consuming it for a card he never saw.
+
+        `header` names the opening line's template. It rides the STASH, so every
+        re-draw (a correction, the confirm-time re-check) keeps it: the photo
+        card opens with «Вот что я вижу на фото», and a card built from a title
+        he TYPED may not say that about a photo that does not exist
+        (catalog_add, 2026-07-28)."""
         # Bind every entry to the note a confirm would land on and preview that
         # merge, so the card renders the RESULT rather than the capture alone.
         self._resolve_media_merges(entries)
+        header = header or "media_card_header"
         # Single pending slot: take it only when free or already ours — the
         # buttons work off the stash either way (offer_note_edit precedent).
         # A text reply would then resolve against the OTHER pending, so the
@@ -4730,7 +4813,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         slot_ours = existing is None or existing.get("kind") == "media_capture"
         entries, notes, card = self._fit_media_card(
             lang, entries, notes,
-            "media_card_footer" if slot_ours else "media_card_footer_buttons")
+            "media_card_footer" if slot_ours else "media_card_footer_buttons",
+            header)
         result = self.reply(chat_id, card,
                             reply_markup={"inline_keyboard": [[
                                 {"text": T(lang, "media_btn_save"),
@@ -4753,7 +4837,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         self._media_clear(chat_id)
         # Notes ride the stash so the cap/unread/truncation/caption disclosures
         # survive a correction re-staging (facts about the batch, not the turn).
-        stash = {"entries": entries, "notes": notes,
+        stash = {"entries": entries, "notes": notes, "header": header,
                  "card_message_id": result["message_id"],
                  "at": datetime.now(timezone.utc).isoformat()}
         store.kv_set(self.conn, f"media_capture:{chat_id}",
@@ -4764,7 +4848,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         return True
 
     def _media_kind_forced_notes(self, lang, entries, notes):
-        """The «Ты сказал, что это фильм — так и считаю» disclosure, recomputed
+        """The kind disclosures — «Ты сказал, что это фильм — так и считаю» and
+        its catalog_add sibling «Ты не сказал, фильм это или книга» — recomputed
         from the CURRENT entries on every draw.
 
         It rode the stash with the cap/unread/truncation lines, but unlike them
@@ -4779,20 +4864,31 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         and computing the line against the full batch left the same
         contradiction on a card that no longer shows the flipped entry (review
         fix 2026-07-28)."""
-        out = [n for n in notes
-               if n not in {T(lang, "media_card_kind_forced",
-                              kind=T(lang, "media_kind_" + k))
-                            for k in ("movie", "book")}]
+        computed = {T(lang, key, kind=T(lang, "media_kind_" + k))
+                    for k in ("movie", "book")
+                    for key in ("media_card_kind_forced", "catalog_card_kind_assumed")}
+        out = [n for n in notes if n not in computed]
         still_forced = {e.get("forced_kind") for e in entries
                         if e.get("forced_kind")
                         and e.get("kind") == e.get("forced_kind")}
+        # An ASSUMED kind is the text route's mirror image: he named a title but
+        # no kind, so the card must say which one it picked — and stop saying it
+        # the moment «это книга» settles the question (the same recompute rule).
+        still_assumed = {e.get("assumed_kind") for e in entries
+                         if e.get("assumed_kind")
+                         and e.get("kind") == e.get("assumed_kind")
+                         and e.get("kind") != e.get("forced_kind")}
         for kind in ("movie", "book"):
             if kind in still_forced:
                 out.append(T(lang, "media_card_kind_forced",
                              kind=T(lang, "media_kind_" + kind)))
+            elif kind in still_assumed:
+                out.append(T(lang, "catalog_card_kind_assumed",
+                             kind=T(lang, "media_kind_" + kind)))
         return out
 
-    def _fit_media_card(self, lang, entries, notes, footer_key):
+    def _fit_media_card(self, lang, entries, notes, footer_key,
+                        header="media_card_header"):
         """Trim the batch to MAX_CARD_ENTRIES and to what actually RENDERS
         within one message. Returns (kept_entries, notes, card_text) with any
         drop disclosed via media_card_truncated — worded count-free so it stays
@@ -4806,21 +4902,22 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             # about the entries the card SHOWS, and `kept` shrinks below.
             cur = self._media_kind_forced_notes(lang, kept, notes)
             cur = cur + ([truncated] if dropped and truncated not in cur else [])
-            card = self._media_card_text(lang, kept, cur, footer_key)
+            card = self._media_card_text(lang, kept, cur, footer_key, header)
             if len(card) <= media.MAX_CARD_CHARS or len(kept) <= 1:
                 return kept, cur, card
             kept.pop()
             dropped = True
 
     def _media_card_text(self, lang, entries, notes=(),
-                         footer_key="media_card_footer"):
+                         footer_key="media_card_footer",
+                         header="media_card_header"):
         """Every entry the confirm would store, numbered, with its kind and
         EVERY field labeled with where it came from (action-truth discipline):
         «на фото: …» was read off the photo, «(нашла)» is a lookup result,
         «(по памяти)» is the model's knowledge, «(уже в записи)» is a value the
         note being merged into already held — and what no source yielded is
         listed under «не нашла: …» rather than silently absent or invented."""
-        lines = [T(lang, "media_card_header", n=len(entries))]
+        lines = [T(lang, header or "media_card_header", n=len(entries))]
         for i, e in enumerate(entries, 1):
             lines.append(self._media_entry_line(lang, i, e))
         lines.extend(notes)
@@ -4963,7 +5060,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         media_capture pending (review fix 2026-07-28)."""
         entries = [e for e in stash.get("entries") or []
                    if isinstance(e, dict) and e.get("title")]
-        op = media.parse_correction(text, len(entries))
+        # The card's own titles/aliases go with the text: a quoted title the card
+        # ALREADY shows corrects it («убери «Дюна»»), a quoted title it does not
+        # names a DIFFERENT work and belongs to the router — which routes it to
+        # catalog_add as a NEW entry (C2, 2026-07-28).
+        titles = [t for e in entries
+                  for t in [e.get("title") or ""] + list(e.get("aliases") or [])]
+        self._turn_names_other_work = media.names_other_work(text, titles)
+        self._turn_other_work = (media.named_work(text, titles)
+                                 if self._turn_names_other_work else {})
+        op = media.parse_correction(text, len(entries), titles)
         if op is None:
             return False
         if op == "unclear":
@@ -4983,6 +5089,20 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             flipped = [entries[i - 1] for i in sorted(chosen)
                        if media.flip_kind(entries[i - 1], action)]
             if not flipped:
+                # …unless what he settled was the card's OWN open question. A
+                # catalog_add entry with no stated kind carries `assumed_kind`
+                # and the card SAYS «Ты не сказал, фильм это или книга». «Это
+                # фильм» changes no kind, but it does answer that — so the
+                # assumption is dropped and the card re-drawn without the line,
+                # instead of acknowledging while the stale disclosure sits on
+                # his screen (review fix 2026-07-28).
+                settled = [entries[i - 1] for i in sorted(chosen)
+                           if entries[i - 1].pop("assumed_kind", None)]
+                if settled:
+                    self._stage_media_card(chat_id, lang, entries,
+                                           stash.get("notes") or (),
+                                           header=stash.get("header"))
+                    return True
                 # Nothing changed: the message asserted the kind the card
                 # already shows. Re-drawing an identical card would swallow the
                 # turn — but ROUTING it is worse (review fix 2026-07-28): the
@@ -5008,8 +5128,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             self.reply(chat_id, T(lang, "cancelled"))
             return True
         # Carry the batch disclosures (cap/unread/truncation/caption) — a
-        # corrected card must still say what the original one disclosed.
-        self._stage_media_card(chat_id, lang, entries, stash.get("notes") or ())
+        # corrected card must still say what the original one disclosed — and
+        # the HEADER, so a text-built card is not re-drawn as a photo one.
+        self._stage_media_card(chat_id, lang, entries, stash.get("notes") or (),
+                               header=stash.get("header"))
         return True
 
     def _media_confirm(self, chat_id, lang):
@@ -5031,7 +5153,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             recheck = T(lang, "media_card_recheck")
             if recheck not in notes:
                 notes.append(recheck)
-            self._stage_media_card(chat_id, lang, entries, notes)
+            self._stage_media_card(chat_id, lang, entries, notes,
+                                   header=stash.get("header"))
             return "redrawn"
         self._media_clear(chat_id)
         pending = store.pending_get(self.conn, chat_id)
@@ -5121,6 +5244,48 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if pending and pending.get("kind") == "media_capture":
             store.pending_clear(self.conn, chat_id)
         self.reply(chat_id, T(lang, "cancelled"))
+
+    # -- Catalog entries from TEXT (the route converse had to improvise) -------
+    #
+    # C1 (2026-07-28). After she declined to file his own photo, «Это фильм» and
+    # «Это другой фильм. "везде всё и сразу" 2022» had NO deterministic route:
+    # converse answered them, converse cannot write — so nothing was written and
+    # four confirmations said otherwise. This is the missing route.
+    #
+    # It is the photo flow minus the photo, deliberately: media.text_entry builds
+    # the entry, media.enrich_entries fills creator/year/genre with the same
+    # per-field provenance, _stage_media_card draws the SAME card, and his ✅ /
+    # «да» reaches the same _media_store_entries. There is no second catalog
+    # writer — a fork would be the next thing to drift out of truth.
+    #
+    # C2 — it ADDS. A new title is a new note; a title that matches an existing
+    # entry binds to it through the ordinary merge path (_resolve_media_merges),
+    # so the card NAMES the note it would refresh and he can still say no.
+    # Nothing on this route can put one work's content in place of another's,
+    # which is exactly what the fabricated «#51 теперь …» claimed to have done.
+    def do_catalog_add(self, chat_id, lang, params):
+        """«Добавь в фильмы "Всё везде и сразу" 2022» — a catalog entry from his
+        own words, previewed on the confirmation card and stored only on his
+        yes."""
+        entry = media.text_entry(
+            params.get("title"), kind=params.get("kind"), year=params.get("year"),
+            creator=(params.get("creator") or params.get("author")
+                     or params.get("director")))
+        if entry is None:
+            # No usable title (a bare «это фильм» whose referent the router could
+            # not resolve). ASK — the one thing the live failure never did.
+            self.reply(chat_id, T(lang, "catalog_add_which"))
+            return
+        self.send_chat_action(chat_id, "typing")
+        # The same enrichment pass the card gets after a photo read: lookups
+        # first (a year/creator HE gave disambiguates them exactly like a visible
+        # one — media.seen_value), then one model fill for what is still missing.
+        # Never raises; a field no source yields stays honestly missing.
+        media.enrich_entries(self.cfg, self.conn, [entry])
+        if not self._stage_media_card(chat_id, lang, [entry],
+                                      header="catalog_card_header"):
+            # The send failed, so nothing is staged and nothing may imply it was.
+            log("catalog card sendMessage failed — nothing staged to confirm")
 
     def _picture_part(self, part):
         """True when THIS part is a picture (a photo, or an image sent as a

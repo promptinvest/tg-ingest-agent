@@ -3080,7 +3080,7 @@ MESSAGE_KV_KEYS = ("capture_action", "journal_draft", "note_edit")
 # deletion — but the whole-table purges below restart the rowids AND (scope
 # 'all') the note_no counter, so a brand-new note can inherit an id/#N pair
 # verbatim. These die with the rows they describe.
-NOTE_REF_KV_KEYS = ("note_review_snapshot", "last_resurfaced")
+NOTE_REF_KV_KEYS = ("note_review_snapshot", "shown_list_snapshot", "last_resurfaced")
 NOTE_REF_KV_PREFIXES = ("note_review_shown",)
 
 

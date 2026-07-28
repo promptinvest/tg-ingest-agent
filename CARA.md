@@ -510,6 +510,74 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   provenance‑tagged facts — the same reader the md export uses — so a listing can only
   show what is actually stored: a note with no year shows its title alone, with no
   placeholder and no invented year. Note numbers and pagination are unchanged.
+- **Add a film or a book by typing it (2026‑07‑28, `catalog_add`).** «Добавь в фильмы
+  «Всё везде и сразу» 2022», «запиши книгу «Дюна» Фрэнк Герберт», «add the movie
+  "Dune" (2021)» — and, crucially, a **correction that names another work**: «Это
+  другой фильм. "везде всё и сразу" 2022». Until now that had no route at all, and a
+  free‑form turn answered it with four confirmations of writes that never happened.
+  It is the photo flow **minus the photo**: the same enrichment (the lookups first,
+  then one model fill), the same confirmation card, the same buttons, the same
+  confirm‑time writer — there is no second catalog writer to drift out of truth.
+  Everything you state carries its own provenance, **«с твоих слов»** — never «на фото»
+  (there is no photo) and never «нашла» (no lookup said it); and a year you typed
+  disambiguates the lookup exactly like a year printed on a poster, so «Дюна 2021»
+  searches for the 2021 film. What you leave out is filled by the ordinary enrichment
+  with its own label, or listed honestly under «не нашла». If you name **no kind**, she
+  files it under the assumed one and says so («Ты не сказал, фильм это или книга —
+  считаю, что фильм»), and «это книга» settles it — moving the entry to the other
+  catalog and taking the disclosure with it, while **keeping the year you gave** (your
+  words are not enrichment; calling the work a book does not make your 2022 untrue).
+  With no title at all she **asks which one** instead of inventing one.
+- **It adds; it never silently replaces (2026‑07‑28).** «Зачем ты стёрла предыдущий?
+  Надо было добавить новый!» — so a new title is a **new entry**, always. Three things
+  make that true in code rather than in the prompt:
+  · a message that **names a work the open card does not show** — a quoted title that
+  matches nothing staged, or an explicit «это другой фильм»/"a different movie" — is no
+  longer read as a correction of that card; it routes, and becomes its own entry. The
+  card stands, untouched, until you answer it. A quoted title the card **does** show
+  still corrects it, so «убери №1 «Дюна»» works as before — and so does an ordinary
+  correction that merely contains those words: «убери №2, это не тот» and «убери №2 —
+  другой фильм» still drop card entry 2, because an entry you pointed at **by number**
+  outranks a loose «другой» (routing them would let «убери №2» be read as deleting your
+  real saved note #2). Quotes around a card word are emphasis, not a title: «убери
+  "второй"» corrects the card;
+  · that same message can never be read as a **yes** to the open card either: even if
+  the router called it a confirm, the write boundary stays shut — and the offer she puts
+  in front of you is **the work you just named**, quotes and year included, rather than
+  a question about a title you already typed. Only when you named no title at all does
+  she ask which one;
+  · a title that **matches an existing entry** binds to it through the ordinary merge
+  path — the card names the note it would refresh (#N) and you can still say no — so
+  the catalog never gains a duplicate and never loses the entry it refreshed.
+- **Replacing a saved note's text now asks first (2026‑07‑28).** `note_edit` («исправь
+  заметку #11 на …», «поменяй краткое #3 на …») used to rewrite in place. Adding is
+  additive; replacing is not — the old text does not survive it — so it now **names the
+  entry and shows both versions** («Поменять текст записи #44 (Movies)? Сейчас: … →
+  Станет: …»), and only your yes applies it. Your yes also re‑embeds the note, so `ask`
+  can never answer out of the text you replaced. This is also the way to fix a **stale
+  catalog title**: note #44's summary is a whole paragraph («Форвард кинофильма "The
+  Ledge" …») because it predates the forwarded‑poster routing — retitling it fixes the
+  list line, the detail card and the catalog's dedup index at once, while the note's
+  stored facts (its year, its director) are left alone, because a title fix is no claim
+  about them. Nothing is bulk‑rewritten: only the note you name, only when you say yes.
+  If another question of hers is already waiting on your answer (a media card, say), she
+  asks you to close that one first instead of quietly taking its place in the queue — a
+  «да» meant for a card must never land on a text replacement.
+- **One field across the list you were just shown (2026‑07‑28, `list_field`).** «Покажи
+  год каждого» right after a three‑item Movies listing returned **one** note's full
+  detail card. It now answers for **every** item of that list: «покажи год каждого»,
+  «а годы?», «покажи жанры», «а режиссёры?», «show the year of each», «and the
+  authors?». The list she answers about is the one **pinned when it was delivered** —
+  the note‑review snapshot's mechanism, reused — so notes saved after the listing never
+  appear in the answer and notes you were shown never fall out of it; paging with ◀/▶
+  moves the pin to the page on your screen. It reads **stored facts only**: where a
+  field is missing it says so for that item («нет в записи») rather than looking one up
+  and printing it among your own data, and an item deleted since the listing is
+  reported as gone rather than quietly dropped. If she has shown you no list recently,
+  she says that instead of answering about a list you never saw — and "recently" is
+  literal: the pin lasts ten minutes and is **dropped the moment another view takes the
+  screen** (a journal page, a reminder list, a detail card), because «по каждому из
+  последнего списка» has to mean the list actually in front of you.
 - **You edit a message, she follows (2026‑07‑26).** Telegram edits are now requested
   (`allowed_updates` included `edited_message` for the first time) and handled:
   · the **dialogue record** is rewritten, so a verbatim readback matches what your chat
@@ -1370,6 +1438,27 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Action‑truth:** she won't claim a real task was done unless the code did it; every
   rendered template is checked in production and a catalogue‑wide test requires every
   "done/saved/scheduled" template to declare its lifecycle state.
+- **She never reports an action she did not perform — and when she can't do something she
+  says so and offers the route that can (2026‑07‑28).** This is the rule the live session
+  broke four times in three minutes: «Готово — сохранила … #51», «#51 теперь «X» вместо
+  «Y»», a restore and a renumbering, none of which happened, and a behavioural rule
+  learned from the invention on top. The contract now has both halves and both are code,
+  not wording:
+  - **Nothing announced that the code did not do.** An ordinary conversation turn cannot
+    write, so a completed‑action claim in one is blocked before it is sent, logged with
+    the exact phrase that tripped it, and replaced with an honest answer that names the
+    real route. The guard reads what she actually writes: dashes, italics, exotic spaces
+    and zero‑width characters are folded first; verb‑less shapes («#51 теперь …»),
+    per‑item outcome lists and the whole **create/file family** («создала», «внесла»,
+    «занесла», «оформила», «завела», "created", "made", "put") count as claims; and a
+    denial standing next to a claim no longer carries it through («ничего не стёрла —
+    добавила» is a claim). Nothing is learned from a turn that was blocked.
+  - **The route exists, so she rarely has to refuse.** «Это фильм» / «Это другой фильм —
+    "везде всё и сразу" 2022» now file a real catalog entry (`catalog_add`), «покажи год
+    каждого» answers for the whole list she showed you (`list_field`), and a wrong title
+    on a saved entry can be fixed (`note_edit`, which asks first). Where she still cannot
+    act she ASKS — naming what she needs — rather than producing a fluent confirmation.
+    An honest «я этого не сделала, но могу вот так» is always better than a smooth lie.
 - **Persona sits below the hard rules (structurally):** the live prompts that actually
   reach the model (`converse.CHARACTER`, the router/ingest system prompts) write the
   security, no‑fabrication, no‑fake‑action and no‑invented‑specifics rules **at the top**,
@@ -1398,7 +1487,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ hermes.py        her business register: ACTIONS domain + Hermes PERSONA + HermesMixin
    │                   (KB ask/fetch, budget_set, review, export)
    ├─ notes_svc.py     NotesMixin: notes/inbox handlers — lists, detail, show media,
-   │                   discard/recategorize/merge, purge (typed phrase), journals, problems
+   │                   discard/recategorize/merge, purge (typed phrase), journals, problems,
+   │                   note_edit (confirmed), list_field (one field across the pinned list)
    ├─ reminders_svc.py ReminderMixin: create/list/cancel/reschedule/rename/undo, partial
    │                   drafts, fired follow-ups, the fire/expiry sweeps
    ├─ ingest.py        parsing, UTF-16-safe URL extraction, category+facts+summary

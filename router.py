@@ -35,6 +35,8 @@ ACTIONS = {
     "item_detail",       # params: id OR query/category — one item in full (links, source)
     "item_delete",       # params: id OR query — delete a stored item (asks confirmation)
     "note_edit",         # params: id/query + new_summary — fix a saved note's summary text in place
+    "catalog_add",       # params: title (+ kind movie|book, year, creator) — add a movie/book to the catalog from TEXT
+    "list_field",        # params: field in year|creator|genre — one field for EVERY item of the list just shown
     "recategorize",      # params: id/ids/query/count + category — change a saved item's category
     "note_lifecycle",    # params: operation in archive|restore|keep|set_purpose|review_later|make_temporary + id/ids/query, purpose, when (UTC ISO)
     "note_review",       # show up to 3 saved notes worth a decision (review due / expiring / untriaged / unused)
@@ -153,7 +155,13 @@ NOTE: a gratitude STATEMENT with content («я благодарен X за Y», 
 "покажи ссылку" / "show the link" -> {"action": "item_detail", "params": {}, "confidence": 0.9}
 "покажи #3" / "детали 3" / "покажи заметку 11" / "заметку #11" / "open note 11" -> {"action": "item_detail", "params": {"id": 11}, "confidence": 0.9}
 "исправь заметку #11: встреча перенесена на вторник" / "поменяй краткое #3 на «оплатить до пятницы»" / "измени описание заметки про рейсы на …" / "edit note 11: new text" / "fix the summary of #3 to …" -> {"action": "note_edit", "params": {"id": 11, "new_summary": "встреча перенесена на вторник"}, "confidence": 0.9}
-NOTE: note_edit fixes a saved NOTE's SUMMARY text — put the corrected text in new_summary and target by id/query. It is NOT recategorize (which changes a note's CATEGORY, not its text) and NOT reminder_rename (which retitles a REMINDER). "исправь/поменяй краткое/измени описание/edit note/fix the summary" of a NOTE -> note_edit.
+NOTE: note_edit fixes a saved NOTE's SUMMARY text — put the corrected text in new_summary and target by id/query. It is NOT recategorize (which changes a note's CATEGORY, not its text) and NOT reminder_rename (which retitles a REMINDER). "исправь/поменяй краткое/измени описание/edit note/fix the summary" of a NOTE -> note_edit. It ASKS before replacing the text, naming the note.
+"добавь в фильмы «Всё везде и сразу» 2022" / "запиши книгу «Дюна» Фрэнк Герберт" / "добавь в каталог фильм Интерстеллар" / "add the movie \"Everything Everywhere All at Once\" (2022) to my catalog" / "save the book Dune by Frank Herbert" -> {"action": "catalog_add", "params": {"title": "Всё везде и сразу", "kind": "movie", "year": "2022"}, "confidence": 0.92}
+"Это другой фильм. \"везде всё и сразу\" 2022" / "нет, я про другой фильм — «Дюна» 2021" / "no, a different movie — \"Dune\" 2021" (he NAMES another work: that is a NEW catalog entry, never a replacement of an old one) -> {"action": "catalog_add", "params": {"title": "Всё везде и сразу", "kind": "movie", "year": "2022"}, "confidence": 0.9}
+"Это фильм" / "это книга" / "it's a movie" (right after a title was under discussion — take the TITLE from the recent conversation and put it in params.title) -> {"action": "catalog_add", "params": {"title": "<the title from the conversation>", "kind": "movie"}, "confidence": 0.85}
+NOTE: catalog_add ADDS a movie/book to the Movies/Books catalog from TEXT (title he typed), and shows a confirmation card before anything is stored. Use it whenever he names a film/book he wants kept — including a CORRECTION that names a different work ("это другой фильм — X"): that is a NEW entry. It NEVER replaces an existing entry; only note_edit does that, and only after asking. If he names no title at all and none is in the conversation, still use catalog_add (she asks which one) rather than converse.
+"покажи год каждого" / "а годы?" / "покажи жанры" / "а режиссёры?" / "у всех год покажи" / "show the year of each" / "and the directors?" (a FOLLOW-UP asking for ONE field across the list she just showed) -> {"action": "list_field", "params": {"field": "year"}, "confidence": 0.9}
+NOTE: list_field answers ONE field (year | creator | genre) for EVERY item of the list just shown. "год/годы"->year, "режиссёр/автор/чей"->creator, "жанр"->genre. It is NOT item_detail (that opens ONE note in full) — «покажи год каждого» after a 3-item listing must answer for all three.
 "ссылку из поста про рейсы" -> {"action": "item_detail", "params": {"query": "рейсы"}, "confidence": 0.9}
 "удали это сообщение" / "delete it" / "сотри это" -> {"action": "item_delete", "params": {}, "confidence": 0.9}
 "удали #2" / "удали пост про рейсы" / "сотри #2" -> {"action": "item_delete", "params": {"id": 2}, "confidence": 0.9}

@@ -102,10 +102,26 @@ def normalize_claim_text(text):
 # completion header. That is what stops the guard from eating her shared-world
 # voice — and a false positive is no longer cheap: it now costs a second model
 # call, writes an issue and closes the memory paths for a whole curation window.
+#
+# REVIEW 2026-07-28 — the CREATE family. The batch that added `catalog_add` made
+# "she filed a new entry" the commonest thing she can now truthfully report, and
+# the guard knew none of the words for it: «создала», «занесла», «оформила»,
+# «прописала», «завела», «внесла», «положила», «разделила», "created", "made",
+# "put" were in no set at all, so a verbatim re-run of the 13:25 fabrication with
+# ONE synonym swapped shipped to the boss. Which set each one belongs to is the
+# same judgement as before — does the word have an ordinary non-data meaning in
+# her voice? «внесла ясность», «завела разговор», «положила книгу на полку»,
+# "I made tea", "I entered the room", "put the kettle on" all say yes, so those
+# are NARRATIVE-CAPABLE and need a data cue or a «Готово» header; «создала
+# запись» and «занесла в каталог» have no such second life.
 _RU_DATA_VERBS = (
     "сохранила|сохранено|сохранена|сохранён|сохранен|"
     "записала|записано|записана|записан|"
     "добавила|добавлено|добавлена|добавлен|"
+    "создала|создано|создана|создан|"
+    "занесла|занесено|занесена|занесён|занесен|"
+    "оформила|оформлено|оформлена|оформлен|"
+    "прописала|прописано|прописана|прописан|"
     "удалила|удалено|удалена|удалён|удален|"
     "стёрла|стерла|стёрто|стерто|стёрта|стерта|"
     "очистила|очищено|очищена|очищен|"
@@ -117,9 +133,13 @@ _RU_DATA_VERBS = (
 )
 _EN_DATA_VERBS = (
     "saved|filed|deleted|cleared|renamed|added|restored|replaced|confirmed|"
-    "scheduled|exported|purged|synced"
+    "scheduled|exported|purged|synced|created|registered"
 )
 _RU_SOFT_VERBS = (
+    "внесла|внесено|внесена|внесён|внесен|"
+    "завела|заведено|заведена|заведён|заведен|"
+    "положила|положено|положена|положен|"
+    "разделила|разделено|разделена|разделён|разделен|"
     "закрыла|закрыто|закрыта|закрыт|"
     "перенесла|перенесено|перенесена|перенесён|перенесен|"
     "передвинула|передвинуто|передвинута|"
@@ -134,7 +154,8 @@ _RU_SOFT_VERBS = (
     "отправила|отправлено|отправлена|отправлен|"
     "выгрузила|выгружено|выгружена"
 )
-_EN_SOFT_VERBS = "closed|moved|updated|fixed|marked|linked|assigned|sent"
+_EN_SOFT_VERBS = ("closed|moved|updated|fixed|marked|linked|assigned|sent|"
+                  "made|entered|logged|placed|put")
 
 _DATA_VERBS = f"{_RU_DATA_VERBS}|{_EN_DATA_VERBS}"
 _DONE_VERBS = f"{_DATA_VERBS}|{_RU_SOFT_VERBS}|{_EN_SOFT_VERBS}"
@@ -228,6 +249,19 @@ _NEGATION_TAIL_RE = re.compile(
     re.IGNORECASE)
 _NEGATION_WINDOW = 40
 
+# English has verbs whose PAST form is also the base form — «put», «placed after
+# to», «sent». The Russian alternation can simply exclude the future/infinitive
+# («добавлю»/«добавить» are different words from «добавила»), but "I can put it
+# in Movies" is an OFFER spelled exactly like a report, and offers are the reply
+# this whole guard exists to produce. A modal or an infinitive marker directly in
+# front of the verb turns it back into one (review 2026-07-28, added with the
+# create/place family).
+_OFFER_TAIL_RE = re.compile(
+    r"\b(?:can|could|will|'ll|shall|should|would|may|might|must|"
+    r"let\s+me|want\s+me\s+to|going\s+to|gonna|to)\s+"
+    r"(?:just\s+|also\s+|then\s+|now\s+)?$",
+    re.IGNORECASE)
+
 # Explicit references to an EARLIER exchange. Discussion of a real past save —
 # «Да, я сохранила его вчера в Movies под #51» — is truthful and must survive, or
 # the repair pass turns it into a confident false DENIAL of something that really
@@ -260,6 +294,12 @@ _QUESTION_CUE_RE = re.compile(
 
 def _negated(value, pos):
     return bool(_NEGATION_TAIL_RE.search(value[max(0, pos - _NEGATION_WINDOW):pos]))
+
+
+def _offered(value, pos):
+    """True when the verb at `pos` sits behind a modal/infinitive marker — a
+    FUTURE offer, not a completed action."""
+    return bool(_OFFER_TAIL_RE.search(value[max(0, pos - _NEGATION_WINDOW):pos]))
 
 
 def _line_around(value, start, end):
@@ -401,13 +441,31 @@ def action_claim_match(text):
     """The exact fragment where ordinary chat claims a completed state change, or
     None. Returned (not just a bool) so the blocked reply can be logged with the
     phrase that tripped the guard — the four production fabrications were only
-    diagnosable because the raw lines were kept."""
+    diagnosable because the raw lines were kept.
+
+    The scan RESUMES ONE CHARACTER PAST a rejected verb, never past the whole
+    match (review 2026-07-28). `finditer` is non-overlapping, so a match thrown
+    out as a denial used to consume everything it spanned — and a denial
+    immediately followed by a claim is exactly the shape of the 13:28 apology:
+    in «Ничего не стёрла - добавила новой записью» the verb group bound to
+    «стёрла», the match was excused, and «добавила» was never evaluated at all.
+    Whether that bypassed was luck rather than design — the same sentence with
+    «удаляла» happened to be caught. A guard that protects the apology and drops
+    the lie inside it is not a guard."""
     value = normalize_claim_text(text)
     for pattern in _CLAIM_PATTERNS:
-        for m in pattern.finditer(value):
+        cursor = 0
+        while cursor <= len(value):
+            m = pattern.search(value, cursor)
+            if m is None:
+                break
             pos = m.start("verb") if "verb" in pattern.groupindex else m.start()
-            if _negated(value, pos) or _inside_question(value, pos, m.end()) \
+            if _negated(value, pos) or _offered(value, pos) \
+                    or _inside_question(value, pos, m.end()) \
                     or _past_reference(value, pos, m.end()):
+                # pos >= m.start() >= cursor for every pattern, so this always
+                # advances — the loop cannot stall on a rejected match.
+                cursor = pos + 1
                 continue
             return " ".join(m.group(0).split())
     return None

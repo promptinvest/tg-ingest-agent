@@ -871,10 +871,17 @@ class AgentViewTests(unittest.TestCase):
         self.assertIn("🌐 vandrouki.ru/x", line)     # compact form: host+path, no scheme/query
 
     def test_note_edit_updates_summary_only(self):
+        # C2 (2026-07-28): a replacement ASKS first, then updates the summary
+        # only — the original text (the KB source) still survives it.
         original_raw = store.get_message(self.agent.conn, self.row_id)["raw_text"]
         with mock.patch.object(self.agent, "reply") as r:
             self.agent.do_note_edit(1, "ru", {"id": self.agent.note_no(self.row_id),
                                               "new_summary": "исправленное краткое"}, "")
+        self.assertEqual(store.pending_get(self.agent.conn, 1)["kind"], "note_retitle")
+        with mock.patch.object(self.agent, "reply") as r, \
+                mock.patch.object(self.agent, "index_message"):
+            self.agent.resolve_pending(1, "confirm", {},
+                                       store.pending_get(self.agent.conn, 1), "ru")
         row = store.get_message(self.agent.conn, self.row_id)
         self.assertEqual(row["summary"], "исправленное краткое")   # summary fixed in place
         self.assertEqual(row["raw_text"], original_raw)            # original text preserved (KB source)
@@ -4365,7 +4372,7 @@ class DisplayNumberTests(unittest.TestCase):
 
     def test_notes_page_shows_sequential_numbers(self):
         self._note(1, "a"); self._note(2, "b"); self._note(3, "c")
-        text, _, _ = self.agent._notes_page("ru", None, None, 0, "tok")  # live paginated path
+        text, _, _, _ = self.agent._notes_page("ru", None, None, 0, "tok")  # live paginated path
         self.assertIn("#1", text)
         self.assertIn("#2", text)
         self.assertIn("#3", text)
@@ -14563,6 +14570,14 @@ class AuditFixes20260726Tests(unittest.TestCase):
             self.agent.do_note_edit(1, "ru", {"id": self._no(rid),
                                               "new_summary": "новое краткое"},
                                     text="исправь")
+        # C2: the replacement is offered, not performed — the text changes only
+        # after his yes (and the offer already quotes the new text back).
+        self.assertIn("новое краткое", rep.call_args[0][1])
+        self.assertNotEqual(store.get_message(self.conn, rid)["summary"], "новое краткое")
+        with mock.patch.object(self.agent, "reply") as rep, \
+                mock.patch.object(self.agent, "index_message"):
+            self.agent.resolve_pending(1, "confirm", {},
+                                       store.pending_get(self.conn, 1), "ru")
         self.assertEqual(store.get_message(self.conn, rid)["summary"], "новое краткое")
         self.assertIn("новое краткое", rep.call_args[0][1])
 
@@ -24332,6 +24347,930 @@ class CatalogGrounding20260728Tests(unittest.TestCase):
         # …and a repeated number is resolved once, not six times.
         self.assertEqual(self.agent._note_refs_grounding("#7 #7 #7"),
                          ["    #7: NO SUCH NOTE — this number holds nothing"])
+
+
+class CatalogAddFromText20260728Tests(unittest.TestCase):
+    """C1/C2 — the route converse had to improvise.
+
+    Production 2026-07-28: after she declined to file his own photo, «Это фильм»
+    and «Это другой фильм. "везде всё и сразу" 2022» had NO deterministic route.
+    Converse answered them, converse cannot write, and four confirmations of
+    writes that never happened followed. `catalog_add` is that missing route: the
+    photo flow minus the photo — same enrichment, same card, same confirm-time
+    writer — and it ADDS rather than replaces.
+
+    Only network boundaries are mocked (llm.urlopen, fetch.fetch_json, tg_call);
+    assertions are durable DB state and the text he would actually read.
+    """
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1",
+                          DB_PATH=str(Path(self.tmp.name) / "ca.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+        self.sent = []
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    @staticmethod
+    def _llm_body(content):
+        return json.dumps({"choices": [{"message": {"content": content}}],
+                           "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+                          ensure_ascii=False).encode("utf-8")
+
+    def run_with_models(self, fn, enrich=None, lookups=None):
+        """Run `fn` with the network scripted: `enrich` serves the catalog
+        enrichment model call (None = an empty fill, i.e. nothing found), and
+        `lookups` serves fetch.fetch_json (None = every lookup fails, as if
+        offline). Returns the texts she sent."""
+        sent = []
+        test = self
+        enrich_queue = list(enrich) if enrich is not None else None
+        lookup_queue = list(lookups) if lookups is not None else None
+        self.llm_systems = []
+        self.lookup_urls = []
+
+        def fake_fetch_json(url, timeout=None, max_bytes=None):
+            test.lookup_urls.append(url)
+            if lookup_queue is None:
+                raise fetch.FetchError("lookups scripted off")
+            if not lookup_queue:
+                raise AssertionError(f"unexpected lookup: {url}")
+            item = lookup_queue.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        def fake_urlopen(request, timeout=None):
+            url = getattr(request, "full_url", "")
+            payload = json.loads(request.data.decode("utf-8"))
+            if url.endswith("/embeddings"):
+                data = [{"index": i, "embedding": [0.1, 0.2]}
+                        for i in range(len(payload.get("input") or []))]
+                return test._Resp(json.dumps(
+                    {"data": data, "usage": {"prompt_tokens": 3}}).encode("utf-8"))
+            system = str((payload.get("messages") or [{}])[0].get("content"))
+            test.llm_systems.append(system)
+            if "PERSONAL MEDIA CATALOG" in system:
+                if enrich_queue is None:
+                    return test._Resp(test._llm_body('{"items": []}'))
+                if not enrich_queue:
+                    raise AssertionError("unexpected enrichment call")
+                return test._Resp(test._llm_body(enrich_queue.pop(0)))
+            raise AssertionError(f"unexpected model call: {system[:60]}")
+
+        def fake_tg(token, method, params=None, **kw):
+            if method == "sendMessage":
+                sent.append((params or {}).get("text", ""))
+            return {"message_id": 4242}
+
+        with mock.patch.object(llm, "urlopen", side_effect=fake_urlopen), \
+                mock.patch.object(fetch, "fetch_json", side_effect=fake_fetch_json,
+                                  create=True), \
+                mock.patch.object(self.mod, "tg_call", side_effect=fake_tg):
+            fn()
+        self.assertFalse(enrich_queue, f"unused enrichment replies: {enrich_queue}")
+        self.assertFalse(lookup_queue, f"unused lookups: {lookup_queue}")
+        self.sent = sent
+        return sent
+
+    def _add(self, params, **kw):
+        return self.run_with_models(
+            lambda: self.agent.do_catalog_add(1, "ru", params), **kw)
+
+    def _confirm(self):
+        return self.run_with_models(
+            lambda: self.agent.resolve_pending(
+                1, "confirm", {}, store.pending_get(self.conn, 1), "ru"))
+
+    def _catalog(self, category="Movies"):
+        return store.list_messages(self.conn, category, None, limit=None)
+
+    # -- C1: the route exists, and it stores only on his yes -------------------
+
+    def test_the_card_is_offered_and_nothing_is_stored_before_the_yes(self):
+        card = self._add({"title": "Всё везде и сразу", "kind": "movie",
+                          "year": "2022"})[0]
+        self.assertIn("Всё везде и сразу", card)
+        self.assertIn("2022", card)
+        # the CARD, not a claim: no note exists yet, in any catalog category
+        self.assertEqual(self._catalog("Movies"), [])
+        self.assertEqual(self._catalog("Books"), [])
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "media_capture")
+        # …and his ✅ is what writes it
+        done = self._confirm()[0]
+        rows = self._catalog("Movies")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["summary"], "Всё везде и сразу")
+        self.assertIn("Всё везде и сразу", done)
+        self.assertIn(f"#{self.agent.note_no(rows[0]['id'])}", done)
+
+    def test_what_he_states_is_labelled_as_his_words_never_as_a_photo(self):
+        # The provenance he can check: he typed the year, so the card says so.
+        # «на фото» would claim a photo that does not exist, «нашла» would claim
+        # a lookup that never ran.
+        card = self._add({"title": "Дюна", "kind": "book", "year": "1965",
+                          "creator": "Фрэнк Герберт"})[0]
+        self.assertIn(texts.T("ru", "media_src_boss"), card)
+        self.assertNotIn(texts.T("ru", "media_src_photo"), card)
+        self.assertNotIn("📸", card)
+        self.assertIn(texts.T("ru", "catalog_card_header", n=1).split("(")[0].strip(),
+                      card)
+        self._confirm()
+        facts = [f["fact"] for f in store.message_facts(
+            self.conn, self._catalog("Books")[0]["id"])]
+        self.assertIn("boss: year: 1965", facts)
+        self.assertIn("boss: author: Фрэнк Герберт", facts)
+
+    def test_enrichment_fills_what_he_did_not_say_with_its_own_provenance(self):
+        # Same enrichment path as a photo read: the model fill is labelled «по
+        # памяти», and only fields he left open are touched.
+        card = self._add(
+            {"title": "Всё везде и сразу", "kind": "movie", "year": "2022"},
+            enrich=['{"items": [{"n": 1, "creator": "Дэн Кван", "year": "1999",'
+                    ' "genre": "фантастика"}]}'])[0]
+        self.assertIn("Дэн Кван", card)
+        self.assertIn(texts.T("ru", "media_src_model"), card)
+        self.assertIn("2022", card)
+        self.assertNotIn("1999", card)     # his year is not overwritten by a fill
+
+    def test_a_year_he_typed_disambiguates_the_lookup_like_a_visible_one(self):
+        # media.seen_value: a year he STATED is evidence about the work, exactly
+        # like a year printed on a poster — so it steers the search query and
+        # rides into the enrichment evidence. Two «Дюна» films exist; which one
+        # he means is the whole point.
+        self._add({"title": "Дюна", "kind": "movie", "year": "2021"})
+        self.assertTrue(self.lookup_urls)
+        self.assertTrue(any("2021" in url for url in self.lookup_urls),
+                        self.lookup_urls)
+        item_line = [s for s in self.llm_systems if "PERSONAL MEDIA CATALOG" in s][0]
+        self.assertIn("2021", item_line)
+
+    def test_no_title_asks_which_one_instead_of_inventing_one(self):
+        sent = self.run_with_models(lambda: self.agent.do_catalog_add(1, "ru", {}))
+        self.assertEqual(sent, [texts.T("ru", "catalog_add_which")])
+        self.assertEqual(self._catalog("Movies"), [])
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    def test_an_unstated_kind_is_disclosed_not_silently_picked(self):
+        card = self._add({"title": "Интерстеллар"})[0]
+        self.assertIn(texts.T("ru", "catalog_card_kind_assumed",
+                              kind=texts.T("ru", "media_kind_movie")), card)
+        # …and «это книга» settles it: the disclosure goes with the doubt, and
+        # the entry moves to the other catalog.
+        redrawn = self.run_with_models(lambda: self.agent.resolve_media_correction(
+            1, "ru", self.agent._media_stash(1), "это книга"))[0]
+        self.assertNotIn(texts.T("ru", "catalog_card_kind_assumed",
+                                 kind=texts.T("ru", "media_kind_movie")), redrawn)
+        self._confirm()
+        self.assertEqual(len(self._catalog("Books")), 1)
+        self.assertEqual(self._catalog("Movies"), [])
+
+    def test_a_kind_flip_keeps_the_year_he_stated(self):
+        # clear_enrichment drops what a lookup/the model produced. What HE said
+        # is not enrichment: calling the work a book does not make his 2022
+        # untrue, and a text route has no photo comment to rescue it into.
+        self._add({"title": "Всё везде и сразу", "year": "2022"})
+        self.run_with_models(lambda: self.agent.resolve_media_correction(
+            1, "ru", self.agent._media_stash(1), "это книга"))
+        entry = self.agent._media_stash(1)["entries"][0]
+        self.assertEqual(entry["year"], "2022")
+        self.assertEqual(entry["year_src"], "boss")
+
+    # -- C2: it ADDS; replacing is a separate, confirmed act -------------------
+
+    def test_a_correction_that_names_another_work_is_a_NEW_entry(self):
+        """The exact live exchange, end to end. «Это другой фильм. "везде всё и
+        сразу" 2022» must not rewrite the open card's entry — and must not be
+        swallowed by the correction parser either."""
+        self._add({"title": "Я устал от тебя", "kind": "movie", "year": "2011"})
+        self._confirm()
+        first = self._catalog("Movies")[0]
+        first_no = self.agent.note_no(first["id"])
+        # Now the correction, as he wrote it. It is NOT a card correction…
+        stash = {"entries": [{"title": "Я устал от тебя", "kind": "movie"}]}
+        self.assertFalse(self.agent.resolve_media_correction(
+            1, "ru", stash, 'Это другой фильм. "везде всё и сразу" 2022'))
+        # …it is a second entry, and the first one is untouched by it.
+        self.agent._reset_turn_state()      # the turn ends; the next one begins
+        self._add({"title": "Всё везде и сразу", "kind": "movie", "year": "2022"})
+        self._confirm()
+        rows = {r["summary"] for r in self._catalog("Movies")}
+        self.assertEqual(rows, {"Я устал от тебя", "Всё везде и сразу"})
+        self.assertEqual(store.message_by_note_no(self.conn, first_no)["summary"],
+                         "Я устал от тебя")
+
+    def test_a_message_naming_another_work_can_never_be_read_as_a_yes(self):
+        # Belt and braces at the WRITE boundary: even if the router called it a
+        # confirm, a message that names a work the card does not show is not a
+        # yes to that card. Nothing is stored on that turn.
+        #
+        # …and the refusal CARRIES the work he named (review fix 2026-07-28):
+        # answering «Что добавить в каталог? Напиши название» to the message
+        # whose quotes hold that very title is the dead end this batch exists to
+        # remove.
+        self._add({"title": "Я устал от тебя", "kind": "movie"})
+        stash = self.agent._media_stash(1)
+        self.agent.resolve_media_correction(
+            1, "ru", stash, 'Это другой фильм. "везде всё и сразу" 2022')
+        sent = self.run_with_models(lambda: self.agent.resolve_pending(
+            1, "confirm", {}, store.pending_get(self.conn, 1), "ru"))
+        self.assertEqual(self._catalog("Movies"), [])       # nothing stored
+        self.assertEqual(self._catalog("Books"), [])
+        self.assertNotIn(texts.T("ru", "catalog_add_which"), sent)
+        self.assertIn("везде всё и сразу", sent[0])
+        self.assertIn("2022", sent[0])
+        # the offer standing in front of him is the NEW work, still unsaved
+        staged = self.agent._media_stash(1)["entries"]
+        self.assertEqual([e["title"] for e in staged], ["везде всё и сразу"])
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "media_capture")
+
+    def test_a_refusal_with_no_title_in_it_still_asks_which_one(self):
+        # PASSES EITHER WAY: the sibling of the fix above — carrying the named
+        # work in must not turn "I have no title" into a guess.
+        # The other half: «это другой фильм» names a work but not WHICH one, and
+        # guessing a title out of the conversation is the inference that produced
+        # the fabrication. She asks — and stores nothing either way.
+        self._add({"title": "Я устал от тебя", "kind": "movie"})
+        self.agent.resolve_media_correction(
+            1, "ru", self.agent._media_stash(1), "это другой фильм")
+        sent = self.run_with_models(lambda: self.agent.resolve_pending(
+            1, "confirm", {}, store.pending_get(self.conn, 1), "ru"))
+        self.assertEqual(sent, [texts.T("ru", "catalog_add_which")])
+        self.assertEqual(self._catalog("Movies"), [])
+
+    def test_the_assumed_kind_line_goes_when_he_settles_it_either_way(self):
+        # «Это фильм» on a card that ASSUMED movie changes no kind — but it does
+        # answer the card's own open question, so the card is re-drawn without
+        # the disclosure instead of acknowledged with the stale line still on
+        # his screen. And a flip there and back never brings it back.
+        assumed = texts.T("ru", "catalog_card_kind_assumed",
+                          kind=texts.T("ru", "media_kind_movie"))
+        card = self._add({"title": "Интерстеллар"})[0]
+        self.assertIn(assumed, card)
+        redrawn = self.run_with_models(lambda: self.agent.resolve_media_correction(
+            1, "ru", self.agent._media_stash(1), "это фильм"))[0]
+        self.assertNotIn(assumed, redrawn)
+        self.assertIn("Интерстеллар", redrawn)
+        self.assertNotIn(texts.T("ru", "media_correction_noop",
+                                 kind=texts.T("ru", "media_kind_movie")), redrawn)
+        self.run_with_models(lambda: self.agent.resolve_media_correction(
+            1, "ru", self.agent._media_stash(1), "это книга"))
+        back = self.run_with_models(lambda: self.agent.resolve_media_correction(
+            1, "ru", self.agent._media_stash(1), "нет, это фильм"))[0]
+        self.assertNotIn(assumed, back)
+
+    def test_the_save_ack_he_reads_is_the_deterministic_template(self):
+        # PASSES EITHER WAY: the scope assertion the missing corpus item asked
+        # for — the day the free-form guard is applied to `reply()` at large,
+        # this is the test that says what breaks.
+        # The free-form guard would match «Готово, сохранила» — it is wired to
+        # converse output alone, and this is the reply that proves the real save
+        # path is untouched by it (review fix 2026-07-28).
+        self._add({"title": "Дюна", "kind": "movie"})
+        done = self._confirm()[0]
+        head = texts.T("ru", "media_saved", lines="").splitlines()[0]
+        self.assertTrue(done.startswith(head), done)
+        self.assertIn("Дюна", done)
+
+    def test_the_same_title_offers_a_refresh_of_that_note_and_names_it(self):
+        # C2's other half: an existing title is not duplicated and not silently
+        # replaced — the card SAYS which note the confirm would update.
+        self._add({"title": "Дюна", "kind": "movie", "year": "2021"})
+        self._confirm()
+        row = self._catalog("Movies")[0]
+        no = self.agent.note_no(row["id"])
+        card = self._add({"title": "Дюна", "kind": "movie",
+                          "creator": "Дени Вильнёв"})[0]
+        self.assertIn(texts.T("ru", "media_card_merge",
+                              title=media.quoted_title("Дюна"), row_id=no), card)
+        self._confirm()
+        rows = self._catalog("Movies")
+        self.assertEqual(len(rows), 1)      # refreshed, never a second «Дюна»
+        facts = [f["fact"] for f in store.message_facts(self.conn, rows[0]["id"])]
+        self.assertIn("boss: director: Дени Вильнёв", facts)
+        self.assertIn("boss: year: 2021", facts)
+
+    def test_the_route_is_wired_end_to_end(self):
+        import router as router_mod
+        import skill_manifest
+        self.assertIn("catalog_add", router_mod.ACTIONS)
+        self.assertIn("catalog_add", self.mod._DISPATCH)
+        policy = skill_manifest.get_policy("catalog_add")
+        self.assertTrue(policy["requires_confirmation"])
+        self.assertTrue(policy["writes_state"])
+        # the phrasings from the live transcript are in the router's few-shots
+        self.assertIn('Это другой фильм', router_mod.ROUTER_EXAMPLES)
+        self.assertIn('"Это фильм"', router_mod.ROUTER_EXAMPLES)
+        self.assertIn('add the movie', router_mod.ROUTER_EXAMPLES)
+        self.assertIn("It NEVER replaces an existing entry", router_mod.ROUTER_EXAMPLES)
+
+
+class OtherWorkParse20260728Tests(unittest.TestCase):
+    """C2 at the parser level: a message that names ANOTHER work is not a
+    correction of the open card — it is a new entry, and it must reach the
+    router."""
+
+    def test_a_quoted_title_the_card_does_not_show_routes(self):
+        self.assertIsNone(media.parse_correction(
+            'Это другой фильм. "везде всё и сразу" 2022', 1, ["Я устал от тебя"]))
+        self.assertIsNone(media.parse_correction(
+            "нет, я про «Дюну» 2021", 1, ["Я устал от тебя"]))
+        self.assertIsNone(media.parse_correction(
+            'no, a different movie — "Dune"', 1, ["I'm tired of you"]))
+
+    def test_a_quoted_title_the_card_DOES_show_still_corrects_it(self):
+        self.assertEqual(
+            media.parse_correction("убери №1 «Дюна»", 1, ["Дюна"]), ("remove", [1]))
+        # an ALIAS counts as the same work
+        self.assertEqual(
+            media.parse_correction("это книга «Dune»", 1, ["Дюна", "Dune"]),
+            ("book", [1]))
+        # …and the same sentence about a work the card does NOT show routes
+        self.assertIsNone(media.parse_correction("убери №1 «Солярис»", 1, ["Дюна"]))
+
+    def test_an_explicit_other_work_phrase_routes_without_a_title(self):
+        for text in ("это другой фильм", "нет, не тот фильм",
+                     "that's a different book", "wrong movie"):
+            with self.subTest(text=text):
+                self.assertIsNone(media.parse_correction(text, 1, ["Дюна"]), text)
+
+    def test_ordinary_corrections_are_untouched(self):
+        # The survives-siblings guard for the new escape hatch: an apostrophe is
+        # not a quote and a kind word is not a work, so every ordinary correction
+        # still parses exactly as it did.
+        for text, expected in (("это книга", ("book", [1])),
+                               ("Не книга, а фильм", ("movie", [1])),
+                               ("убери его отсюда", ("remove", [1]))):
+            with self.subTest(text=text):
+                self.assertEqual(media.parse_correction(text, 1, ["Дюна"]), expected)
+        self.assertFalse(media.names_other_work("it's a book, that's it", ["Дюна"]))
+        self.assertFalse(media.names_other_work("это книга", []))
+
+
+class ListFieldAcrossList20260728Tests(unittest.TestCase):
+    """C3 — «Покажи год каждого» right after a 3-item Movies listing returned ONE
+    note's full detail card (production 2026-07-28 05:49). A field follow-up is
+    answered for EVERY item of the list she actually showed, from the pinned
+    snapshot — never from a re-derived "most recent" query."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1",
+                          DB_PATH=str(Path(self.tmp.name) / "lf.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _note(self, category, title, facts=()):
+        cat = store.ensure_category(self.conn, category)
+        self._next_tg = getattr(self, "_next_tg", 0) - 1
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": self._next_tg,
+            "received_at": store._now(), "raw_text": title})
+        store.set_suggestion(self.conn, rid, cat, title, "m")
+        store.set_facts(self.conn, rid, list(facts))
+        store.confirm_category(self.conn, rid, cat)
+        return rid
+
+    def _say(self, fn):
+        replies = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, **k: replies.append(text)
+                               or {"message_id": 7}), \
+                mock.patch.object(self.agent, "reply_chunks",
+                                  side_effect=lambda cid, text, **k: replies.append(text)):
+            fn()
+        return "\n".join(replies)
+
+    def _list_movies(self):
+        return self._say(lambda: self.agent.do_list_items(1, "ru", {"category": "Movies"}))
+
+    def _field(self, params, text=""):
+        return self._say(lambda: self.agent.do_list_field(1, "ru", params, text))
+
+    def test_the_year_is_answered_for_every_item_of_the_shown_list(self):
+        self._note("Movies", "Дюна", ["lookup: year: 2021"])
+        self._note("Movies", "Всё везде и сразу", ["boss: year: 2022"])
+        self._note("Movies", "Я устал от тебя", ["photo: year: 2011"])
+        self._list_movies()
+        out = self._field({"field": "year"})
+        for year in ("2021", "2022", "2011"):
+            self.assertIn(year, out)
+        for title in ("Дюна", "Всё везде и сразу", "Я устал от тебя"):
+            self.assertIn(title, out)
+        # it is a LIST answer, not one note's detail card
+        self.assertNotIn("🔑", out)
+        self.assertEqual(len(
+            [l for l in out.splitlines() if l.startswith("#")]), 3)
+
+    def test_a_missing_field_is_said_honestly_per_item(self):
+        self._note("Movies", "Дюна", ["lookup: year: 2021"])
+        self._note("Movies", "A Star is Born")     # filed by ingest, no facts
+        self._list_movies()
+        out = self._field({"field": "year"})
+        self.assertIn("2021", out)
+        star = [l for l in out.splitlines() if "A Star is Born" in l][0]
+        self.assertIn(texts.T("ru", "list_field_unknown"), star)
+        # nothing was invented to fill the hole
+        self.assertNotIn("19", star.replace("A Star is Born", ""))
+
+    def test_directors_and_genres_answer_the_same_way(self):
+        self._note("Movies", "Дюна", ["lookup: director: Дени Вильнёв",
+                                      "model: genre: фантастика"])
+        self._note("Movies", "Всё везде и сразу", ["boss: director: Дэн Кван"])
+        self._list_movies()
+        creators = self._field({}, "а режиссёры?")
+        self.assertIn("Дени Вильнёв", creators)
+        self.assertIn("Дэн Кван", creators)
+        genres = self._field({}, "покажи жанры")
+        self.assertIn("фантастика", genres)
+        self.assertIn(texts.T("ru", "list_field_unknown"), genres)
+
+    def test_the_english_phrasings_reach_the_same_answer(self):
+        self._note("Books", "Dune", ["lookup: author: Frank Herbert",
+                                     "lookup: year: 1965"])
+        self._say(lambda: self.agent.do_list_items(1, "en", {"category": "Books"}))
+        out = self._say(lambda: self.agent.do_list_field(
+            1, "en", {}, "and the authors?"))
+        self.assertIn("Frank Herbert", out)
+        self.assertIn(texts.T("en", "list_field_name_creator"), out)
+        years = self._say(lambda: self.agent.do_list_field(
+            1, "en", {}, "show the year of each"))
+        self.assertIn("1965", years)
+
+    def test_it_answers_about_the_SHOWN_list_not_the_newest_notes(self):
+        """The substitution this mechanism exists to prevent: notes saved AFTER
+        the listing must not appear in the answer, and the ones he was shown must
+        not fall out of it."""
+        self._note("Movies", "Дюна", ["lookup: year: 2021"])
+        self._list_movies()
+        self._note("Movies", "Совсем новая", ["lookup: year: 2030"])
+        out = self._field({"field": "year"})
+        self.assertIn("2021", out)
+        self.assertNotIn("Совсем новая", out)
+        self.assertNotIn("2030", out)
+
+    def test_with_no_shown_list_she_says_so_instead_of_guessing(self):
+        self._note("Movies", "Дюна", ["lookup: year: 2021"])
+        out = self._field({"field": "year"})
+        self.assertEqual(out, texts.T("ru", "list_field_no_list"))
+        self.assertNotIn("2021", out)
+
+    def test_an_item_deleted_since_the_listing_is_reported_not_dropped(self):
+        a = self._note("Movies", "Дюна", ["lookup: year: 2021"])
+        self._note("Movies", "Всё везде и сразу", ["boss: year: 2022"])
+        self._list_movies()
+        no_a = store.get_message(self.conn, a)["note_no"]
+        store.delete_message(self.conn, a)
+        out = self._field({"field": "year"})
+        self.assertIn(texts.T("ru", "list_field_gone"), out)
+        self.assertIn(f"#{no_a}", out)
+        self.assertIn("2022", out)
+
+    def test_an_unnamed_field_asks_which_one(self):
+        self._note("Movies", "Дюна", ["lookup: year: 2021"])
+        self._list_movies()
+        self.assertEqual(self._field({"field": "рейтинг"}, "а рейтинг?"),
+                         texts.T("ru", "list_field_which"))
+
+    def test_the_field_cues_are_word_bounded(self):
+        # The lesson the catalog-grounding cues already paid for: a BARE
+        # substring turns «в чём выгода?» into a request for the year («года»).
+        self._note("Movies", "Дюна", ["lookup: year: 2021"])
+        self._list_movies()
+        self.assertEqual(self._field({}, "в чём выгода?"),
+                         texts.T("ru", "list_field_which"))
+        # …while every inflection he actually uses still resolves
+        for text, field in (("а годы?", "year"), ("у всех год покажи", "year"),
+                            ("покажи жанры", "genre"), ("а режиссёры?", "creator"),
+                            ("чьи это книги?", "creator"),
+                            ("and the directors?", "creator")):
+            with self.subTest(text=text):
+                self.assertEqual(self.agent._list_field_name({}, text), field)
+
+    def test_a_review_card_is_a_shown_list_too(self):
+        rid = self._note("Movies", "Дюна", ["lookup: year: 2021"])
+        self.conn.execute(
+            "UPDATE messages SET knowledge_state = 'inbox' WHERE id = ?", (rid,))
+        self.conn.commit()
+        self._say(lambda: self.agent.do_note_review(1, "ru", None, preset_ids=[rid]))
+        out = self._field({"field": "year"})
+        self.assertIn("2021", out)
+
+    def test_paging_moves_the_pin_to_the_page_he_is_looking_at(self):
+        for i in range(self.agent.NOTES_PAGE_SIZE + 1):
+            self._note("Movies", f"Фильм {i}", [f"lookup: year: {2000 + i}"])
+        self._list_movies()
+        token = self.conn.execute(
+            "SELECT id FROM list_views ORDER BY id DESC LIMIT 1").fetchone()[0]
+        with mock.patch.object(self.mod, "tg_call", return_value={"message_id": 1}), \
+                mock.patch.object(self.agent, "answer_callback"):
+            self.agent.handle_page_callback("cb", 1, {"message_id": 9},
+                                            f"pg|{token}|1")
+        out = self._field({"field": "year"})
+        # page 2 holds exactly the tail of the listing — the oldest note
+        self.assertIn("Фильм 0", out)
+        self.assertNotIn(f"Фильм {self.agent.NOTES_PAGE_SIZE}", out)
+
+    def test_another_view_on_his_screen_drops_the_pin(self):
+        """REVIEW 2026-07-28 — the pin was written by three call sites and
+        cleared by none, yet the header calls it «последний список». A journal
+        page, a reminder list or a detail card left the old notes pin live, so
+        «а годы?» answered about a list two views back while claiming it was the
+        one in front of him."""
+        self._note("Movies", "Дюна", ["lookup: year: 2021"])
+        self._list_movies()
+        self.assertTrue(self.agent._shown_list_slots())
+        with mock.patch.object(router, "route",
+                               return_value={"action": "journal_show",
+                                             "params": {}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "reply",
+                                  return_value={"message_id": 7}), \
+                mock.patch.object(self.agent, "index_message"):
+            self.agent.dispatch(1, {}, "покажи дневник за месяц")
+        self.assertFalse(self.agent._shown_list_slots())
+        out = self._field({"field": "year"})
+        self.assertEqual(out, texts.T("ru", "list_field_no_list"))
+        self.assertNotIn("2021", out)
+
+    def test_the_pin_follows_the_screen_by_construction(self):
+        # Which actions drop it is a list, so the list itself is the contract:
+        # every view that REPLACES what he is looking at is in it, and the three
+        # paths that re-pin what they delivered are deliberately not.
+        for action in ("journal_show", "reminder_list", "item_detail",
+                       "show_media", "list_files", "categories"):
+            with self.subTest(clears=action):
+                self.assertIn(action, self.mod._LIST_REPLACING_ACTIONS)
+        for action in ("list_items", "note_review", "list_field", "converse"):
+            with self.subTest(keeps=action):
+                self.assertNotIn(action, self.mod._LIST_REPLACING_ACTIONS)
+        # "the list she JUST showed" — an hour is not "just now"; past the TTL
+        # `list_field_no_list` is the honest answer.
+        self.assertLessEqual(self.agent.SHOWN_LIST_TTL_SECONDS, 900)
+
+    def test_a_word_that_merely_starts_like_the_cue_does_not_pick_a_field(self):
+        # `год\w*` is word-bounded and still matches «годовщина»/«годится», and
+        # `_list_field_name` falls back to the RAW message when the router names
+        # no field — so an unrelated word silently picked the year (review fix
+        # 2026-07-28).
+        for text in ("сегодня годовщина", "это годится", "в чём выгода?",
+                     "годный фильм"):
+            with self.subTest(text=text):
+                self.assertEqual(self.agent._list_field_name({}, text), "")
+        for text, field in (("а годы?", "year"), ("в каком году?", "year"),
+                            ("по годам", "year"), ("покажи год каждого", "year")):
+            with self.subTest(text=text):
+                self.assertEqual(self.agent._list_field_name({}, text), field)
+
+    def test_the_route_is_wired_end_to_end(self):
+        import router as router_mod
+        import skill_manifest
+        self.assertIn("list_field", router_mod.ACTIONS)
+        self.assertIn("list_field", self.mod._DISPATCH)
+        self.assertEqual(skill_manifest.get_policy("list_field")["risk"], "read_only")
+        self.assertFalse(skill_manifest.get_policy("list_field")["writes_state"])
+        self.assertIn("покажи год каждого", router_mod.ROUTER_EXAMPLES)
+        self.assertIn("show the year of each", router_mod.ROUTER_EXAMPLES)
+
+
+class NoteRetitleConfirmed20260728Tests(unittest.TestCase):
+    """C2/C4 — replacing the text of an existing entry NAMES it and asks first,
+    and it works on a catalog entry whose summary is a stale paragraph (note
+    #44: «Форвард кинофильма "The Ledge" …», filed before the forwarded-poster
+    routing existed)."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1",
+                          DB_PATH=str(Path(self.tmp.name) / "nr.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    BLOB = ('Форвард кинофильма "The Ledge" — триллер о восхождении, '
+            'прислал канал с постером и коротким описанием сюжета')
+
+    def _note(self, category, title, facts=()):
+        cat = store.ensure_category(self.conn, category)
+        self._next_tg = getattr(self, "_next_tg", 0) - 1
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": self._next_tg,
+            "received_at": store._now(), "raw_text": title})
+        store.set_suggestion(self.conn, rid, cat, title, "m")
+        store.set_facts(self.conn, rid, list(facts))
+        store.confirm_category(self.conn, rid, cat)
+        return rid
+
+    def _say(self, fn):
+        replies = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, **k: replies.append(text)
+                               or {"message_id": 7}), \
+                mock.patch.object(self.agent, "reply_chunks",
+                                  side_effect=lambda cid, text, **k: replies.append(text)), \
+                mock.patch.object(self.agent, "index_message"):
+            fn()
+        return replies
+
+    def test_it_asks_before_replacing_and_names_the_entry(self):
+        rid = self._note("Movies", self.BLOB, ["lookup: year: 2011"])
+        no = self.agent.note_no(rid)
+        offer = self._say(lambda: self.agent.do_note_edit(
+            1, "ru", {"id": no, "new_summary": "The Ledge"}, ""))[0]
+        self.assertIn(f"#{no}", offer)          # NAMES the entry
+        self.assertIn("The Ledge", offer)       # …and shows what it would become
+        self.assertIn("Форвард", offer)         # …beside what it is now
+        # nothing has changed yet
+        self.assertEqual(store.get_message(self.conn, rid)["summary"], self.BLOB)
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "note_retitle")
+
+    def test_his_no_leaves_the_entry_exactly_as_it_was(self):
+        rid = self._note("Movies", self.BLOB)
+        no = self.agent.note_no(rid)
+        self._say(lambda: self.agent.do_note_edit(
+            1, "ru", {"id": no, "new_summary": "The Ledge"}, ""))
+        out = self._say(lambda: self.agent.resolve_pending(
+            1, "cancel", {}, store.pending_get(self.conn, 1), "ru"))
+        self.assertEqual(store.get_message(self.conn, rid)["summary"], self.BLOB)
+        self.assertTrue(out)
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    def test_his_yes_fixes_the_title_and_the_listing_reads_cleanly(self):
+        rid = self._note("Movies", self.BLOB,
+                         ["lookup: year: 2011", "lookup: director: Matthew Chapman"])
+        no = self.agent.note_no(rid)
+        self._say(lambda: self.agent.do_note_edit(
+            1, "ru", {"id": no, "new_summary": "The Ledge"}, ""))
+        done = self._say(lambda: self.agent.resolve_pending(
+            1, "confirm", {}, store.pending_get(self.conn, 1), "ru"))[0]
+        self.assertIn("The Ledge", done)
+        row = store.get_message(self.conn, rid)
+        self.assertEqual(row["summary"], "The Ledge")
+        self.assertEqual(row["raw_text"], self.BLOB)   # the source text survives
+        # …and the catalog listing now reads as a catalog line, year and all
+        listing = "\n".join(self._say(
+            lambda: self.agent.do_list_items(1, "ru", {"category": "Movies"})))
+        line = [l for l in listing.splitlines() if "The Ledge" in l][0]
+        self.assertNotIn("Форвард", line)
+        self.assertIn("2011", line)
+        self.assertIn("Matthew Chapman", line)
+        # the facts describe the same work — a title fix is no claim about them
+        facts = [f["fact"] for f in store.message_facts(self.conn, rid)]
+        self.assertEqual(len(facts), 2)
+
+    def test_the_confirmation_cannot_land_on_a_different_note(self):
+        # The pending pins the stable #N beside the rowid, so a note deleted
+        # under an open offer is a not-found, never a substitute rewrite.
+        rid = self._note("Movies", self.BLOB)
+        other = self._note("Movies", "Дюна")
+        no = self.agent.note_no(rid)
+        self.agent.note_no(other)
+        self._say(lambda: self.agent.do_note_edit(
+            1, "ru", {"id": no, "new_summary": "The Ledge"}, ""))
+        pending = store.pending_get(self.conn, 1)
+        store.delete_message(self.conn, rid)
+        out = self._say(lambda: self.agent.resolve_pending(1, "confirm", {},
+                                                           pending, "ru"))
+        self.assertEqual(out[0], texts.T("ru", "items_empty"))
+        self.assertEqual(store.get_message(self.conn, other)["summary"], "Дюна")
+
+    def test_the_policy_declares_the_confirmation(self):
+        import skill_manifest
+        self.assertTrue(skill_manifest.get_policy("note_edit")["requires_confirmation"])
+
+    def test_a_media_card_keeps_the_pending_slot_a_note_edit_would_take(self):
+        """One pending slot per chat, and a bare «да» resolves whatever is in
+        it. A text replacement must never inherit a yes aimed at the open card —
+        that is the accident C2 exists to prevent, arriving through the back
+        door (review fix 2026-07-28)."""
+        rid = self._note("Movies", self.BLOB)
+        no = self.agent.note_no(rid)
+        store.pending_set(self.conn, 1, "media_capture", {"n": 1})
+        out = self._say(lambda: self.agent.do_note_edit(
+            1, "ru", {"id": no, "new_summary": "The Ledge"}, ""))
+        self.assertEqual(out, [texts.T("ru", "note_edit_slot_busy")])
+        # the card's question still owns the slot, and nothing was staged for a yes
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "media_capture")
+        self.assertEqual(store.get_message(self.conn, rid)["summary"], self.BLOB)
+        # …and once the card is answered, the same request works as before
+        store.pending_clear(self.conn, 1)
+        self._say(lambda: self.agent.do_note_edit(
+            1, "ru", {"id": no, "new_summary": "The Ledge"}, ""))
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "note_retitle")
+
+
+class ActionTruthCreateFamily20260728Tests(unittest.TestCase):
+    """REVIEW 2026-07-28 — the two guard BYPASSES this batch's own capability
+    opened, and the honest copy that closing them must not eat.
+
+    `catalog_add` makes "she filed a new entry" the commonest thing she can
+    truthfully report, so the words for it are the words a fabrication will use.
+    """
+
+    # Every one of these returned None from action_claim_match before the fix.
+    CREATE_FAMILY = (
+        "Готово — создала запись #52 🎬",
+        "Готово, внесла «Всё везде и сразу» в Movies.",
+        "Готово: завела отдельную запись под новый фильм.",
+        "Готово — занесла в каталог.",
+        "Готово — оформила отдельной записью.",
+        "Готово 🎬 прописала год 2022 у #51.",
+        "Готово! Разделила на две записи.",
+        "Создала новую запись в Movies под «Всё везде и сразу».",
+        "Done — created a new entry (#52).",
+        "Done, I made a separate entry for it.",
+        "I've put it in Movies for you.",
+        "Что скажешь про #52, который я создала?",
+    )
+
+    def test_the_create_and_place_family_is_covered(self):
+        # A verbatim re-run of the 13:25 fabrication with ONE synonym swapped
+        # shipped to the boss: none of these verbs was in any set.
+        for line in self.CREATE_FAMILY:
+            with self.subTest(line=line):
+                self.assertTrue(action_truth.freeform_claims_action(line), line)
+
+    def test_a_denial_next_to_a_claim_no_longer_carries_it_through(self):
+        # The 13:28 apology shape — «ничего не стёрла — добавила». `finditer` is
+        # non-overlapping, so a match thrown out as a denial used to consume the
+        # rest of the clause and the SECOND, unnegated verb was never evaluated.
+        # Whether that bypassed was luck: «не удаляла — добавила» was caught.
+        for line in ("Ничего не стёрла — добавила новой записью.",
+                     "Не переживай, ничего не стёрла — добавила новой записью.",
+                     "Не бойся, ничего не удалила, всё сохранила в Movies.",
+                     "Старую не удаляла — добавила запись #52.",
+                     "Nothing was deleted — I added a separate entry."):
+            with self.subTest(line=line):
+                self.assertTrue(action_truth.freeform_claims_action(line), line)
+
+    def test_the_widening_leaves_her_voice_and_her_offers_intact(self):
+        # PASSES EITHER WAY by design — the anti-regression half of the
+        # widening, not a proof of it: it fails the day a wider verb set starts
+        # eating honest copy.
+        # The survives-sibling for both fixes. «внести ясность», «завести
+        # разговор», «положить книгу на полку», "make tea", "enter a room" and
+        # "put the kettle on" are ordinary sentences, which is exactly why those
+        # verbs are NARRATIVE-CAPABLE (a data cue or a «Готово» header arms them)
+        # rather than data verbs.
+        for line in ("Надеюсь, внесла ясность 🙂",
+                     "Положила книгу на полку и заварила чай.",
+                     "Завела разговор про Нолана — он мне нравится.",
+                     "Разделила с тобой это чувство 🤍",
+                     "I made tea and sat down with a book.",
+                     "I entered the room and the cat ran off.",
+                     "Put the kettle on, waiting for you 🤍",
+                     # English «put» IS its own past tense, so a modal or an
+                     # infinitive marker is the only thing telling an offer from
+                     # a report — and an offer is the reply this guard exists to
+                     # produce.
+                     "I can put it in Movies if you like.",
+                     "I'll put it in Movies once you say yes.",
+                     "Want me to put it in Movies?",
+                     "Могу занести это в каталог, если хочешь.",
+                     "Я могу создать отдельную запись — создать?",
+                     # …and the honest denials the repair pass writes
+                     "Я ничего не добавила.",
+                     "Я её не сохранила.",
+                     "I haven't added it."):
+            with self.subTest(line=line):
+                self.assertFalse(action_truth.freeform_claims_action(line),
+                                 f"the guard ate honest copy: {line!r}")
+
+    def test_the_deterministic_save_ack_is_allowed_and_is_not_free_form(self):
+        # PASSES EITHER WAY: it is the REQUIRED corpus item that was missing
+        # («сохранила» in a deterministic template, asserted ALLOWED), pinning a
+        # property the widening had to keep rather than the widening itself.
+        # The corpus item the batch was missing: «сохранила» inside the REAL save
+        # template. It is legitimate because the template is rendered only after
+        # _media_store_entries committed — declared in TEMPLATE_STATES — and it
+        # is safe from the free-form guard only because that guard is wired to
+        # converse output alone. Both halves are pinned here: the day the guard
+        # is applied to `reply()` at large, this test says what breaks.
+        for lang in ("ru", "en"):
+            ack = texts.T(lang, "media_saved", lines="🎬 «Дюна» → Movies (#7)")
+            with self.subTest(lang=lang):
+                action_truth.assert_template_key_allowed("media_saved", ack)
+                self.assertTrue(action_truth.freeform_claims_action(ack))
+        self.assertEqual(action_truth.TEMPLATE_STATES["media_saved"], "done")
+
+
+class OtherWorkNarrowing20260728Tests(unittest.TestCase):
+    """REVIEW 2026-07-28 — the C2 escape hatch was wider than "he named another
+    work", and it took ordinary card corrections with it.
+
+    `names_other_work` fired on a bare «другой»/«не тот» and on ANY quoted
+    phrase, and `parse_correction` checked it before every other reading — so
+    «убери №2, это не тот» stopped being a card correction and became a message
+    for the router, which reads «убери №2» as a delete of his real saved note #2.
+    """
+
+    def test_an_indexed_card_correction_is_not_diverted_by_a_bare_marker(self):
+        titles = ["Дюна", "Я устал от тебя"]
+        for text in ("убери №2, это не тот",
+                     "убери №2 — другой фильм",
+                     "у меня другой вопрос — убери №2"):
+            with self.subTest(text=text):
+                self.assertEqual(media.parse_correction(text, 2, titles),
+                                 ("remove", [2]), text)
+
+    def test_a_quoted_unstaged_title_still_wins_over_an_index(self):
+        # PASSES EITHER WAY: the narrowing had to keep the strong signal intact
+        # while dropping the loose one, and this is the half that must not move.
+        # The stronger signal: he named a work this card never showed, so the
+        # turn belongs to the router even though it points at entry 1.
+        self.assertIsNone(media.parse_correction("убери №1 «Солярис»", 1, ["Дюна"]))
+        self.assertEqual(media.parse_correction("убери №1 «Дюна»", 1, ["Дюна"]),
+                         ("remove", [1]))
+
+    def test_the_marker_must_name_a_KIND_of_work(self):
+        # «другой фильм» / «не та книга» point at a work; «другой» on its own is
+        # ordinary correction vocabulary.
+        for text in ("это другой фильм", "нет, не тот фильм",
+                     "that's a different book", "wrong movie"):
+            with self.subTest(names=text):
+                self.assertTrue(media.names_other_work(text, ["Дюна"]), text)
+        for text in ("второй не тот", "первый ок, второй другой",
+                     "у меня другой вопрос", "это не то, что я имел в виду"):
+            with self.subTest(ordinary=text):
+                self.assertFalse(media.names_other_work(text, ["Дюна"]), text)
+
+    def test_quotes_around_a_card_word_are_emphasis_not_a_title(self):
+        for text in ('убери "второй"', 'сделай "книгой"', 'это "фильм"'):
+            with self.subTest(text=text):
+                self.assertFalse(media.names_other_work(text, ["Дюна"]), text)
+        self.assertEqual(media.parse_correction("нет, не то — это книга", 1, ["Дюна"]),
+                         ("book", [1]))
+
+    def test_the_work_he_named_is_carried_into_the_new_card(self):
+        # …so the refusal can offer THAT entry instead of asking for a title he
+        # already typed (see the write-boundary test below).
+        self.assertEqual(
+            media.named_work('Это другой фильм. "везде всё и сразу" 2022',
+                             ["Я устал от тебя"]),
+            {"title": "везде всё и сразу", "year": "2022"})
+        # a staged title is not "another work", and a card word is not a title
+        self.assertEqual(media.named_work("убери «Дюна»", ["Дюна"]), {})
+        self.assertEqual(media.named_work('убери "второй"', ["Дюна"]), {})
+        # nothing quoted -> nothing named: she ASKS rather than guessing a title
+        # out of free text, which is the inference that started all this.
+        self.assertEqual(media.named_work("это другой фильм", ["Дюна"]), {})
+
+    def test_a_negated_kind_no_longer_files_the_entry_under_it(self):
+        # media.stated_kind did a bare substring scan, so «не книга» resolved to
+        # 'book' — the wrong catalog AND no assumed-kind disclosure, i.e. the
+        # card asserting a kind he had explicitly rejected.
+        self.assertEqual(media.stated_kind("не книга"), "movie")
+        self.assertEqual(media.stated_kind("фильм, не книга"), "movie")
+        self.assertEqual(media.stated_kind("не фильм"), "book")
+        self.assertEqual(media.stated_kind("книга"), "book")
+        self.assertEqual(media.stated_kind("фильм и книга"), "")
+        self.assertEqual(media.stated_kind(""), "")
+        entry = media.text_entry("X", "не книга")
+        self.assertEqual(entry["kind"], "movie")
+        self.assertNotIn("assumed_kind", entry)   # he DID state it, by exclusion
+
+    def test_a_kind_he_names_is_never_assumed_again(self):
+        # flip_kind kept `assumed_kind`, so a flip BACK to it brought «Ты не
+        # сказал, фильм это или книга» back onto a card he has now twice told.
+        entry = media.text_entry("Всё везде и сразу", "", "2022", "")
+        self.assertEqual(entry["assumed_kind"], "movie")
+        self.assertTrue(media.flip_kind(entry, "book"))
+        self.assertNotIn("assumed_kind", entry)
+        self.assertTrue(media.flip_kind(entry, "movie"))
+        self.assertNotIn("assumed_kind", entry)
+        self.assertEqual(entry["year_src"], media.BOSS_SRC)   # his year survives both
 
 
 if __name__ == "__main__":

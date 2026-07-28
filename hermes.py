@@ -46,6 +46,9 @@ ACTIONS = frozenset({
     "calendar_add", "spend", "budget_set", "stats", "categories", "overview",
     "list_items", "item_detail", "item_delete", "note_edit", "note_lifecycle",
     "note_review", "recategorize", "merge_categories",
+    # Filing a film/book he typed, and reading one field back across the list he
+    # was just shown, are work with his data like any other listing (2026-07-28).
+    "catalog_add", "list_field",
     "show_media", "vps_stats", "purge", "fetch", "ask", "issues_report",
     "report_problem", "multi_action", "set_journal", "journal_show",
     "journal_prompt", "export", "working_history", "review",

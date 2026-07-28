@@ -302,6 +302,10 @@ TEXTS = {
     "media_field_year": {"ru": "год: {value}", "en": "year: {value}"},
     "media_field_genre": {"ru": "жанр: {value}", "en": "genre: {value}"},
     "media_src_photo": {"ru": "на фото", "en": "in the photo"},
+    # A value the BOSS stated himself, in text (the catalog_add route). It is
+    # neither read off a photo nor found nor remembered, and mislabeling it as
+    # any of those would put words in her mouth about his own (2026-07-28).
+    "media_src_boss": {"ru": "с твоих слов", "en": "you told me"},
     "media_src_lookup": {"ru": "нашла", "en": "found"},
     "media_src_model": {"ru": "по памяти", "en": "from memory"},
     # A value the merge target ALREADY holds, which this capture did not find.
@@ -318,6 +322,56 @@ TEXTS = {
     "media_fname_creator_movie": {"ru": "режиссёра", "en": "director"},
     "media_fname_year": {"ru": "год", "en": "year"},
     "media_fname_genre": {"ru": "жанр", "en": "genre"},
+    # -- C1: a catalog entry from TEXT («добавь в фильмы «X» 2022») ------------
+    # Same card, same buttons, same confirm boundary as the photo flow — only the
+    # HEADER differs, and it has to: there is no photo, so «вот что я вижу на
+    # фото» would be a small lie on the very card whose job is to be exact.
+    # No final verbs here either: nothing is stored until his ✅.
+    "catalog_card_header": {
+        "ru": "🗂 Вот что получится в каталоге ({n}):",
+        "en": "🗂 Here's how it would go into the catalog ({n}):",
+    },
+    # He named a title but not whether it's a film or a book. She files it under
+    # the assumed kind and SAYS she assumed — on a text route there is no cover
+    # to read, so picking silently would be a claim he never made. Recomputed on
+    # every draw, so «это книга» removes the line along with the doubt.
+    "catalog_card_kind_assumed": {
+        "ru": "Ты не сказал, фильм это или книга — считаю, что {kind}; поправь, если нет.",
+        "en": "You didn't say whether it's a movie or a book — I'm taking it as a {kind}; correct me if not.",
+    },
+    # No title at all («это фильм» with nothing before it, or a correction that
+    # says only that the entry is wrong). ASKING is the whole point: the live
+    # failure invented a title, a note number and a confirmation instead.
+    "catalog_add_which": {
+        "ru": "Что добавить в каталог? Напиши название — и год, если помнишь 🙂",
+        "en": "What should I add to the catalog? Give me the title — and the year if you know it 🙂",
+    },
+    # -- C3: ONE field across the list she JUST showed -------------------------
+    # «Покажи год каждого» after a 3-item listing answered with ONE note's full
+    # detail card. This answers for every item of the pinned list, and says
+    # honestly — per item — where nothing is stored.
+    "list_field_header": {
+        "ru": "🗂 {field} — по каждому из последнего списка:",
+        "en": "🗂 {field} — for every item in that list:",
+    },
+    "list_field_name_year": {"ru": "Год", "en": "Year"},
+    "list_field_name_creator": {"ru": "Режиссёр/автор", "en": "Director/author"},
+    "list_field_name_genre": {"ru": "Жанр", "en": "Genre"},
+    "list_field_unknown": {"ru": "нет в записи", "en": "not on file"},
+    "list_field_gone": {"ru": "этой записи больше нет", "en": "that note is gone"},
+    # She showed no list recently (or it aged out). Saying so is the honest
+    # answer; re-deriving "the newest notes" would answer about a list he never
+    # saw — the substitution every resolver in this app fails closed on.
+    "list_field_no_list": {
+        "ru": ("Я сейчас никакого списка не показывала 🙂 Скажи, что посмотреть "
+               "(например «покажи фильмы») — и тогда спроси про год или жанр."),
+        "en": ("I haven't shown you a list just now 🙂 Ask me for one (e.g. \"show "
+               "my movies\") and then ask about the year or the genre."),
+    },
+    "list_field_which": {
+        "ru": "Что показать по каждому — год, режиссёра/автора или жанр?",
+        "en": "Which one should I show for each — year, director/author, or genre?",
+    },
     # -- category md export («дай md по Movies» — works for ANY category) ------
     "export_category_which": {
         "ru": "Какую категорию выгрузить? Сейчас есть: {names}",
@@ -1125,6 +1179,34 @@ TEXTS = {
     "note_edit_unclear": {
         "ru": "На что поменять краткое? Напиши новый текст — и я исправлю.",
         "en": "What should the summary say? Give me the new text and I'll fix it.",
+    },
+    # C2 (2026-07-28) — «Зачем ты стёрла предыдущий? Надо было добавить новый!»
+    # Replacing the text of an existing entry is the one thing that cannot be
+    # undone by adding something, so it NAMES the entry, shows both versions and
+    # asks. (No final verbs: nothing has changed when this is rendered.)
+    "note_edit_confirm": {
+        "ru": ("Поменять текст записи #{row_id} ({category})?\n"
+               "Сейчас: {old}\n"
+               "Станет: {new}\n"
+               "Старый текст не вернуть — подтверди, и поправлю."),
+        "en": ("Change the text of note #{row_id} ({category})?\n"
+               "Now: {old}\n"
+               "After: {new}\n"
+               "The old text won't be recoverable — confirm and I'll fix it."),
+    },
+    "note_edit_declined": {
+        "ru": "Ок, оставила запись #{row_id} как была 🙂",
+        "en": "OK, note #{row_id} stays as it was 🙂",
+    },
+    # Another question is already waiting on the single pending slot. A text
+    # replacement must never inherit a «да» meant for that one, so she asks him
+    # to close it first instead of quietly taking the slot (review 2026-07-28).
+    # (Nothing has changed when this is rendered — no final verbs.)
+    "note_edit_slot_busy": {
+        "ru": ("Сначала ответь на открытый вопрос выше 🙂 Потом повтори — и я "
+               "покажу, что именно поменяю в записи."),
+        "en": ("Answer the question that's already open above first 🙂 Then say it "
+               "again and I'll show you exactly what I'd change in the note."),
     },
     # -- he EDITED the Telegram message a saved note was made from ------------
     # Honest, never silent: the old version is the one she is holding, and the

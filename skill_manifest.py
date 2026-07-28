@@ -37,8 +37,22 @@ SKILLS = {
                 "title": {"en": "Discard suggestion", "ru": "Отклонить запись"}},
     "item_delete": {"risk": "state_write", "writes_state": True, "requires_confirmation": True,
                     "title": {"en": "Delete item", "ru": "Удалить запись"}},
+    # Replacing a saved note's text is not additive and not undoable, so it is
+    # confirmation-gated in the handler (a pending that NAMES the note and shows
+    # both versions) — C2, 2026-07-28.
     "note_edit": {"risk": "state_write", "writes_state": True, "persona_context": True,
+                  "requires_confirmation": True,
                   "title": {"en": "Edit a note", "ru": "Исправить заметку"}},
+    # A movie/book added to the catalog from TEXT. It stages the SAME
+    # confirmation card the photo flow uses and writes only on his ✅, so it is a
+    # draft_write like reminder_create — and it spends model calls (the lookup /
+    # enrichment pass that gives the entry its director, year and genre).
+    "catalog_add": {"risk": "draft_write", "uses_llm": True, "writes_state": True,
+                    "requires_confirmation": True, "persona_context": True,
+                    "title": {"en": "Add to the catalog", "ru": "Добавить в каталог"}},
+    "list_field": {"risk": "read_only",
+                   "title": {"en": "One field across a list",
+                             "ru": "Одно поле по всему списку"}},
     "recategorize": {"risk": "state_write", "writes_state": True, "persona_context": True,
                      "title": {"en": "Re-categorize item", "ru": "Сменить категорию"}},
     # Reversible single ops run directly (undo = the inverse op); a BULK archive
