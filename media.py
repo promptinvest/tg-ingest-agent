@@ -8,8 +8,9 @@ photo-only — enrichment (B2, below) is a separate pass with its own provenance
 so nothing here may present a guess as something seen.
 
 B2 enrichment (before the card renders): per entry, creator/year/genre are
-looked up KEYLESSLY — OpenLibrary for books, the Wikipedia opensearch+summary
-APIs for movies and books — through fetch.py's SSRF-guarded `fetch_json`
+looked up KEYLESSLY — OpenLibrary for books, the Wikipedia search+summary APIs
+(`action=query&list=search` + REST summary) for movies and books — through
+fetch.py's SSRF-guarded `fetch_json`
 (validated + IP-pinned hops, wall-clock deadline), then ONE budgeted chat call
 fills what the lookups left, and a field neither source yields stays honestly
 missing. Every field carries its provenance ('photo' | 'lookup' | 'model'),
@@ -512,7 +513,7 @@ def _merge_entry(kept, other):
         if not kept.get(field) and other.get(field):
             kept[field] = other[field]
             kept[field + "_src"] = other.get(field + "_src") or "photo"
-    for key in ("forced_kind", "flipped_from"):
+    for key in ("forced_kind", "flipped_from", "forward_text"):
         if not kept.get(key) and other.get(key):
             kept[key] = other[key]
     moved = list(kept.get("flipped_seen") or [])
@@ -627,14 +628,35 @@ _PLATFORM_TERMS = {
     "paramount", "showtime", "peacock",
 }
 
-# Wikipedia disambiguators («Дюна (фильм, 2021)» vs «Дюна (роман)») — used only
-# to PREFER the page matching the extracted kind among exact-title matches.
+# Wikipedia disambiguators («Дюна (фильм, 2021)» vs «Дюна (роман)») — used to
+# PREFER the page matching the extracted kind among exact-title matches, to
+# EXCLUDE a page whose parenthetical names the other kind, and to read the year
+# a title like «Fall (2022 film)» prints.
 _WIKI_KIND_HINTS = {
     "movie": ("фильм", "мультфильм", "сериал", "телесериал", "film", "series",
               "miniseries", "tv"),
     "book": ("роман", "повесть", "книга", "рассказ", "поэма", "пьеса", "novel",
              "book", "story", "play", "poem"),
 }
+
+# The QUERY qualifier that turns an unfindable common-word title into a first
+# hit (live fix 2026-07-28). Four of the owner's five real captures came back
+# «не нашла: режиссёра, год, жанр» because the old `opensearch` endpoint
+# matches a title PREFIX only: verified against the real API, opensearch "FALL"
+# answers «Fall of the Western Roman Empire», «Fallout (franchise)», …, and the
+# (correct) strong-context veto then rightly threw the junk away. `list=search`
+# is a full-text search, so the query can carry what identifies the work — the
+# KIND and, when the photo printed one, the YEAR: search "FALL film" answers
+# «Fall (2022 film)» first, and search "The Colony 2021 film" still answers
+# nothing that matches, which is the honest outcome for a genuinely ambiguous
+# title. The veto, the candidate scoring and the truncation rule are unchanged;
+# they were only ever being fed garbage.
+_WIKI_SEARCH_QUALIFIER = {
+    "movie": {"en": "film", "ru": "фильм"},
+    "book": {"en": "book", "ru": "книга"},
+}
+# The parenthetical of a Wikipedia page title, when it has one at the very end.
+_WIKI_DISAMBIG_RE = re.compile(r"\(([^)]*)\)\s*$")
 
 # Genre vocabularies: the ONLY way prose from a lookup becomes a genre value —
 # a fixed pattern -> canonical-value table, never free text (so a malicious
@@ -748,18 +770,6 @@ def _entry_arg(value, kind=None):
     if isinstance(value, dict):
         return value
     return {"title": value, "kind": kind}
-
-
-def _lookup_title_key(value):
-    """Lookup-only title key. Storage dedup stays punctuation-sensitive, while
-    discovery may safely ignore a leading article: a screenshot saying
-    `Frighteners` must be allowed to reach `The Frighteners`."""
-    title = _DISAMBIG_RE.sub("", str(value or ""))
-    return _LEADING_ARTICLE_RE.sub("", normalize_title(title))
-
-
-def _compact_title_key(value):
-    return re.sub(r"\s+", "", _lookup_title_key(value))
 
 
 def _context_terms(entry):
@@ -1017,44 +1027,159 @@ def _openlibrary_fields(doc):
     return {k: v for k, v in out.items() if v}
 
 
+def _wiki_result_titles(data):
+    """Page titles out of EITHER Wikipedia list shape: `action=query&list=search`
+    ({"query": {"search": [{"title": …}]}}) and the legacy `opensearch` array
+    ([term, [titles], [descs], [urls]]). Defensive — an arbitrary shape (or a
+    failed lookup's None) yields []."""
+    if isinstance(data, dict):
+        query = data.get("query")
+        search = query.get("search") if isinstance(query, dict) else None
+        if not isinstance(search, list):
+            return []
+        return [item["title"] for item in search
+                if isinstance(item, dict) and isinstance(item.get("title"), str)]
+    if isinstance(data, list) and len(data) >= 2 and isinstance(data[1], list):
+        return [value for value in data[1] if isinstance(value, str)]
+    return []
+
+
+def _wiki_disambig(page):
+    """The casefolded parenthetical a page title ends with («2022 film»), or ''."""
+    m = _WIKI_DISAMBIG_RE.search(" ".join(str(page or "").split()))
+    return m.group(1).casefold() if m else ""
+
+
+def _wiki_disambig_kind(page):
+    """'movie' | 'book' | '' — the kind a page's parenthetical NAMES, and ''
+    when it names BOTH.
+
+    The hint vocabularies overlap on real page titles: «The Expanse (novel
+    series)», «Watchmen (comic book series)» carry a book word AND «series»,
+    which is a movie word. Answering by dict order would call those pages
+    MOVIES and — since this decision now EXCLUDES a candidate, not merely
+    orders it — drop a book's own correct page (review fix 2026-07-28). An
+    ambiguous tag decides nothing: the candidate survives and the existing hint
+    preference orders it."""
+    tag = _wiki_disambig(page)
+    if not tag:
+        return ""
+    named = [kind for kind, hints in _WIKI_KIND_HINTS.items()
+             if any(hint in tag for hint in hints)]
+    return named[0] if len(named) == 1 else ""
+
+
+def _wiki_disambig_year(page):
+    """The year a page's parenthetical prints («Fall (2022 film)» -> '2022'), or
+    ''. Used ONLY to fill a year the summary did not state — the parenthetical
+    is part of the article's own title, not remote prose."""
+    m = _YEAR_RE.search(_wiki_disambig(page))
+    return m.group(0) if m else ""
+
+
+def _wiki_base_key(value):
+    """A WIKIPEDIA page title's dedup key with the disambiguator removed.
+
+    For CANDIDATES only. A trailing parenthetical on a wiki page title is
+    Wikipedia's own suffix («Fall (2022 film)»); on a title read off a photo it
+    is part of the work's name («Дюна (Часть вторая)»), and the search query
+    sends that name whole — so stripping it from OUR side too would let the
+    query and the "is this our title?" test disagree about what the title is,
+    and «Дюна (фильм, 2021)» would answer for the wrong instalment
+    (review fix 2026-07-28)."""
+    return normalize_title(_DISAMBIG_RE.sub("", str(value or "")))
+
+
 def _wiki_candidates(data, title, kind):
-    if not (isinstance(data, list) and len(data) >= 2 and isinstance(data[1], list)):
+    """Search results that name OUR title, best tier first.
+
+    `list=search` is a FUZZY full-text search where the old prefix-matching
+    `opensearch` was not, so the same "is this our title?" test now has to
+    survive genuinely unrelated neighbours — and it does it in two tiers
+    (fix 2026-07-28):
+
+    - SAME TITLE: the page's base title (parenthetical stripped) normalizes to
+      ours, or matches it once spaces are removed («Brain Dead» ↔ «Braindead» —
+      a transcription artifact of one string).
+    - ARTICLE-RELAXED: it matches only after dropping a leading article FROM
+      THE CANDIDATE («Frighteners» -> «The Frighteners»), recovering a photo
+      read that lost the article.
+
+    The article relaxation is deliberately ONE-WAY. Our own read is what he
+    SAW: a candidate that lacks an article our title HAS is a different work,
+    so «The Colony» may not resolve to «Colony (2026 film)» — the live #45
+    case, which stays honestly missing. The two-way version reached that page
+    as a LONE candidate and would have rendered it «нашла».
+
+    A page whose parenthetical names the OTHER kind is dropped outright: the
+    search already asked for this kind, so «Дюна (роман)» is not a movie
+    candidate. A page with no kind parenthetical — or one whose parenthetical
+    names both, «The Expanse (novel series)» — still qualifies, and the existing
+    hint preference still orders what survives.
+
+    Only the CANDIDATE's parenthetical is stripped: ours is part of the name the
+    query actually searched for (_wiki_base_key)."""
+    ours = normalize_title(title)
+    ours_compact = re.sub(r"\s+", "", ours)
+    if not ours:
         return []
-    norm = _lookup_title_key(title)
-    compact = _compact_title_key(title)
-    matches = [
-        value for value in data[1]
-        if isinstance(value, str)
-        and (_lookup_title_key(value) == norm
-             or (_compact_title_key(value) == compact and len(compact) >= 7))
-    ]
+    same, relaxed = [], []
+    for value in _wiki_result_titles(data):
+        page_kind = _wiki_disambig_kind(value)
+        if kind in CATEGORY_BY_KIND and page_kind and page_kind != kind:
+            continue
+        base = _wiki_base_key(value)
+        if base == ours or (len(ours_compact) >= 7
+                            and re.sub(r"\s+", "", base) == ours_compact):
+            same.append(value)
+            continue
+        stripped = _LEADING_ARTICLE_RE.sub("", base)
+        if stripped and (stripped == ours
+                         or (len(ours_compact) >= 7
+                             and re.sub(r"\s+", "", stripped) == ours_compact)):
+            relaxed.append(value)
+    matches = same or relaxed
     hints = _WIKI_KIND_HINTS.get(kind) or ()
     hinted = [value for value in matches if any(h in value.casefold() for h in hints)]
     return hinted or matches
 
 
-def _pick_wiki_page(data, title, kind):
-    """The opensearch result to summarize: exact normalized-title matches only
-    (disambiguator stripped), preferring the one whose disambiguator names our
-    kind («Дюна (фильм, 2021)» for a movie). None when nothing matches —
-    defensive against arbitrary shapes."""
-    matches = _wiki_candidates(data, title, kind)
-    return matches[0] if matches else None
+def _wiki_search_query(title, kind, year=""):
+    """The full-text search string: the LATIN/CYRILLIC title exactly as read,
+    the photo-visible year when there is one, then the kind qualifier — the
+    shape verified against the real API («FALL film», «The Colony 2021 film»).
+
+    Only the entry's own TITLE is searched. A Russian alias is context and
+    confirmation, never a search term: sending «В никуда» to en.wikipedia.org
+    would search a wiki that does not hold it under that name, and any hit
+    would be a coincidence rendered as «нашла»."""
+    parts = [" ".join(str(title or "").split())]
+    if year:
+        parts.append(str(year))
+    qualifier = (_WIKI_SEARCH_QUALIFIER.get(kind) or {}).get(_wiki_lang(title))
+    if qualifier:
+        parts.append(qualifier)
+    return " ".join(p for p in parts if p)
 
 
 def lookup_wikipedia(title, kind, budget):
-    """Movie/book fields from Wikipedia opensearch + REST summaries, on the wiki
-    matching the title's script. Safe title variants admit candidates; visible
-    context disambiguates them. Parsing remains deterministic: year via regex,
-    genre via the fixed vocabulary, creator via EN 'by <Name>' patterns (RU
-    declined names are skipped). All kept values are cleaned untrusted text."""
+    """Movie/book fields from a Wikipedia full-text search + REST summaries, on
+    the wiki matching the title's script. The QUERY carries the kind qualifier
+    and the photo-visible year (_wiki_search_query) so a common-word title is
+    findable at all; safe title variants admit candidates; visible context
+    disambiguates them. Parsing remains deterministic: year via regex (falling
+    back to the page title's own parenthetical), genre via the fixed
+    vocabulary, creator via EN 'by <Name>' patterns (RU declined names are
+    skipped). All kept values are cleaned untrusted text."""
     entry = _entry_arg(title, kind)
     title = entry.get("title")
     kind = entry.get("kind") or kind
     lang = _wiki_lang(title)
     base = f"https://{lang}.wikipedia.org"
-    found = _lookup_json(base + "/w/api.php?action=opensearch&format=json&limit=5"
-                         + "&search=" + quote(str(title or "")), budget)
+    seen_year = (entry.get("year") or "") if entry.get("year_src") == "photo" else ""
+    found = _lookup_json(base + "/w/api.php?action=query&list=search&format=json"
+                         + "&srlimit=5&srsearch="
+                         + quote(_wiki_search_query(title, kind, seen_year)), budget)
     pages = _wiki_candidates(found, title, kind)
     if not pages:
         return {}
@@ -1097,8 +1222,19 @@ def lookup_wikipedia(title, kind, budget):
             str(pair[1].get("extract") or ""),
         ]),
     )
-    return _agreeing_fields([_wikipedia_fields(summary, lang)
-                             for _, summary in winners])
+    found_fields = []
+    for page, summary in winners:
+        fields = _wikipedia_fields(summary, lang)
+        if not fields.get("year"):
+            # «Fall (2022 film)» states its year in the article's OWN title.
+            # That parenthetical is Wikipedia's identifier for the work, not
+            # remote prose, and it is exactly what the search qualifier was
+            # aiming at — so it fills a year the summary left unsaid (2026-07-28).
+            year = _wiki_disambig_year(page)
+            if year:
+                fields["year"] = year
+        found_fields.append(fields)
+    return _agreeing_fields(found_fields)
 
 
 def _wikipedia_fields(summary, lang):
@@ -1258,15 +1394,29 @@ def fact_label(field, kind):
 # capture has refreshed. Stated in CARA.md/SOLUTION.md rather than migrated.
 CONTEXT_LABEL = "context: "
 
+# The text a FORWARDED post carried alongside its poster (F3, 2026-07-28).
+# Routing that photo into media capture means the ordinary forwarded NOTE — the
+# row whose raw_text was that post — is never created, so the post's own words
+# would simply be gone. They are kept as a plainly labelled fact instead.
+#
+# Deliberately NOT one of the `photo:`/`lookup:`/`model:` prefixes: this text
+# was not read off the photo, was not looked up and is not the model's
+# knowledge, and — being untrusted channel content — it must never be able to
+# fill a structured FIELD. `_CATALOG_FACT_RE` does not match it, so it can only
+# ever read back as a comment (that is the guard, not an accident).
+FORWARD_LABEL = "forwarded post: "
+
 
 def entry_facts(entry):
     """Facts for one confirmed entry: visible context as `photo: context: …`,
     aliases as `photo: alias: …`, plus one `<src>: <label>: <value>` fact per
-    structured field. Labels are language-neutral English; values stay exactly
-    as read/found."""
+    structured field, plus a forwarded post's own text as `forwarded post: …`.
+    Labels are language-neutral English; values stay exactly as read/found."""
     facts = []
     if entry.get("comment"):
         facts.append(f"photo: {CONTEXT_LABEL}{entry['comment']}")
+    if entry.get("forward_text"):
+        facts.append(f"{FORWARD_LABEL}{entry['forward_text']}")
     for alias in entry.get("aliases") or []:
         facts.append(f"photo: alias: {alias}")
     for f in FIELDS:

@@ -355,9 +355,31 @@ class NotesMixin:
             path = path[:24] + "…"
         return (host + path) or str(url or "")[:40]
 
+    def _catalog_meta(self, row_category, row_id):
+        """' · 2022 · Scott Mann' for a CATALOG note (Movies/Books and their RU
+        aliases), or ''.
+
+        «Когда прошу показать фильмы, хочу видеть не только названия, но и годы»
+        (owner, 2026-07-28). The values come from the note's own
+        provenance-tagged facts — `photo:`/`lookup:`/`model:` year and
+        author/director (media.parse_catalog_facts, the same reader the md
+        export uses), so a listing can only ever show what is actually stored.
+        A note with no year (an ordinary «A Star is Born» filed by ingest long
+        before this feature) shows its title alone: no placeholder, no invented
+        year. The creator rides along only when there IS one — it is what makes
+        two same-titled films tellable apart."""
+        if not store.is_catalog_category(row_category):
+            return ""
+        import media
+        fields, _comments = media.parse_catalog_facts(
+            [f["fact"] for f in store.message_facts(self.conn, row_id)])
+        bits = [b for b in (fields.get("year"), fields.get("creator")) if b]
+        return "".join(" · " + " ".join(str(b).split())[:60] for b in bits)
+
     def _note_line(self, lang, row):
         """One note's compact block for a list: '📄 #N · category' (N = stable note number),
-        a preview, and any attachment/url marks. Shared by the plain list and the paginated view."""
+        a preview, and any attachment/url marks. Shared by the plain list and the paginated view.
+        A catalog note (Movies/Books) also carries its stored year and creator."""
         ru = lang == "ru"
         row_category = row["category"] or row["suggested_category"] or (
             "без категории" if ru else "uncategorized")
@@ -365,7 +387,7 @@ class NotesMixin:
         item = [f"📄 #{self.note_no(row['id'])} · {row_category}{pending}"]
         text = self._ellipsize((row["summary"] or row["raw_text"] or "").replace("\n", " "), 110)
         if text:
-            item.append(f"   {text}")
+            item.append(f"   {text}{self._catalog_meta(row_category, row['id'])}")
         marks = []
         files = store.message_files(self.conn, row["id"])
         if files:
@@ -420,7 +442,12 @@ class NotesMixin:
     def do_list_items(self, chat_id, lang, params):
         """Browse saved notes with inline ◀/▶ pagination (edits one message in place instead
         of flooding the chat or capping the list at 10). An explicit `state`
-        (inbox/active/archived) opens that lifecycle view."""
+        (inbox/active/archived) opens that lifecycle view.
+
+        A CATALOG alias in the filter («покажи фильмы» after the 2026-07-28 fold
+        moved those notes to «Movies») is resolved inside
+        `store.list_messages_filtered` — ONE place, so resolve_item,
+        resolve_items and the bulk recategorize get it too."""
         category, query = params.get("category"), params.get("query")
         state = str(params.get("state") or "").strip().lower() or None
         if state not in (None,) + store.NOTE_STATES:

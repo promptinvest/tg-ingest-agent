@@ -4106,13 +4106,30 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     # consent to exactly what is displayed. When the catalog moves underneath an
     # open card, the confirm re-draws it instead of storing (_media_confirm).
 
-    def handle_media_capture(self, parts, chat_id, text):
+    def handle_media_capture(self, parts, chat_id, text, forwarded=False):
         """Classify the boss's picture-only turn; run the movie/book capture flow
         when it applies. Returns (handled, descs): handled=True when this method
         answered the turn; descs carries classify descriptions (neutralized) for
-        the conversational fallback so vision isn't paid twice."""
+        the conversational fallback so vision isn't paid twice.
+
+        `forwarded=True` is the same flow for a FORWARDED poster/cover (F3,
+        2026-07-28 — showing Cara a movie poster produced a clean catalog entry
+        or a descriptive blob with a stored image depending only on whether it
+        was forwarded). Three things differ, all of them deliberate:
+
+        - the post's caption is CHANNEL text, not his statement, so it never
+          forces a kind and never becomes an identify request (`caption_intent`
+          is not consulted): «Ты сказал, что это фильм» must stay true;
+        - it is DISCLOSED on the card and kept on the stored entries as a
+          `forwarded post:` fact — the ordinary forwarded note is not created
+          here, so the post's own words would otherwise be lost;
+        - every outcome that is NOT a staged card returns handled=False, so the
+          forward falls through to the unchanged ingest path. A forward is
+          diverted only when a card he can actually answer exists — that keeps
+          «no titles read», a budget stop, a failed send and a non-media photo
+          from silently swallowing a post that used to be filed."""
         lang = self.lang()
-        caption_intent = media.caption_intent(text)
+        caption_intent = None if forwarded else media.caption_intent(text)
         photos = [p for p in parts if self._picture_part(p)]
         if not photos:
             return False, None
@@ -4156,6 +4173,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                         unread += 1
                 entries = media.dedup_entries(entries)
                 if not entries:
+                    if forwarded:
+                        # No card to offer -> do not divert the forward: the
+                        # ordinary ingest path still files the post exactly as
+                        # it does today (F3).
+                        return False, None
                     # Transport failure and "saw no titles" get different copy —
                     # she never claims she looked when the model never answered.
                     self.reply(chat_id, T(lang, "llm_error" if unread
@@ -4187,7 +4209,23 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     # A partial album read is DISCLOSED (review fix): the card
                     # must never imply it covers photos she couldn't read.
                     notes.append(T(lang, "media_card_photo_unread", n=unread))
-                if text:
+                if forwarded:
+                    # The forward is diverted from the inbox: SAY so (the note
+                    # he expects is not being created) and say the picture is
+                    # parsed, not kept — the media rule, applied to a path whose
+                    # long-standing behavior was to store the image.
+                    notes.append(T(lang, "media_card_forwarded"))
+                    forward_text = " ".join(str(text or "").split())[:300]
+                    if forward_text:
+                        # Untrusted channel text on her card and in a stored
+                        # fact: neutralized, flattened and capped, exactly like
+                        # a photo read (media._clean_line's contract).
+                        forward_text = common.neutralize_untrusted(forward_text)
+                        notes.append(T(lang, "media_card_forward_text",
+                                       text=forward_text))
+                        for entry in entries:
+                            entry["forward_text"] = forward_text
+                elif text:
                     if caption_intent:
                         # The caption WAS acted on, so the card says what she did
                         # with it — never the old «как команду её тут не
@@ -4206,10 +4244,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                        caption=" ".join(text.split())[:200]))
                 # Entry-count AND rendered-length budgeting (staged == shown)
                 # happens inside _stage_media_card.
-                self._stage_media_card(chat_id, lang, entries, notes)
-                return True, None
+                staged = self._stage_media_card(chat_id, lang, entries, notes)
+                # A card that never reached him stages nothing; for a forward
+                # that must not consume the post either (F3).
+                return (bool(staged) if forwarded else True), None
             descs = [common.neutralize_untrusted(c["desc"])
                      for c in classified if c["desc"]] or None
+            if forwarded:
+                # A forwarded document/other photo is ordinary inbox content —
+                # the existing ingest path files it, image and all, unchanged.
+                return False, descs
             if "document" in kinds:
                 if text:
                     # A caption rides the normal route (its commands still work;
@@ -4219,6 +4263,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                 return True, None
             return False, descs  # 'other' -> conversational path, nothing stored
         except llm.BudgetExceeded as exc:
+            if forwarded:
+                # Money WAS spent (the raise comes from a classify/extract call
+                # in the loop above) — but there is no CARD, so the forward must
+                # not be consumed. The ordinary ingest path owns the budget stop
+                # and still FILES the post; dropping a forward here would be a
+                # new way to lose his inbox content.
+                log("media capture (forwarded): budget stop — falling back to ingest")
+                return False, None
             store.issue_add(self.conn, chat_id, "budget_stop", "media capture")
             self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent,
                                   limit=exc.limit,
@@ -4278,8 +4330,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         STAGED set is exactly the DISPLAYED set: the card is budgeted by entry
         count AND rendered length (reply() hard-cuts at 4000 chars), so his
         confirm can never cover entries a truncation hid — any drop is
-        disclosed on the card itself."""
-        self._media_clear(chat_id)
+        disclosed on the card itself.
+
+        Returns True when a card was actually sent and staged, False when the
+        send failed — the forwarded path keys on that to leave the post to the
+        ordinary ingest flow instead of consuming it for a card he never saw."""
         # Bind every entry to the note a confirm would land on and preview that
         # merge, so the card renders the RESULT rather than the capture alone.
         self._resolve_media_merges(entries)
@@ -4304,13 +4359,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             # confirmable set behind a card he never SAW — the consent invariant
             # is "the card shows exactly what a confirm stores", and there is no
             # card at all here. Nothing is staged and the slot is not claimed
-            # (review fix 2026-07-28); _media_clear above already retired the
-            # previous card's buttons and stash.
+            # (review fix 2026-07-28). A PREVIOUS unanswered card is left intact
+            # too: the clear below runs only on a successful send, so a forward
+            # that ends up filed as an ordinary note can no longer destroy an
+            # unrelated card's stash and buttons on its way past.
             log("media card sendMessage failed — nothing staged, nothing to confirm")
-            pending = store.pending_get(self.conn, chat_id)
-            if pending and pending.get("kind") == "media_capture":
-                store.pending_clear(self.conn, chat_id)
-            return
+            return False
+        # Only now is the previous card retired — replaced by one he can see.
+        self._media_clear(chat_id)
         # Notes ride the stash so the cap/unread/truncation/caption disclosures
         # survive a correction re-staging (facts about the batch, not the turn).
         stash = {"entries": entries, "notes": notes,
@@ -4321,6 +4377,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if slot_ours:
             store.pending_set(self.conn, chat_id, "media_capture",
                               {"n": len(entries)})
+        return True
 
     def _media_kind_forced_notes(self, lang, entries, notes):
         """The «Ты сказал, что это фильм — так и считаю» disclosure, recomputed
@@ -5073,11 +5130,61 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # whole contract is idempotence. Missing one repair beats that.
         return self._store_attachments(row_id, parts, skip=have)
 
+    def _forwarded_media_capture(self, parts):
+        """A FORWARDED poster/cover goes through media capture, like his own
+        photo does (F3, 2026-07-28).
+
+        The live split this closes: note #44 came from a forwarded post, so the
+        same real-world act — showing Cara a movie poster — produced a clean
+        catalog entry when he photographed it and a paragraph-long descriptive
+        blob with a stored image when he forwarded it.
+
+        SCOPE, stated deliberately (the 2026-07-16 own-photo retirement and the
+        media-capture plan's decision 1 are about HIS photos; forwarded-post
+        media storage is long-standing documented behavior):
+          - a forwarded photo that classifies as MEDIA follows the MEDIA rule —
+            parsed transiently, never stored — because that is the consistency
+            he asked for, and the entry it produces is a catalog row, not a
+            copy of the post;
+          - a forwarded photo that is NOT media keeps storing exactly as today.
+
+        Returns True only when a confirmation card was actually staged; every
+        other outcome leaves the post to the unchanged ingest path below."""
+        first = parts[0]
+        if not first.get("forward_origin"):
+            return False
+        if not (self.cfg.vision_model and self._pictures_only(parts)):
+            return False
+        chat_id = (first.get("chat") or {}).get("id")
+        if store.message_by_tg_id(self.conn, chat_id,
+                                  first.get("message_id")) is not None:
+            # This post is ALREADY a note: a redelivery, or the startup replay
+            # of an update whose first pass crashed mid-finalize. The repair
+            # path below owns it — diverting now would card the same post a
+            # second time and leave the half-written row unrepaired forever.
+            #
+            # KNOWN AND ACCEPTED (review 2026-07-28): a post that was DIVERTED
+            # never gets a `messages` row, so this guard cannot see it. If the
+            # process dies between staging the card and marking the durable
+            # `telegram_updates` row done, the replay re-pays classify+extract
+            # and re-draws the card. Nothing is stored twice — the stash is a
+            # single slot and the confirm re-resolves the catalog — so the cost
+            # is one repeated lookup and a re-drawn card, not data corruption.
+            return False
+        # An album's caption sits on whichever part carries it.
+        caption = next((p.get("caption", "").strip() for p in parts
+                        if (p.get("caption") or "").strip()), "")
+        handled, _descs = self.handle_media_capture(parts, chat_id, caption,
+                                                    forwarded=True)
+        return bool(handled)
+
     def finalize(self, parts):
         lang = self.lang()
         first = parts[0]
         chat_id = first["chat"]["id"]
         reply_to = first.get("message_id")
+        if self._forwarded_media_capture(parts):
+            return
         doc_text, doc_name = self.read_text_document(parts)
         raw_text = doc_text or ingest.first_text(parts)
         # A file-only message (a forwarded PDF, a voice clip, a video…) has no

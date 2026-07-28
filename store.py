@@ -1365,6 +1365,7 @@ def _migrate_steps(conn):
             bump_vec_gen(conn)
     _migrate_gratitude_builtin(conn)
     _migrate_note_outcomes(conn)
+    _migrate_catalog_categories(conn)
 
 
 NOTE_OUTCOME_MIRROR_KINDS = (
@@ -1493,6 +1494,64 @@ def _migrate_note_outcomes(conn):
     )
     # No commit: this runs inside _migrate's single transaction, so the backfill
     # and its marker land together or not at all.
+
+
+CATALOG_CATEGORY_MARKER = "catalog_category_alias_v1"
+
+
+def _migrate_catalog_categories(conn):
+    """One-time fold of the RU catalog categories into their English canon
+    (fix 2026-07-28 — the boss's films were split across «Фильмы» and «Movies»).
+
+    Deterministic, additive, idempotent; NO LLM/network. For each canonical
+    catalog name (Movies, Books) every row named by `CATALOG_MIGRATION_ALIASES`
+    is folded in with `_merge_category_rows` — the same routine «объедини
+    категории» uses — so notes keep their ids, note numbers, facts, embeddings
+    and status; only the category STRING moves and the emptied alias row is
+    deleted. Two notes are never merged into one: this migration writes no facts
+    and deletes no message.
+
+    Skipped, never touched:
+      - a category the boss marked as a JOURNAL on either side (kind='journal'),
+        and any category a journal DEFINITION points at even after «X больше не
+        дневник» deactivated it — diary protection outranks catalog tidiness;
+      - any catalog-ish name OUTSIDE the narrow migration list («Кино»,
+        «Книга», «Films»…): it keeps its rows and its name. Resolution can be
+        generous because it creates nothing; this step deletes a row, so it
+        stays on the two names the live split actually produced;
+      - a fold onto itself.
+
+    The marker key makes it one-time; it survives a purge, like the note-outcome
+    backfill, so a later `purge` cannot silently re-run the fold. Runs inside
+    `_migrate`'s single transaction (no commit here): the moves, the deletions
+    and the marker land together or not at all."""
+    if conn.execute("SELECT value FROM kv WHERE key = ?",
+                    (CATALOG_CATEGORY_MARKER,)).fetchone() is not None:
+        return
+    protected = {(d["category"] or "").casefold() for d in journal_defs(conn)}
+    protected.discard("")
+    rows = conn.execute("SELECT name, kind FROM categories").fetchall()
+    by_norm = {r["name"].casefold(): r for r in rows}
+    for canonical, aliases in CATALOG_MIGRATION_ALIASES.items():
+        dst = by_norm.get(canonical.casefold())
+        if ((dst is not None and (dst["kind"] or "inbox") == "journal")
+                or canonical.casefold() in protected):
+            common.log(f"catalog fold: «{canonical}» is a journal — left alone")
+            continue
+        for row in rows:
+            norm = row["name"].casefold()
+            if norm == canonical.casefold():
+                continue
+            if " ".join(norm.split()) not in aliases:
+                continue
+            if (row["kind"] or "inbox") == "journal" or norm in protected:
+                common.log(f"catalog fold: «{row['name']}» is a journal — left alone")
+                continue
+            moved, dst_name = _merge_category_rows(conn, row["name"], canonical)
+            common.log(f"catalog fold: «{row['name']}» -> «{dst_name}» "
+                f"({moved} note(s) re-pointed)")
+    conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, 'done')",
+                 (CATALOG_CATEGORY_MARKER,))
 
 
 def _category_confirmed_count(conn, name):
@@ -1670,12 +1729,64 @@ def _category_stem(name):
     return re.sub(r"[ьйаяуюоёеиыэ]+$", "", str(name or "").strip().casefold())
 
 
-def canonical_category(conn, name):
+# ONE catalog identity per kind (fix 2026-07-28). The boss's films lived in TWO
+# categories at once: «Фильмы» from ordinary ingest and «Movies» from media
+# capture. They diverged in behaviour — «покажи фильмы» (list_items) showed only
+# one of them while a free-form answer pulled from both, and an md export of
+# «Movies» silently missed the notes filed under «Фильмы». The RU names are
+# therefore ALIASES of the English catalog categories at every resolution point,
+# and `_migrate_catalog_categories` folds the existing rows once.
+#
+# The English name is canonical because the media-capture plan fixed it there
+# (owner decision 2026-07-27: RU titles stay RU, only the CATEGORY names are
+# English). A category the boss marked as a JOURNAL is never folded — diary
+# protection outranks catalog tidiness (canonical_category answers journals
+# before it ever reaches this table).
+CATALOG_CATEGORY_ALIASES = {
+    "Movies": ("movies", "movie", "films", "film",
+               "фильмы", "фильм", "кино", "кинофильмы"),
+    "Books": ("books", "book", "книги", "книга"),
+}
+_CATALOG_CANONICAL = {alias: canonical
+                      for canonical, aliases in CATALOG_CATEGORY_ALIASES.items()
+                      for alias in aliases}
+
+
+# What the one-time MIGRATION is allowed to fold. Deliberately narrower than
+# the runtime alias table above (review fix 2026-07-28): resolving a name costs
+# nothing and creates nothing, but the migration DELETES a category row from
+# live owner data and there is no un-merge command. So it folds only the two
+# names the live incident actually produced — «Фильмы» beside «Movies» — and
+# leaves anything else he already keeps under its own name alone. A «Кино» that
+# means something else survives untouched; going forward it still RESOLVES to
+# «Movies» only when no «Кино» category exists (canonical_category answers an
+# existing row first).
+CATALOG_MIGRATION_ALIASES = {"Movies": ("фильмы",), "Books": ("книги",)}
+
+
+def catalog_canonical_name(name):
+    """The canonical English catalog category a name is an alias of («Фильмы» ->
+    «Movies»), or '' when the name is not a catalog name at all. Pure — it knows
+    nothing about the DB, so callers stay free to protect journals first."""
+    return _CATALOG_CANONICAL.get(" ".join(str(name or "").casefold().split()), "")
+
+
+def is_catalog_category(name):
+    """True for Movies/Books and their RU aliases — the categories whose notes
+    carry provenance-tagged creator/year/genre facts (media.entry_facts)."""
+    return bool(catalog_canonical_name(name))
+
+
+def canonical_category(conn, name, catalog=True):
     """Return an existing category, preferring a matching journal.
 
     A journal owns its common singular/plural stem at every write boundary. This
     prevents a manual correction such as «Благодарности» from creating a new
     inbox category beside the existing journal «Благодарность».
+
+    `catalog=False` switches the catalog-alias step off for a caller that is
+    NAMING a category rather than filing into one (`set_category_kind`): «сделай
+    Кино дневником» must mark «Кино», never the existing «Movies» catalog.
     """
     value = str(name or "").strip()
     if not value:
@@ -1693,23 +1804,70 @@ def canonical_category(conn, name):
             if _category_stem(row["name"]) == stem:
                 return row["name"]
     row = conn.execute("SELECT name FROM categories WHERE norm_key = ?", (norm,)).fetchone()
-    return row["name"] if row else None
+    if row:
+        return row["name"]
+    # Only with NOTHING under the name he actually used does the catalog ALIAS
+    # table speak: «покажи фильмы», «дай md по Фильмам» and a fresh capture into
+    # «Movies» must all land on the SAME rows (2026-07-28).
+    #
+    # It runs LAST on purpose (review fix 2026-07-28). A category that already
+    # exists under its own name keeps its own identity — a «Кино» he keeps for
+    # something else is not shadowed by «Movies», and a «Фильмы» the migration
+    # deliberately REFUSED to fold still answers to its own name. And a
+    # canonical row marked as a DIARY is skipped outright, so catalog tidiness
+    # can never route ordinary notes into a journal's protections: diary
+    # protection outranks catalog tidiness on the creation path too.
+    canon = catalog_canonical_name(value) if catalog else ""
+    if canon:
+        row = conn.execute(
+            "SELECT name FROM categories WHERE norm_key = ?"
+            " AND COALESCE(kind, 'inbox') != 'journal'",
+            (canon.casefold(),)).fetchone()
+        if row:
+            return row["name"]
+    return None
 
 
-def ensure_category(conn, name):
-    """Insert the category if new (case-insensitive incl. Cyrillic); return
-    the canonical stored name."""
+def _ensure_category_row(conn, name, canonicalize=True):
+    """ensure_category WITHOUT the commit — what the migrations and
+    `_merge_category_rows` need, since a commit inside `_migrate`'s single
+    transaction would end it. Returns (canonical_name, created).
+
+    `canonicalize=False` creates the name VERBATIM and skips the catalog alias
+    table entirely — for `set_category_kind`, which is naming a category, not
+    filing into one."""
     name = str(name or "").strip()
-    canonical = canonical_category(conn, name)
+    canonical = canonical_category(conn, name, catalog=canonicalize)
     if canonical:
-        return canonical
-    norm = name.casefold()
+        return canonical, False
+    if canonicalize:
+        # Nothing answered under the name he used: create the CANONICAL one, so
+        # a capture or a recategorize phrased in Russian cannot re-open the
+        # split. Unless a row already SITS on the canonical norm_key — which
+        # here can only be a journal, the one thing `canonical_category` refuses
+        # to hand back: creating «Movies» would then collide with his diary
+        # (UNIQUE norm_key), so «Фильмы» opens its own catalog instead. Diary
+        # protection outranks catalog tidiness (review fix 2026-07-28).
+        canon = catalog_canonical_name(name)
+        if canon and conn.execute("SELECT 1 FROM categories WHERE norm_key = ?",
+                                  (canon.casefold(),)).fetchone() is None:
+            name = canon
     conn.execute(
         "INSERT INTO categories (name, norm_key, created_at) VALUES (?, ?, ?)",
-        (name, norm, _now()),
+        (name, name.casefold(), _now()),
     )
-    conn.commit()
-    return name
+    return name, True
+
+
+def ensure_category(conn, name, canonicalize=True):
+    """Insert the category if new (case-insensitive incl. Cyrillic); return
+    the canonical stored name. A catalog alias («Фильмы») resolves — or is
+    created — as its canonical English category («Movies»), unless the caller
+    passes canonicalize=False."""
+    canonical, created = _ensure_category_row(conn, name, canonicalize=canonicalize)
+    if created:
+        conn.commit()
+    return canonical
 
 
 def known_categories(conn, limit=50):
@@ -1727,18 +1885,46 @@ def merge_categories(conn, src, dst):
     still-suggested) from src to dst, then delete the now-empty src category. Returns
     (moved_count, dst_canonical_name), or (0, None) if src doesn't exist; (0, dst) if
     src == dst. Preserves message ids/embeddings (only the category string changes)."""
+    moved, dst_name = _merge_category_rows(conn, src, dst)
+    conn.commit()
+    invalidate_vector_cache(conn)
+    return moved, dst_name
+
+
+def _merge_category_rows(conn, src, dst):
+    """The category fold itself, WITHOUT the commit / cache invalidation — so
+    `_migrate_catalog_categories` can reuse these exact semantics inside
+    `_migrate`'s one transaction instead of inventing a second fold (a note is
+    never merged into another note here: only the category STRING moves)."""
     src_row = conn.execute("SELECT name, kind FROM categories WHERE norm_key = ?",
                            (str(src or "").casefold(),)).fetchone()
     if not src_row:
         return 0, None
     src_name = src_row["name"]
-    dst_name = ensure_category(conn, dst)
+    dst_name, _created = _ensure_category_row(conn, dst)
     if src_name.casefold() == dst_name.casefold():
         return 0, dst_name
-    moved = conn.execute("UPDATE messages SET category = ? WHERE category = ?",
-                         (dst_name, src_name)).rowcount
-    conn.execute("UPDATE messages SET suggested_category = ? WHERE suggested_category = ?",
-                 (dst_name, src_name))
+    # Cyrillic-casefold match, not SQL `=` (review fix 2026-07-28). `category`
+    # is written through ensure_category and so matches byte-for-byte, but
+    # `suggested_category` is whatever `ingest.suggest` returned — an unconfirmed
+    # note suggested as «фильмы» would be left behind by an exact comparison,
+    # and every reader downstream (_note_line, list_messages_filtered) casefolds.
+    # Same pattern as `_messages_in_category`. Ids are collected BEFORE updating:
+    # writing to `messages` while its own cursor is open is undefined in SQLite.
+    src_key = src_name.casefold()
+    move_cat, move_sug = [], []
+    for row in conn.execute(
+            "SELECT id, category, suggested_category FROM messages").fetchall():
+        if (row["category"] or "").casefold() == src_key:
+            move_cat.append(row["id"])
+        if (row["suggested_category"] or "").casefold() == src_key:
+            move_sug.append(row["id"])
+    for mid in move_cat:
+        conn.execute("UPDATE messages SET category = ? WHERE id = ?", (dst_name, mid))
+    for mid in move_sug:
+        conn.execute("UPDATE messages SET suggested_category = ? WHERE id = ?",
+                     (dst_name, mid))
+    moved = len(move_cat)
     conn.execute("DELETE FROM categories WHERE norm_key = ?", (src_name.casefold(),))
     if (src_row["kind"] or "inbox") == "journal":
         # Journal protection is CONTAGIOUS on merge: folding a diary into another
@@ -1747,10 +1933,13 @@ def merge_categories(conn, src, dst):
         conn.execute("UPDATE categories SET kind = 'journal' WHERE norm_key = ?",
                      (dst_name.casefold(),))
     # A structured-journal definition follows its category through a merge/rename
-    # (Cyrillic-casefold match; SQL = would miss case variants).
+    # (Cyrillic-casefold match; SQL = would miss case variants). Written inline
+    # rather than via `journal_def_update`: that helper commits, and this body
+    # also runs inside `_migrate`'s single transaction.
     for d in journal_defs(conn):
         if (d["category"] or "").casefold() == src_name.casefold():
-            journal_def_update(conn, d["slug"], category=dst_name)
+            conn.execute("UPDATE journal_definitions SET category = ?, updated_at = ?"
+                         " WHERE slug = ?", (dst_name, _now(), d["slug"]))
     # Folding a plain category INTO a journal: the moved messages need entry
     # rows or the diary listing simply doesn't show them until the next
     # restart's backfill happens to add them. Same shape as that backfill —
@@ -1769,8 +1958,6 @@ def merge_categories(conn, src, dst):
     # The decoded-vector cache carries each chunk's category; a whole-category
     # rename is exactly the messages-only write its fingerprint cannot see.
     bump_vec_gen(conn)
-    conn.commit()
-    invalidate_vector_cache(conn)
     return moved, dst_name
 
 
@@ -1789,8 +1976,13 @@ def set_category_kind(conn, name, kind):
     Creates the category if new; returns the canonical name. A structured-journal
     definition on that category follows the boss's decision: «X больше не
     дневник» deactivates it (no new entries/prompts; existing entries stay),
-    re-marking as a journal reactivates it."""
-    canonical = ensure_category(conn, name)
+    re-marking as a journal reactivates it.
+
+    The name is taken VERBATIM (canonicalize=False): «сделай Кино дневником»
+    must create/mark «Кино», never resolve through the catalog alias table and
+    convert the existing «Movies» CATALOG into a diary (review fix 2026-07-28).
+    Diary protection outranks catalog tidiness on the creation path too."""
+    canonical = ensure_category(conn, name, canonicalize=False)
     conn.execute("UPDATE categories SET kind = ? WHERE norm_key = ?",
                  (kind, canonical.casefold()))
     for d in journal_defs(conn):
@@ -2572,6 +2764,19 @@ def list_messages_filtered(conn, category=None, query=None, limit=None, state=No
     list (own dated journal) unless a category filter is given."""
     q = str(query).casefold() if query else None
     cat = str(category).casefold() if category else None
+    if cat and catalog_canonical_name(cat):
+        # ONE catalog identity (review fix 2026-07-28). The fold re-points the
+        # notes to «Movies» and deletes the «Фильмы» row, so an exact category
+        # comparison would answer NOTHING to every Russian-phrased request —
+        # «покажи фильмы», «удали 3 из фильмов», «переложи всё из Фильмы в
+        # Архив», «покажи заметку из фильмов». Resolving here covers list_items,
+        # resolve_item, resolve_items and the bulk recategorize in one place.
+        # Narrow on purpose: only names the alias table knows, and
+        # `canonical_category` answers an existing row (and a journal) first, so
+        # a category that still exists under its own name is never redirected.
+        resolved = canonical_category(conn, category)
+        if resolved:
+            cat = resolved.casefold()
     journals = {n.casefold() for n in journal_categories(conn)} if category is None else set()
     # Unlimited query scans (pagination) aggregate facts once; a limited query fetches facts
     # per candidate row instead of aggregating the whole facts table on every hot-path call.

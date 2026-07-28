@@ -208,6 +208,29 @@ TEXTS = {
         "en": ("I can see the caption \"{caption}\", but I didn't run it as a "
                "command — if you need something, send it as its own message."),
     },
+    # A FORWARDED poster/cover now runs the capture flow too (F3, 2026-07-28).
+    # THREE things must be said out loud, because all three differ from what the
+    # inbox normally does with a forward: the post is NOT becoming an ordinary
+    # note, its picture is parsed instead of kept (the media rule) — and a
+    # DECLINE therefore leaves nothing behind at all. The last clause is the
+    # honest form of the trade-off (review fix 2026-07-28): saying only «I won't
+    # file it as a note» let him read «decline» as «file it the old way».
+    # (The wording avoids «сохранила»/«saved» on purpose — a card is not an
+    # action boundary, and action_truth.assert_catalogue enforces that.)
+    "media_card_forwarded": {
+        "ru": ("Это пересланный пост — разобрала постер как карточку каталога, "
+               "обычной заметкой его не сохраняю и картинку не храню. "
+               "Если откажешься, от поста не останется вообще ничего."),
+        "en": ("This is a forwarded post — I read the poster as a catalog card; "
+               "I'm not filing it as an ordinary note and I don't keep the image. "
+               "If you decline, nothing from this post is kept at all."),
+    },
+    # The post's own text: not his words and not photo evidence, so it neither
+    # commands anything nor fills a field — but it is not dropped either.
+    "media_card_forward_text": {
+        "ru": "Текст поста оставлю в записи комментарием: «{text}»",
+        "en": "I'll keep the post's text on the entry as a comment: \"{text}\"",
+    },
     "media_card_identified": {
         "ru": "Подобрала наиболее вероятное совпадение по фото и видимому контексту.",
         "en": "I matched the most likely work using the photo and its visible context.",

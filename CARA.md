@@ -187,7 +187,7 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   fill gaps but cannot replace it.
   **Enrichment (B2)** then fills missing creator/year/genre per entry BEFORE the card
   renders, each field tagged with where it came from: keyless **lookups** — OpenLibrary for
-  books, the Wikipedia opensearch+summary APIs (wiki chosen by the title's script) for
+  books, the Wikipedia search+summary APIs (wiki chosen by the title's script) for
   movies and books, all through the same SSRF‑guarded fetch — render as «(нашла)», the
   **model‑knowledge fallback** (ONE budgeted chat call per batch for whatever the
   lookups left) as «(по памяти)», and a field NEITHER source yields is listed honestly
@@ -217,9 +217,35 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   words of your visible context (cover marketing set in capitals, «НОВИНКА МЕСЯЦА» and
   the like, is not a name either). Lookup
   discovery tolerates only safe title presentation variants — a leading article
-  (`Frighteners` / `The Frighteners`) or spacing (`Brain Dead` / `Braindead`) — while
+  (`Frighteners` / `The Frighteners`, one‑way: a candidate may CARRY an article our read
+  lacks, never the reverse — your read is what the poster SHOWED, so «The Colony» may not
+  resolve to «Colony») or spacing
+  (`Brain Dead` / `Braindead`) — while
   storage dedup stays strict. Unicode creator names such as `Albert Pintó` remain
   intact. There is deliberately **no general web‑search API** (owner decision).
+  **The lookup asks a QUESTION that can be answered (live fix 2026‑07‑28).** Four of
+  five real captures came back «не нашла: режиссёра, год, жанр» — not because the
+  selection rules were wrong, but because they were fed junk: the bare title went to
+  Wikipedia's `opensearch`, which matches a title PREFIX, so a common‑word title
+  answered unrelated articles («FALL» → «Fall of the Western Roman Empire», «Fallout
+  (franchise)»…) and the veto rightly threw them all away. The query is now a full‑text
+  search carrying what identifies the work: the title **plus the kind** («film» /
+  «book» / «фильм» / «книга») plus the year **when the photo printed one** — «FALL film»
+  answers «Fall (2022 film)» first. A page whose own parenthetical names the OTHER kind
+  is dropped outright — but only when it names ONE kind: «The Expanse (novel series)»
+  says both «novel» and «series», so it decides nothing and the book's own page survives.
+  That parenthetical also fills a year the summary left unsaid
+  («Fall (2022 film)» — that is the article's identifier, not remote prose). A
+  parenthetical on YOUR title is the opposite: it is part of the work's name («Дюна
+  (Часть вторая)»), so it is searched and it must match — that instalment will not
+  silently answer with «Дюна (фильм, 2021)». Only the
+  Latin/Cyrillic TITLE is searched: a Russian alias stays context and confirmation, never
+  a search term against a wiki that doesn't hold the work under that name. Everything
+  else is untouched — the candidate scoring, the strong‑context veto, the
+  truncation‑means‑undecided rule, the call budget, the byte/time caps and the
+  neutralization of every value. Titles that are genuinely ambiguous («The Colony» —
+  released as «Tides» in some markets) or simply absent from the wiki («Wild Republic»)
+  still come back honestly missing rather than confidently wrong.
   Lookups run inline on the one thread, so they are budgeted twice — a short per‑call
   timeout and a per‑batch call cap (10), with fail‑fast after 2 consecutive transport
   failures; a 20‑title screenshot enriches its first titles by lookup and hands the
@@ -272,8 +298,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   budget stays authoritative for classify/extract as before. **The photo itself is
   never stored** in this flow (owner decision 1): it is downloaded to a tmp path,
   parsed and deleted on every path including errors — no images/files rows, so the
-  2026‑07‑16 own‑photo retirement stays fully intact (forwarded‑post media storage is
-  unchanged). Up to `MAX_LLM_IMAGES` (4) photos of an album are classified per batch,
+  2026‑07‑16 own‑photo retirement stays fully intact (a forwarded photo that is NOT
+  media still stores exactly as before — see the forwarded‑poster bullet below). Up to `MAX_LLM_IMAGES` (4) photos of an album are classified per batch,
   and the card says so honestly when an album is bigger; a photo that dropped out of a
   partially readable album is disclosed on the card («не смогла прочитать {n} фото») —
   since 2026‑07‑28 that covers EVERY way one can drop out (a download that failed, an
@@ -345,6 +371,60 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   card is offered; the card shows them and explicitly says they were not acted on
   («если что‑то нужно, напиши отдельным сообщением»). Captions on non‑media photos
   route exactly as before.
+- **A FORWARDED poster runs the same capture flow (2026‑07‑28).** Showing Cara a movie
+  poster used to produce two completely different results depending only on whether you
+  pressed the camera button or forward: your own photo became a clean catalog entry,
+  while a forwarded post went down the ordinary ingest path and became a paragraph‑long
+  descriptive blob with the image stored (live note #44). A forwarded picture‑only
+  message is now classified exactly like your own; when it classifies as **media** it
+  goes through extract → card → confirm → catalog entry. Three things are deliberately
+  different, because the post's text is a CHANNEL's, not yours:
+  · its caption never forces a kind and is never read as «найди этот фильм» — she would
+  otherwise say «ты сказал, что это фильм» about words you never wrote;
+  · the caption is not lost either: the card quotes it and the confirmed entry keeps it
+  as a plainly labelled `forwarded post:` fact, which reads back as a **comment** and can
+  never fill a creator/year/genre field;
+  · the picture follows the MEDIA rule — parsed transiently, not stored — which is the
+  consistency you asked for, and the card SAYS both things («обычной заметкой его не
+  сохраняю и картинку не храню»).
+  A forwarded photo that is **not** media (an article page, a scan, anything else) keeps
+  the existing behavior untouched: image stored, ordinary suggestion card. And a forward
+  is diverted **only when a card actually exists** — if she reads no titles, the send
+  fails, or the budget stops her, the post is filed by the ordinary inbox path exactly as
+  before, so this can never become a way to lose a post.
+  Two costs stated plainly rather than hidden: every forwarded picture now pays one
+  extra **cheap classify vision call**, and a non‑media forward then still pays its usual
+  describe‑image call on top (she budget‑stops when spend runs out, so this is real);
+  and a forwarded poster you **cancel is not filed at all** — not as a note either. The
+  card says exactly that before you answer («если откажешься, от поста не останется
+  вообще ничего»). A poster forwarded twice shows «уже есть в каталоге» instead of
+  «дубликат». One accepted edge: if the process dies between drawing the card and marking
+  the update handled, the restart re‑reads that one post and draws the card again —
+  nothing is stored twice, the cost is one repeated lookup.
+- **One catalog identity per kind (2026‑07‑28).** Your films lived in TWO categories at
+  once — «Фильмы» (from ordinary ingest, e.g. «A Star is Born») and «Movies» (from media
+  capture) — so «покажи фильмы» listed one of them, a free‑form answer pulled from both,
+  and an md export of «Movies» silently missed the rest. The Russian names are now
+  **aliases** of the English catalog categories (Фильмы/Фильм/Кино/Кинофильмы → `Movies`,
+  Книги/Книга → `Books`) wherever a category is resolved — a capture, a manual
+  recategorize, «покажи фильмы», «удали 3 из фильмов», «переложи всё из Фильмы в Архив»,
+  «дай md по Фильмам» all land on the same rows.
+  Two deliberate limits keep this from touching anything you did not ask about.
+  **An existing category always answers to its own name first:** the alias table speaks
+  only when nothing exists under the name you used, so a «Кино» you keep for something
+  else is never shadowed by «Movies». And the **one‑time migration that folded the old
+  rows is narrower still** — it moved only «Фильмы» and «Книги», the two names the actual
+  split produced, because that step deletes a category row and there is no un‑merge
+  command; everything else keeps its rows and its name.
+  A category you marked as a **journal** is never folded or hijacked in either direction:
+  a diary called «Книги» keeps its own identity, a diary called «Movies» never collects
+  «Фильмы» notes, and «сделай Кино дневником» marks «Кино» — never the film catalog.
+- **Listings show the year (2026‑07‑28).** «Покажи фильмы» used to print bare titles. A
+  note in a catalog category now carries its stored **year** and, when there is one, its
+  creator: «Дюна · 2021 · Дени Вильнёв». The values come from the note's own
+  provenance‑tagged facts — the same reader the md export uses — so a listing can only
+  show what is actually stored: a note with no year shows its title alone, with no
+  placeholder and no invented year. Note numbers and pagination are unchanged.
 - **You edit a message, she follows (2026‑07‑26).** Telegram edits are now requested
   (`allowed_updates` included `edited_message` for the first time) and handled:
   · the **dialogue record** is rewritten, so a verbatim readback matches what your chat
