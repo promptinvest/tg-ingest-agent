@@ -23,6 +23,18 @@ already carries guillemets is not wrapped twice (`quoted_title`); and the card
 previews the note a confirm will merge into (`merge_preview`) so what he
 approves is what gets stored.
 
+Review fixes (2026-07-28, same day): BOTH kind-flip paths — the caption's
+`force_kind` and the card's reply-correction — go through ONE routine
+(`flip_kind`), so they cannot preserve different amounts of visible evidence
+again. Same-title disambiguation is honest in both directions: a truncated
+summary loop leaves the field MISSING instead of collapsing into a confident
+single pick, tied candidates that AGREE still answer the fields they agree on,
+a photo-visible name confirms by stem (RU declension) and never refutes by
+absence, and only real identifiers (platform, visible creator/year, a printed
+NAME) may veto a lone candidate — two ordinary comment words may not. Free photo
+context is stored under its own `photo: context:` label so a transcription that
+reads like a field can never displace a real lookup fact.
+
 Hard rules this module upholds:
 - NO image is ever stored in this flow. The caller downloads the photo to a tmp
   path and deletes it in try/finally; this module only reads bytes for the model
@@ -84,6 +96,12 @@ FIELDS = ("creator", "year", "genre")
 # original photo/lookup/model prefix — it exists so the card never attributes an
 # older capture's finding to the photo just sent (see merge_preview).
 INHERITED_SRC = "note"
+# Card-only provenance for a value ANOTHER entry on the SAME card contributes to
+# the note both of them merge into. It cannot be «уже в записи» (nothing is
+# stored before his yes) and it is not this entry's finding either.
+SIBLING_SRC = "card"
+# Every provenance the card knows how to label.
+DISPLAY_SRCS = ("photo", "lookup", "model", INHERITED_SRC, SIBLING_SRC)
 
 # Lookups run INLINE on the poll loop's only thread, so they are budgeted twice:
 # a short per-call timeout (fetch_json wall-clocks each call at 2x this) and a
@@ -97,6 +115,10 @@ LOOKUP_TIMEOUT = 5
 LOOKUP_MAX_BYTES = 256 * 1024
 MAX_LOOKUP_CALLS = 10
 MAX_LOOKUP_CONSECUTIVE_FAILURES = 2
+# Same-title Wikipedia rivals we are willing to READ per entry. More rivals than
+# this is not "decide among the first three" — it is undecidable within the
+# budget, and lookup_wikipedia says so by leaving the fields missing.
+MAX_WIKI_SUMMARIES = 3
 
 CATEGORY_BY_KIND = {"movie": "Movies", "book": "Books"}
 KIND_EMOJI = {"movie": "🎬", "book": "📚"}
@@ -238,7 +260,20 @@ def _photo_field(item, field):
         return match.group(0) if match else ""
     if field == "genre" and value:
         lang = "ru" if _CYRILLIC_RE.search(value) else "en"
-        return _genre_of(value.casefold(), lang)
+        # A SEEN genre is evidence, not remote prose. The fixed vocabulary is
+        # what stops a crafted lookup summary planting arbitrary text in this
+        # field, but it has no вестерн/нуар/мюзикл entry — so a poster plainly
+        # printing «Вестерн» used to lose its genre entirely and could then be
+        # filled by a model GUESS shown as «(по памяти)», a guess standing where
+        # the photo gave a fact. The table now only CANONICALIZES what it knows;
+        # an unknown visible genre is kept verbatim (already fence-neutralized
+        # and capped by _clean_line) and, being present, is never overwritten by
+        # the model fallback (review fix 2026-07-28). The passthrough is
+        # casefolded like the canonical values: both land in the SAME catalog
+        # column, and «Вестерн» sitting beside «фантастика» would make grouping
+        # and export dedup of that column case-sensitive for exactly the values
+        # that bypassed the table (review fix 2026-07-28).
+        return _genre_of(value.casefold(), lang) or value.casefold()
     return value
 
 
@@ -348,33 +383,68 @@ def _same_work_by_layout(kept, entry):
     return True
 
 
-def force_kind(entries, kind):
-    """The boss NAMED the kind in the caption — that statement outranks the
-    vision guess (live regression: «Фильм» on a film's book-shaped cover still
-    produced a BOOK entry and a book's author). Every entry becomes `kind`.
+def flip_kind(entry, kind, forced=False):
+    """Change ONE staged entry's kind. This is the SINGLE routine both flip
+    paths use — the caption's `force_kind` and the reply-correction («№2 —
+    книга», «не книга, а фильм») in resolve_media_correction — so they cannot
+    drift apart again (review fix 2026-07-28: the caption path preserved the
+    visible evidence and re-deduped, the reply path silently destroyed the
+    evidence and could leave two identical catalog rows).
 
     A FLIPPED entry drops its structured fields, enriched and visible alike:
     they belong to the other reading, and a visible «author: X» relabeled
     «режиссёр: X» would be exactly the provenance lie the card exists to
     prevent. The text is not lost — it moves into the photo comment, where it
     stays honest («на фото: …») and still disambiguates the lookup.
-    Returns the entries that actually changed."""
+
+    The moved values are ALSO recorded in `flipped_seen`: they describe the
+    reading the boss REJECTED, so they may inform a lookup's score but must
+    never veto it (_strong_context_terms) — otherwise the very forcing that
+    enables the right lookup kills it. That exemption is not permanent: a flip
+    BACK to the kind those values came from (`flipped_from`) restores the very
+    reading they describe, so they become ordinary boss-visible photo context
+    again and gate the lookup like any other (review fix 2026-07-28 — the
+    exemption used to survive every later flip).
+
+    `forced=True` records the caption's claim on the entry (`forced_kind`), from
+    which the card's «Ты сказал, что это фильм» disclosure is recomputed at
+    render time. Returns True when the entry actually changed."""
+    if kind not in CATEGORY_BY_KIND or entry.get("kind") == kind:
+        return False
+    previous = entry.get("kind")
+    seen = [str(entry[f]) for f in FIELDS
+            if entry.get(f) and entry.get(f + "_src") == "photo"]
+    clear_enrichment(entry)
+    moved = list(entry.get("flipped_seen") or [])
+    if kind == entry.get("flipped_from"):
+        moved = []
+        entry.pop("flipped_from", None)
+    for value in seen:
+        if value.casefold() not in (entry.get("comment") or "").casefold():
+            entry["comment"] = ((entry.get("comment", "") + " · " + value)
+                                if entry.get("comment") else value)[:MAX_COMMENT_CHARS]
+            if value not in moved:
+                moved.append(value)
+    if seen:
+        entry["flipped_from"] = previous
+    if moved:
+        entry["flipped_seen"] = moved
+    else:
+        entry.pop("flipped_seen", None)
+    entry["kind"] = kind
+    if forced:
+        entry["forced_kind"] = kind
+    return True
+
+
+def force_kind(entries, kind):
+    """The boss NAMED the kind in the caption — that statement outranks the
+    vision guess (live regression: «Фильм» on a film's book-shaped cover still
+    produced a BOOK entry and a book's author). Every entry becomes `kind`, via
+    the shared `flip_kind`. Returns the entries that actually changed."""
     if kind not in CATEGORY_BY_KIND:
         return []
-    flipped = []
-    for entry in entries:
-        if entry.get("kind") == kind:
-            continue
-        seen = [str(entry[f]) for f in FIELDS
-                if entry.get(f) and entry.get(f + "_src") == "photo"]
-        clear_enrichment(entry)
-        for value in seen:
-            if value.casefold() not in (entry.get("comment") or "").casefold():
-                entry["comment"] = ((entry.get("comment", "") + " · " + value)
-                                    if entry.get("comment") else value)[:MAX_COMMENT_CHARS]
-        entry["kind"] = kind
-        flipped.append(entry)
-    return flipped
+    return [entry for entry in entries if flip_kind(entry, kind, forced=True)]
 
 
 # Wrapping quote pairs a photo-read title may already carry. Only a pair that
@@ -413,7 +483,16 @@ def _entry_titles(entry):
 
 
 def _merge_entry(kept, other):
-    """Merge two photo reads of the same work without losing visible evidence."""
+    """Merge two photo reads of the same work without losing visible evidence.
+
+    That includes the flip state, because `dedup_entries` keeps the FIRST
+    occurrence and both flip paths re-dedup right after flipping: when the
+    survivor is the entry that did NOT flip, dropping `flipped_seen` would put
+    the rescued text back into `_strong_context_terms` as a veto (the exact
+    failure the exemption exists to prevent) and dropping `forced_kind` would
+    silently delete the «Ты сказал, что это фильм» disclosure from a card the
+    caption really did change (review fix 2026-07-28). `force_kind` applies ONE
+    kind to the whole batch, so the two entries can never disagree here."""
     aliases = list(kept.get("aliases") or [])
     have = {normalize_title(kept.get("title"))}
     have.update(normalize_title(a) for a in aliases)
@@ -433,6 +512,15 @@ def _merge_entry(kept, other):
         if not kept.get(field) and other.get(field):
             kept[field] = other[field]
             kept[field + "_src"] = other.get(field + "_src") or "photo"
+    for key in ("forced_kind", "flipped_from"):
+        if not kept.get(key) and other.get(key):
+            kept[key] = other[key]
+    moved = list(kept.get("flipped_seen") or [])
+    for value in other.get("flipped_seen") or []:
+        if value not in moved:
+            moved.append(value)
+    if moved:
+        kept["flipped_seen"] = moved
     return kept
 
 
@@ -525,6 +613,14 @@ _CONTEXT_STOP = {
     "this", "that", "этот", "эта", "это", "года", "year", "years", "назад",
     "about", "про", "with", "from", "как", "для", "and", "the",
     "top", "топ", "great", "best", "лучший", "отличный",
+    # Cover/poster MARKETING prose. It is printed in CAPITALS as often as a
+    # name is, so `_proper_noun_terms` cannot tell «НОВИНКА МЕСЯЦА» from «ZACH
+    # BOHANNON` by shape — and an unlisted phrase still vetoes, which fails
+    # toward honest-missing rather than toward the wrong work (review fix
+    # 2026-07-28). Inflected forms are listed explicitly, like «года» above.
+    "новинка", "новинки", "новинку", "новое", "бестселлер", "бестселлеры",
+    "премьера", "хит", "хиты", "месяца", "недели", "продаж", "издание",
+    "bestseller", "bestselling", "premiere", "release", "month", "week",
 }
 _PLATFORM_TERMS = {
     "netflix", "hbo", "amazon", "prime", "disney", "hulu", "apple",
@@ -691,44 +787,157 @@ def _blob_words(blob):
     return set(_WORD_RE.findall(str(blob or "").casefold()))
 
 
+# A photo-read NAME token confirms a candidate by STEM, not by identity: RU
+# prose DECLINES creators («роман Михаила Булгакова»), so the cover's «Михаил
+# Булгаков» tokenizes as {михаил, булгаков} against the candidate's {михаила,
+# булгакова}. That — declension — is the ONLY thing the tolerance is for, so it
+# applies to Cyrillic terms only: a Latin term must occur as a whole word, or
+# «Peter Jackson» would score a full confirmation against a candidate that
+# merely mentions «Peterson» in «Jacksonville» (review fix 2026-07-28).
+# Transliteration is NOT bridged by any stem — a Cyrillic and a Latin token
+# share no prefix — so a transliterated creator can only fail to confirm; per
+# _creator_absence_refutes it must then not refute either.
+_NAME_STEM = 5
+
+
+def _name_matches(term, words):
+    """True when a photo-read name token occurs among a candidate's words,
+    tolerating RU declension endings (review fix 2026-07-28)."""
+    if term in words:
+        return True
+    if len(term) < _NAME_STEM or not _CYRILLIC_RE.search(term):
+        return False
+    stem = term[:_NAME_STEM]
+    return any(len(w) >= _NAME_STEM and w.startswith(stem) for w in words)
+
+
+def _own_title_words(entry):
+    """The words of the title/aliases we searched WITH — they are ours, not the
+    candidate's, and say nothing about the language the candidate is written in."""
+    own = set()
+    for value in [entry.get("title")] + list(entry.get("aliases") or []):
+        own.update(_WORD_RE.findall(str(value or "").casefold()))
+    return own
+
+
+def _creator_absence_refutes(blob, entry, creator):
+    """Does this candidate's SILENCE about the photo-visible creator count
+    against it?
+
+    A Latin creator: yes — any record of the right work names it. A CYRILLIC
+    creator: only when the candidate's own prose (its words minus the title we
+    searched with) is Cyrillic too. A ru-wiki summary of the right work names
+    the author, declined — and _name_matches reads declensions — so silence
+    there is real counter-evidence. An English record simply cannot contain
+    «Булгаков» whatever work it describes: it may confirm (transliterated
+    records do not even manage that), it may never refute.
+
+    Judging by the whole blob would have judged by OUR title: «Мастер и
+    Маргарита» makes every candidate look Cyrillic, including the English
+    OpenLibrary record whose author reads «Mikhail Bulgakov» (review fix
+    2026-07-28)."""
+    if not _CYRILLIC_RE.search(creator):
+        return True
+    own = _own_title_words(entry)
+    return any(_CYRILLIC_RE.search(w) for w in _blob_words(blob) if w not in own)
+
+
+def _photo_creator(entry):
+    return (entry.get("creator") or "") if entry.get("creator_src") == "photo" else ""
+
+
 def _candidate_score(blob, entry):
     words = _blob_words(blob)
     score = sum(1 for term in _context_terms(entry) if term in words)
-    creator = (entry.get("creator") or "") if entry.get("creator_src") == "photo" else ""
+    creator = _photo_creator(entry)
     creator_terms = [w for w in _WORD_RE.findall(creator.casefold())
                      if w not in _CONTEXT_STOP]
     if creator_terms:
-        score += 12 if all(w in words for w in creator_terms) else -12
+        if all(_name_matches(w, words) for w in creator_terms):
+            score += 12
+        elif _creator_absence_refutes(blob, entry, creator):
+            score -= 12
     year = (entry.get("year") or "") if entry.get("year_src") == "photo" else ""
     if year:
         score += 10 if year in words else -10
     return score
 
 
-def _strong_context_terms(entry):
-    """Visible context strong enough to veto even a lone same-title result.
-    A platform, explicit photo field, or multi-word identifier is useful;
-    a one-word review such as «топ» is not."""
-    if entry.get("creator_src") == "photo":
-        return _context_terms({
-            "comment": entry.get("creator") or "", "aliases": [],
-        })
+# A NAME the photo printed: a run of two or more consecutive capitalized words
+# («ZACH BOHANNON», «Peter Jackson», «П. Джексон»). Ordinary comment prose
+# («смотрели вместе», «подарок брата») has no such run.
+_PROPER_RUN_RE = re.compile(
+    r"(?:[A-ZА-ЯЁ][^\W\d_]*[.'’\-]?\s+)+[A-ZА-ЯЁ][^\W\d_]*")
+
+
+def _proper_noun_terms(text):
+    """Casefolded words of every capitalized multi-word run in free photo
+    context — the part of a comment that actually IDENTIFIES a work."""
+    out = []
+    for run in _PROPER_RUN_RE.finditer(str(text or "")):
+        for word in _WORD_RE.findall(run.group(0).casefold()):
+            if word not in _CONTEXT_STOP and word not in out:
+                out.append(word)
+    return out
+
+
+def _flipped_terms(entry):
+    """Words the photo comment holds ONLY because a kind flip moved them there
+    (flip_kind). They describe the reading the boss rejected, so they must not
+    gate the lookup the flip exists to enable."""
+    moved = " ".join(str(v) for v in entry.get("flipped_seen") or [])
+    return set(_context_terms({"comment": moved, "aliases": []}))
+
+
+def _strong_context_terms(entry, blob=""):
+    """Visible context strong enough to VETO even a lone same-title result.
+
+    What identifies a WORK: a photo-visible creator, a photo-visible year, a
+    streaming platform, or a name printed in the comment. What does NOT: two
+    ordinary content words. The old `len(terms) >= 2` rule made any two-word
+    comment a veto, so «смотрели вместе» or «экранизация романа» — prose the
+    extract prompt actively asks for — discarded a correct unique match and
+    sent the entry to the model as «по памяти». The stronger his photo context,
+    the worse the outcome; that is the inverse of the intent (review fix
+    2026-07-28).
+
+    Whether a photo creator may veto THIS candidate is decided by
+    _creator_absence_refutes, i.e. by the candidate's own script: a Cyrillic
+    name's absence from an ENGLISH record is uninformative (vetoing on it
+    rejected exactly the book covers this feature exists for), while its
+    absence from a RUSSIAN summary of the same title is exactly the signal that
+    says «this is a different «Ася»» — the module's contract is honest-missing,
+    not a confident wrong match (review fix 2026-07-28: the exemption used to be
+    unconditional, so a lone ru candidate by another author was accepted and
+    rendered «нашла»)."""
+    creator = str(entry.get("creator") or "") if entry.get("creator_src") == "photo" else ""
+    if creator:
+        if not _creator_absence_refutes(str(blob), entry, creator):
+            return []
+        return _context_terms({"comment": creator, "aliases": []})
     if entry.get("year_src") == "photo" and entry.get("year"):
         return [str(entry["year"])]
-    terms = _context_terms({
-        "comment": entry.get("comment") or "", "aliases": [],
-    })
+    comment = str(entry.get("comment") or "")
+    moved = _flipped_terms(entry)
+    terms = [t for t in _context_terms({"comment": comment, "aliases": []})
+             if t not in moved]
     platforms = [term for term in terms if term in _PLATFORM_TERMS]
-    return platforms or (terms if len(terms) >= 2 else [])
+    names = [term for term in _proper_noun_terms(comment)
+             if term in terms]
+    return platforms or names
 
 
-def _select_context_candidate(candidates, entry, blob):
-    """Pick one same-title candidate only when it is unambiguous. A single
-    candidate survives unless it contradicts explicit photo creator/year.
-    Multiple same-kind works need a UNIQUE positive contextual score; otherwise
-    honest-missing/model fallback beats a confident wrong match."""
+def _select_context_candidates(candidates, entry, blob):
+    """The same-title candidates whose evidence may be used. A single candidate
+    survives unless it contradicts explicit photo creator/year. Among several,
+    the top contextual score must be positive — but a TIE is not automatically
+    ambiguity: tied candidates are returned together and the caller keeps only
+    the fields they AGREE on (review fix 2026-07-28 — OpenLibrary routinely
+    returns several editions of the SAME book, and discarding their unanimous
+    author/year sent the field to the model as «по памяти» for a work the
+    lookup had identified). Fields they disagree on stay honestly missing."""
     if not candidates:
-        return None
+        return []
     scored = [(item, _candidate_score(blob(item), entry)) for item in candidates]
     if len(scored) == 1:
         item, score = scored[0]
@@ -736,13 +945,29 @@ def _select_context_candidate(candidates, entry, blob):
         # One result is not automatically the right work when the photo gave a
         # real disambiguator (Netflix, Bohannon, Jackson…). If none of that
         # visible context occurs in the candidate, honest-missing is safer.
-        strong_terms = _strong_context_terms(entry)
-        if strong_terms and not any(term in candidate_words for term in strong_terms):
-            return None
-        return item if score >= 0 else None
+        strong_terms = _strong_context_terms(entry, blob(item))
+        if strong_terms and not any(_name_matches(term, candidate_words)
+                                    for term in strong_terms):
+            return []
+        return [item] if score >= 0 else []
     best = max(score for _, score in scored)
-    winners = [item for item, score in scored if score == best]
-    return winners[0] if best > 0 and len(winners) == 1 else None
+    if best <= 0:
+        return []               # nothing in the photo picks a side — refuse
+    return [item for item, score in scored if score == best]
+
+
+def _agreeing_fields(field_sets):
+    """The fields on which every candidate in a tie AGREES (normalized), and
+    only those: a genuine same-title conflict still leaves the field missing."""
+    if not field_sets:
+        return {}
+    out = {}
+    for field in FIELDS:
+        values = [fields.get(field) or "" for fields in field_sets]
+        if values[0] and all(normalize_title(v) == normalize_title(values[0])
+                             for v in values):
+            out[field] = values[0]
+    return out
 
 
 def lookup_openlibrary(title, budget):
@@ -770,9 +995,14 @@ def lookup_openlibrary(title, budget):
                       if isinstance(doc.get("subject"), list) else [])
         return " · ".join(str(v) for v in values)
 
-    doc = _select_context_candidate(candidates, entry, doc_blob)
-    if doc is None:
-        return {}
+    # Every candidate comes out of ONE call, so this list is never truncated by
+    # the budget: nothing can silently turn an ambiguous set into a single pick
+    # here (contrast lookup_wikipedia's per-page summary loop).
+    winners = _select_context_candidates(candidates, entry, doc_blob)
+    return _agreeing_fields([_openlibrary_fields(doc) for doc in winners])
+
+
+def _openlibrary_fields(doc):
     out = {}
     authors = doc.get("author_name")
     if isinstance(authors, list) and authors and isinstance(authors[0], str):
@@ -828,15 +1058,37 @@ def lookup_wikipedia(title, kind, budget):
     pages = _wiki_candidates(found, title, kind)
     if not pages:
         return {}
+    wanted = pages[:MAX_WIKI_SUMMARIES]
+    if len(pages) > len(wanted):
+        # The SLICE truncates too, and it truncates before a single summary is
+        # read: five same-title works minus the two we will never fetch is the
+        # same evidence/decision mismatch as a failed rival, one level up. Bail
+        # here rather than after paying for three summaries — an undecidable set
+        # stays undecided, and the budget is left for the other entries (review
+        # fix 2026-07-28).
+        log(f"media lookup: {len(pages)} same-title pages, only "
+            f"{len(wanted)} within budget — leaving the fields missing")
+        return {}
     candidates = []
-    for page in pages[:3]:
+    for page in wanted:
         # safe="": a slash inside a matched title («Face/Off») must travel as
         # %2F; quote()'s default would turn it into an extra REST path segment.
         summary = _lookup_json(base + "/api/rest_v1/page/summary/"
                                + quote(page.replace(" ", "_"), safe=""), budget)
         if isinstance(summary, dict):
             candidates.append((page, summary))
-    chosen = _select_context_candidate(
+    if len(candidates) < len(wanted) and len(wanted) > 1:
+        # A rival was never READ: `_lookup_json` returns None both when the
+        # per-batch budget is exhausted and after a transport failure, and the
+        # single-candidate branch is far more permissive than the multi one — so
+        # losing the 2nd/3rd summary used to convert «three same-title works,
+        # refuse» into «one candidate, accept», storing the wrong work as
+        # «нашла». Truncation means UNDECIDED, never "the first one" (review fix
+        # 2026-07-28).
+        log(f"media lookup: {len(wanted)} same-title pages, "
+            f"{len(candidates)} readable — leaving the fields missing")
+        return {}
+    winners = _select_context_candidates(
         candidates, entry,
         lambda pair: " · ".join([
             pair[0],
@@ -845,9 +1097,11 @@ def lookup_wikipedia(title, kind, budget):
             str(pair[1].get("extract") or ""),
         ]),
     )
-    if chosen is None:
-        return {}
-    _, summary = chosen
+    return _agreeing_fields([_wikipedia_fields(summary, lang)
+                             for _, summary in winners])
+
+
+def _wikipedia_fields(summary, lang):
     desc = _clean_line(summary.get("description"), MAX_DESC_CHARS)
     extract = _clean_line(summary.get("extract"), 500)
     out = {}
@@ -984,13 +1238,35 @@ def fact_label(field, kind):
     return field
 
 
+# Free visible context carries its own reserved label, like the alias facts.
+# 41a5818 kept `photo:` OUT of the field alternation for a reason: a photo
+# comment that happens to READ like a field label is a transcription, not a
+# verified value, and must never displace a real lookup fact. d31f2ba widened
+# the pattern to emit legitimate `photo: author:` facts and deleted the guard
+# with no replacement, so a shelf photo whose comment began «author: Frank
+# Herbert» won the creator column over the genuine `lookup: author: …` (and
+# purged it on merge). The label is restored STRUCTURALLY instead (review fix
+# 2026-07-28): only genuinely structured facts can match the alternation.
+#
+# The guard is structural for NEW writes only. Notes captured between d31f2ba
+# and 2026-07-28 may still carry a transcribed comment as a `photo: <label>:
+# <value>` fact, and nothing can tell those apart from the LEGITIMATE visible
+# fields written in the same shape — the visible-field list was never stored —
+# so there is no safe backfill. Such a fact still reads back as the note's
+# creator/year/genre; a fresh `lookup:`/`photo:` fact for the same field now
+# REPLACES it (fact_key), so the residue only surfaces on a note no later
+# capture has refreshed. Stated in CARA.md/SOLUTION.md rather than migrated.
+CONTEXT_LABEL = "context: "
+
+
 def entry_facts(entry):
-    """Facts for one confirmed entry: visible context/aliases as `photo: …`,
-    plus one `<src>: <label>: <value>` fact per structured field. Labels are
-    language-neutral English; values stay exactly as read/found."""
+    """Facts for one confirmed entry: visible context as `photo: context: …`,
+    aliases as `photo: alias: …`, plus one `<src>: <label>: <value>` fact per
+    structured field. Labels are language-neutral English; values stay exactly
+    as read/found."""
     facts = []
     if entry.get("comment"):
-        facts.append(f"photo: {entry['comment']}")
+        facts.append(f"photo: {CONTEXT_LABEL}{entry['comment']}")
     for alias in entry.get("aliases") or []:
         facts.append(f"photo: alias: {alias}")
     for f in FIELDS:
@@ -1004,10 +1280,30 @@ _FACT_FIELD_RE = re.compile(r"^(?:photo|lookup|model): (author|director|year|gen
 
 
 def fact_field(fact):
-    """The structured field label of a provenance-tagged fact, or None for
+    """The structured field LABEL of a provenance-tagged fact, or None for
     photo context/aliases and free-form facts."""
     m = _FACT_FIELD_RE.match(str(fact or ""))
     return m.group(1) if m else None
+
+
+def fact_key(fact):
+    """The abstract FIELD a fact fills — author and director are both `creator`,
+    exactly as facts_fields/parse_catalog_facts read them back. merge_facts
+    replaces on this key, not on the raw label: a note that still carries
+    `director:` (a Movies note recategorized into Books) otherwise kept it
+    beside a fresh `author:` fact, the export printed the stale one, and a later
+    card rendered a DIRECTOR under «автор» (review fix 2026-07-28)."""
+    field = fact_field(fact)
+    return "creator" if field in ("author", "director") else field
+
+
+def _fact_dupe_key(fact):
+    """Casefolded identity for append-dedup, blind to the `context:` label added
+    2026-07-28 — a re-capture must not append a second copy of a comment the
+    note already holds in the older `photo: <text>` shape."""
+    text = " ".join(str(fact or "").split()).casefold()
+    head = "photo: " + CONTEXT_LABEL
+    return "photo: " + text[len(head):] if text.startswith(head) else text
 
 
 def merge_facts(old, new):
@@ -1015,14 +1311,14 @@ def merge_facts(old, new):
     fact for the SAME field (the fresh capture wins — «refreshes facts», and no
     contradictory year pair survives); photo context and unrecognized facts
     append when not already present (casefolded)."""
-    new_fields = {fact_field(f) for f in new} - {None}
-    kept = [f for f in old if fact_field(f) not in new_fields]
-    have = {f.casefold() for f in kept}
+    new_fields = {fact_key(f) for f in new} - {None}
+    kept = [f for f in old if fact_key(f) not in new_fields]
+    have = {_fact_dupe_key(f) for f in kept}
     out = list(kept)
     for f in new:
-        if f.casefold() not in have:
+        if _fact_dupe_key(f) not in have:
             out.append(f)
-            have.add(f.casefold())
+            have.add(_fact_dupe_key(f))
     return out
 
 
@@ -1049,16 +1345,25 @@ def parse_catalog_facts(facts):
             if not fields[field]:
                 fields[field] = m.group(3).strip()
         elif m:
-            comments.append(m.group(3).strip())
+            rest = m.group(3).strip()
+            if rest.casefold().startswith(CONTEXT_LABEL):
+                rest = rest[len(CONTEXT_LABEL):].strip()
+            comments.append(rest)
         else:
             comments.append(text)
     return fields, [c for c in comments if c]
 
 
 def facts_fields(facts):
-    """{field: [src, value]} read back out of a note's provenance-tagged facts
-    (first value per field wins — parse_catalog_facts' rule). This is how the
-    card learns what an EXISTING note already holds."""
+    """{field: [src, value, label]} read back out of a note's provenance-tagged
+    facts (first value per field wins — parse_catalog_facts' rule). This is how
+    the card learns what an EXISTING note already holds.
+
+    The concrete LABEL travels with the value (review fix 2026-07-28): `creator`
+    is an abstraction over author/director, and re-deriving the display label
+    from the CAPTURE's kind relabeled a note's inherited «автор» as «режиссёр»
+    whenever the note had crossed categories — the one thing the INHERITED_SRC
+    design exists to prevent."""
     out = {}
     for fact in facts or ():
         m = _CATALOG_FACT_RE.match(str(fact or "").strip())
@@ -1067,50 +1372,73 @@ def facts_fields(facts):
         field = "creator" if m.group(2) in ("author", "director") else m.group(2)
         value = m.group(3).strip()
         if field not in out and value:
-            out[field] = [m.group(1), value]
+            out[field] = [m.group(1), value, m.group(2)]
     return out
+
+
+def merge_previews(entries, old_facts):
+    """The fields a confirm will ACTUALLY leave on ONE note, per entry, for
+    every staged entry that merges into it.
+
+    The capture's own values, plus — for every field it left missing — what the
+    note already holds (merge_facts replaces only the fields the fresh capture
+    carries). This closes the live invariant break: the card said «не нашла:
+    режиссёра, год, жанр» while the merged row kept a director and a year from
+    an earlier capture.
+
+    SEVERAL staged entries can land on one note (each matched it by a different
+    alias), and the confirm folds them in card order — a later entry's fact
+    REPLACES an earlier one's for the same field. So every line for that row
+    describes the SAME final row, which is the card's whole contract (review fix
+    2026-07-28: each line used to be computed against the card-time snapshot
+    alone, so NEITHER described the row the confirm produced).
+
+    Provenance stays honest per value: the entry's own source for its own value,
+    INHERITED_SRC («уже в записи») for the note's, SIBLING_SRC («из этой же
+    карточки») for a value another entry on this same card contributes — that
+    one is not on file yet, and nothing is stored before his yes.
+
+    Display-only — the entries' own fields stay untouched, so re-rendering a
+    corrected card can neither inherit twice nor turn a note's old value into
+    something THIS capture claims to have found."""
+    final = {}
+    for field, trio in facts_fields(old_facts).items():
+        final[field] = (INHERITED_SRC, trio[1], trio[2], None)
+    for idx, entry in enumerate(entries):
+        for f in FIELDS:
+            if entry.get(f):
+                final[f] = (entry.get(f + "_src") or "model", str(entry[f]),
+                            fact_label(f, entry.get("kind")), idx)
+    return [{f: [src if owner in (None, idx) else SIBLING_SRC, value, label]
+             for f, (src, value, label, owner) in final.items()}
+            for idx, _ in enumerate(entries)]
 
 
 def merge_preview(entry, old_facts):
-    """The fields a confirm will ACTUALLY leave on the note this capture merges
-    into: the capture's own values, plus — for every field the capture left
-    missing — what the note already holds (merge_facts replaces only the fields
-    the fresh capture carries).
-
-    This closes the live invariant break: the card said «не нашла: режиссёра,
-    год, жанр» while the merged row kept a director and a year from an earlier
-    capture. Display-only — the entry's own fields stay untouched, so
-    re-rendering a card cannot inherit twice or turn an inherited value into
-    something this capture claims to have found.
-
-    An inherited value carries the source INHERITED, not the note's original
-    provenance (review fix 2026-07-28): «на фото» would claim the photo he just
-    sent shows a director it never showed, and «нашла» would claim a lookup this
-    turn never ran. The card says «уже в записи» instead."""
-    inherited = facts_fields(old_facts)
-    out = {}
-    for f in FIELDS:
-        if entry.get(f):
-            out[f] = [entry.get(f + "_src") or "model", str(entry[f])]
-        elif f in inherited:
-            out[f] = [INHERITED_SRC, inherited[f][1]]
-    return out
+    """merge_previews for a single staged entry (the common case)."""
+    return merge_previews([entry], old_facts)[0]
 
 
 def entry_display_fields(entry):
-    """{field: (src, value)} the card must show for one staged entry: the merge
-    preview when it is bound to an existing note, otherwise its own fields.
-    (The stash round-trips through JSON, so a pair may arrive as a list.)"""
+    """{field: (src, value, label)} the card must show for one staged entry: the
+    merge preview when it is bound to an existing note, otherwise its own
+    fields. `label` is the concrete author/director/year/genre label the value
+    carries; it is '' only for a stash written BEFORE 2026-07-28, which stored
+    pairs — the card then falls back to deriving the label from the entry's
+    kind. The stash round-trips through JSON, so a triple may arrive as a
+    list."""
     merge = entry.get("merge") or {}
     fields = merge.get("fields")
     if not isinstance(fields, dict):
-        fields = {f: [entry.get(f + "_src") or "model", entry[f]]
+        fields = {f: [entry.get(f + "_src") or "model", entry[f],
+                      fact_label(f, entry.get("kind"))]
                   for f in FIELDS if entry.get(f)}
     out = {}
     for f in FIELDS:
         pair = fields.get(f)
-        if isinstance(pair, (list, tuple)) and len(pair) == 2 and pair[1]:
-            out[f] = (str(pair[0]), str(pair[1]))
+        if isinstance(pair, (list, tuple)) and len(pair) >= 2 and pair[1]:
+            label = str(pair[2]) if len(pair) > 2 and pair[2] else ""
+            out[f] = (str(pair[0]), str(pair[1]), label)
     return out
 
 
@@ -1144,12 +1472,28 @@ def catalog_markdown(category, items, lang):
 # -- deterministic card corrections -------------------------------------------
 
 _NUM_RE = re.compile(r"(?:№|#)\s*(\d{1,2})|\b(\d{1,2})\b")
-_REMOVE_WORDS = ("убер", "убра", "удал", "выкин", "выброс", "remove", "drop ", "delete")
+# «убира» sits beside «убер»/«убра» so the negation check can SEE «не убирай»
+# (review fix 2026-07-28 — a removal word she cannot see cannot be negated).
+_REMOVE_WORDS = ("убер", "убра", "убира", "удал", "выкин", "выброс",
+                 "remove", "drop ", "delete")
 _MOVIE_WORDS = ("фильм", "кино", "сериал", "movie", "film", "series")
 _BOOK_WORDS = ("книг", "book")
-# «не книга» / "not a movie" / "no book" — the article may sit between the
-# negation and the kind word, so the check looks at the rstripped prefix tail.
-_NEGATION_RE = re.compile(r"(?:\bне|\bnot(?:\s+an?|\s+the)?|\bno)$")
+# «не книга» / "not a movie" / "no book" / "don't delete" — the article may sit
+# between the negation and the word, so the check looks at the rstripped prefix
+# tail. The contracted form is listed because the same negation now guards
+# REMOVALS, where "don't delete #2" is the natural phrasing (2026-07-28).
+_NEGATION_RE = re.compile(
+    r"(?:\bне|\bnot(?:\s+an?|\s+the)?|n't(?:\s+an?|\s+the)?|\bno)$")
+# A REMOVAL is negated across a short MODAL far more often than a kind is:
+# «не надо удалять №2», «не нужно убирать №2», «не стоит удалять №3», «не хочу
+# удалять №2» are the ordinary Russian phrasings, and the adjacent-particle rule
+# caught only the bare imperative («не удаляй №2») — so the commonest way to say
+# "keep it" still DROPPED the entry he was protecting (review fix 2026-07-28).
+_REMOVE_NEGATION_RE = re.compile(
+    r"(?:\bне|\bnot|n't|\bno)"
+    r"(?:\s+(?:надо|нужно|нужн\w+|стоит|следует|хочу|хочется|хотел\w*|буду|"
+    r"будем|станем|собираюсь|планирую|"
+    r"want\s+to|need\s+to|going\s+to|gonna|have\s+to))?$")
 # «удали напоминание №2» is about a REMINDER, not card entry 2: a message that
 # names one of these objects is never a card correction — it routes normally.
 # ('note' also catches 'notebook', which otherwise contains the kind word 'book'.)
@@ -1160,9 +1504,18 @@ _FOREIGN_OBJECTS = ("напомина", "заметк", "задач", "кате�
 # correction — except when the sentence asks for something («посоветуй фильм на
 # вечер», «включи кино»). These verbs are the difference, and they keep the
 # 2026-07-24 review fix intact instead of re-widening the router bypass.
+#
+# «посмотр»/«почита»/«хочу» close the demonstrative hole (review fix
+# 2026-07-28): «давай посмотрим этот фильм» carries a demonstrative, so the
+# no-number branch used to accept it as a correction — on a one-entry movie card
+# it flipped nothing, re-drew the card and SWALLOWED the turn; on a multi-entry
+# card it answered «не поняла, какую запись поправить» to a message that was
+# never a correction.
 _REQUEST_WORDS = ("посовет", "порекоменд", "подбер", "предлож", "включ",
                   "поставь", "скачай", "закажи", "купи", "найди мне",
-                  "recommend", "suggest", "let's ", "play ", "order ", "buy ")
+                  "посмотр", "почита", "хочу",
+                  "recommend", "suggest", "let's ", "play ", "order ", "buy ",
+                  "watch ", "read ")
 # A QUESTION is not an assertion about the open card: «что за фильм?», «а книга
 # есть в бумаге?», «это какой фильм?» ask for something and must reach the
 # router even while a card is open (review fix 2026-07-28). Only checked for
@@ -1194,20 +1547,20 @@ _IDENTIFY_RE = re.compile(
     r"\s*[.?!…]*$", re.I)
 
 
-def _kind_named(low, words):
+def _kind_named(low, words, negation=_NEGATION_RE):
     """True when one of `words` appears NOT negated («не книга» does not name
     'book' — it rejects it)."""
     for w in words:
         for m in re.finditer(re.escape(w), low):
-            if not _NEGATION_RE.search(low[:m.start()].rstrip()):
+            if not negation.search(low[:m.start()].rstrip()):
                 return True
     return False
 
 
-def _kind_negated(low, words):
+def _kind_negated(low, words, negation=_NEGATION_RE):
     for word in words:
         for match in re.finditer(re.escape(word), low):
-            if _NEGATION_RE.search(low[:match.start()].rstrip()):
+            if negation.search(low[:match.start()].rstrip()):
                 return True
     return False
 
@@ -1249,6 +1602,13 @@ def parse_correction(text, n_entries):
     else («удали всё») all still route. A request or a question never corrects
     a card at all, on any number of entries.
 
+    Negation binds removals exactly as it binds kinds (2026-07-28), and for a
+    removal it reaches across a short modal — «не удаляй №2» AND «не надо
+    удалять №2»/«не стоит убирать №2» all keep entry 2 and route. A message
+    that both protects and removes («не убирай №2, убери №3») asks instead of
+    guessing. A removal is never treated as a request either: «хочу убрать это»
+    corrects the card, while «хочу посмотреть этот фильм» still routes.
+
     Returns None when the message is not a correction at all (route it normally —
     «да» must still reach confirm), the string "unclear" when it clearly tries to
     correct but names no resolvable entry, or (op, [indices]) with op in
@@ -1256,7 +1616,13 @@ def parse_correction(text, n_entries):
     low = " " + " ".join(str(text or "").casefold().split()) + " "
     if any(w in low for w in _FOREIGN_OBJECTS):
         return None
-    remove = any(w in low for w in _REMOVE_WORDS)
+    # A NEGATED removal is not a removal: «не удаляй №2» asked her to KEEP entry
+    # 2, and the bare substring scan used to drop exactly the entry he was
+    # protecting — the negation handling the kind words already had (review fix
+    # 2026-07-28; nothing is stored yet, but the entry leaves the staged set and
+    # his next «да» silently saves less than he approved).
+    remove = _kind_named(low, _REMOVE_WORDS, _REMOVE_NEGATION_RE)
+    remove_negated = _kind_negated(low, _REMOVE_WORDS, _REMOVE_NEGATION_RE)
     movie = _kind_named(low, _MOVIE_WORDS)
     book = _kind_named(low, _BOOK_WORDS)
     if not (remove or movie or book):
@@ -1274,7 +1640,13 @@ def parse_correction(text, n_entries):
         # «посоветуй не книгу, а фильм» is still a request. Checked BEFORE the
         # contrast/assertion shapes so neither can re-open the router bypass the
         # 2026-07-24 review fix closed (review fix 2026-07-28).
-        if any(w in low for w in _REQUEST_WORDS):
+        #
+        # ...but a REMOVAL is not something one asks Cara to do to anything BUT
+        # the open card, and «хочу»/«посмотр»/«почита» widened the request
+        # vocabulary far enough to swallow «хочу убрать это» — a plain
+        # correction — into the router (review fix 2026-07-28). None of the
+        # request verbs is about removing, so they only gate kind assertions.
+        if not remove and any(w in low for w in _REQUEST_WORDS):
             return None
         flat = low.strip()
         # ...and neither is a QUESTION, whatever it points at: «что за фильм?»
@@ -1295,6 +1667,11 @@ def parse_correction(text, n_entries):
             return "unclear"    # card-directed but ambiguous on a multi-entry card
         in_range = [1]
     if remove:
+        if remove_negated:
+            # «Не убирай №2, убери №3» names a removal AND protects an entry:
+            # both readings are live and guessing costs him an entry he asked
+            # her to keep. She asks instead.
+            return "unclear"
         return ("remove", in_range)
     if movie and book:
         return "unclear"  # both kinds named and neither negated — don't guess

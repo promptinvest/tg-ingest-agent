@@ -262,6 +262,14 @@ TEXTS = {
         "ru": "Не поняла правку 🤔 Скажи, например: «№2 — книга» или «убери №3».",
         "en": "I didn't catch the correction 🤔 Say e.g. \"#2 is a book\" or \"remove #3\".",
     },
+    # He named the kind the card ALREADY shows. Answered deterministically: a
+    # re-drawn identical card would eat the turn, and routing a message that is
+    # explicitly about the open card would expose a write-capable pending to the
+    # model (2026-07-28).
+    "media_correction_noop": {
+        "ru": "Так и есть — {kind} 🙂 Карточку не меняю.",
+        "en": "That's what it says — {kind} 🙂 Leaving the card as is.",
+    },
     # -- B2 enrichment: per-field provenance on the card -----------------------
     # «на фото» = visible structured evidence; «(нашла)» = a keyless lookup
     # (OpenLibrary/Wikipedia); «(по памяти)» = model knowledge. A field NO source
@@ -277,6 +285,10 @@ TEXTS = {
     # It needs its own label: «на фото» would claim this photo shows it and
     # «нашла» would claim a lookup ran this turn — neither is true (2026-07-28).
     "media_src_note": {"ru": "уже в записи", "en": "already on file"},
+    # A value ANOTHER entry on this same card brings to the note both of them
+    # merge into. It is not «уже в записи» (nothing is stored before his yes)
+    # and this entry did not find it either (2026-07-28).
+    "media_src_card": {"ru": "из этой же карточки", "en": "from this card"},
     "media_fields_missing": {"ru": "не нашла: {fields}", "en": "couldn't find: {fields}"},
     # Field names as they read inside the missing note (RU accusative).
     "media_fname_creator_book": {"ru": "автора", "en": "author"},

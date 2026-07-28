@@ -4121,17 +4121,27 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         tmpdir = tempfile.mkdtemp(prefix="cara-photo-")
         try:
             classified = []
+            # EVERY photo that drops out of the batch is counted, not just the
+            # ones whose EXTRACT failed: a download that never landed and a
+            # classify that came back unusable also mean «I couldn't read that
+            # one», and the card may never imply it covers photos she could not
+            # read (review fix 2026-07-28). A photo she DID read and found to be
+            # a document/other is not unread — it is deliberately skipped.
+            unread = 0
             for i, part in enumerate(photos[:cap]):
                 path = self._download_photo_tmp(part, tmpdir, i)
                 if path is None:
+                    unread += 1
                     continue
                 kind, desc = media.classify(self.cfg, self.conn, path, lang)
+                if kind is None:
+                    unread += 1
                 classified.append({"kind": kind, "desc": desc, "path": path})
             kinds = {c["kind"] for c in classified if c["kind"]}
             if not kinds:
                 return False, None  # nothing classifiable -> legacy conversational flow
             if "media" in kinds:
-                entries, unread = [], 0
+                entries = []
                 for c in classified:
                     if c["kind"] != "media":
                         continue
@@ -4182,12 +4192,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                         # The caption WAS acted on, so the card says what she did
                         # with it — never the old «как команду её тут не
                         # выполняла», which was untrue for these captions.
-                        if forced:
-                            notes.append(T(
-                                lang, "media_card_kind_forced",
-                                kind=T(lang, "media_kind_movie"
-                                       if caption_intent["kind"] == "movie"
-                                       else "media_kind_book")))
+                        # The forced-KIND line is NOT appended here: it is a
+                        # claim about the entries' current kinds, so
+                        # _stage_media_card recomputes it on every draw (a
+                        # correction that reverses the forcing must not leave the
+                        # card contradicting itself — review fix 2026-07-28).
                         if caption_intent.get("identify"):
                             notes.append(T(lang, "media_card_identified"))
                     else:
@@ -4290,17 +4299,57 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                 {"text": T(lang, "media_btn_cancel"),
                                  "callback_data": "mcap|n"},
                             ]]})
+        if not (result and result.get("message_id")):
+            # The card never reached him. Staging it anyway would leave a
+            # confirmable set behind a card he never SAW — the consent invariant
+            # is "the card shows exactly what a confirm stores", and there is no
+            # card at all here. Nothing is staged and the slot is not claimed
+            # (review fix 2026-07-28); _media_clear above already retired the
+            # previous card's buttons and stash.
+            log("media card sendMessage failed — nothing staged, nothing to confirm")
+            pending = store.pending_get(self.conn, chat_id)
+            if pending and pending.get("kind") == "media_capture":
+                store.pending_clear(self.conn, chat_id)
+            return
         # Notes ride the stash so the cap/unread/truncation/caption disclosures
         # survive a correction re-staging (facts about the batch, not the turn).
         stash = {"entries": entries, "notes": notes,
+                 "card_message_id": result["message_id"],
                  "at": datetime.now(timezone.utc).isoformat()}
-        if result and result.get("message_id"):
-            stash["card_message_id"] = result["message_id"]
         store.kv_set(self.conn, f"media_capture:{chat_id}",
                      json.dumps(stash, ensure_ascii=False))
         if slot_ours:
             store.pending_set(self.conn, chat_id, "media_capture",
                               {"n": len(entries)})
+
+    def _media_kind_forced_notes(self, lang, entries, notes):
+        """The «Ты сказал, что это фильм — так и считаю» disclosure, recomputed
+        from the CURRENT entries on every draw.
+
+        It rode the stash with the cap/unread/truncation lines, but unlike them
+        it is not a durable fact about the batch: it is a claim about the kinds
+        the card shows right now. A reply-correction that flips the entry back —
+        or an «убери №N» that removes the only entry the caption flipped — left
+        the card asserting a kind it no longer displays, contradicting itself on
+        one screen (review fix 2026-07-28).
+
+        Called from inside _fit_media_card's loop, against the entries that
+        actually SURVIVE the fit: length truncation drops entries from the tail,
+        and computing the line against the full batch left the same
+        contradiction on a card that no longer shows the flipped entry (review
+        fix 2026-07-28)."""
+        out = [n for n in notes
+               if n not in {T(lang, "media_card_kind_forced",
+                              kind=T(lang, "media_kind_" + k))
+                            for k in ("movie", "book")}]
+        still_forced = {e.get("forced_kind") for e in entries
+                        if e.get("forced_kind")
+                        and e.get("kind") == e.get("forced_kind")}
+        for kind in ("movie", "book"):
+            if kind in still_forced:
+                out.append(T(lang, "media_card_kind_forced",
+                             kind=T(lang, "media_kind_" + kind)))
+        return out
 
     def _fit_media_card(self, lang, entries, notes, footer_key):
         """Trim the batch to MAX_CARD_ENTRIES and to what actually RENDERS
@@ -4312,7 +4361,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         kept = list(entries[:media.MAX_CARD_ENTRIES])
         dropped = len(kept) < len(entries)
         while True:
-            cur = notes + ([truncated] if dropped and truncated not in notes else [])
+            # The forced-kind line is recomputed per iteration: it is a claim
+            # about the entries the card SHOWS, and `kept` shrinks below.
+            cur = self._media_kind_forced_notes(lang, kept, notes)
+            cur = cur + ([truncated] if dropped and truncated not in cur else [])
             card = self._media_card_text(lang, kept, cur, footer_key)
             if len(card) <= media.MAX_CARD_CHARS or len(kept) <= 1:
                 return kept, cur, card
@@ -4351,13 +4403,22 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         fields = media.entry_display_fields(e)
         missing = []
         for f in media.FIELDS:
-            suffix = (f + "_" + ("book" if e["kind"] == "book" else "movie")
-                      if f == "creator" else f)
-            pair = fields.get(f)
-            if pair:
-                piece = T(lang, "media_field_" + suffix, value=pair[1])
-                if pair[0] in ("photo", "lookup", "model", media.INHERITED_SRC):
-                    piece += " (" + T(lang, "media_src_" + pair[0]) + ")"
+            trio = fields.get(f)
+            # The creator label follows the VALUE, not this capture's kind: an
+            # inherited fact carries the label the note actually holds, so a
+            # note that crossed categories can no longer have its «автор»
+            # re-rendered as «режиссёр» (review fix 2026-07-28).
+            label = trio[2] if trio and len(trio) > 2 else ""
+            if f == "creator":
+                kind_of_label = ({"author": "book", "director": "movie"}.get(label)
+                                 or ("book" if e["kind"] == "book" else "movie"))
+                suffix = "creator_" + kind_of_label
+            else:
+                suffix = f
+            if trio:
+                piece = T(lang, "media_field_" + suffix, value=trio[1])
+                if trio[0] in media.DISPLAY_SRCS:
+                    piece += " (" + T(lang, "media_src_" + trio[0]) + ")"
                 bits.append(piece)
             else:
                 missing.append(T(lang, "media_fname_" + suffix))
@@ -4406,16 +4467,29 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         that merge leaves behind. Idempotent: the preview lives under `merge`,
         never in the entry's own fields, so re-rendering a corrected card can
         neither inherit twice nor turn a note's old value into something THIS
-        capture claims to have found."""
+        capture claims to have found.
+
+        Entries that resolve to the SAME row are previewed TOGETHER: the confirm
+        folds them into one note (_media_store_entries' `written` chain), so
+        each line must describe that shared result rather than the row as it
+        stood before either of them merged (review fix 2026-07-28)."""
         index_cache = {}
+        groups = {}
         for e in entries:
             state = self._media_merge_state(e, index_cache)
             if state is None:
                 e.pop("merge", None)
                 continue
             row_id, title, facts = state
-            e["merge"] = {"row_id": row_id, "title": title, "base": facts,
-                          "fields": media.merge_preview(e, facts)}
+            groups.setdefault(row_id, []).append((e, title, facts))
+        for row_id, group in groups.items():
+            # Every member read the same row in the same pass, so they share the
+            # card-time snapshot; `base` stays that snapshot because the
+            # confirm-time re-check compares against it (_media_merges_moved).
+            previews = media.merge_previews([e for e, _, _ in group], group[0][2])
+            for (e, title, facts), fields in zip(group, previews):
+                e["merge"] = {"row_id": row_id, "title": title, "base": facts,
+                              "fields": fields}
         return entries
 
     def _media_merges_moved(self, entries):
@@ -4441,7 +4515,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         """A message while the media card is pending: apply a deterministic
         correction («№2 — фильм, не книга», «убери №3») and re-show the card.
         Returns False when the message is no correction at all — it then routes
-        normally, so «да» still confirms and unrelated requests still work."""
+        normally, so «да» still confirms and unrelated requests still work. A
+        kind op that changes NOTHING (he named the kind the card already shows)
+        is ACKNOWLEDGED rather than re-drawn or routed: an identical card would
+        silently consume the turn, and the router can confirm a live
+        media_capture pending (review fix 2026-07-28)."""
         entries = [e for e in stash.get("entries") or []
                    if isinstance(e, dict) and e.get("title")]
         op = media.parse_correction(text, len(entries))
@@ -4455,16 +4533,34 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if action == "remove":
             entries = [e for i, e in enumerate(entries, 1) if i not in chosen]
         else:
-            flipped = []
-            for i in chosen:
-                if entries[i - 1]["kind"] != action:
-                    # A kind flip invalidates the enrichment (the looked-up
-                    # DIRECTOR must not resurface labeled «автор») — clear and
-                    # re-enrich just the flipped entries under a fresh budget.
-                    entries[i - 1]["kind"] = action
-                    flipped.append(media.clear_enrichment(entries[i - 1]))
-            if flipped:
-                media.enrich_entries(self.cfg, self.conn, flipped)
+            # ONE flip routine for both paths (media.flip_kind): a kind flip
+            # invalidates the enrichment (the looked-up DIRECTOR must not
+            # resurface labeled «автор») but PRESERVES the photo-visible text as
+            # honest photo context, exactly as the caption path does — the two
+            # ways to say the same thing must not lose different amounts of
+            # evidence (review fix 2026-07-28).
+            flipped = [entries[i - 1] for i in sorted(chosen)
+                       if media.flip_kind(entries[i - 1], action)]
+            if not flipped:
+                # Nothing changed: the message asserted the kind the card
+                # already shows. Re-drawing an identical card would swallow the
+                # turn — but ROUTING it is worse (review fix 2026-07-28): the
+                # message is explicitly about the open card, and `confirm` is a
+                # valid router action while a media_capture pending is live, so
+                # a model reading «это фильм» as agreement would store the whole
+                # staged set on a turn that was not a yes. She answers it
+                # deterministically instead: he gets a reply, the card stands,
+                # and the write boundary stays behind an explicit ✅/«да».
+                self.reply(chat_id, T(lang, "media_correction_noop",
+                                      kind=T(lang, "media_kind_" + action)))
+                return True
+            # Re-enrich just the flipped entries under a fresh budget, then
+            # re-dedup: settling the kind can make two staged entries the SAME
+            # work (a novel and its film tie-in), and without this pass the card
+            # offers the title twice and the confirm inserts two notes — the
+            # caption path's re-dedup, back-ported (review fix 2026-07-28).
+            media.enrich_entries(self.cfg, self.conn, flipped)
+            entries = media.dedup_entries(entries)
         if not entries:
             self._media_clear(chat_id)
             store.pending_clear(self.conn, chat_id)

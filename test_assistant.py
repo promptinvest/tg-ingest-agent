@@ -19667,6 +19667,60 @@ class MediaModuleTests(unittest.TestCase):
         self.assertNotIn("creator", entry)
         self.assertIn("ZACH BOHANNON", entry["comment"])
 
+    def test_flip_kind_is_the_one_routine_both_paths_use(self):
+        # T-A: the caption path and the reply-correction path must not be able
+        # to drift apart again — force_kind is now a thin loop over flip_kind,
+        # and resolve_media_correction calls the same routine (the flow test
+        # test_reply_correction_keeps_visible_evidence_like_the_caption proves
+        # the second caller). The routine reports whether it changed anything,
+        # which is what lets a no-op correction route on.
+        entry = {"title": "EMPTY WORLD", "kind": "book", "comment": "",
+                 "creator": "ZACH BOHANNON", "creator_src": "photo",
+                 "year": "2018", "year_src": "photo",
+                 "genre": "ужасы", "genre_src": "photo"}
+        self.assertTrue(media.flip_kind(entry, "movie"))
+        self.assertEqual(entry["kind"], "movie")
+        for f in media.FIELDS:                       # the other reading is gone
+            self.assertNotIn(f, entry)
+        for value in ("ZACH BOHANNON", "2018", "ужасы"):
+            self.assertIn(value, entry["comment"])   # ...but never destroyed
+        self.assertEqual(entry["flipped_seen"], ["ZACH BOHANNON", "2018", "ужасы"])
+        self.assertNotIn("forced_kind", entry)       # a reply correction, not a caption
+        # idempotent + guarded: the same kind, or no kind at all, changes nothing
+        self.assertFalse(media.flip_kind(entry, "movie"))
+        self.assertFalse(media.flip_kind(entry, None))
+        # ...and the caption path records its claim so the card can recompute
+        # the «Ты сказал, что это фильм» line from the CURRENT entries
+        forced = {"title": "Дюна", "kind": "book", "comment": ""}
+        media.force_kind([forced], "movie")
+        self.assertEqual(forced["forced_kind"], "movie")
+
+    def test_a_flip_that_dedups_into_an_unflipped_twin_keeps_its_state(self):
+        # T-A seam: both flip paths re-dedup immediately after flipping, and
+        # dedup keeps the FIRST occurrence — so when the survivor is the entry
+        # that did NOT flip, _merge_entry decided the fate of both new pieces of
+        # state. It carried neither: the disclosure «Ты сказал, что это фильм»
+        # vanished from a card the caption really had changed, and the rescued
+        # photo text landed in the survivor's comment WITHOUT the `flipped_seen`
+        # record that exempts it — so it became a veto against the very lookup
+        # the forcing enables, which is the exemption's whole purpose (review
+        # fix 2026-07-28).
+        entries = [{"title": "Дюна", "kind": "movie", "aliases": [],
+                    "comment": "постер"},
+                   {"title": "Дюна", "kind": "book", "aliases": [], "comment": "",
+                    "creator": "Фрэнк Герберт", "creator_src": "photo"}]
+        media.force_kind(entries, "movie")
+        merged = media.dedup_entries(entries)
+        self.assertEqual(len(merged), 1)
+        kept = merged[0]
+        self.assertEqual(kept["forced_kind"], "movie")       # the disclosure
+        self.assertEqual(kept["flipped_seen"], ["Фрэнк Герберт"])
+        self.assertIn("Фрэнк Герберт", kept["comment"])      # never destroyed
+        # ...and being exempt, it cannot veto the movie lookup the caption asked
+        # for (the survives sibling for the comment itself: «постер» is ordinary
+        # prose and was never a veto either)
+        self.assertEqual(media._strong_context_terms(kept, "Dune (2021 film)"), [])
+
     def test_quoted_title_never_doubles_guillemets(self):
         # D5 rendering: the live card printed ««В никуда»» because the poster's
         # own quotes came through the verbatim read.
@@ -19757,33 +19811,41 @@ class MediaModuleTests(unittest.TestCase):
         # D4: what a confirm will ACTUALLY leave on the note it merges into.
         old = ["photo: с полки", "lookup: director: Peter Jackson",
                "lookup: year: 1996", "model: genre: comedy"]
+        # the note's own LABEL travels with the value (review fix 2026-07-28):
+        # `creator` is an abstraction over author/director, and re-deriving the
+        # label from the capture's kind mislabels a note that crossed categories
         self.assertEqual(media.facts_fields(old), {
-            "creator": ["lookup", "Peter Jackson"],
-            "year": ["lookup", "1996"],
-            "genre": ["model", "comedy"]})
+            "creator": ["lookup", "Peter Jackson", "director"],
+            "year": ["lookup", "1996", "year"],
+            "genre": ["model", "comedy", "genre"]})
         entry = {"title": "Frighteners", "kind": "movie",
                  "year": "1997", "year_src": "photo"}
         # An INHERITED value is labeled as the note's, never as this turn's:
         # «на фото» would claim the photo he just sent shows a director it never
         # showed, «нашла» a lookup this capture never ran.
         self.assertEqual(media.merge_preview(entry, old), {
-            "creator": ["note", "Peter Jackson"],
-            "year": ["photo", "1997"],                # the fresh capture still wins
-            "genre": ["note", "comedy"]})
+            "creator": ["note", "Peter Jackson", "director"],
+            "year": ["photo", "1997", "year"],        # the fresh capture still wins
+            "genre": ["note", "comedy", "genre"]})
         # ...even when the note's own value came from a PHOTO — an earlier
         # capture's poster is not this one's.
         self.assertEqual(
             media.merge_preview({"title": "x", "kind": "movie"},
                                 ["photo: director: Гай Ричи"]),
-            {"creator": ["note", "Гай Ричи"]})
+            {"creator": ["note", "Гай Ричи", "director"]})
         # the preview never leaks into the entry: a re-rendered card cannot
         # inherit twice, nor claim THIS capture found the note's old value
         self.assertNotIn("creator", entry)
         self.assertEqual(media.entry_display_fields(entry),
-                         {"year": ("photo", "1997")})
+                         {"year": ("photo", "1997", "year")})
         entry["merge"] = {"fields": media.merge_preview(entry, old)}
         self.assertEqual(media.entry_display_fields(entry)["creator"],
-                         ("note", "Peter Jackson"))
+                         ("note", "Peter Jackson", "director"))
+        # an OLD stash (written before the label was carried) holds PAIRS — the
+        # card must still render them, falling back to the kind-derived label
+        entry["merge"] = {"fields": {"creator": ["note", "Peter Jackson"]}}
+        self.assertEqual(media.entry_display_fields(entry)["creator"],
+                         ("note", "Peter Jackson", ""))
 
     def test_extract_ignores_non_list_alias_shape(self):
         raw = ('{"entries": [{"title": "NOWHERE", "aliases": "В никуда", '
@@ -19872,6 +19934,65 @@ class MediaModuleTests(unittest.TestCase):
     def test_parse_correction_remove(self):
         self.assertEqual(media.parse_correction("убери №3", 3), ("remove", [3]))
         self.assertEqual(media.parse_correction("удали 2 и 3", 3), ("remove", [2, 3]))
+
+    def test_parse_correction_negated_remove_keeps_the_entry(self):
+        # The negation contract applied to KINDS but not to removals, so «не
+        # удаляй №2» dropped exactly the entry he asked her to keep and re-showed
+        # the card as if he had requested it — his next «да» then silently saved
+        # less than he approved (review fix 2026-07-28).
+        for text in ("не удаляй №2", "Не убирай №2", "don't delete #2"):
+            self.assertIsNone(media.parse_correction(text, 3), text)
+        # ...and the negation reaches across a MODAL, which is how the sentence
+        # is normally said in Russian. The adjacent-particle rule caught only
+        # the bare imperative, so the commonest phrasings still removed exactly
+        # the entry he was protecting (review fix 2026-07-28).
+        for text in ("не надо удалять №2", "не нужно убирать №2",
+                     "не стоит удалять №3", "не хочу удалять №2"):
+            self.assertIsNone(media.parse_correction(text, 3), text)
+        # both readings in one sentence: she asks instead of guessing which
+        self.assertEqual(media.parse_correction("не убирай №2, убери №3", 3),
+                         "unclear")
+        # the survives siblings: plain removals still remove, and the modal
+        # bridge does not swallow a removal that was never negated
+        self.assertEqual(media.parse_correction("убери №3", 3), ("remove", [3]))
+        self.assertEqual(media.parse_correction("надо удалить №2", 3),
+                         ("remove", [2]))
+        self.assertEqual(media.parse_correction("мне надо удалить №2", 3),
+                         ("remove", [2]))
+        self.assertEqual(media.parse_correction("убери его отсюда", 1),
+                         ("remove", [1]))
+
+    def test_parse_correction_demonstrative_request_routes(self):
+        # A demonstrative alone used to be enough to bind a message to the card,
+        # bypassing the assertion/request guards: «давай посмотрим этот фильм»
+        # was swallowed as a no-op correction on a 1-entry card and answered
+        # «не поняла правку» on a bigger one (review fix 2026-07-28).
+        for n in (1, 3):
+            for text in ("давай посмотрим этот фильм",
+                         "хочу посмотреть этот фильм",
+                         "почитаю эту книгу на выходных"):
+                self.assertIsNone(media.parse_correction(text, n), (text, n))
+        # the survives siblings: real demonstrative corrections still parse
+        self.assertEqual(media.parse_correction("это книга", 1), ("book", [1]))
+        self.assertEqual(media.parse_correction("это не книга это фильм", 1),
+                         ("movie", [1]))
+        # ...and the boundary the widening moved, pinned in both directions.
+        # A NUMBERED wish is still a correction (the numbered branch never
+        # checks the request vocabulary at all):
+        self.assertEqual(media.parse_correction("хочу чтобы №2 была книгой", 3),
+                         ("book", [2]))
+        # ...and a REMOVAL is never a request, whatever verb carries it —
+        # «хочу» would otherwise route «хочу убрать это» to the model while a
+        # card is open, and none of the request verbs is about removing
+        # (review fix 2026-07-28).
+        self.assertEqual(media.parse_correction("хочу убрать это", 1),
+                         ("remove", [1]))
+        self.assertEqual(media.parse_correction("хочу убрать это", 3), "unclear")
+        # The deliberate collateral, asserted rather than left untested: a kind
+        # assertion wrapped in a reading/watching verb still ROUTES. «почитаю»
+        # is as much a plan as a correction, and routing costs nothing (the
+        # card stands, nothing is written), while guessing costs the entry.
+        self.assertIsNone(media.parse_correction("почитаю, но это фильм", 1))
 
     def test_parse_correction_non_corrections_route_on(self):
         # «да» must still reach confirm; unrelated commands must reach the router.
@@ -19982,6 +20103,7 @@ class MediaModuleTests(unittest.TestCase):
             ("media_card_footer_buttons", {}),
             ("media_nothing_extracted", {}),
             ("media_correction_unclear", {}),
+            ("media_correction_noop", {"kind": "фильм"}),
             # B2 enrichment + category export templates
             ("media_field_creator_book", {"value": "Фрэнк Герберт"}),
             ("media_field_creator_movie", {"value": "Дени Вильнёв"}),
@@ -19991,6 +20113,7 @@ class MediaModuleTests(unittest.TestCase):
             ("media_src_model", {}),
             ("media_src_photo", {}),
             ("media_src_note", {}),
+            ("media_src_card", {}),
             ("media_fields_missing", {"fields": "год, жанр"}),
             ("media_fname_creator_book", {}),
             ("media_fname_creator_movie", {}),
@@ -20013,7 +20136,7 @@ class MediaModuleTests(unittest.TestCase):
              "year": "1965", "year_src": "lookup",
              "genre": "фантастика", "genre_src": "model"}
         self.assertEqual(media.entry_facts(e), [
-            "photo: топ",
+            "photo: context: топ",
             "photo: alias: Dune",
             "lookup: author: Frank Herbert",
             "lookup: year: 1965",
@@ -20024,6 +20147,92 @@ class MediaModuleTests(unittest.TestCase):
             {"title": "Дюна", "kind": "movie", "comment": "",
              "creator": "Дени Вильнёв", "creator_src": "model"}),
             ["model: director: Дени Вильнёв"])
+
+    def test_photo_comment_that_reads_like_a_field_stays_a_comment(self):
+        # T-C: 41a5818 kept `photo:` out of the field alternation because a
+        # transcribed comment that READS like a field label is not a verified
+        # value; d31f2ba widened the pattern (to emit real `photo: author:`
+        # facts) and dropped the guard. A shelf photo whose comment began
+        # «author: Frank Herbert» then won the creator column over the genuine
+        # lookup fact — and merge_facts PURGED that lookup fact. The label is
+        # restored structurally: free context carries `context:`.
+        entry = {"title": "Дюна", "kind": "book",
+                 "comment": "author: Frank Herbert",
+                 "creator": "Фрэнк Герберт", "creator_src": "lookup"}
+        facts = media.entry_facts(entry)
+        self.assertEqual(facts, ["photo: context: author: Frank Herbert",
+                                 "lookup: author: Фрэнк Герберт"])
+        fields, comments = media.parse_catalog_facts(facts)
+        self.assertEqual(fields["creator"], "Фрэнк Герберт")   # the REAL fact wins
+        self.assertEqual(comments, ["author: Frank Herbert"])  # ...as a comment
+        self.assertEqual(media.facts_fields(facts)["creator"],
+                         ["lookup", "Фрэнк Герберт", "author"])
+        # ...and merging it into a note no longer purges that note's creator
+        self.assertIn("lookup: author: Иван Ефремов",
+                      media.merge_facts(["lookup: author: Иван Ефремов"],
+                                        ["photo: context: author: Frank Herbert"]))
+
+    def test_legacy_photo_comment_facts_still_read_and_dont_double(self):
+        # the survives sibling: notes stored BEFORE the `context:` label keep
+        # working — they read back as comments, and a re-capture of the same
+        # comment must not append a second copy in the new shape.
+        fields, comments = media.parse_catalog_facts(
+            ["photo: топ-3 у критиков", "lookup: year: 1965"])
+        self.assertEqual(comments, ["топ-3 у критиков"])
+        self.assertEqual(fields["year"], "1965")
+        self.assertEqual(
+            media.merge_facts(["photo: топ-3 у критиков"],
+                              ["photo: context: топ-3 у критиков"]),
+            ["photo: топ-3 у критиков"])
+
+    def test_merge_facts_replaces_across_the_author_director_labels(self):
+        # T-C: merge_facts keyed replacement on the RAW label while the card and
+        # the export read author/director back as ONE field. A Movies note
+        # recategorized into Books kept its `director:` beside a fresh `author:`,
+        # so the export printed the stale director under «Автор/режиссёр» and a
+        # later card showed a DIRECTOR under «автор» (review fix 2026-07-28).
+        merged = media.merge_facts(
+            ["photo: с полки", "lookup: director: Дени Вильнёв",
+             "lookup: year: 2021"],
+            ["lookup: author: Фрэнк Герберт"])
+        self.assertEqual(merged, ["photo: с полки", "lookup: year: 2021",
+                                  "lookup: author: Фрэнк Герберт"])
+        fields, _ = media.parse_catalog_facts(merged)
+        self.assertEqual(fields["creator"], "Фрэнк Герберт")
+        # the survives sibling: unrelated fields and comments are untouched, and
+        # a same-label refresh still behaves exactly as before
+        self.assertEqual(fields["year"], "2021")
+        self.assertEqual(
+            media.merge_facts(["lookup: director: A"], ["lookup: director: B"]),
+            ["lookup: director: B"])
+
+    def test_photo_genre_outside_the_vocabulary_survives(self):
+        # T-D: the fixed vocabulary is the gate for LOOKUP prose, but a poster
+        # that plainly prints «Вестерн» is EVIDENCE. It used to be dropped (no
+        # _GENRES entry), listed as «не нашла: жанр» and then filled by a model
+        # GUESS — a guess standing where the photo gave a fact.
+        # It is casefolded exactly like a canonical value: both shapes land in
+        # the SAME catalog/export column, and «Вестерн» sitting beside
+        # «фантастика» would make grouping that column case-sensitive for
+        # precisely the values that bypassed the table (review fix 2026-07-28).
+        entry = media._photo_field({"genre": "Вестерн"}, "genre")
+        self.assertEqual(entry, "вестерн")
+        self.assertEqual(media._photo_field({"genre": "neo-noir"}, "genre"),
+                         "neo-noir")
+        # ...and being present, it is never overwritten by the model fallback
+        e = {"title": "Джанго", "kind": "movie", "comment": "",
+             "genre": "Вестерн", "genre_src": "photo"}
+        with mock.patch.object(
+                llm, "chat",
+                return_value='{"items": [{"n": 1, "creator": "", "year": "",'
+                             ' "genre": "драма"}]}'):
+            media._model_fill(mock.Mock(do_model="m"), None, [e])
+        self.assertEqual((e["genre"], e["genre_src"]), ("Вестерн", "photo"))
+        # the survives sibling: a genre the table DOES know is still canonicalized
+        # (so «фантастический» and «фантастика» stay one value in the export)
+        self.assertEqual(media._photo_field({"genre": "научная фантастика"},
+                                            "genre"), "фантастика")
+        self.assertEqual(media._photo_field({"genre": "Horror"}, "genre"), "horror")
 
     def test_merge_facts_refreshes_same_field_keeps_comments(self):
         old = ["photo: старая пометка", "model: year: 1966", "lookup: genre: драма"]
@@ -20257,15 +20466,63 @@ class MediaEnrichLookupTests(unittest.TestCase):
         # Visible context must not select a work by hiding INSIDE an unrelated
         # word: a publisher «АСТ» sits in «фантастика», «мир» in «мировой» — and
         # one such accident is enough to be the score that picks a same-title
-        # work, which the card then labels «нашла». (The positive direction —
-        # a term that really occurs as a word still selects — is
-        # test_wikipedia_same_title_uses_netflix_context.)
+        # work, which the card then labels «нашла». Two same-title candidates,
+        # one of which merely CONTAINS the term inside another word: neither is
+        # picked. (The positive direction — a term that really occurs as a word
+        # still selects — is test_wikipedia_same_title_uses_netflix_context.)
         entry = {"title": "Дюна", "kind": "book", "comment": "издательство АСТ"}
         out, _ = self._wiki("book", [
-            ["Дюна", ["Дюна (роман)"], [], []],
-            {"description": "научно-фантастический роман", "extract": ""},
+            ["Дюна", ["Дюна (роман)", "Дюна (книга)"], [], []],
+            {"title": "Дюна (роман)",
+             "description": "научно-фантастический роман 1965 года", "extract": ""},
+            {"title": "Дюна (книга)",
+             "description": "детективный роман 1999 года", "extract": ""},
         ], title="Дюна", entry=entry)
         self.assertEqual(out, {})       # honest-missing beats an accidental hit
+
+    def test_an_ordinary_two_word_comment_no_longer_vetoes_a_unique_match(self):
+        # The other direction of the same rule (review fix 2026-07-28): free
+        # photo prose is CONTEXT, not an identifier. Two ordinary content words
+        # used to veto even a lone exact-title page, so the stronger his visible
+        # context, the likelier the entry fell to a «по памяти» guess — the
+        # inverse of the intent. Only real identifiers may veto (a platform, a
+        # visible creator/year, a printed NAME — see the sibling below).
+        entry = {"title": "Дюна", "kind": "book", "comment": "смотрели вместе"}
+        out, _ = self._wiki("book", [
+            ["Дюна", ["Дюна (роман)"], [], []],
+            {"description": "научно-фантастический роман 1965 года", "extract": ""},
+        ], title="Дюна", entry=entry)
+        self.assertEqual(out, {"year": "1965", "genre": "фантастика"})
+
+    def test_all_caps_marketing_prose_is_not_a_name_and_does_not_veto(self):
+        # The capitalized-run rule closed the lowercase half of that veto but
+        # not the ALL-CAPS half, and `extract` reads photo text VERBATIM off
+        # covers that are routinely set in capitals — so «НОВИНКА МЕСЯЦА» was
+        # still two "names" vetoing a correct unique match. Case alone cannot
+        # tell that phrase from «ZACH BOHANNON» (the sibling below, which MUST
+        # keep vetoing), so the discrimination is vocabulary: known cover
+        # marketing prose is a stop word. An UNLISTED all-caps phrase still
+        # vetoes — that residue fails toward honest-missing, never toward the
+        # wrong work (review fix 2026-07-28).
+        entry = {"title": "Дюна", "kind": "book", "comment": "НОВИНКА МЕСЯЦА"}
+        out, _ = self._wiki("book", [
+            ["Дюна", ["Дюна (роман)"], [], []],
+            {"description": "научно-фантастический роман 1965 года", "extract": ""},
+        ], title="Дюна", entry=entry)
+        self.assertEqual(out, {"year": "1965", "genre": "фантастика"})
+
+    def test_a_name_printed_in_the_comment_still_vetoes_a_lone_mismatch(self):
+        # The survives sibling: a capitalized NAME run in the comment does
+        # identify the work, so a lone same-title page that lacks it is still
+        # refused — honest-missing beats the wrong book presented as «нашла».
+        entry = {"title": "EMPTY WORLD", "kind": "book",
+                 "comment": "ZACH BOHANNON, с полки"}
+        out, _ = self._wiki("book", [
+            ["Empty World", ["Empty World"], [], []],
+            {"title": "Empty World",
+             "description": "1977 novel by Sam Youd", "extract": ""},
+        ], title="EMPTY WORLD", entry=entry)
+        self.assertEqual(out, {})
 
     def test_wikipedia_ambiguous_same_title_without_context_refuses_first_hit(self):
         out, _ = self._wiki("movie", [
@@ -20273,6 +20530,260 @@ class MediaEnrichLookupTests(unittest.TestCase):
             {"description": "1997 American drama film", "extract": ""},
             {"description": "2023 Spanish survival drama film", "extract": ""},
         ], title="Nowhere")
+        self.assertEqual(out, {})
+
+    def test_truncated_summary_loop_leaves_the_fields_missing(self):
+        # T-B, the high one: `_lookup_json` returns None both when the per-batch
+        # budget is exhausted and after a transport failure, and NOTHING told the
+        # selector that rivals went unread. The single-candidate branch is far
+        # more permissive than the multi one, so losing the 2nd and 3rd summaries
+        # converted «three same-title works — refuse» into «one candidate —
+        # accept», and the wrong work was then stored as a `lookup:` fact and
+        # shown as «нашла». Truncation means UNDECIDED (review fix 2026-07-28).
+        out, calls = self._wiki("movie", [
+            ["Nowhere", ["Nowhere (1997 film)", "Nowhere (2023 film)"], [], []],
+            {"title": "Nowhere (1997 film)",
+             "description": "1997 American drama film directed by Gregg Araki",
+             "extract": ""},
+            fetch.FetchError("HTTP 504"),          # the rival is never read
+        ], title="Nowhere")
+        self.assertEqual(out, {})
+        self.assertEqual(len(calls), 3)
+        # ...and the same when the CALL BUDGET (not the network) truncates it
+        budget = media._LookupBudget(calls=2)
+        responses = [["Nowhere", ["Nowhere (1997 film)", "Nowhere (2023 film)"],
+                      [], []],
+                     {"title": "Nowhere (1997 film)",
+                      "description": "1997 American drama film directed by "
+                                     "Gregg Araki", "extract": ""}]
+        with mock.patch.object(fetch, "fetch_json",
+                               side_effect=lambda url, **kw: responses.pop(0)):
+            self.assertEqual(media.lookup_wikipedia("Nowhere", "movie", budget), {})
+
+    def test_more_same_title_rivals_than_the_budget_reads_stay_undecided(self):
+        # The same evidence/decision mismatch one level up: the SLICE truncates
+        # too, and it truncates before a single summary is read. Five same-title
+        # works minus the two that would never be fetched is not «decide among
+        # three» — it is undecidable, and the guard that only compared the loop's
+        # survivors against the slice never fired. Nothing is even paid for.
+        out, calls = self._wiki("movie", [
+            ["Nowhere", ["Nowhere (1997 film)", "Nowhere (2023 film)",
+                         "Nowhere (2002 film)", "Nowhere (2010 film)"], [], []],
+        ], title="Nowhere")
+        self.assertEqual(out, {})
+        self.assertEqual(len(calls), 1)          # no summary was fetched at all
+
+    def test_a_complete_summary_loop_still_resolves(self):
+        # the survives sibling: when every rival IS read, the context still picks
+        # one — the refusal above is about UNREAD evidence, not about ambiguity
+        # she can actually resolve. (A single-page title is unaffected: see
+        # test_wikipedia_ru_year_genre_but_no_declined_creator.)
+        entry = {"title": "NOWHERE", "kind": "movie", "aliases": [],
+                 "comment": "A NETFLIX FILM"}
+        out, calls = self._wiki("movie", [
+            ["Nowhere", ["Nowhere (1997 film)", "Nowhere (2023 film)"], [], []],
+            {"title": "Nowhere (1997 film)",
+             "description": "1997 American drama film directed by Gregg Araki",
+             "extract": ""},
+            {"title": "Nowhere (2023 film)",
+             "description": "2023 Spanish survival drama film",
+             "extract": "A Netflix film directed by Albert Pintó."},
+        ], title="NOWHERE", entry=entry)
+        self.assertEqual(out["year"], "2023")
+        self.assertEqual(len(calls), 3)
+
+    def test_tied_candidates_that_agree_answer_the_fields_they_agree_on(self):
+        # T-B: OpenLibrary returns several editions/work records of the SAME
+        # book, and the photo's visible author confirms them ALL — so they tie,
+        # and a unique-winner rule threw the unanimous answer away and sent the
+        # field to the model as «по памяти» for a work the lookup had identified.
+        # Agreement is resolved per FIELD; only genuine conflicts stay missing.
+        payload = {"docs": [
+            {"title": "Мастер и Маргарита", "author_name": ["Михаил Булгаков"],
+             "first_publish_year": 1967, "subject": ["Satire"]},
+            {"title": "«Мастер и Маргарита»", "author_name": ["Михаил Булгаков"],
+             "first_publish_year": 1967, "subject": ["Fantasy fiction"]},
+        ]}
+        entry = {"title": "Мастер и Маргарита", "kind": "book",
+                 "creator": "Михаил Булгаков", "creator_src": "photo",
+                 "comment": ""}
+        out = self._ol(payload, title=entry)
+        # author and year are unanimous; the genre differs between the editions,
+        # so it stays honestly missing rather than being picked
+        self.assertEqual(out, {"creator": "Михаил Булгаков", "year": "1967"})
+
+    def test_tied_candidates_that_disagree_still_stay_missing(self):
+        # the survives sibling: a genuine same-title conflict (two different
+        # books by the same-named author) is still «honest-missing beats a
+        # confident wrong match» — nothing agreed, nothing is kept.
+        payload = {"docs": [
+            {"title": "Empty World", "author_name": ["Sam Youd"],
+             "first_publish_year": 1977, "subject": ["Science fiction"]},
+            {"title": "Empty World", "author_name": ["Sam Youd"],
+             "first_publish_year": 2003, "subject": ["Horror"]},
+        ]}
+        entry = {"title": "EMPTY WORLD", "kind": "book",
+                 "creator": "SAM YOUD", "creator_src": "photo", "comment": ""}
+        self.assertEqual(self._ol(payload, title=entry), {"creator": "Sam Youd"})
+
+    def test_a_russian_photo_author_confirms_the_lookup_instead_of_vetoing_it(self):
+        # T-A/T-B interaction: the word-set fix (right in itself — it stopped
+        # «АСТ» matching inside «фантастика») made the ±12 creator rule exact, so
+        # a Russian cover's «Михаил Булгаков» could not match the candidate's
+        # declined «Михаила Булгакова»: −12 AND a second veto on the same
+        # mismatch. The commonest shape this feature targets — a book cover
+        # printing author + title — was guaranteed to return nothing while
+        # burning lookup calls. Names now match by stem (review fix 2026-07-28).
+        entry = {"title": "Мастер и Маргарита", "kind": "book",
+                 "creator": "Михаил Булгаков", "creator_src": "photo",
+                 "comment": ""}
+        out, _ = self._wiki("book", [
+            ["Мастер и Маргарита", ["Мастер и Маргарита"], [], []],
+            {"title": "Мастер и Маргарита",
+             "description": "роман Михаила Булгакова",
+             "extract": "«Мастер и Маргарита» — роман 1967 года."},
+        ], title="Мастер и Маргарита", entry=entry)
+        self.assertEqual(out, {"year": "1967"})
+
+    def test_a_cyrillic_author_absent_from_an_english_record_still_confirms(self):
+        # The OTHER half of the same fix, which no test reached: OpenLibrary
+        # TRANSLITERATES Russian authors, and no stem bridges «Булгаков» to
+        # «Bulgakov». The name can then neither match nor be found — so the
+        # question is what its ABSENCE means. From an English record: nothing at
+        # all (it could not have contained the Cyrillic name whatever work it
+        # describes), so no −12 and no veto, and the lookup answers. Fails both
+        # pre-fix (−12, then the veto) and if either half is reverted.
+        payload = {"docs": [
+            {"title": "Мастер и Маргарита", "author_name": ["Mikhail Bulgakov"],
+             "first_publish_year": 1967, "subject": ["Satire"]},
+        ]}
+        entry = {"title": "Мастер и Маргарита", "kind": "book",
+                 "creator": "Михаил Булгаков", "creator_src": "photo",
+                 "comment": ""}
+        self.assertEqual(self._ol(payload, title=entry),
+                         {"creator": "Mikhail Bulgakov", "year": "1967"})
+
+    def test_a_cyrillic_author_absent_from_a_russian_summary_still_refutes(self):
+        # the refusal sibling every loosening needs, and the honesty invariant
+        # of the whole flow: the exemption above is about the candidate's
+        # SCRIPT, not about Cyrillic names being unfalsifiable. A ru-wiki
+        # summary of the right work names its author (declined — and
+        # _name_matches reads declensions), so silence there IS counter-evidence
+        # and a lone same-title work by someone else must stay «не нашла»
+        # instead of being stored as a `lookup:` fact and shown «нашла».
+        # LABEL: this passes against the code as it stood before the whole
+        # 2026-07-28 batch too (the old veto was unconditional). What it pins is
+        # the INTERMEDIATE state, where the Cyrillic exemption was blanket and
+        # this exact case returned a confident wrong match.
+        entry = {"title": "Мастер и Маргарита", "kind": "book",
+                 "creator": "Фёдор Достоевский", "creator_src": "photo",
+                 "comment": ""}
+        out, _ = self._wiki("book", [
+            ["Мастер и Маргарита", ["Мастер и Маргарита"], [], []],
+            {"title": "Мастер и Маргарита",
+             "description": "роман Михаила Булгакова",
+             "extract": "«Мастер и Маргарита» — роман 1967 года."},
+        ], title="Мастер и Маргарита", entry=entry)
+        self.assertEqual(out, {})
+
+    def test_the_stem_match_does_not_admit_an_unrelated_word(self):
+        # the survives sibling: stem matching is anchored at the START of the
+        # candidate's token and needs 5 characters, so it cannot resurrect the
+        # substring accidents the word-set rule closed — «АСТ» still does not
+        # match «фантастика», and a wrong same-title author still refutes.
+        self.assertFalse(media._name_matches("аст", {"фантастика"}))
+        self.assertFalse(media._name_matches("булгаков", {"достоевский"}))
+        self.assertTrue(media._name_matches("булгаков", {"булгакова"}))
+        # ...and the tolerance exists for RU DECLENSION only, so a LATIN term
+        # must occur as a whole word: an unrestricted 5-char stem let «Peter
+        # Jackson» collect the full +12 (and satisfy the lone-candidate veto)
+        # against a page that merely mentions «Peterson» in «Jacksonville»
+        # (review fix 2026-07-28).
+        self.assertFalse(media._name_matches("peter", {"peterson", "jacksonville"}))
+        self.assertFalse(media._name_matches("jackson", {"peterson", "jacksonville"}))
+        self.assertTrue(media._name_matches("jackson", {"jackson"}))
+        jackson = {"title": "Bad Taste", "kind": "movie",
+                   "creator": "Peter Jackson", "creator_src": "photo",
+                   "comment": ""}
+        out, _ = self._wiki("movie", [
+            ["Bad Taste", ["Bad Taste"], [], []],
+            {"title": "Bad Taste",
+             "description": "1994 film",
+             "extract": "Shot in Jacksonville and produced by Peterson."},
+        ], title="Bad Taste", entry=jackson)
+        self.assertEqual(out, {})       # a near-spelling is not a confirmation
+        payload = {"docs": [
+            {"title": "Empty World", "author_name": ["Sam Youd"],
+             "first_publish_year": 1977, "subject": ["Science fiction"]},
+            {"title": "Empty World", "author_name": ["Zach Bohannon"],
+             "first_publish_year": 2018, "subject": ["Horror"]},
+        ]}
+        entry = {"title": "EMPTY WORLD", "kind": "book",
+                 "creator": "ZACH BOHANNON", "creator_src": "photo", "comment": ""}
+        self.assertEqual(self._ol(payload, title=entry),
+                         {"creator": "Zach Bohannon", "year": "2018",
+                          "genre": "horror"})
+
+    def test_a_kind_flip_moved_into_the_comment_cannot_veto_the_lookup(self):
+        # T-A: force_kind rescues the REJECTED reading's visible values into the
+        # photo comment («Sam Youd · 1977»), and the veto rule then treated that
+        # rescued name as identifying context — so the movie page the forcing
+        # exists to find was discarded and the card said «не нашла: режиссёра,
+        # год, жанр». Evidence about the reading he overruled may inform the
+        # score; it may not gate the lookup (review fix 2026-07-28).
+        entry = {"title": "EMPTY WORLD", "kind": "book", "comment": "",
+                 "creator": "Sam Youd", "creator_src": "photo",
+                 "year": "1977", "year_src": "photo"}
+        media.force_kind([entry], "movie")
+        self.assertIn("Sam Youd", entry["comment"])          # still preserved
+        out, _ = self._wiki("movie", [
+            ["Empty World", ["Empty World (film)"], [], []],
+            {"title": "Empty World (film)",
+             "description": "2015 British drama film",
+             "extract": "The film was directed by Nick Hamm."},
+        ], title="EMPTY WORLD", entry=entry)
+        self.assertEqual(out, {"creator": "Nick Hamm", "year": "2015",
+                               "genre": "drama"})
+
+    def test_photo_context_the_boss_actually_saw_still_vetoes_after_a_flip(self):
+        # the survives sibling: only the values the FLIP moved are exempt. A
+        # name the photo itself printed in the comment keeps its veto power, so
+        # a flipped entry is not a free pass for any same-title page.
+        entry = {"title": "EMPTY WORLD", "kind": "book",
+                 "comment": "ZACH BOHANNON",
+                 "year": "1977", "year_src": "photo"}
+        media.force_kind([entry], "movie")
+        out, _ = self._wiki("movie", [
+            ["Empty World", ["Empty World (film)"], [], []],
+            {"title": "Empty World (film)",
+             "description": "2015 British drama film",
+             "extract": "The film was directed by Nick Hamm."},
+        ], title="EMPTY WORLD", entry=entry)
+        self.assertEqual(out, {})
+
+    def test_flipping_back_returns_the_rescued_text_to_ordinary_photo_context(self):
+        # `flipped_seen` exempts the values a flip moved into the comment from
+        # the veto, because they describe the reading he OVERRULED. Flip the
+        # entry back and that is no longer true: «ZACH BOHANNON» is once again
+        # the author of the book the card now shows, i.e. exactly the kind of
+        # boss-visible evidence that must gate the lookup. The exemption used to
+        # be permanent (review fix 2026-07-28).
+        entry = {"title": "EMPTY WORLD", "kind": "book", "comment": "",
+                 "creator": "ZACH BOHANNON", "creator_src": "photo"}
+        media.flip_kind(entry, "movie")
+        self.assertEqual(entry["flipped_seen"], ["ZACH BOHANNON"])
+        self.assertEqual(media._strong_context_terms(entry, "любой текст"), [])
+        media.flip_kind(entry, "book")
+        self.assertNotIn("flipped_seen", entry)
+        self.assertEqual(media._strong_context_terms(entry, "любой текст"),
+                         ["zach", "bohannon"])
+        # ...and the veto is real again: a lone same-title book by someone else
+        # stays honestly missing instead of being stored as «нашла».
+        out, _ = self._wiki("book", [
+            ["Empty World", ["Empty World"], [], []],
+            {"title": "Empty World",
+             "description": "1977 novel by Sam Youd", "extract": ""},
+        ], title="EMPTY WORLD", entry=entry)
         self.assertEqual(out, {})
 
     def test_wikipedia_en_creator_patterns(self):
@@ -20418,12 +20929,15 @@ class MediaCaptureGoldenTests(unittest.TestCase):
                           ensure_ascii=False).encode("utf-8")
 
     def drive(self, update, vision=None, router=None, converse=None, ingest=None,
-              enrich=None, lookups=None, getfile_fail=()):
+              enrich=None, lookups=None, getfile_fail=(), sendmessage_fail=False):
         """Run one update (or a callable) with the model scripted per role.
         Queue items are popped per call; an Exception item is raised from the
         fake network layer; an un-scripted or unused call fails the test.
         getfile_fail: file_ids whose getFile raises TelegramError (transport
         failure for that one album part).
+        sendmessage_fail: every sendMessage raises TelegramError, i.e. the
+        failure is driven at the NETWORK boundary — the real Agent.reply runs
+        and converts it into the None the flow keys on.
         lookups: scripted fetch.fetch_json results/exceptions, popped per call
         (None = every lookup fails as if offline — the B1 default; the batch
         fail-fast then stops lookups after 2 consecutive failures).
@@ -20482,6 +20996,8 @@ class MediaCaptureGoldenTests(unittest.TestCase):
 
         def fake_tg(token, method, params=None, **kw):
             if method == "sendMessage":
+                if sendmessage_fail:
+                    raise test.mod.TelegramError("chat not found")
                 sent.append((params or {}).get("text", ""))
             if method == "getFile":
                 if (params or {}).get("file_id") in getfile_fail:
@@ -20559,7 +21075,10 @@ class MediaCaptureGoldenTests(unittest.TestCase):
         self.assertEqual(row["summary"], "Мастер и Маргарита")
         self.assertEqual(row["note_purpose"], "reference")
         facts = [r["fact"] for r in store.message_facts(self.conn, row["id"])]
-        self.assertEqual(facts, ["photo: топ-3 у критиков"])     # photo: provenance prefix
+        # photo: provenance prefix, and free context carries its own reserved
+        # `context:` label so a transcription that READS like a field label can
+        # never displace a real lookup fact (review fix 2026-07-28).
+        self.assertEqual(facts, ["photo: context: топ-3 у критиков"])
         embedded = self.conn.execute(
             "SELECT COUNT(*) c FROM chunks WHERE embedding IS NOT NULL").fetchone()["c"]
         self.assertGreater(embedded, 0)                          # chunked+embedded for ask
@@ -20622,6 +21141,315 @@ class MediaCaptureGoldenTests(unittest.TestCase):
         self.assertIn("🎬 «EMPTY WORLD» — фильм", card)
         self.assertNotIn(texts.T("ru", "media_correction_unclear"), card)
 
+    def test_reply_correction_keeps_visible_evidence_like_the_caption(self):
+        # T-A, the parity that matters most: «Не книга, а фильм» and a «Фильм»
+        # CAPTION are the same statement, but the reply path called
+        # clear_enrichment bare — so three values he had just READ on the card
+        # under «на фото» vanished between two cards with no explanation, and
+        # the re-enrichment lost the very context that disambiguates the new
+        # lookup. Both paths now go through media.flip_kind.
+        self.drive({"message": self._photo_msg(631)}, vision=[
+            '{"kind": "media", "description": "обложка"}',
+            '{"entries": [{"title": "EMPTY WORLD", "aliases": [], "kind": "book",'
+            ' "creator": "ZACH BOHANNON", "year": "2018", "genre": "horror",'
+            ' "comment": ""}]}',
+        ], enrich=[])
+        sent = self.drive({"message": self._msg(632, "Не книга, а фильм")},
+                          enrich=['{"items": []}'])
+        card = "\n".join(sent)
+        self.assertIn("🎬 «EMPTY WORLD» — фильм", card)
+        # the book reading's fields are gone as FIELDS (a book author relabeled
+        # «режиссёр» would be the provenance lie the card exists to prevent)...
+        self.assertNotIn("режиссёр: ZACH BOHANNON", card)
+        # ...but the text he saw survives as honest photo context
+        for value in ("ZACH BOHANNON", "2018", "horror"):
+            self.assertIn(value, card)
+        self.assertIn("на фото:", card)
+
+    def test_reply_correction_flip_dedups_like_the_caption_path(self):
+        # T-A: dedup keeps kinds apart, so a novel and its film tie-in under one
+        # title stay two entries until the kind is settled. The caption path
+        # re-dedups after force_kind; the reply path did not, so «№1 — фильм»
+        # left the same work on the card twice and the confirm inserted TWO
+        # Movies notes (review fix 2026-07-28).
+        self.drive({"message": self._photo_msg(641)}, vision=[
+            '{"kind": "media", "description": "обложка и постер"}',
+            '{"layout": "list", "entries": ['
+            '{"title": "Дюна", "aliases": [], "kind": "book", "creator": "",'
+            ' "year": "", "genre": "", "comment": "роман"},'
+            '{"title": "Дюна", "aliases": [], "kind": "movie", "creator": "",'
+            ' "year": "", "genre": "", "comment": "постер"}]}',
+        ], enrich=['{"items": []}'])
+        sent = self.drive({"message": self._msg(642, "№1 — фильм")},
+                          enrich=['{"items": []}'])
+        card = "\n".join(s for s in sent if "1." in s)
+        self.assertEqual(len(re.findall(r"(?m)^\d+\. ", card)), 1)
+        self.assertIn("🎬 «Дюна» — фильм", card)
+        self.assertIn("роман", card)                     # neither read is lost
+        self.assertIn("постер", card)
+        self.drive({"message": self._msg(643, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        rows = self.conn.execute("SELECT summary, category FROM messages").fetchall()
+        self.assertEqual([(r["summary"], r["category"]) for r in rows],
+                         [("Дюна", "Movies")])
+
+    def test_forced_kind_note_goes_when_a_correction_reverses_it(self):
+        # T-A: «Ты сказал, что это фильм — так и считаю» rode the stash with the
+        # cap/unread disclosures, but unlike them it is a claim about the CURRENT
+        # kinds. After «Не фильм, а книга» the redrawn card showed «книга» and
+        # still asserted she was taking it as a film — contradicting itself on
+        # one screen (review fix 2026-07-28).
+        forced_note = texts.T("ru", "media_card_kind_forced",
+                              kind=texts.T("ru", "media_kind_movie"))
+        sent = self.drive(
+            {"message": self._photo_msg(651, caption="Фильм")},
+            vision=[
+                '{"kind": "media", "description": "обложка"}',
+                '{"layout": "single", "entries": [{"title": "EMPTY WORLD",'
+                ' "aliases": [], "kind": "book", "creator": "", "year": "",'
+                ' "genre": "", "comment": ""}]}',
+            ], enrich=['{"items": []}'])
+        self.assertIn(forced_note, "\n".join(sent))
+        sent2 = self.drive({"message": self._msg(652, "Не фильм, а книга")},
+                           enrich=['{"items": []}'])
+        card = "\n".join(sent2)
+        self.assertIn("📚 «EMPTY WORLD» — книга", card)
+        self.assertNotIn(forced_note, card)
+
+    def test_forced_kind_note_survives_a_correction_that_leaves_it_true(self):
+        # the survives sibling: the disclosure is recomputed, not deleted — an
+        # entry the caption really did flip, and which is still shown with that
+        # kind, keeps saying so after an unrelated «убери №2».
+        forced_note = texts.T("ru", "media_card_kind_forced",
+                              kind=texts.T("ru", "media_kind_movie"))
+        self.drive(
+            {"message": self._photo_msg(661, caption="Фильм")},
+            vision=[
+                '{"kind": "media", "description": "две обложки"}',
+                '{"layout": "list", "entries": ['
+                '{"title": "EMPTY WORLD", "aliases": [], "kind": "book",'
+                ' "creator": "", "year": "", "genre": "", "comment": ""},'
+                '{"title": "Дюна", "aliases": [], "kind": "book", "creator": "",'
+                ' "year": "", "genre": "", "comment": ""}]}',
+            ], enrich=['{"items": []}'])
+        sent = self.drive({"message": self._msg(662, "убери №2")})
+        card = "\n".join(sent)
+        self.assertIn("🎬 «EMPTY WORLD» — фильм", card)
+        self.assertNotIn("«Дюна»", card)
+        self.assertIn(forced_note, card)
+
+    def test_a_caption_flip_that_dedups_keeps_its_disclosure(self):
+        # The same seam from the card's side, in the ordering that exposes it:
+        # the movie read comes FIRST, so the entry the caption flipped is the
+        # one dedup folds AWAY. The disclosure must survive the fold (it is
+        # recomputed from `forced_kind`, which _merge_entry now carries), and so
+        # must the evidence the flip rescued (review fix 2026-07-28).
+        forced_note = texts.T("ru", "media_card_kind_forced",
+                              kind=texts.T("ru", "media_kind_movie"))
+        sent = self.drive(
+            {"message": self._photo_msg(721, caption="Фильм")},
+            vision=[
+                '{"kind": "media", "description": "постер и обложка"}',
+                '{"layout": "list", "entries": ['
+                '{"title": "Дюна", "aliases": [], "kind": "movie", "creator": "",'
+                ' "year": "", "genre": "", "comment": "постер"},'
+                '{"title": "Дюна", "aliases": [], "kind": "book",'
+                ' "creator": "Фрэнк Герберт", "year": "", "genre": "",'
+                ' "comment": ""}]}',
+            ], enrich=['{"items": []}'])
+        card = "\n".join(sent)
+        self.assertEqual(len(re.findall(r"(?m)^\d+\. ", card)), 1)   # one work
+        self.assertIn("🎬 «Дюна» — фильм", card)
+        self.assertIn(forced_note, card)
+        self.assertIn("Фрэнк Герберт", card)         # rescued as photo context
+        self.assertNotIn("режиссёр: Фрэнк Герберт", card)
+        stash = self.agent._media_stash(1)
+        self.assertEqual(stash["entries"][0]["flipped_seen"], ["Фрэнк Герберт"])
+
+    def test_the_forced_kind_line_goes_with_the_entries_the_card_drops(self):
+        # ...and the same claim must not survive TRUNCATION either: the notes
+        # were computed once, against the full batch, while _fit_media_card
+        # pops entries off the tail until the card renders inside one message.
+        # A caption that flipped only a tail entry then left the card asserting
+        # a kind it no longer showed — the same self-contradiction, reached by
+        # length instead of by correction (review fix 2026-07-28).
+        forced_note = texts.T("ru", "media_card_kind_forced",
+                              kind=texts.T("ru", "media_kind_movie"))
+        entries = [{"title": "Ф" * 900, "kind": "movie", "comment": ""}
+                   for _ in range(5)]
+        entries.append({"title": "Дюна", "kind": "movie", "comment": "",
+                        "forced_kind": "movie"})
+        kept, notes, card = self.agent._fit_media_card(
+            "ru", entries, [], "media_card_footer")
+        self.assertLess(len(kept), len(entries))             # the tail was cut
+        self.assertNotIn("«Дюна»", card)                     # incl. the flipped one
+        self.assertNotIn(forced_note, card)
+        self.assertNotIn(forced_note, notes)
+        self.assertIn(texts.T("ru", "media_card_truncated"), notes)
+        # the survives sibling: the SAME batch that keeps the forced entry keeps
+        # the line — this is a claim about what the card shows, not a deletion
+        kept2, notes2, card2 = self.agent._fit_media_card(
+            "ru", entries[-1:], [], "media_card_footer")
+        self.assertEqual(len(kept2), 1)
+        self.assertIn(forced_note, card2)
+
+    def test_a_no_op_kind_correction_is_answered_not_swallowed_and_not_routed(self):
+        # T-D: «это фильм» about an entry the card ALREADY shows as a film flips
+        # nothing, yet the correction path re-staged an identical card and
+        # reported "handled" — the boss's turn was consumed with no answer.
+        # Routing it instead would be worse: the message is explicitly about the
+        # open card, and `confirm` is a valid router action while a
+        # media_capture pending is live, so a model reading it as agreement
+        # would store the whole staged set on a turn that was not a yes. She
+        # answers deterministically (review fix 2026-07-28).
+        self.drive({"message": self._photo_msg(671)}, vision=[
+            '{"kind": "media", "description": "постер"}',
+            '{"entries": [{"title": "Дюна", "kind": "movie", "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        before = self.agent._media_stash(1)["entries"]
+        # driven through handle_update, with NO router scripted: any router call
+        # would raise «unexpected router LLM call» and fail this test.
+        sent = self.drive({"message": self._msg(672, "это фильм")})
+        self.assertIn(texts.T("ru", "media_correction_noop",
+                              kind=texts.T("ru", "media_kind_movie")),
+                      "\n".join(sent))
+        self.assertEqual(self.agent._media_stash(1)["entries"], before)
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "media_capture")
+        self.assertEqual(self._counts(), (0, 0, 0))      # and nothing was stored
+        # the survives sibling: a correction that DOES change something still
+        # re-draws the card deterministically (and never reaches the router)
+        sent2 = self.drive({"message": self._msg(673, "это книга")},
+                           enrich=['{"items": []}'])
+        self.assertIn("📚 «Дюна» — книга", "\n".join(sent2))
+        self.assertEqual(self.agent._media_stash(1)["entries"][0]["kind"], "book")
+
+    def test_a_card_that_never_reached_him_is_not_confirmable(self):
+        # T-D: sendMessage failed, so there IS no card — yet the stash was
+        # written and the pending slot claimed, leaving a set he never saw
+        # confirmable by «да» or by an old card's button. The consent invariant
+        # is «the card shows exactly what a confirm stores» (review fix
+        # 2026-07-28). The failure is driven at the NETWORK boundary, so the
+        # real Agent.reply runs: it is what turns a TelegramError into the None
+        # the staging path keys on, and stubbing it out would have hidden that.
+        self.drive({"message": self._photo_msg(681)}, vision=[
+            '{"kind": "media", "description": "постер"}',
+            '{"entries": [{"title": "Дюна", "kind": "movie", "comment": ""}]}',
+        ], enrich=['{"items": []}'], sendmessage_fail=True)
+        self.assertFalse(self.agent._media_stash(1))
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertFalse(self.agent._media_confirm(1, "ru"))
+        self.assertEqual(self._counts(), (0, 0, 0))
+        self._assert_tmp_gone()
+        # the survives sibling: the same photo with a card that DID send stages
+        # normally and stores on his yes
+        self.drive({"message": self._photo_msg(682)}, vision=[
+            '{"kind": "media", "description": "постер"}',
+            '{"entries": [{"title": "Дюна", "kind": "movie", "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        self.assertTrue(self.agent._media_stash(1).get("entries"))
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "media_capture")
+
+    def test_two_entries_on_one_note_each_line_describes_the_final_row(self):
+        # T-C: both entries merge into ONE note, and the confirm folds them —
+        # but each card line was previewed against the card-time snapshot alone,
+        # so NEITHER described the row the confirm produced (line 1 said «не
+        # нашла: жанр» while the row ends up with one). A sibling's contribution
+        # is labeled honestly: it is not «уже в записи» — nothing is stored yet.
+        movies = store.ensure_category(self.conn, "Movies")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": -1,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": "NOWHERE"})
+        store.set_suggestion(self.conn, rid, movies, "NOWHERE", "m")
+        store.set_facts(self.conn, rid, ["photo: alias: «В никуда»"])
+        store.confirm_category(self.conn, rid, movies)
+        # Both entries bring the SAME field with DIFFERENT values on purpose:
+        # the confirm folds them in card order, so a later entry's fact REPLACES
+        # an earlier one's — the ordering rule merge_previews documents and
+        # depends on. Disjoint fields would be satisfied by a first-wins
+        # implementation too, and would pin nothing (review fix 2026-07-28).
+        sent = self.drive({"message": self._photo_msg(691)}, vision=[
+            '{"kind": "media", "description": "две афиши"}',
+            '{"layout": "list", "entries": ['
+            '{"title": "NOWHERE", "aliases": [], "kind": "movie", "creator": "",'
+            ' "year": "2023", "genre": "", "comment": ""},'
+            '{"title": "«В никуда»", "aliases": [], "kind": "movie",'
+            ' "creator": "", "year": "2024", "genre": "драма", "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        card = "\n".join(sent)
+        line1 = [l for l in card.splitlines() if l.startswith("1.")][0]
+        line2 = [l for l in card.splitlines() if l.startswith("2.")][0]
+        sibling = texts.T("ru", "media_src_card")
+        # BOTH lines describe the row the confirm produces: the year is 2024 on
+        # both, credited to the entry that actually contributes it.
+        self.assertIn("год: 2024 (%s)" % sibling, line1)     # the OTHER entry's
+        self.assertIn("жанр: драма (%s)" % sibling, line1)
+        self.assertNotIn("2023", line1)
+        self.assertIn("год: 2024 (на фото)", line2)
+        self.assertIn("жанр: драма (на фото)", line2)
+        for line in (line1, line2):
+            self.assertNotIn("не нашла: год", line)
+            self.assertNotIn("не нашла: жанр", line)
+        self.drive({"message": self._msg(692, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        facts = [r["fact"] for r in store.message_facts(self.conn, rid)]
+        self.assertIn("photo: year: 2024", facts)            # exactly what both
+        self.assertIn("photo: genre: драма", facts)          # lines described
+        self.assertNotIn("photo: year: 2023", facts)         # no contradictory pair
+
+    def test_an_inherited_creator_keeps_the_label_the_note_holds(self):
+        # T-C: `creator` is an abstraction over author/director, and the card
+        # derived the label from the CAPTURE's kind — so a Books note that still
+        # carries `director:` (it was a Movies note once) had its inherited value
+        # re-rendered as «автор», i.e. a director presented as an author, which
+        # is exactly what INHERITED_SRC exists to prevent (review fix
+        # 2026-07-28).
+        books = store.ensure_category(self.conn, "Books")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": -1,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": "Дюна"})
+        store.set_suggestion(self.conn, rid, books, "Дюна", "m")
+        store.set_facts(self.conn, rid, ["lookup: director: Дени Вильнёв"])
+        store.confirm_category(self.conn, rid, books)
+        sent = self.drive({"message": self._photo_msg(701)}, vision=[
+            '{"kind": "media", "description": "обложка"}',
+            '{"entries": [{"title": "Дюна", "kind": "book", "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        card = "\n".join(sent)
+        self.assertIn("режиссёр: Дени Вильнёв (уже в записи)", card)
+        self.assertNotIn("автор: Дени Вильнёв", card)
+        self.drive({"message": self._msg(702, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        # ...and the stored row still holds exactly the fact the card described
+        self.assertEqual([r["fact"] for r in store.message_facts(self.conn, rid)],
+                         ["lookup: director: Дени Вильнёв"])
+
+    def test_a_fresh_author_replaces_a_stale_director_on_the_merged_note(self):
+        # the other half of the label seam: when the capture DOES bring a
+        # creator, merge_facts must replace the note's old one whatever label it
+        # carried — otherwise both survive, the export prints the stale one and
+        # a later card shows a DIRECTOR under «автор».
+        books = store.ensure_category(self.conn, "Books")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": -1,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": "Дюна"})
+        store.set_suggestion(self.conn, rid, books, "Дюна", "m")
+        store.set_facts(self.conn, rid, ["lookup: director: Дени Вильнёв"])
+        store.confirm_category(self.conn, rid, books)
+        self.drive({"message": self._photo_msg(711)}, vision=[
+            '{"kind": "media", "description": "обложка"}',
+            '{"entries": [{"title": "Дюна", "kind": "book",'
+            ' "creator": "Фрэнк Герберт", "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        self.drive({"message": self._msg(712, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        facts = [r["fact"] for r in store.message_facts(self.conn, rid)]
+        self.assertEqual(facts, ["photo: author: Фрэнк Герберт"])
+        fields, _ = media.parse_catalog_facts(facts)
+        self.assertEqual(fields["creator"], "Фрэнк Герберт")
+
     def test_correction_removes_entry(self):
         self.drive({"message": self._photo_msg(131)}, vision=[
             '{"kind": "media", "description": "полка"}',
@@ -20636,6 +21464,27 @@ class MediaCaptureGoldenTests(unittest.TestCase):
             '{"action": "confirm", "params": {}, "confidence": 0.95}'])
         rows = self.conn.execute("SELECT summary FROM messages").fetchall()
         self.assertEqual([r["summary"] for r in rows], ["Дюна"])
+
+    def test_a_negated_removal_keeps_the_entry_and_his_yes_saves_both(self):
+        # T-D end to end: the parser fix matters because the harm is DURABLE.
+        # «не удаляй №2» used to drop entry 2 from the staged set and re-draw
+        # the card as if he had asked for it — nothing is written yet, but his
+        # next «да» then silently saved less than he had approved. The message
+        # is not a correction at all, so it routes like any other turn.
+        self.drive({"message": self._photo_msg(741)}, vision=[
+            '{"kind": "media", "description": "полка"}',
+            '{"entries": [{"title": "Дюна", "kind": "book", "comment": ""},'
+            '{"title": "Солярис", "kind": "book", "comment": ""}]}',
+        ])
+        self.drive({"message": self._msg(742, "не надо удалять №2")},
+                   router=['{"action": "converse", "params": {}, "confidence": 0.9}'],
+                   converse=["Не трогаю 🙂"])
+        self.assertEqual([e["title"] for e in self.agent._media_stash(1)["entries"]],
+                         ["Дюна", "Солярис"])
+        self.drive({"message": self._msg(743, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        rows = self.conn.execute("SELECT summary FROM messages ORDER BY id").fetchall()
+        self.assertEqual([r["summary"] for r in rows], ["Дюна", "Солярис"])
 
     def test_cancel_stores_nothing(self):
         self.drive({"message": self._photo_msg(141)}, vision=[
@@ -20688,7 +21537,11 @@ class MediaCaptureGoldenTests(unittest.TestCase):
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) c FROM messages").fetchone()["c"], 1)   # merged, not duplicated
         facts = [r["fact"] for r in store.message_facts(self.conn, rid)]
-        self.assertEqual(facts, ["photo: старая пометка", "photo: новое издание"])
+        # the note's LEGACY comment fact (pre-`context:` shape) is kept as it is
+        # and the fresh one is appended under the new label — the older shape
+        # still reads back as a comment, so nothing on the live box is orphaned
+        self.assertEqual(facts, ["photo: старая пометка",
+                                 "photo: context: новое издание"])
         self.assertIn("уже есть", " ".join(sent))                    # the ack says it merged
 
     def test_recapture_by_localized_alias_merges_existing_work(self):
@@ -20880,6 +21733,10 @@ class MediaCaptureGoldenTests(unittest.TestCase):
     def test_partial_album_download_failure_still_cards_readable_parts(self):
         # getFile dies for one album part: the card still covers what she COULD
         # read and the tmp dir is gone (the None branch of _download_photo_tmp).
+        # The lost photo is DISCLOSED exactly like an unreadable extract (review
+        # fix 2026-07-28): the counter used to see extract failures only, so a
+        # photo that never downloaded silently shrank the batch while the card
+        # implied it covered everything he sent.
         parts = [self._photo_msg(341), self._photo_msg(342)]
         sent = self.drive(lambda: self.agent.handle_own_media(parts, 1, ""),
                           vision=[
@@ -20887,8 +21744,41 @@ class MediaCaptureGoldenTests(unittest.TestCase):
                               '{"entries": [{"title": "Дюна", "kind": "movie",'
                               ' "comment": ""}]}',
                           ], getfile_fail={"f342"})
-        self.assertIn("«Дюна»", "\n".join(sent))
+        card = "\n".join(sent)
+        self.assertIn("«Дюна»", card)
+        self.assertIn(texts.T("ru", "media_card_photo_unread", n=1), card)
         self._assert_tmp_gone()
+
+    def test_partial_album_classify_failure_is_disclosed_too(self):
+        # The third way a photo drops out: classify comes back unusable (non
+        # JSON / transport). It skipped the photo without counting, so the card
+        # covered one poster of two and said nothing about it.
+        parts = [self._photo_msg(343), self._photo_msg(344)]
+        sent = self.drive(lambda: self.agent.handle_own_media(parts, 1, ""),
+                          vision=[
+                              '{"kind": "media", "description": "постер"}',
+                              "тут никакого json нет",
+                              '{"entries": [{"title": "Дюна", "kind": "movie",'
+                              ' "comment": ""}]}',
+                          ])
+        card = "\n".join(sent)
+        self.assertIn("«Дюна»", card)
+        self.assertIn(texts.T("ru", "media_card_photo_unread", n=1), card)
+
+    def test_a_document_photo_in_the_album_is_not_called_unread(self):
+        # The survives sibling: a photo she READ and found to be a document is
+        # deliberately skipped, not "unread" — the disclosure must stay true.
+        parts = [self._photo_msg(345), self._photo_msg(346)]
+        sent = self.drive(lambda: self.agent.handle_own_media(parts, 1, ""),
+                          vision=[
+                              '{"kind": "media", "description": "постер"}',
+                              '{"kind": "document", "description": "договор"}',
+                              '{"entries": [{"title": "Дюна", "kind": "movie",'
+                              ' "comment": ""}]}',
+                          ])
+        card = "\n".join(sent)
+        self.assertIn("«Дюна»", card)
+        self.assertNotIn(texts.T("ru", "media_card_photo_unread", n=1), card)
 
     def test_recapture_other_kind_stays_separate_note(self):
         # Storage-level dedup is scoped by CATEGORY: a captured «Дюна» BOOK must
@@ -21470,7 +22360,7 @@ class MediaCaptureGoldenTests(unittest.TestCase):
         self.assertEqual((row["status"], row["category"]), ("confirmed", "Books"))
         facts = [r["fact"] for r in store.message_facts(self.conn, row["id"])]
         self.assertEqual(facts, [
-            "photo: топ",
+            "photo: context: топ",
             "lookup: author: Михаил Булгаков",
             "lookup: year: 1967",
             "lookup: genre: fantasy",

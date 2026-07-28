@@ -191,10 +191,31 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   movies and books, all through the same SSRF‑guarded fetch — render as «(нашла)», the
   **model‑knowledge fallback** (ONE budgeted chat call per batch for whatever the
   lookups left) as «(по памяти)», and a field NEITHER source yields is listed honestly
-  under «не нашла: …» — never invented. Same‑title lookup candidates are selected only
+  under «не нашла: …» — never invented. A genre PRINTED on the poster is kept even when
+  it is outside her genre vocabulary (2026‑07‑28: «Вестерн» used to be dropped and could
+  then be replaced by a model guess — a guess standing where the photo gave a fact); it
+  is lower‑cased like the canonical values so one catalog column doesn't group
+  case‑sensitively, and the vocabulary still gates what lookup prose may become a genre. Same‑title lookup
+  candidates are selected only
   when the photo's visible creator/year/context identifies one (for example Netflix
   NOWHERE 2023 rather than an older film with the same title); an unresolved ambiguity
-  is rejected and passed, with the same evidence, to the model fallback. Lookup
+  is rejected and passed, with the same evidence, to the model fallback. That selection
+  is honest in BOTH directions (2026‑07‑28 review): if the call budget or a transport
+  failure leaves a same‑title rival UNREAD — or there are simply more same‑title rivals
+  than she will ever read within the budget — the set stays undecided and the fields
+  stay missing; a truncated search never collapses into a confident single pick. Tied
+  candidates that AGREE (duplicate editions of one book) still answer the fields they
+  agree on, and only the fields they disagree on stay missing. A name printed on the
+  photo confirms a candidate even in a Russian oblique case («Михаил Булгаков» /
+  «романа Михаила Булгакова»), and what its ABSENCE means depends on the candidate's
+  language: an English record simply cannot contain a Cyrillic name, so its silence is
+  ignored (that is how a transliterated «Mikhail Bulgakov» record still answers), while
+  a Russian summary of the right work does name its author — so silence there still
+  rejects the candidate, which is what keeps another author's same‑title book out of
+  your catalog. And only a real identifier — a platform, a visible creator/year, a name
+  printed in the comment — may reject a lone exact‑title match, never two ordinary
+  words of your visible context (cover marketing set in capitals, «НОВИНКА МЕСЯЦА» and
+  the like, is not a name either). Lookup
   discovery tolerates only safe title presentation variants — a leading article
   (`Frighteners` / `The Frighteners`) or spacing (`Brain Dead` / `Braindead`) — while
   storage dedup stays strict. Unicode creator names such as `Albert Pintó` remain
@@ -206,13 +227,19 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   photo/batch** through the single‑pending‑slot flow (✅/✖️
   buttons; reply‑to‑correct: «№2 — книга, не фильм» flips a kind, «убери №3» drops an
   entry — deterministic parsing, never a model guess; a kind flip CLEARS and re‑enriches
-  that entry's fields, so a looked‑up director never resurfaces labeled «автор») and
-  stores **only on your yes**:
+  that entry's fields, so a looked‑up director never resurfaces labeled «автор»)
+  and stores **only on your yes**:
   one confirmed NOTE per entry — summary = the title (RU stays RU), category **`Movies`**
   or **`Books`** (auto‑created, English names by owner decision), purpose `reference`,
-  facts with provenance prefixes (`photo:` aliases/comments and visible
-  author/director/year/genre, `lookup:`/`model:` enriched fields), chunked+embedded so
-  «ask» finds them. Titles are quoted **exactly once** everywhere they render — a
+  facts with provenance prefixes (`photo:` aliases and visible
+  author/director/year/genre, `photo: context:` for free visible context — its own
+  reserved label since 2026‑07‑28, so a transcribed comment that happens to READ like
+  a field label can never displace a real lookup fact; the label is structural, for NEW
+  captures — a note captured before that date may still carry a transcribed comment in
+  the older `photo: <label>: <value>` shape, which nothing can tell apart from a
+  genuinely visible field, so there is no backfill and the next capture of that work
+  replaces the field anyway —, `lookup:`/`model:` enriched
+  fields), chunked+embedded so «ask» finds them. Titles are quoted **exactly once** everywhere they render — a
   title read with its own guillemets is no longer wrapped again (2026‑07‑28).
   **Dedup** on category plus the normalized title **or an explicit
   same‑work alias**: re‑capturing a known/localized title refreshes the existing
@@ -223,7 +250,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   в каталоге: «…» (#N)») and shows the fields the merge will actually LEAVE on it —
   including the ones this capture didn't find and the note already holds, marked
   **«уже в записи»**: an inherited value is never labeled «на фото» (this photo
-  didn't show it) or «нашла» (no lookup ran this turn). Previously the card could say
+  didn't show it) or «нашла» (no lookup ran this turn), and it keeps the LABEL the note
+  actually holds (2026‑07‑28: a note that had crossed categories showed its stored
+  director under «автор»). When TWO card entries land on the SAME note (each matched it
+  by a different title/alias), every line describes that one final row, and a value the
+  other entry brings is marked **«из этой же карточки»** — it is not on file yet.
+  Previously the card could say
   «не нашла: режиссёра, год» while the merged row kept a director and a year you
   never saw. If the catalog moves while a card is open (another confirm, an edit, a
   delete, or the target note being **renamed**), your yes **re‑draws the card** with
@@ -242,10 +274,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   parsed and deleted on every path including errors — no images/files rows, so the
   2026‑07‑16 own‑photo retirement stays fully intact (forwarded‑post media storage is
   unchanged). Up to `MAX_LLM_IMAGES` (4) photos of an album are classified per batch,
-  and the card says so honestly when an album is bigger; a photo that failed to read
-  inside a partially readable album is disclosed on the card («не смогла прочитать
-  {n} фото»); an unreadable photo gets an honest «названия разобрать не смогла», not
-  an invented title. **The card always fits one Telegram message and the staged set
+  and the card says so honestly when an album is bigger; a photo that dropped out of a
+  partially readable album is disclosed on the card («не смогла прочитать {n} фото») —
+  since 2026‑07‑28 that covers EVERY way one can drop out (a download that failed, an
+  unusable classify, an unreadable extract), not just the last of the three; a photo she
+  read and found to be a document is not called unread; an unreadable photo gets an
+  honest «названия разобрать не смогла», not an invented title. If the card message
+  itself fails to send, NOTHING is staged and no confirm is reachable — a card you never
+  saw can never be approved (2026‑07‑28). **The card always fits one Telegram message and the staged set
   IS the displayed set** (2026‑07‑27 review fix): entries are budgeted by count (≤30)
   and by rendered length (`reply()` hard‑cuts at 4000 chars), any surplus is dropped
   from the staged set too and the card states the storage consequence («сохраню
@@ -264,7 +300,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   They never
   fire on messages naming another object — «удали напоминание №2» removes the
   reminder; a mis‑parse fails safe
-  (card intact, message routed). When
+  (card intact, message routed). Negation binds REMOVALS too (2026‑07‑28): «не удаляй
+  №2» — and «не надо удалять №2», «не стоит убирать №2», the way it is usually said —
+  keeps entry 2 and routes, where it used to delete exactly the entry you protected;
+  a message that both protects and removes («не убирай №2, убери №3») asks instead
+  of guessing. A demonstrative REQUEST («давай посмотрим этот фильм») routes like any
+  other request, while a removal is never read as one («хочу убрать это» corrects the
+  card). A "correction" that changes nothing (you name the kind the card already shows)
+  gets a short «так и есть» — she neither re‑draws an identical card nor hands a message
+  about the open card to the router, which could read it as a yes. When
   another confirmation already holds the single pending slot, the card's footer
   offers the **buttons only** (a text reply would resolve against the other pending);
   the buttons work off the stash regardless and keep working after the pending row's
@@ -278,11 +322,24 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   adaptation's book‑shaped cover still produced a BOOK entry and offered a novelist
   as its author.) A forced flip DROPS that entry's fields, visible ones included —
   a cover's «author» must never come back labeled «режиссёр» — and keeps the visible
-  text as honest photo context. The card then says what she DID with the caption
+  text as honest photo context (which informs the new lookup but, being evidence about
+  the reading you overruled, can never veto it — until you flip the entry BACK, when
+  that text describes the reading you have just restored and gates the lookup again).
+  **A kind flip is ONE routine, whichever
+  way you say it** (2026‑07‑28 review): a caption and a reply‑correction now preserve
+  the same visible evidence, re‑enrich the same way and re‑run the same dedup pass — the
+  reply path used to destroy the values you had just read under «на фото» and could
+  leave the same work on the card twice (two Movies notes on confirm). When that dedup
+  folds the flipped entry into an unflipped twin, both the rescued text and the
+  disclosure below travel with it. The card then
+  says what she DID with the caption
   («Ты сказал, что это фильм — так и считаю…» — worded so she never quotes back a
   word you didn't type: «Кино» and «Найди этот фильм» both mean the same kind),
   never that she ignored it; it says nothing
-  extra when the caption changed nothing. «Найди этот фильм/эту книгу» is treated as
+  extra when the caption changed nothing, and that line is recomputed on every draw
+  against the entries the card actually SHOWS, so a correction that flips the entry back
+  (or removes it, or a long batch that truncates it off the card) takes the line with it
+  instead of leaving the card contradicting itself. «Найди этот фильм/эту книгу» is treated as
   the identification request the card
   answers, and a caption that does both says each thing once. Other media captions are still not routed as separate commands while the
   card is offered; the card shows them and explicitly says they were not acted on
