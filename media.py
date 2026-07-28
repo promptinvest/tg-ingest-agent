@@ -16,6 +16,13 @@ missing. Every field carries its provenance ('photo' | 'lookup' | 'model'),
 on the card and in the stored facts. There is
 deliberately NO general web-search API (owner decision 2026-07-27).
 
+Live-run fixes (2026-07-28): a caption that NAMES the kind is authoritative and
+is applied before enrichment (`force_kind`); one photo's read collapses to one
+entry per work before the batch ever sees it (`_collapse_photo`); a title that
+already carries guillemets is not wrapped twice (`quoted_title`); and the card
+previews the note a confirm will merge into (`merge_preview`) so what he
+approves is what gets stored.
+
 Hard rules this module upholds:
 - NO image is ever stored in this flow. The caller downloads the photo to a tmp
   path and deletes it in try/finally; this module only reads bytes for the model
@@ -61,10 +68,22 @@ MAX_COMMENT_CHARS = 320
 MAX_DESC_CHARS = 300
 MAX_FIELD_CHARS = 80
 MAX_ALIASES = 5
+# A layout="single" photo is ONE work, so its extra entries are that work's
+# other printed titles. A read that produced MORE than this is not a credible
+# single-work photo (a double feature, an omnibus cover, a shelf shot the model
+# mislabeled), and fusing two real works is durable damage: the absorbed title
+# becomes an alias FACT, which is a dedup key, and there is no un-merge command.
+# Above the bound the read is treated as a list (review fix 2026-07-28).
+MAX_SINGLE_LAYOUT_ENTRIES = 3
 
 # B2 enrichment fields, in card order. 'creator' renders as author (books) /
 # director (movies); facts store the concrete label (see fact_label).
 FIELDS = ("creator", "year", "genre")
+# Card-only provenance for a value the merge target ALREADY holds and this
+# capture did not find. It is not a storage source — the stored fact keeps its
+# original photo/lookup/model prefix — it exists so the card never attributes an
+# older capture's finding to the photo just sent (see merge_preview).
+INHERITED_SRC = "note"
 
 # Lookups run INLINE on the poll loop's only thread, so they are budgeted twice:
 # a short per-call timeout (fetch_json wall-clocks each call at 2x this) and a
@@ -104,29 +123,43 @@ def classify_prompt(lang="ru"):
 
 
 def extract_prompt(kind_hint=None):
-    """Vision extraction contract. A deterministic caption-derived kind hint is
-    deliberately WEAK: it helps with an ambiguous poster, but visible evidence
-    wins (the boss can call a book a film by mistake, as the Empty World live
-    regression demonstrated). Raw caption text never enters this prompt."""
+    """Vision extraction contract. A caption-derived kind hint is AUTHORITATIVE
+    (2026-07-28): when the boss states «Фильм» he is telling her what the thing
+    IS, and his statement outranks a cover's shape — the live Empty World
+    regression was a film adaptation whose book-shaped cover made the model
+    answer kind="book", so enrichment dutifully looked up a novel. The kind is
+    forced post-extraction anyway (force_kind); saying so here just stops the
+    model fighting its own reading. Raw caption text never enters this prompt.
+
+    `layout` is asked for because ONE poster is ONE work, however many languages
+    its title is printed in: it lets the localized title collapse into an alias
+    deterministically (see _collapse_photo) instead of shipping «NOWHERE» and
+    ««В никуда»» as two entries."""
     hint = ""
     if kind_hint in ("movie", "book"):
         label = "movie/series" if kind_hint == "movie" else "book"
         hint = (
-            f"- The boss called this a {label}. Treat that only as a HINT; if the "
-            "visible cover/poster evidence clearly contradicts it, use the visible "
-            "kind instead.\n"
+            f"- The user has STATED that this is a {label}. That is AUTHORITATIVE: "
+            f'use "{kind_hint}" as the "kind" of every entry even if the cover or '
+            "poster looks like the other type, and read titles and visible "
+            "evidence as usual.\n"
         )
     return (
         "This photo shows movies and/or books (a cover, a poster, a shelf, or a "
         "list/screenshot). Extract ONLY what is actually VISIBLE in the photo.\n"
         "Reply with ONLY a JSON object:\n"
-        '{"entries": [{"title": "<primary title exactly as written>", '
+        '{"layout": "single" | "list", '
+        '"entries": [{"title": "<primary title exactly as written>", '
         '"aliases": ["<translated/alternate title for the SAME work, exactly as written>"], '
         '"kind": "movie" | "book", '
         '"creator": "<visible author/director explicitly linked to this work, or \\"\\">", '
         '"year": "<visible 4-digit release/publication year, or \\"\\">", '
         '"genre": "<visible genre word/phrase, or \\"\\">", '
         '"comment": "<short visible context about THIS work, or \\"\\">"}]}\n'
+        '- "layout": "single" when the photo shows ONE work (a cover, a poster, '
+        "a single card) — every title printed on it, in any language, belongs to "
+        'that one work. "list" when it shows several distinct works (a shelf, a '
+        "list, a catalog screenshot).\n"
         "- Copy titles and aliases VERBATIM in their original language/spelling — "
         "never translate or improve them.\n"
         "- A translated/localized title printed on the SAME cover/poster is an "
@@ -214,10 +247,15 @@ def extract(cfg, conn, image_path, lang="ru", kind_hint=None):
     evidence dicts (title, aliases, kind, visible structured fields/context);
     [] when the model saw no usable titles or answered non-JSON — the caller
     renders that as an honest 'couldn't read the titles'. Transport failures
-    raise llm.LLMError (BudgetExceeded included)."""
+    raise llm.LLMError (BudgetExceeded included).
+
+    Same-work collapsing happens HERE, inside one photo's read: the batch-level
+    dedup only sees titles that already know about each other, and one poster
+    must never leave this function as two entries."""
     raw = llm.vision_chat(cfg, conn, "media", cfg.vision_model, image_path,
                           extract_prompt(kind_hint), max_tokens=1600)
     parsed = llm.parse_llm_json(raw)
+    layout = str((parsed or {}).get("layout") or "").strip().casefold()
     entries = []
     for item in (parsed or {}).get("entries") or []:
         if not isinstance(item, dict):
@@ -251,7 +289,118 @@ def extract(cfg, conn, image_path, lang="ru", kind_hint=None):
         entries.append(entry)
         if len(entries) >= MAX_ENTRIES_PER_PHOTO:
             break
-    return entries
+    return _collapse_photo(entries, layout)
+
+
+def _collapse_photo(entries, layout):
+    """Same-work merging INSIDE one photo's read. Two shapes:
+
+    - an explicit alias link (the model listed «В никуда» as NOWHERE's alias, or
+      «Braindead» as «Brain Dead»'s) — the batch dedup's rule, applied per photo
+      so the card is right the first time rather than after a later capture;
+    - a SINGLE-work photo the model still split one-entry-per-printed-language.
+      A poster is one film: «NOWHERE» + ««В никуда»» became notes #40 and #41 in
+      the live run. With layout="single" the extras become aliases of the first
+      (most prominent) entry instead of separate works.
+
+    An absent/unknown layout is treated as "list" — the safe default: a shelf
+    photo must never lose a work to an over-eager merge. So is a "single" read
+    that came back with more works than a poster can plausibly print
+    (MAX_SINGLE_LAYOUT_ENTRIES), and so is any pair the layout claim alone
+    cannot carry (_same_work_by_layout)."""
+    merged = dedup_entries(entries)
+    if (layout != "single" or len(merged) <= 1
+            or len(merged) > MAX_SINGLE_LAYOUT_ENTRIES):
+        return merged
+    out = []
+    for entry in merged:
+        same = next((kept for kept in out
+                     if _same_work_by_layout(kept, entry)), None)
+        if same is None:
+            out.append(entry)
+        else:
+            _merge_entry(same, entry)
+    return out
+
+
+def _same_work_by_layout(kept, entry):
+    """May `entry` be folded into `kept` on the strength of the model's
+    layout="single" judgement alone? The layout IS the evidence here, but it is
+    not allowed to override contradicting evidence, and it may never cost a
+    title (review fix 2026-07-28):
+
+    - a different kind is a different catalog category — never folded (an
+      explicit alias link still merges those, via dedup_entries);
+    - two photo-visible creators (or years) that DISAGREE are two works, whatever
+      the layout says — that is a double feature, not one poster;
+    - a fold with no alias room left would silently DROP the extra title
+      (_merge_entry stops at MAX_ALIASES), and this flow discloses every drop —
+      so the entry stays its own entry instead."""
+    if kept.get("kind") != entry.get("kind"):
+        return False
+    if len(kept.get("aliases") or []) >= MAX_ALIASES:
+        return False
+    for field in ("creator", "year"):
+        a = kept.get(field) if kept.get(field + "_src") == "photo" else ""
+        b = entry.get(field) if entry.get(field + "_src") == "photo" else ""
+        if a and b and normalize_title(a) != normalize_title(b):
+            return False
+    return True
+
+
+def force_kind(entries, kind):
+    """The boss NAMED the kind in the caption — that statement outranks the
+    vision guess (live regression: «Фильм» on a film's book-shaped cover still
+    produced a BOOK entry and a book's author). Every entry becomes `kind`.
+
+    A FLIPPED entry drops its structured fields, enriched and visible alike:
+    they belong to the other reading, and a visible «author: X» relabeled
+    «режиссёр: X» would be exactly the provenance lie the card exists to
+    prevent. The text is not lost — it moves into the photo comment, where it
+    stays honest («на фото: …») and still disambiguates the lookup.
+    Returns the entries that actually changed."""
+    if kind not in CATEGORY_BY_KIND:
+        return []
+    flipped = []
+    for entry in entries:
+        if entry.get("kind") == kind:
+            continue
+        seen = [str(entry[f]) for f in FIELDS
+                if entry.get(f) and entry.get(f + "_src") == "photo"]
+        clear_enrichment(entry)
+        for value in seen:
+            if value.casefold() not in (entry.get("comment") or "").casefold():
+                entry["comment"] = ((entry.get("comment", "") + " · " + value)
+                                    if entry.get("comment") else value)[:MAX_COMMENT_CHARS]
+        entry["kind"] = kind
+        flipped.append(entry)
+    return flipped
+
+
+# Wrapping quote pairs a photo-read title may already carry. Only a pair that
+# wraps the WHOLE title is one of these; anything else is title content.
+_TITLE_WRAPS = (("«", "»"), ("“", "”"), ("„", "“"), ('"', '"'), ("'", "'"))
+
+
+def quoted_title(value):
+    """A title rendered inside EXACTLY one pair of guillemets. Posters print
+    their own quotes, so the verbatim read is often already «В никуда» — the
+    live card wrapped it again and showed ««В никуда»». Only a matching outer
+    pair around the whole string is unwrapped, so a title with internal
+    punctuation («Ассистент: начало») is left exactly as read. A title whose
+    outer guillemets belong to its PARTS («Дюна» и «Солярис») is not unwrapped
+    either — but it already reads as quoted, so it is returned as-is rather
+    than printed as ««Дюна» и «Солярис»» (review fix 2026-07-28)."""
+    text = " ".join(str(value or "").split())
+    for opener, closer in _TITLE_WRAPS:
+        if len(text) > 1 and text.startswith(opener) and text.endswith(closer):
+            inner = text[1:-1].strip()
+            if inner and opener not in inner and closer not in inner:
+                text = inner
+            elif inner and (opener, closer) == ("«", "»"):
+                return text
+            break
+    return f"«{text}»"
 
 
 def _entry_titles(entry):
@@ -311,16 +460,15 @@ def dedup_entries(entries):
     return out
 
 
-def find_existing(conn, category, title, aliases=()):
-    """The confirmed note this capture would duplicate: same category, same
-    normalized canonical title or explicit same-work alias. Returns the row or
-    None. Linear over one category's confirmed notes — a personal catalog, not
-    a corpus."""
-    wanted = {normalize_title(title)}
-    wanted.update(normalize_title(alias) for alias in aliases or ())
-    wanted.discard("")
-    if not wanted:
-        return None
+def catalog_index(conn, category):
+    """ONE pass over a category's confirmed notes -> [(row, {known titles})].
+
+    A scan per lookup is fine for a single confirm, but the card flow resolves a
+    merge for EVERY staged entry — when the card is drawn, again on every
+    correction, and again at confirm — all inline on the poll loop's only
+    thread. Hoisting the scan out of that loop keeps a 30-entry card from
+    re-reading the whole category 30 times (review fix 2026-07-28)."""
+    index = []
     for row in conn.execute(
             "SELECT * FROM messages WHERE status = 'confirmed' AND category = ?"
             " ORDER BY id", (category,)):
@@ -332,9 +480,37 @@ def find_existing(conn, category, title, aliases=()):
                 " AND fact LIKE 'photo: alias: %'", (row["id"],)
             )
         )
+        known.discard("")
+        index.append((row, known))
+    return index
+
+
+def _wanted_titles(title, aliases=()):
+    wanted = {normalize_title(title)}
+    wanted.update(normalize_title(alias) for alias in aliases or ())
+    wanted.discard("")
+    return wanted
+
+
+def find_in_index(index, title, aliases=()):
+    """find_existing against an already-built catalog_index."""
+    wanted = _wanted_titles(title, aliases)
+    if not wanted:
+        return None
+    for row, known in index:
         if wanted.intersection(known):
             return row
     return None
+
+
+def find_existing(conn, category, title, aliases=()):
+    """The confirmed note this capture would duplicate: same category, same
+    normalized canonical title or explicit same-work alias. Returns the row or
+    None. Linear over one category's confirmed notes — a personal catalog, not
+    a corpus (batch callers build the index once; see catalog_index)."""
+    if not _wanted_titles(title, aliases):
+        return None
+    return find_in_index(catalog_index(conn, category), title, aliases)
 
 
 # -- B2 enrichment: creator/year/genre with per-field provenance --------------
@@ -506,17 +682,26 @@ def _context_terms(entry):
     return terms[:20]
 
 
+def _blob_words(blob):
+    """A candidate's text as a WORD SET. Context terms are matched word-wise on
+    purpose (review fix 2026-07-28): plain containment let a publisher term
+    «АСТ» hit inside «фантастика» and «Кот» inside «который», and one such
+    accident is enough to be the unique positive score that picks a same-title
+    work — which then renders as «нашла»."""
+    return set(_WORD_RE.findall(str(blob or "").casefold()))
+
+
 def _candidate_score(blob, entry):
-    low = str(blob or "").casefold()
-    score = sum(1 for term in _context_terms(entry) if term in low)
+    words = _blob_words(blob)
+    score = sum(1 for term in _context_terms(entry) if term in words)
     creator = (entry.get("creator") or "") if entry.get("creator_src") == "photo" else ""
     creator_terms = [w for w in _WORD_RE.findall(creator.casefold())
                      if w not in _CONTEXT_STOP]
     if creator_terms:
-        score += 12 if all(w in low for w in creator_terms) else -12
+        score += 12 if all(w in words for w in creator_terms) else -12
     year = (entry.get("year") or "") if entry.get("year_src") == "photo" else ""
     if year:
-        score += 10 if year in low else -10
+        score += 10 if year in words else -10
     return score
 
 
@@ -547,12 +732,12 @@ def _select_context_candidate(candidates, entry, blob):
     scored = [(item, _candidate_score(blob(item), entry)) for item in candidates]
     if len(scored) == 1:
         item, score = scored[0]
-        candidate_blob = str(blob(item) or "").casefold()
+        candidate_words = _blob_words(blob(item))
         # One result is not automatically the right work when the photo gave a
         # real disambiguator (Netflix, Bohannon, Jackson…). If none of that
         # visible context occurs in the candidate, honest-missing is safer.
         strong_terms = _strong_context_terms(entry)
-        if strong_terms and not any(term in candidate_blob for term in strong_terms):
+        if strong_terms and not any(term in candidate_words for term in strong_terms):
             return None
         return item if score >= 0 else None
     best = max(score for _, score in scored)
@@ -870,6 +1055,65 @@ def parse_catalog_facts(facts):
     return fields, [c for c in comments if c]
 
 
+def facts_fields(facts):
+    """{field: [src, value]} read back out of a note's provenance-tagged facts
+    (first value per field wins — parse_catalog_facts' rule). This is how the
+    card learns what an EXISTING note already holds."""
+    out = {}
+    for fact in facts or ():
+        m = _CATALOG_FACT_RE.match(str(fact or "").strip())
+        if not (m and m.group(2)):
+            continue
+        field = "creator" if m.group(2) in ("author", "director") else m.group(2)
+        value = m.group(3).strip()
+        if field not in out and value:
+            out[field] = [m.group(1), value]
+    return out
+
+
+def merge_preview(entry, old_facts):
+    """The fields a confirm will ACTUALLY leave on the note this capture merges
+    into: the capture's own values, plus — for every field the capture left
+    missing — what the note already holds (merge_facts replaces only the fields
+    the fresh capture carries).
+
+    This closes the live invariant break: the card said «не нашла: режиссёра,
+    год, жанр» while the merged row kept a director and a year from an earlier
+    capture. Display-only — the entry's own fields stay untouched, so
+    re-rendering a card cannot inherit twice or turn an inherited value into
+    something this capture claims to have found.
+
+    An inherited value carries the source INHERITED, not the note's original
+    provenance (review fix 2026-07-28): «на фото» would claim the photo he just
+    sent shows a director it never showed, and «нашла» would claim a lookup this
+    turn never ran. The card says «уже в записи» instead."""
+    inherited = facts_fields(old_facts)
+    out = {}
+    for f in FIELDS:
+        if entry.get(f):
+            out[f] = [entry.get(f + "_src") or "model", str(entry[f])]
+        elif f in inherited:
+            out[f] = [INHERITED_SRC, inherited[f][1]]
+    return out
+
+
+def entry_display_fields(entry):
+    """{field: (src, value)} the card must show for one staged entry: the merge
+    preview when it is bound to an existing note, otherwise its own fields.
+    (The stash round-trips through JSON, so a pair may arrive as a list.)"""
+    merge = entry.get("merge") or {}
+    fields = merge.get("fields")
+    if not isinstance(fields, dict):
+        fields = {f: [entry.get(f + "_src") or "model", entry[f]]
+                  for f in FIELDS if entry.get(f)}
+    out = {}
+    for f in FIELDS:
+        pair = fields.get(f)
+        if isinstance(pair, (list, tuple)) and len(pair) == 2 and pair[1]:
+            out[f] = (str(pair[0]), str(pair[1]))
+    return out
+
+
 def catalog_markdown(category, items, lang):
     """The md catalog of one category («дай md по Movies»): one table row per
     note — title, creator, year, genre, comments, added date. items: dicts with
@@ -911,6 +1155,28 @@ _NEGATION_RE = re.compile(r"(?:\bне|\bnot(?:\s+an?|\s+the)?|\bno)$")
 # ('note' also catches 'notebook', which otherwise contains the kind word 'book'.)
 _FOREIGN_OBJECTS = ("напомина", "заметк", "задач", "категори", "сообщени",
                     "reminder", "note", "task", "category", "message")
+# A REQUEST is not an assertion about the open card. On a single-entry card
+# there is no ambiguity about WHICH entry, so a kind word is normally a
+# correction — except when the sentence asks for something («посоветуй фильм на
+# вечер», «включи кино»). These verbs are the difference, and they keep the
+# 2026-07-24 review fix intact instead of re-widening the router bypass.
+_REQUEST_WORDS = ("посовет", "порекоменд", "подбер", "предлож", "включ",
+                  "поставь", "скачай", "закажи", "купи", "найди мне",
+                  "recommend", "suggest", "let's ", "play ", "order ", "buy ")
+# A QUESTION is not an assertion about the open card: «что за фильм?», «а книга
+# есть в бумаге?», «это какой фильм?» ask for something and must reach the
+# router even while a card is open (review fix 2026-07-28). Only checked for
+# no-number messages — «№2 — книга?» still names its entry explicitly.
+_QUESTION_RE = re.compile(
+    r"[?？]$|^(?:(?:а|ну|и)\s+)?(?:что|чего|как|какой|какая|какое|какие|каком|где|"
+    r"когда|зачем|почему|сколько|кто|чей|"
+    r"what|which|where|when|why|how|who|whose)\b")
+# ...and a LONGER sentence only asserts about the card when it points at it: a
+# place/emphasis marker or an object pronoun. Without one, «найди похожие
+# фильмы» and «хочу посмотреть фильм в кино» are not corrections either.
+_ASSERTION_RE = re.compile(
+    r"\b(тут|там|здесь|вообще|на самом деле|точно|правда|же|ведь|"
+    r"его|ее|её|их|actually|really)\b")
 # A no-number message binds to the card only when it POINTS at it: «это книга»,
 # or the message being nothing but the kind/remove word itself («книга», «убери»).
 _DEMONSTRATIVE_RE = re.compile(r"\b(это|эта|этот|эту|this|that|it)\b")
@@ -975,6 +1241,14 @@ def parse_correction(text, n_entries):
     single-entry card) AND names no other object (a reminder, a note, a task…).
     A mis-parse now fails SAFE: the card stays intact and the message routes.
 
+    On a SINGLE-entry card the reference requirement is relaxed (2026-07-28):
+    there is only one entry it could be about, so a message that ASSERTS a kind
+    or a removal — «Не книга, а фильм», «тут вообще-то фильм», «убери его» —
+    corrects it. It must genuinely assert: a request («посоветуй фильм на
+    вечер»), a question («что за фильм?») and a bare command about something
+    else («удали всё») all still route. A request or a question never corrects
+    a card at all, on any number of entries.
+
     Returns None when the message is not a correction at all (route it normally —
     «да» must still reach confirm), the string "unclear" when it clearly tries to
     correct but names no resolvable entry, or (op, [indices]) with op in
@@ -996,13 +1270,26 @@ def parse_correction(text, n_entries):
     if nums and not in_range:
         return "unclear"        # numbers named, none on the card («убери №7» of 2)
     if not nums:
-        contrast = (
-            n_entries == 1
-            and ((movie and _kind_negated(low, _BOOK_WORDS))
-                 or (book and _kind_negated(low, _MOVIE_WORDS)))
-        )
-        if not (contrast or _DEMONSTRATIVE_RE.search(low)
-                or _BARE_KIND_RE.match(low.strip())):
+        # A REQUEST is not an assertion about the open card in ANY phrasing —
+        # «посоветуй не книгу, а фильм» is still a request. Checked BEFORE the
+        # contrast/assertion shapes so neither can re-open the router bypass the
+        # 2026-07-24 review fix closed (review fix 2026-07-28).
+        if any(w in low for w in _REQUEST_WORDS):
+            return None
+        flat = low.strip()
+        # ...and neither is a QUESTION, whatever it points at: «что за фильм?»
+        # and «это какой фильм?» ask her something, they do not assert anything
+        # about the card, so they belong to the router (review fix 2026-07-28).
+        if _QUESTION_RE.search(flat):
+            return None
+        # «не книга, а фильм»: BOTH kind vocabularies match, so the negation is
+        # the only thing that says which one is asserted (_kind_named already
+        # skips negated hits — this just records that a contrast was made).
+        contrast = ((movie and _kind_negated(low, _BOOK_WORDS))
+                    or (book and _kind_negated(low, _MOVIE_WORDS)))
+        asserts_single = n_entries == 1 and bool(_ASSERTION_RE.search(low))
+        if not (contrast or asserts_single or _DEMONSTRATIVE_RE.search(low)
+                or _BARE_KIND_RE.match(flat)):
             return None         # no entry reference at all -> not a correction
         if n_entries != 1:
             return "unclear"    # card-directed but ambiguous on a multi-entry card

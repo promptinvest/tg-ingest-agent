@@ -19628,12 +19628,162 @@ class MediaModuleTests(unittest.TestCase):
         self.assertIsNone(media.caption_intent(
             "Найди этот фильм и напомни посмотреть завтра"))
 
-    def test_extract_prompt_demands_aliases_visible_evidence_and_weak_hint(self):
+    def test_extract_prompt_demands_aliases_layout_and_an_authoritative_kind(self):
         prompt = media.extract_prompt("movie")
         self.assertIn('"aliases"', prompt)
         self.assertIn('"creator"', prompt)
         self.assertIn("SAME cover/poster", prompt)
-        self.assertIn("only as a HINT", prompt)
+        self.assertIn('"layout"', prompt)
+        # D1: the boss's stated kind outranks the cover's shape — the prompt no
+        # longer invites the model to override him.
+        self.assertIn("AUTHORITATIVE", prompt)
+        self.assertNotIn("only as a HINT", prompt)
+        self.assertNotIn("AUTHORITATIVE", media.extract_prompt(None))
+
+    def test_force_kind_flips_and_invalidates_the_other_reading(self):
+        # D1: «Фильм» on a film's book-shaped cover. The looked-up BOOK author
+        # must not survive the flip — relabeled «режиссёр» it would be a lie.
+        entries = [{"title": "EMPTY WORLD", "kind": "book", "comment": "",
+                    "creator": "Sam Youd", "creator_src": "lookup",
+                    "year": "1977", "year_src": "lookup"},
+                   {"title": "Дюна", "kind": "movie", "comment": "постер"}]
+        flipped = media.force_kind(entries, "movie")
+        self.assertEqual([e["title"] for e in flipped], ["EMPTY WORLD"])
+        self.assertEqual(entries[0]["kind"], "movie")
+        self.assertNotIn("creator", entries[0])
+        self.assertNotIn("year", entries[0])
+        # an entry already of that kind is untouched, and no caption kind is a no-op
+        self.assertEqual(entries[1],
+                         {"title": "Дюна", "kind": "movie", "comment": "постер"})
+        self.assertEqual(media.force_kind(entries, None), [])
+
+    def test_force_kind_keeps_visible_text_as_photo_context(self):
+        # the survives sibling: visible evidence is not destroyed, it stops
+        # being a FIELD and becomes honest photo context (which still feeds the
+        # lookup's disambiguation).
+        entry = {"title": "EMPTY WORLD", "kind": "book", "comment": "",
+                 "creator": "ZACH BOHANNON", "creator_src": "photo"}
+        media.force_kind([entry], "movie")
+        self.assertNotIn("creator", entry)
+        self.assertIn("ZACH BOHANNON", entry["comment"])
+
+    def test_quoted_title_never_doubles_guillemets(self):
+        # D5 rendering: the live card printed ««В никуда»» because the poster's
+        # own quotes came through the verbatim read.
+        self.assertEqual(media.quoted_title("«В никуда»"), "«В никуда»")
+        self.assertEqual(media.quoted_title("В никуда"), "«В никуда»")
+        self.assertEqual(media.quoted_title('"Dune"'), "«Dune»")
+        self.assertEqual(media.quoted_title("“Dune”"), "«Dune»")
+
+    def test_quoted_title_keeps_legitimate_titles_whole(self):
+        # the survives sibling: internal punctuation, digits-only titles and a
+        # title that merely CONTAINS quotes keep every character.
+        self.assertEqual(media.quoted_title("Ассистент: начало"),
+                         "«Ассистент: начало»")
+        self.assertEqual(media.quoted_title("1984"), "«1984»")
+        self.assertEqual(media.quoted_title("Война — и мир"), "«Война — и мир»")
+        # A title whose outer guillemets belong to its PARTS is not unwrapped
+        # (the pair is not its own wrapper) — but it already reads as quoted, so
+        # it is returned untouched rather than as ««Дюна» и «Солярис»». Exact
+        # equality on purpose: assertIn would pass on the doubled form too.
+        self.assertEqual(media.quoted_title("«Дюна» и «Солярис»"),
+                         "«Дюна» и «Солярис»")
+
+    def test_extract_single_layout_collapses_one_posters_titles(self):
+        # D5: one poster, two printed languages, no alias link from the model —
+        # the split must not leave extract() (the live NOWHERE / «В никуда»
+        # pair became notes #40 and #41).
+        raw = ('{"layout": "single", "entries": ['
+               '{"title": "NOWHERE", "aliases": [], "kind": "movie",'
+               ' "creator": "", "year": "", "genre": "",'
+               ' "comment": "A NETFLIX FILM"},'
+               '{"title": "«В никуда»", "aliases": [], "kind": "movie",'
+               ' "creator": "", "year": "", "genre": "", "comment": ""}]}')
+        with mock.patch.object(llm, "vision_chat", return_value=raw):
+            entries = media.extract(mock.Mock(vision_model="v"), None, "x.jpg")
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["title"], "NOWHERE")
+        self.assertEqual(entries[0]["aliases"], ["«В никуда»"])
+        self.assertEqual(entries[0]["comment"], "A NETFLIX FILM")
+
+    def test_extract_list_layout_keeps_every_work(self):
+        # the survives sibling: a shelf/list photo must never lose a work to the
+        # poster collapse — and an ABSENT layout is treated as a list.
+        # LABEL: this one passes on the pre-fix source too (extract() simply
+        # returned every entry there). It is the guard that the collapse never
+        # widens, not evidence that anything changed.
+        raw = ('{"layout": "list", "entries": ['
+               '{"title": "Dune", "kind": "movie"},'
+               '{"title": "«Солярис»", "kind": "movie"}]}')
+        with mock.patch.object(llm, "vision_chat", return_value=raw):
+            entries = media.extract(mock.Mock(vision_model="v"), None, "x.jpg")
+        self.assertEqual([e["title"] for e in entries], ["Dune", "«Солярис»"])
+        with mock.patch.object(llm, "vision_chat",
+                               return_value=raw.replace('"layout": "list", ', "")):
+            entries2 = media.extract(mock.Mock(vision_model="v"), None, "x.jpg")
+        self.assertEqual(len(entries2), 2)
+
+    def test_single_layout_collapse_never_fuses_evidently_different_works(self):
+        # The collapse's negative control, INSIDE the risky branch (the list
+        # test never reaches it). layout="single" is the model's judgement, and
+        # it is not allowed to override contradicting evidence or to cost a
+        # title — a mis-fused work writes a wrong alias FACT, which is a dedup
+        # key, and there is no un-merge command.
+        def run(payload):
+            with mock.patch.object(llm, "vision_chat", return_value=payload):
+                return media.extract(mock.Mock(vision_model="v"), None, "x.jpg")
+
+        # a double feature: two visible directors that disagree
+        two_directors = run(
+            '{"layout": "single", "entries": ['
+            '{"title": "Braindead", "kind": "movie", "creator": "Peter Jackson"},'
+            '{"title": "Brain Damage", "kind": "movie", "creator": "Frank Henenlotter"}]}')
+        self.assertEqual([e["title"] for e in two_directors],
+                         ["Braindead", "Brain Damage"])
+        # a novel next to a film on one shelf shot the model called "single"
+        mixed = run('{"layout": "single", "entries": ['
+                    '{"title": "Дюна", "kind": "book"},'
+                    '{"title": "Солярис", "kind": "movie"}]}')
+        self.assertEqual(len(mixed), 2)
+        # ...and a "single" read that produced more works than a poster can
+        # print is not a credible single-work photo: nothing is fused, and NO
+        # title is silently lost past the alias budget.
+        titles = [f"Фильм {i}" for i in range(1, 9)]
+        many = run('{"layout": "single", "entries": [%s]}' % ",".join(
+            '{"title": "%s", "kind": "movie"}' % t for t in titles))
+        self.assertEqual([e["title"] for e in many], titles)
+
+    def test_facts_fields_and_merge_preview_inherit_only_what_is_missing(self):
+        # D4: what a confirm will ACTUALLY leave on the note it merges into.
+        old = ["photo: с полки", "lookup: director: Peter Jackson",
+               "lookup: year: 1996", "model: genre: comedy"]
+        self.assertEqual(media.facts_fields(old), {
+            "creator": ["lookup", "Peter Jackson"],
+            "year": ["lookup", "1996"],
+            "genre": ["model", "comedy"]})
+        entry = {"title": "Frighteners", "kind": "movie",
+                 "year": "1997", "year_src": "photo"}
+        # An INHERITED value is labeled as the note's, never as this turn's:
+        # «на фото» would claim the photo he just sent shows a director it never
+        # showed, «нашла» a lookup this capture never ran.
+        self.assertEqual(media.merge_preview(entry, old), {
+            "creator": ["note", "Peter Jackson"],
+            "year": ["photo", "1997"],                # the fresh capture still wins
+            "genre": ["note", "comedy"]})
+        # ...even when the note's own value came from a PHOTO — an earlier
+        # capture's poster is not this one's.
+        self.assertEqual(
+            media.merge_preview({"title": "x", "kind": "movie"},
+                                ["photo: director: Гай Ричи"]),
+            {"creator": ["note", "Гай Ричи"]})
+        # the preview never leaks into the entry: a re-rendered card cannot
+        # inherit twice, nor claim THIS capture found the note's old value
+        self.assertNotIn("creator", entry)
+        self.assertEqual(media.entry_display_fields(entry),
+                         {"year": ("photo", "1997")})
+        entry["merge"] = {"fields": media.merge_preview(entry, old)}
+        self.assertEqual(media.entry_display_fields(entry)["creator"],
+                         ("note", "Peter Jackson"))
 
     def test_extract_ignores_non_list_alias_shape(self):
         raw = ('{"entries": [{"title": "NOWHERE", "aliases": "В никуда", '
@@ -19732,6 +19882,62 @@ class MediaModuleTests(unittest.TestCase):
     def test_parse_correction_single_entry_needs_no_number(self):
         self.assertEqual(media.parse_correction("это книга", 1), ("book", [1]))
 
+    def test_parse_correction_contrast_negation_names_the_asserted_kind(self):
+        # D2(a): BOTH vocabularies match, so only the negation says which kind
+        # is asserted. LABEL: the single-entry lines below already passed in
+        # d31f2ba (which computed `contrast` for n_entries == 1) — they stay as
+        # regression guards for the live «Не книга, а фильм» turn. What is new
+        # here is the MULTI-entry card, where the same contrast now resolves to
+        # «unclear» instead of silently routing away.
+        for text in ("Не книга, а фильм", "это не книга это фильм",
+                     "not a book, a movie"):
+            self.assertEqual(media.parse_correction(text, 1), ("movie", [1]), text)
+        self.assertEqual(media.parse_correction("не фильм, а книга", 1), ("book", [1]))
+        # ...and on a MULTI-entry card it asks which one instead of guessing
+        self.assertEqual(media.parse_correction("Не книга, а фильм", 3), "unclear")
+
+    def test_parse_correction_contrast_does_not_swallow_a_request(self):
+        # The contrast branch must not re-open the router bypass the 2026-07-24
+        # review fix closed: a REQUEST phrased as a contrast is still a request,
+        # on a one-entry card (where it would silently flip the sole entry) and
+        # on a multi-entry one (where it would answer «Не поняла правку»).
+        for n in (1, 3):
+            self.assertIsNone(media.parse_correction("посоветуй не книгу, а фильм", n), n)
+            self.assertIsNone(media.parse_correction("включи не книгу, а фильм", n), n)
+        # the survives sibling: the same shape WITHOUT a request verb corrects
+        self.assertEqual(media.parse_correction("не книгу, а фильм", 1), ("movie", [1]))
+
+    def test_parse_correction_single_entry_accepts_a_plain_assertion(self):
+        # D2(b): with one entry there is no ambiguity about WHICH, so «№1» is
+        # not required for anything longer than the bare kind word.
+        self.assertEqual(media.parse_correction("тут вообще-то фильм", 1),
+                         ("movie", [1]))
+        self.assertEqual(media.parse_correction("убери его отсюда", 1),
+                         ("remove", [1]))
+        # the 2026-07-24 review fix still holds: a REQUEST routes on, card intact
+        self.assertIsNone(media.parse_correction("посоветуй фильм на вечер", 1))
+        self.assertIsNone(media.parse_correction("включи какой-нибудь фильм", 1))
+        self.assertIsNone(media.parse_correction("удали напоминание", 1))
+        # ...and the loosening is INERT on a multi-entry card: the same
+        # assertions carry no entry reference there, so they route on.
+        self.assertIsNone(media.parse_correction("тут вообще-то фильм", 3))
+        self.assertIsNone(media.parse_correction("убери его отсюда", 3))
+
+    def test_parse_correction_single_entry_still_needs_an_assertion(self):
+        # The loosening is "clearly asserts a kind/removal", not "mentions one":
+        # a question and an unrelated command must keep reaching the router even
+        # while a one-entry card is open (a swallowed turn is a lost turn, and a
+        # disagreeing kind word would also pay for a fresh enrichment).
+        for text in ("что за фильм?", "а книга есть в бумаге?",
+                     "какой это по счёту фильм",
+                     "найди похожие фильмы", "хочу посмотреть фильм в кино",
+                     "удали всё"):
+            self.assertIsNone(media.parse_correction(text, 1), text)
+        # the survives sibling: real assertions and the bare forms still parse
+        self.assertEqual(media.parse_correction("это фильм", 1), ("movie", [1]))
+        self.assertEqual(media.parse_correction("книга", 1), ("book", [1]))
+        self.assertEqual(media.parse_correction("тут точно книга", 1), ("book", [1]))
+
     def test_parse_correction_ambiguous_is_unclear_not_a_guess(self):
         self.assertEqual(media.parse_correction("это книга", 3), "unclear")
         # out-of-range number on a 2-entry card
@@ -19764,10 +19970,12 @@ class MediaModuleTests(unittest.TestCase):
             ("media_card_photo_unread", {"n": 1}),
             ("media_card_caption_note", {"caption": "сохрани"}),
             ("media_card_identified", {}),
-            ("media_card_hint_conflict", {"caption": "Фильм"}),
+            ("media_card_kind_forced", {"kind": "фильм"}),
+            ("media_card_merge", {"title": "«Дюна»", "row_id": 7}),
+            ("media_card_recheck", {}),
             ("media_aliases", {"aliases": "«В никуда»"}),
             ("media_saved", {"lines": "x"}),
-            ("media_line_merged", {"emoji": "📚", "title": "Дюна",
+            ("media_line_merged", {"emoji": "📚", "title": "«Дюна»",
                                    "category": "Books", "row_id": 7}),
             ("media_card_truncated", {}),
             ("media_card_footer", {}),
@@ -19782,6 +19990,7 @@ class MediaModuleTests(unittest.TestCase):
             ("media_src_lookup", {}),
             ("media_src_model", {}),
             ("media_src_photo", {}),
+            ("media_src_note", {}),
             ("media_fields_missing", {"fields": "год, жанр"}),
             ("media_fname_creator_book", {}),
             ("media_fname_creator_movie", {}),
@@ -20043,6 +20252,20 @@ class MediaEnrichLookupTests(unittest.TestCase):
         ], title="Brain Dead", entry=brain)
         self.assertEqual(braindead, {"creator": "Peter Jackson", "year": "1992",
                                     "genre": "comedy"})
+
+    def test_context_terms_select_by_word_not_by_substring(self):
+        # Visible context must not select a work by hiding INSIDE an unrelated
+        # word: a publisher «АСТ» sits in «фантастика», «мир» in «мировой» — and
+        # one such accident is enough to be the score that picks a same-title
+        # work, which the card then labels «нашла». (The positive direction —
+        # a term that really occurs as a word still selects — is
+        # test_wikipedia_same_title_uses_netflix_context.)
+        entry = {"title": "Дюна", "kind": "book", "comment": "издательство АСТ"}
+        out, _ = self._wiki("book", [
+            ["Дюна", ["Дюна (роман)"], [], []],
+            {"description": "научно-фантастический роман", "extract": ""},
+        ], title="Дюна", entry=entry)
+        self.assertEqual(out, {})       # honest-missing beats an accidental hit
 
     def test_wikipedia_ambiguous_same_title_without_context_refuses_first_hit(self):
         out, _ = self._wiki("movie", [
@@ -20770,7 +20993,7 @@ class MediaCaptureGoldenTests(unittest.TestCase):
         self.assertIn(texts.T("ru", "media_card_identified"), card)
         self.assertNotIn("как команду её тут не выполняла", card)
         extract_request = json.dumps(self.llm_requests[1], ensure_ascii=False)
-        self.assertIn("only as a HINT", extract_request)
+        self.assertIn("AUTHORITATIVE", extract_request)
 
         self.drive({"callback_query": {
             "id": "cb-nowhere", "from": {"id": 1}, "data": "mcap|y",
@@ -20784,25 +21007,358 @@ class MediaCaptureGoldenTests(unittest.TestCase):
         self.assertIn("lookup: director: Albert Pintó", facts)
         self.assertIn("lookup: year: 2023", facts)
 
-    def test_bare_movie_hint_does_not_override_visible_book_evidence(self):
-        # Exact live EMPTY WORLD shape: the boss called it «Фильм», but the
-        # cover visibly names an author. Evidence wins and the disagreement is
-        # disclosed instead of silently ignoring the caption.
+    def test_movie_caption_outranks_the_book_shaped_cover(self):
+        # D1, the exact live EMPTY WORLD turn: a film adaptation's book-shaped
+        # cover captioned «Фильм». The model answered kind="book" anyway, so
+        # enrichment looked up a NOVEL and the card offered Sam Youd, 1977. His
+        # caption is a statement about the work: the kind is forced BEFORE
+        # enrichment, so the lookup that runs is the MOVIE one.
         sent = self.drive(
             {"message": self._photo_msg(502, caption="Фильм")},
             vision=[
                 '{"kind": "media", "description": "обложка"}',
-                '{"entries": [{"title": "EMPTY WORLD", "aliases": [],'
-                ' "kind": "book", "creator": "ZACH BOHANNON", "year": "2018",'
-                ' "genre": "horror", "comment": ""}]}',
+                '{"layout": "single", "entries": [{"title": "EMPTY WORLD",'
+                ' "aliases": [], "kind": "book", "creator": "", "year": "",'
+                ' "genre": "", "comment": ""}]}',
+            ],
+            lookups=[
+                ["Empty World", ["Empty World (film)"], [], []],
+                {"title": "Empty World (film)",
+                 "description": "2015 British drama film",
+                 "extract": "The film was directed by Nick Hamm."},
             ],
             enrich=[],
         )
         card = "\n".join(sent)
-        self.assertIn("📚 «EMPTY WORLD» — книга", card)
-        self.assertIn("автор: ZACH BOHANNON (на фото)", card)
-        self.assertIn(texts.T("ru", "media_card_hint_conflict", caption="Фильм"), card)
-        self.assertNotIn("Sam Youd", card)
+        self.assertIn("🎬 «EMPTY WORLD» — фильм", card)
+        self.assertNotIn("📚", card)
+        self.assertNotIn("Sam Youd", card)                 # no book was ever looked up
+        self.assertTrue(all("openlibrary" not in u for u in self.lookup_urls),
+                        self.lookup_urls)
+        self.assertIn("режиссёр: Nick Hamm (нашла)", card)
+        # she says what she DID with the caption — the old note claimed she had
+        # not acted on it while it was in fact steering the read.
+        self.assertIn(texts.T("ru", "media_card_kind_forced",
+                              kind=texts.T("ru", "media_kind_movie")), card)
+        self.assertNotIn("как команду её тут не выполняла", card)
+        self.drive({"message": self._msg(503, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        row = self.conn.execute("SELECT * FROM messages").fetchone()
+        self.assertEqual(row["category"], "Movies")        # категория тоже фильмовая
+        facts = [r["fact"] for r in store.message_facts(self.conn, row["id"])]
+        self.assertIn("lookup: director: Nick Hamm", facts)
+        self.assertNotIn("lookup: author: Nick Hamm", facts)
+
+    def test_matching_kind_caption_adds_no_note_at_all(self):
+        # The other half of D1's copy rule: a caption the media flow HONORED
+        # never gets the «как команду не выполняла» disclaimer, and when it
+        # changed nothing she says nothing extra either.
+        # LABEL: behaviourally this held before the fix too (the honored-caption
+        # branch was already silent for a matching kind) — on the pre-fix source
+        # it errors only because the media_card_kind_forced key does not exist.
+        # It is a copy-regression guard, not evidence of a behaviour change.
+        sent = self.drive(
+            {"message": self._photo_msg(541, caption="Фильм")},
+            vision=[
+                '{"kind": "media", "description": "постер"}',
+                '{"layout": "single", "entries": [{"title": "Дюна",'
+                ' "aliases": [], "kind": "movie", "creator": "", "year": "",'
+                ' "genre": "", "comment": ""}]}',
+            ],
+            enrich=['{"items": []}'],
+        )
+        card = "\n".join(sent)
+        self.assertIn("🎬 «Дюна» — фильм", card)
+        self.assertNotIn("как команду её тут не выполняла", card)
+        self.assertNotIn(texts.T("ru", "media_card_kind_forced",
+                                 kind=texts.T("ru", "media_kind_movie")), card)
+
+    def test_one_poster_two_languages_is_one_entry_single_guillemets(self):
+        # D5, the exact live NOWHERE turn: EN and RU titles off ONE poster came
+        # back as two entries (stored as #40 and #41) and the RU one rendered
+        # ««В никуда»». One poster is one work, quoted exactly once.
+        sent = self.drive({"message": self._photo_msg(531)}, vision=[
+            '{"kind": "media", "description": "постер фильма"}',
+            '{"layout": "single", "entries": ['
+            '{"title": "NOWHERE", "aliases": [], "kind": "movie", "creator": "",'
+            ' "year": "", "genre": "", "comment": "A NETFLIX FILM"},'
+            '{"title": "«В никуда»", "aliases": [], "kind": "movie",'
+            ' "creator": "", "year": "", "genre": "", "comment": ""}]}',
+        ], lookups=[
+            ["Nowhere", ["Nowhere (1997 film)", "Nowhere (2023 film)"], [], []],
+            {"title": "Nowhere (1997 film)",
+             "description": "1997 American drama film directed by Gregg Araki",
+             "extract": ""},
+            {"title": "Nowhere (2023 film)",
+             "description": "2023 Spanish survival drama film",
+             "extract": "A Netflix film directed by Albert Pintó."},
+        ], enrich=[])
+        card = "\n".join(sent)
+        self.assertEqual(len(re.findall(r"(?m)^\d+\. ", card)), 1)
+        self.assertIn("«В никуда»", card)
+        self.assertNotIn("««В никуда»»", card)             # D5 rendering
+        self.assertIn("Albert Pintó", card)                # D3 evidence selection
+        self.assertNotIn("Gregg Araki", card)
+        self.drive({"message": self._msg(532, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        rows = self.conn.execute("SELECT * FROM messages").fetchall()
+        self.assertEqual(len(rows), 1)                     # ONE note, not #40 + #41
+        self.assertEqual(rows[0]["summary"], "NOWHERE")
+        facts = [r["fact"] for r in store.message_facts(self.conn, rows[0]["id"])]
+        self.assertIn("photo: alias: «В никуда»", facts)
+        self.assertIn("lookup: director: Albert Pintó", facts)
+
+    def test_card_previews_the_merge_so_stored_equals_shown(self):
+        # D4, THE invariant the TTL-less stash rests on. A capture that lands on
+        # an existing note used to show only its OWN (empty) fields while
+        # merge_facts silently kept the note's older director/year: the card
+        # said «не нашла: режиссёра, год, жанр», the row said Peter Jackson,
+        # 1996. Now the card previews the merge and the confirm stores it.
+        movies = store.ensure_category(self.conn, "Movies")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": -1,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": "The Frighteners"})
+        store.set_suggestion(self.conn, rid, movies, "The Frighteners", "m")
+        store.set_facts(self.conn, rid, ["photo: alias: Frighteners",
+                                         "lookup: director: Peter Jackson",
+                                         "lookup: year: 1996",
+                                         "lookup: genre: comedy"])
+        store.confirm_category(self.conn, rid, movies)
+        sent = self.drive({"message": self._photo_msg(511)}, vision=[
+            '{"kind": "media", "description": "постер"}',
+            '{"layout": "single", "entries": [{"title": "Frighteners",'
+            ' "aliases": [], "kind": "movie", "creator": "", "year": "",'
+            ' "genre": "", "comment": ""}]}',
+        ], enrich=['{"items": []}'])   # lookups offline: this capture finds nothing
+        card = "\n".join(sent)
+        # ...and each inherited value is labeled as the NOTE's, not as something
+        # this photo showed («на фото») or this turn looked up («нашла»).
+        self.assertIn("режиссёр: Peter Jackson (уже в записи)", card)
+        self.assertIn("год: 1996 (уже в записи)", card)
+        self.assertIn("жанр: comedy (уже в записи)", card)
+        self.assertNotIn("(нашла)", card)                  # no lookup ran this turn
+        self.assertNotIn("не нашла", card)                 # the row will not be blank
+        self.assertIn("уже есть в каталоге", card)
+        self.assertIn("«The Frighteners» (#%d)" % self.agent.note_no(rid), card)
+        sent2 = self.drive({"message": self._msg(512, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) c FROM messages").fetchone()["c"], 1)
+        # stored == shown, field for field
+        self.assertEqual([r["fact"] for r in store.message_facts(self.conn, rid)],
+                         ["photo: alias: Frighteners",
+                          "lookup: director: Peter Jackson",
+                          "lookup: year: 1996",
+                          "lookup: genre: comedy"])
+        self.assertIn("«The Frighteners»", " ".join(sent2))  # the row he was shown
+
+    def test_confirm_redraws_when_the_catalog_moved_under_the_card(self):
+        # D4's other half: if a refresh genuinely must happen at confirm time,
+        # the card is re-rendered and re-approved — never silently diverged.
+        self.drive({"message": self._photo_msg(521)}, vision=[
+            '{"kind": "media", "description": "постер"}',
+            '{"entries": [{"title": "Дюна", "kind": "movie", "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        movies = store.ensure_category(self.conn, "Movies")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": -1,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": "Дюна"})
+        store.set_suggestion(self.conn, rid, movies, "Дюна", "m")
+        store.set_facts(self.conn, rid, ["lookup: director: Дени Вильнёв"])
+        store.confirm_category(self.conn, rid, movies)
+        sent = self.drive({"message": self._msg(522, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        card = "\n".join(sent)
+        self.assertIn(texts.T("ru", "media_card_recheck"), card)
+        self.assertIn("режиссёр: Дени Вильнёв (уже в записи)", card)
+        self.assertEqual(self.conn.execute(          # nothing stored on the stale yes
+            "SELECT COUNT(*) c FROM messages").fetchone()["c"], 1)
+        sent2 = self.drive({"message": self._msg(523, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        self.assertIn("уже есть", " ".join(sent2))
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) c FROM messages").fetchone()["c"], 1)
+        self.assertEqual([r["fact"] for r in store.message_facts(self.conn, rid)],
+                         ["lookup: director: Дени Вильнёв"])
+
+    def test_recheck_via_button_does_not_toast_a_save_and_is_said_once(self):
+        # The redraw path through the ✅ BUTTON: the callback used to answer «✅»
+        # before knowing the outcome, so a card that was only re-drawn still got
+        # a checkmark. And because the disclosure rides the stash, a SECOND move
+        # under the same card must not print the line twice.
+        self.drive({"message": self._photo_msg(551)}, vision=[
+            '{"kind": "media", "description": "постер"}',
+            '{"entries": [{"title": "Дюна", "kind": "movie", "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        movies = store.ensure_category(self.conn, "Movies")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": -1,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": "Дюна"})
+        store.set_suggestion(self.conn, rid, movies, "Дюна", "m")
+        store.set_facts(self.conn, rid, ["lookup: year: 2021"])
+        store.confirm_category(self.conn, rid, movies)
+        cb = {"id": "cb-move", "from": {"id": 1}, "data": "mcap|y",
+              "message": {"chat": {"id": 1}, "message_id": 4242}}
+        with mock.patch.object(self.agent, "answer_callback") as ack:
+            sent = self.drive({"callback_query": dict(cb)})
+        self.assertNotEqual(ack.call_args.args[1], "✅")   # nothing was saved
+        card = "\n".join(sent)
+        self.assertEqual(card.count(texts.T("ru", "media_card_recheck")), 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) c FROM messages").fetchone()["c"], 1)
+        # the catalog moves AGAIN under the re-drawn card
+        store.set_facts(self.conn, rid, ["lookup: year: 2021",
+                                         "lookup: genre: фантастика"])
+        with mock.patch.object(self.agent, "answer_callback"):
+            sent2 = self.drive({"callback_query": dict(cb, id="cb-move2")})
+        self.assertEqual("\n".join(sent2).count(
+            texts.T("ru", "media_card_recheck")), 1)       # said once, not twice
+        # ...and the third yes, with nothing moving, finally stores
+        with mock.patch.object(self.agent, "answer_callback") as ack3:
+            self.drive({"callback_query": dict(cb, id="cb-move3")})
+        self.assertEqual(ack3.call_args.args[1], "✅")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) c FROM messages").fetchone()["c"], 1)   # merged, not new
+
+    def test_two_staged_entries_on_one_note_keep_both_contributions(self):
+        # Both card entries resolve to the SAME existing note (it carries an
+        # alias that matches the second title). Merging each against the
+        # card-time snapshot would silently drop the first entry's facts.
+        movies = store.ensure_category(self.conn, "Movies")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": -1,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": "NOWHERE"})
+        store.set_suggestion(self.conn, rid, movies, "NOWHERE", "m")
+        store.set_facts(self.conn, rid, ["photo: alias: «В никуда»"])
+        store.confirm_category(self.conn, rid, movies)
+        self.drive({"message": self._photo_msg(561)}, vision=[
+            '{"kind": "media", "description": "две афиши"}',
+            '{"layout": "list", "entries": ['
+            '{"title": "NOWHERE", "aliases": [], "kind": "movie", "creator": "",'
+            ' "year": "2023", "genre": "", "comment": ""},'
+            '{"title": "«В никуда»", "aliases": [], "kind": "movie",'
+            ' "creator": "", "year": "", "genre": "драма", "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        self.drive({"message": self._msg(562, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) c FROM messages").fetchone()["c"], 1)
+        facts = [r["fact"] for r in store.message_facts(self.conn, rid)]
+        self.assertIn("photo: year: 2023", facts)          # entry 1 survived
+        self.assertIn("photo: genre: драма", facts)        # ...and entry 2
+
+    def test_renaming_the_target_note_under_the_card_forces_a_recheck(self):
+        # The card names the row it will update and the confirm re-indexes it
+        # under that name: a RENAME between card and confirm is a moved catalog
+        # just as much as a changed fact list.
+        movies = store.ensure_category(self.conn, "Movies")
+        rid = store.insert_message(self.conn, {
+            "chat_id": 1, "tg_message_id": -1,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "raw_text": "Дюна"})
+        store.set_suggestion(self.conn, rid, movies, "Дюна", "m")
+        store.set_facts(self.conn, rid, ["lookup: year: 2021"])
+        store.confirm_category(self.conn, rid, movies)
+        sent = self.drive({"message": self._photo_msg(571)}, vision=[
+            '{"kind": "media", "description": "постер"}',
+            '{"entries": [{"title": "Дюна", "kind": "movie", "comment": ""}]}',
+        ], enrich=['{"items": []}'])
+        self.assertIn("«Дюна» (#%d)" % self.agent.note_no(rid), "\n".join(sent))
+        self.conn.execute("UPDATE messages SET summary = ? WHERE id = ?",
+                          ("Дюна: часть вторая", rid))
+        self.conn.commit()
+        sent2 = self.drive({"message": self._msg(572, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        card = "\n".join(sent2)
+        self.assertIn(texts.T("ru", "media_card_recheck"), card)
+        self.assertIn("«Дюна: часть вторая»", card)        # the row's real name
+        self.assertNotIn("Готово, сохранила", card)        # the stale yes stored nothing
+
+    def test_book_caption_outranks_a_film_poster_and_looks_up_a_book(self):
+        # The inverse of the EMPTY WORLD turn, and a materially different path:
+        # a forced BOOK goes to OpenLibrary first and its creator fact must be
+        # `author:`, never `director:`.
+        sent = self.drive(
+            {"message": self._photo_msg(591, caption="Книга")},
+            vision=[
+                '{"kind": "media", "description": "постер"}',
+                '{"layout": "single", "entries": [{"title": "Дюна",'
+                ' "aliases": [], "kind": "movie", "creator": "", "year": "",'
+                ' "genre": "", "comment": ""}]}',
+            ],
+            lookups=[{"docs": [{"title": "Дюна",
+                                "author_name": ["Фрэнк Герберт"],
+                                "first_publish_year": 1965,
+                                "subject": ["Science fiction"]}]}],
+            enrich=[],
+        )
+        card = "\n".join(sent)
+        self.assertIn("📚 «Дюна» — книга", card)
+        self.assertIn("автор: Фрэнк Герберт (нашла)", card)
+        self.assertNotIn("режиссёр", card)
+        self.assertTrue(any("openlibrary.org" in u for u in self.lookup_urls),
+                        self.lookup_urls)
+        self.assertIn(texts.T("ru", "media_card_kind_forced",
+                              kind=texts.T("ru", "media_kind_book")), card)
+        self.drive({"message": self._msg(592, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        row = self.conn.execute("SELECT * FROM messages").fetchone()
+        self.assertEqual(row["category"], "Books")
+        facts = [r["fact"] for r in store.message_facts(self.conn, row["id"])]
+        self.assertIn("lookup: author: Фрэнк Герберт", facts)
+        self.assertFalse([f for f in facts if f.startswith("lookup: director:")])
+
+    def test_forced_kind_collapses_the_novel_and_its_tie_in_into_one_note(self):
+        # force_kind runs AFTER the batch dedup, and dedup keeps kinds apart —
+        # so a photo showing a novel and its film tie-in under ONE title,
+        # captioned «Фильм», used to card the same work twice and insert two
+        # Movies notes. The kind must be settled before the last dedup pass.
+        sent = self.drive(
+            {"message": self._photo_msg(601, caption="Фильм")},
+            vision=[
+                '{"kind": "media", "description": "обложка и постер"}',
+                '{"layout": "list", "entries": ['
+                '{"title": "Дюна", "aliases": [], "kind": "book", "creator": "",'
+                ' "year": "", "genre": "", "comment": "роман"},'
+                '{"title": "Дюна", "aliases": [], "kind": "movie", "creator": "",'
+                ' "year": "", "genre": "", "comment": "постер"}]}',
+            ],
+            enrich=['{"items": []}'],
+        )
+        card = "\n".join(sent)
+        self.assertEqual(len(re.findall(r"(?m)^\d+\. ", card)), 1)
+        self.assertIn("🎬 «Дюна» — фильм", card)
+        self.assertIn("роман", card)                       # neither read is lost
+        self.assertIn("постер", card)
+        self.drive({"message": self._msg(602, "да")}, router=[
+            '{"action": "confirm", "params": {}, "confidence": 0.95}'])
+        rows = self.conn.execute("SELECT summary, category FROM messages").fetchall()
+        self.assertEqual([(r["summary"], r["category"]) for r in rows],
+                         [("Дюна", "Movies")])
+
+    def test_identify_caption_that_also_forces_the_kind_says_both_once(self):
+        # «Найди этот фильм» on a book-shaped cover is BOTH an identification
+        # request and a kind statement: the card discloses each exactly once and
+        # never claims the caption went unused.
+        sent = self.drive(
+            {"message": self._photo_msg(611, caption="Найди этот фильм")},
+            vision=[
+                '{"kind": "media", "description": "обложка"}',
+                '{"layout": "single", "entries": [{"title": "EMPTY WORLD",'
+                ' "aliases": [], "kind": "book", "creator": "", "year": "",'
+                ' "genre": "", "comment": ""}]}',
+            ],
+            enrich=['{"items": []}'],
+        )
+        card = "\n".join(sent)
+        self.assertIn("🎬 «EMPTY WORLD» — фильм", card)
+        self.assertEqual(card.count(texts.T("ru", "media_card_kind_forced",
+                                            kind=texts.T("ru", "media_kind_movie"))), 1)
+        self.assertEqual(card.count(texts.T("ru", "media_card_identified")), 1)
         self.assertNotIn("как команду её тут не выполняла", card)
 
     def test_card_with_foreign_pending_keeps_slot_and_buttons_store(self):

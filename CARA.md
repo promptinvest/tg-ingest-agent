@@ -170,12 +170,18 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   chat now spans the last **20 turns** (was 12); deeper reads stay behind
   `recall_conversation` («перечитай наш разговор за вчера»).
 - **Media capture from your photos (2026‑07‑27, plan B1+B2; core accuracy repair
-  2026‑07‑27).** A picture‑only message you
+  2026‑07‑27; live‑run identification fixes 2026‑07‑28).** A picture‑only message you
   send is vision‑CLASSIFIED first (media / document / other). A photo **about movies or
   books** — a poster, a cover, a shelf, a screenshot with a list — gets a second,
   separate EXTRACT pass that reads the titles **verbatim** off the photo, keeps a
   translated/localized title printed on the SAME cover/poster as an **alias of one
-  work**, and preserves visible creator/year/genre plus useful identification context
+  work** — a single‑work photo collapses to ONE entry inside that photo's read, so a
+  poster printing both «NOWHERE» and «В никуда» can never leave as two entries
+  (2026‑07‑28; the collapse is bounded — a «single» read that came back with more works
+  than a poster can print, with disagreeing visible directors/years, or with different
+  kinds is treated as a list, because fusing two real works would write a wrong
+  alias into the catalog and nothing can un‑merge it) — and preserves visible
+  creator/year/genre plus useful identification context
   (multi‑title lists supported, kind 🎬/📚 per title; every visible value has explicit
   «на фото: …» provenance). Visible photo evidence is authoritative: enrichment can
   fill gaps but cannot replace it.
@@ -206,11 +212,26 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   or **`Books`** (auto‑created, English names by owner decision), purpose `reference`,
   facts with provenance prefixes (`photo:` aliases/comments and visible
   author/director/year/genre, `lookup:`/`model:` enriched fields), chunked+embedded so
-  «ask» finds them. **Dedup** on category plus the normalized title **or an explicit
+  «ask» finds them. Titles are quoted **exactly once** everywhere they render — a
+  title read with its own guillemets is no longer wrapped again (2026‑07‑28).
+  **Dedup** on category plus the normalized title **or an explicit
   same‑work alias**: re‑capturing a known/localized title refreshes the existing
   note's facts and says so — never a duplicate row (a fresh enrichment fact REPLACES
   the old fact for the same field, so no contradictory year pair survives; photo
-  context appends). **Md export:** «дай md по Movies» / «экспорт категории
+  context appends). **The card shows the merge before you approve it** (2026‑07‑28):
+  the existing note is resolved when the card is drawn, the card names it («уже есть
+  в каталоге: «…» (#N)») and shows the fields the merge will actually LEAVE on it —
+  including the ones this capture didn't find and the note already holds, marked
+  **«уже в записи»**: an inherited value is never labeled «на фото» (this photo
+  didn't show it) or «нашла» (no lookup ran this turn). Previously the card could say
+  «не нашла: режиссёра, год» while the merged row kept a director and a year you
+  never saw. If the catalog moves while a card is open (another confirm, an edit, a
+  delete, or the target note being **renamed**), your yes **re‑draws the card** with
+  the fresh preview and asks again instead of storing something you never read — the
+  ✅ button then answers with 👀 rather than a checkmark, since nothing was saved, and
+  the «каталог изменился» line is said once however many times it happens. That
+  re‑check is what keeps the stash safe without a TTL.
+  **Md export:** «дай md по Movies» / «экспорт категории
   Books» (`export what="category"`) sends an md catalog table of that category's
   confirmed notes — title, creator, year, genre, comments, added date, missing fields
   dashed — and works for ANY category (a generic note's facts ride the comments
@@ -231,11 +252,18 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   только то, что показано здесь») — a confirm can never cover entries a truncation
   hid, and the cap/unread/truncation/caption disclosures survive a correction
   re‑showing the card. Reply‑corrections are deliberately STRICT (2026‑07‑27 review
-  fix): they require an explicit entry reference («№2», an in‑range bare number,
-  «это книга» on a single‑entry card), except that an unambiguous natural contrast on
-  a one‑entry card — «Не книга, а фильм» — also corrects that sole entry. They never
+  fix): on a MULTI‑entry card they require an explicit entry reference («№2», an
+  in‑range bare number) and anything card‑directed but ambiguous gets «Не поняла
+  правку» rather than a guess. On a **single‑entry card there is no ambiguity about
+  which entry**, so a plain ASSERTION corrects it (2026‑07‑28) — «Не книга, а
+  фильм», «тут вообще‑то фильм», «убери его» — with a **negation** deciding which kind
+  is being asserted when both words appear. It has to be an assertion, though:
+  requests («посоветуй фильм на вечер», «включи какой‑нибудь фильм», and «посоветуй
+  не книгу, а фильм» — a request phrased as a contrast), questions («что за фильм?»,
+  «а книга есть в бумаге?») and unrelated commands («удали всё») all keep routing.
+  They never
   fire on messages naming another object — «удали напоминание №2» removes the
-  reminder, «посоветуй фильм на вечер» reaches the router; a mis‑parse fails safe
+  reminder; a mis‑parse fails safe
   (card intact, message routed). When
   another confirmation already holds the single pending slot, the card's footer
   offers the **buttons only** (a text reply would resolve against the other pending);
@@ -244,9 +272,19 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   guidance (send it as text/a file); anything else is conversation as before,
   informed by the same classify description (no second paid vision pass), and stores
   nothing. A media caption's small, deterministic in‑flow intent is honored:
-  «Фильм»/«Книга» is a **weak kind hint** (visible evidence wins on conflict) and
-  «Найди этот фильм/эту книгу» is treated as the identification request the card
-  answers. Other media captions are still not routed as separate commands while the
+  «Фильм»/«Книга» **states the kind and outranks the vision guess** (2026‑07‑28) —
+  the kind is forced on every extracted entry BEFORE enrichment, so the lookups run
+  for the kind you named. (Previously it was a weak hint: «Фильм» on a film
+  adaptation's book‑shaped cover still produced a BOOK entry and offered a novelist
+  as its author.) A forced flip DROPS that entry's fields, visible ones included —
+  a cover's «author» must never come back labeled «режиссёр» — and keeps the visible
+  text as honest photo context. The card then says what she DID with the caption
+  («Ты сказал, что это фильм — так и считаю…» — worded so she never quotes back a
+  word you didn't type: «Кино» and «Найди этот фильм» both mean the same kind),
+  never that she ignored it; it says nothing
+  extra when the caption changed nothing. «Найди этот фильм/эту книгу» is treated as
+  the identification request the card
+  answers, and a caption that does both says each thing once. Other media captions are still not routed as separate commands while the
   card is offered; the card shows them and explicitly says they were not acted on
   («если что‑то нужно, напиши отдельным сообщением»). Captions on non‑media photos
   route exactly as before.

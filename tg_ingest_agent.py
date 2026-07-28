@@ -4101,8 +4101,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     # points at the buttons only, since a text reply would resolve against the
     # OTHER pending). There is no TTL on the stash: the card SHOWS every entry
     # it would store — the staged set is budgeted to what actually RENDERS
-    # within one message — so confirming an old card is still consent to
-    # exactly what is displayed.
+    # within one message, and an entry that merges into an existing note shows
+    # that note and its post-merge fields — so confirming an old card is still
+    # consent to exactly what is displayed. When the catalog moves underneath an
+    # open card, the confirm re-draws it instead of storing (_media_confirm).
 
     def handle_media_capture(self, parts, chat_id, text):
         """Classify the boss's picture-only turn; run the movie/book capture flow
@@ -4149,6 +4151,19 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     self.reply(chat_id, T(lang, "llm_error" if unread
                                           else "media_nothing_extracted"))
                     return True, None
+                # A caption that NAMED the kind is his statement about the work,
+                # not a hint: it is applied BEFORE enrichment, so the lookups run
+                # for the kind he named (the live «Фильм» on a film's book-shaped
+                # cover otherwise looked up a novel and reported its author).
+                forced = media.force_kind(entries, (caption_intent or {}).get("kind"))
+                if forced:
+                    # Forcing can make two entries the SAME work: dedup keeps
+                    # kinds apart, so a novel and its film tie-in on one photo
+                    # («Дюна» book + «Дюна» movie) only become collapsible once
+                    # the caption has settled the kind. Without this re-pass the
+                    # card would offer the same title twice and the confirm
+                    # would insert two Movies notes (review fix 2026-07-28).
+                    entries = media.dedup_entries(entries)
                 # B2: creator/year/genre BEFORE the card renders, so the card
                 # shows every field with provenance (photo/lookup/model) and says
                 # honestly what no source yielded. Never raises: lookups
@@ -4164,12 +4179,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                     notes.append(T(lang, "media_card_photo_unread", n=unread))
                 if text:
                     if caption_intent:
-                        hint = caption_intent["kind"]
-                        if all(entry.get("kind") != hint for entry in entries):
+                        # The caption WAS acted on, so the card says what she did
+                        # with it — never the old «как команду её тут не
+                        # выполняла», which was untrue for these captions.
+                        if forced:
                             notes.append(T(
-                                lang, "media_card_hint_conflict",
-                                caption=" ".join(text.split())[:200]))
-                        elif caption_intent.get("identify"):
+                                lang, "media_card_kind_forced",
+                                kind=T(lang, "media_kind_movie"
+                                       if caption_intent["kind"] == "movie"
+                                       else "media_kind_book")))
+                        if caption_intent.get("identify"):
                             notes.append(T(lang, "media_card_identified"))
                     else:
                         # State-changing/other captions still cannot bypass the
@@ -4252,6 +4271,9 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         confirm can never cover entries a truncation hid — any drop is
         disclosed on the card itself."""
         self._media_clear(chat_id)
+        # Bind every entry to the note a confirm would land on and preview that
+        # merge, so the card renders the RESULT rather than the capture alone.
+        self._resolve_media_merges(entries)
         # Single pending slot: take it only when free or already ours — the
         # buttons work off the stash either way (offer_note_edit precedent).
         # A text reply would then resolve against the OTHER pending, so the
@@ -4302,7 +4324,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         """Every entry the confirm would store, numbered, with its kind and
         EVERY field labeled with where it came from (action-truth discipline):
         «на фото: …» was read off the photo, «(нашла)» is a lookup result,
-        «(по памяти)» is the model's knowledge — and what no source yielded is
+        «(по памяти)» is the model's knowledge, «(уже в записи)» is a value the
+        note being merged into already held — and what no source yielded is
         listed under «не нашла: …» rather than silently absent or invented."""
         lines = [T(lang, "media_card_header", n=len(entries))]
         for i, e in enumerate(entries, 1):
@@ -4313,23 +4336,28 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         return "\n".join(lines)
 
     def _media_entry_line(self, lang, i, e):
-        """One card line: kind, enriched fields with provenance markers, the
-        photo comment, and the honest missing-fields note."""
+        """One card line: kind, the fields the CONFIRM will leave on the note
+        (media.entry_display_fields — the merge preview when this capture lands
+        on an existing entry, otherwise the capture's own fields), each with its
+        provenance marker, the photo comment, the honest missing-fields note,
+        and — when it merges — which catalog entry it updates."""
         label = T(lang, "media_kind_movie" if e["kind"] == "movie"
                   else "media_kind_book")
-        bits = [f"{i}. {media.KIND_EMOJI[e['kind']]} «{e['title']}» — {label}"]
+        bits = [f"{i}. {media.KIND_EMOJI[e['kind']]} "
+                f"{media.quoted_title(e['title'])} — {label}"]
         if e.get("aliases"):
-            aliases = ", ".join(f"«{value}»" for value in e["aliases"])
+            aliases = ", ".join(media.quoted_title(value) for value in e["aliases"])
             bits.append(T(lang, "media_aliases", aliases=aliases))
+        fields = media.entry_display_fields(e)
         missing = []
         for f in media.FIELDS:
             suffix = (f + "_" + ("book" if e["kind"] == "book" else "movie")
                       if f == "creator" else f)
-            if e.get(f):
-                piece = T(lang, "media_field_" + suffix, value=e[f])
-                src = e.get(f + "_src")
-                if src in ("photo", "lookup", "model"):
-                    piece += " (" + T(lang, "media_src_" + src) + ")"
+            pair = fields.get(f)
+            if pair:
+                piece = T(lang, "media_field_" + suffix, value=pair[1])
+                if pair[0] in ("photo", "lookup", "model", media.INHERITED_SRC):
+                    piece += " (" + T(lang, "media_src_" + pair[0]) + ")"
                 bits.append(piece)
             else:
                 missing.append(T(lang, "media_fname_" + suffix))
@@ -4337,7 +4365,77 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             bits.append(T(lang, "media_from_photo", comment=e["comment"]))
         if missing:
             bits.append(T(lang, "media_fields_missing", fields=", ".join(missing)))
+        merge = e.get("merge") or {}
+        if merge.get("row_id"):
+            bits.append(T(lang, "media_card_merge",
+                          title=media.quoted_title(merge.get("title") or e["title"]),
+                          row_id=self.note_no(merge["row_id"])))
         return " · ".join(bits)
+
+    # -- card == storage ------------------------------------------------------
+    # The stash deliberately has no TTL, and the ONLY thing that makes that safe
+    # is the invariant "the card displays exactly what a confirm stores". The
+    # live run broke it: confirm-time dedup merged each capture into an existing
+    # note and media.merge_facts KEPT that note's older fields for everything the
+    # fresh capture had left missing, so the card said «не нашла: режиссёра, год,
+    # жанр» while the row kept a director and a year he never saw. The merge is
+    # therefore resolved and PREVIEWED at card time, and re-checked at confirm.
+
+    def _media_merge_state(self, entry, index_cache):
+        """(row_id, title, facts) of the confirmed note this entry would merge
+        into, or None. Read-only on purpose: the category is NOT created here —
+        nothing may be written before his confirm. `index_cache` holds one
+        catalog scan per category for the whole pass (a 30-entry card resolved
+        30 scans per turn before — media.catalog_index)."""
+        kind = (entry.get("kind") if entry.get("kind") in media.CATEGORY_BY_KIND
+                else "movie")
+        name = media.CATEGORY_BY_KIND[kind]
+        category = store.canonical_category(self.conn, name) or name
+        if category not in index_cache:
+            index_cache[category] = media.catalog_index(self.conn, category)
+        row = media.find_in_index(index_cache[category], entry.get("title") or "",
+                                  entry.get("aliases") or ())
+        if row is None:
+            return None
+        facts = [r["fact"] for r in store.message_facts(self.conn, row["id"])]
+        return (row["id"], row["summary"] or row["raw_text"] or entry.get("title"),
+                facts)
+
+    def _resolve_media_merges(self, entries):
+        """Stamp each entry with the note a confirm would update and the fields
+        that merge leaves behind. Idempotent: the preview lives under `merge`,
+        never in the entry's own fields, so re-rendering a corrected card can
+        neither inherit twice nor turn a note's old value into something THIS
+        capture claims to have found."""
+        index_cache = {}
+        for e in entries:
+            state = self._media_merge_state(e, index_cache)
+            if state is None:
+                e.pop("merge", None)
+                continue
+            row_id, title, facts = state
+            e["merge"] = {"row_id": row_id, "title": title, "base": facts,
+                          "fields": media.merge_preview(e, facts)}
+        return entries
+
+    def _media_merges_moved(self, entries):
+        """True when the catalog side of any staged entry no longer matches what
+        the card was drawn from (a confirm, an edit, a delete or a RENAME landed
+        in between). The staged entries are then re-previewed and re-shown
+        instead of stored — consent covers a described result, not a stale one.
+        The title is part of the comparison because the card names the target
+        row and the confirm re-indexes it under that name."""
+        index_cache = {}
+        for e in entries:
+            state = self._media_merge_state(e, index_cache)
+            merge = e.get("merge") or {}
+            now = (state[0], state[1], list(state[2])) if state else None
+            was = ((merge.get("row_id"), merge.get("title"),
+                    list(merge.get("base") or []))
+                   if merge.get("row_id") else None)
+            if now != was:
+                return True
+        return False
 
     def resolve_media_correction(self, chat_id, lang, stash, text):
         """A message while the media card is pending: apply a deterministic
@@ -4380,12 +4478,24 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     def _media_confirm(self, chat_id, lang):
         """His yes — the ONLY write boundary of the flow. Consumes the stash
         first so a double confirm (button + «да») cannot store twice. Returns
-        False when nothing is staged."""
+        False when nothing is staged, "redrawn" when the card had to be re-shown
+        instead of stored (the caller must not then claim a save), else True."""
         stash = self._media_stash(chat_id)
         entries = [e for e in stash.get("entries") or []
                    if isinstance(e, dict) and e.get("title")]
         if not entries:
             return False
+        if self._media_merges_moved(entries):
+            # The card no longer describes what storing would produce: re-draw
+            # it (with the fresh preview) and ask again rather than diverge.
+            # The disclosure is added ONCE — the notes ride the stash, so a
+            # second move must not print the same line twice (review fix).
+            notes = list(stash.get("notes") or [])
+            recheck = T(lang, "media_card_recheck")
+            if recheck not in notes:
+                notes.append(recheck)
+            self._stage_media_card(chat_id, lang, entries, notes)
+            return "redrawn"
         self._media_clear(chat_id)
         pending = store.pending_get(self.conn, chat_id)
         if pending and pending.get("kind") == "media_capture":
@@ -4402,25 +4512,34 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         for `ask`. A category + normalized-title/explicit-alias match MERGES —
         media.merge_facts refreshes same-field enrichment facts (fresh capture
         wins, no contradictory year pair survives), appends the rest, re-indexes,
-        never a duplicate row."""
+        never a duplicate row.
+
+        The merge target is NOT resolved here: it is whatever the CARD showed
+        (`entry['merge']`, re-checked in _media_confirm), so the row he approved
+        is the row that changes and its post-merge fields are the ones he read."""
         lines = []
+        # row_id -> the facts THIS confirm has already left on that row. Two
+        # staged entries can land on the same note (each matched it by a
+        # different alias); merging both against the card-time snapshot would
+        # silently discard the first one's contribution (review fix).
+        written = {}
         for e in entries:
             kind = e.get("kind") if e.get("kind") in media.CATEGORY_BY_KIND else "movie"
             emoji = media.KIND_EMOJI[kind]
             category = store.ensure_category(self.conn, media.CATEGORY_BY_KIND[kind])
             facts_new = media.entry_facts(e)
-            existing = media.find_existing(
-                self.conn, category, e["title"], e.get("aliases") or ())
-            if existing is not None:
-                row_id = existing["id"]
-                old = [r["fact"] for r in store.message_facts(self.conn, row_id)]
+            merge = e.get("merge") or {}
+            if merge.get("row_id"):
+                row_id = merge["row_id"]
+                old = written.get(row_id, list(merge.get("base") or []))
                 merged = media.merge_facts(old, facts_new)
+                written[row_id] = merged
+                title = merge.get("title") or e["title"]
                 if merged != old:
                     store.set_facts(self.conn, row_id, merged)
-                self.index_message(row_id, "\n".join(
-                    [existing["summary"] or existing["raw_text"] or e["title"], *merged]))
+                self.index_message(row_id, "\n".join([title, *merged]))
                 lines.append(T(lang, "media_line_merged", emoji=emoji,
-                               title=e["title"], category=category,
+                               title=media.quoted_title(title), category=category,
                                row_id=self.note_no(row_id)))
                 continue
             row_id = store.insert_message(self.conn, {
@@ -4439,7 +4558,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             store.set_facts(self.conn, row_id, facts_new)
             store.confirm_category(self.conn, row_id, category)
             self.index_message(row_id, "\n".join([e["title"], *facts_new]))
-            lines.append(f"{emoji} «{e['title']}» → {category} "
+            lines.append(f"{emoji} {media.quoted_title(e['title'])} → {category} "
                          f"(#{self.note_no(row_id)})")
         return lines
 
@@ -4453,8 +4572,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             self.answer_callback(callback_id, T(lang, "nothing_pending"))
             return
         if data == "mcap|y":
-            self.answer_callback(callback_id, "✅")
-            self._media_confirm(chat_id, lang)
+            # The confirm can RE-DRAW instead of storing (the catalog moved
+            # under the card). A ✅ toast would then claim a save that did not
+            # happen — the one thing this flow never does (review fix).
+            redrawn = self._media_confirm(chat_id, lang) == "redrawn"
+            self.answer_callback(callback_id, "👀" if redrawn else "✅")
             return
         self.answer_callback(callback_id, "👌")
         self._media_clear(chat_id)

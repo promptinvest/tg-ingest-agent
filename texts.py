@@ -212,11 +212,32 @@ TEXTS = {
         "ru": "Подобрала наиболее вероятное совпадение по фото и видимому контексту.",
         "en": "I matched the most likely work using the photo and its visible context.",
     },
-    "media_card_hint_conflict": {
-        "ru": ("Подпись «{caption}» учла как подсказку, но видимые признаки ей "
-               "противоречат — проверь тип перед сохранением."),
-        "en": ("I used the caption “{caption}” as a hint, but the visible evidence "
-               "conflicts with it — check the type before saving."),
+    # A caption that NAMED the kind was acted on, not merely noticed: she says
+    # what she DID with it (2026-07-28 — the old note claimed the caption was
+    # not executed while it was in fact being used as a hint).
+    # NB: no final verbs — the card is still an OFFER (state waiting_confirmation),
+    # so she says how she is READING the photo, never that she filed anything.
+    # NB2: {kind} is the CANONICAL kind word, not his caption («Кино», «Найди
+    # этот фильм» both arrive as «фильм»), so the wording must not quote it back
+    # as if it were what he typed — she never misquotes him (review fix).
+    "media_card_kind_forced": {
+        "ru": "Ты сказал, что это {kind} — так и считаю, даже если обложка выглядит иначе.",
+        "en": "You told me it's a {kind} — so that's how I'm taking it, even if the cover reads otherwise.",
+    },
+    # The capture lands on a note that already exists: the card must SAY so and
+    # name it, because the confirm updates THAT row, not a new one.
+    "media_card_merge": {
+        "ru": "уже есть в каталоге: {title} (#{row_id}) — обновлю эту запись",
+        "en": "already in the catalog: {title} (#{row_id}) — I'll update that entry",
+    },
+    # The catalog moved under an open card (another confirm, an edit, a delete),
+    # so the approved card no longer describes the result: she re-draws it
+    # instead of storing something he never saw.
+    "media_card_recheck": {
+        "ru": ("Пока карточка висела, каталог изменился — вот как выйдет теперь. "
+               "Проверь и подтверди ещё раз."),
+        "en": ("The catalog changed while this card was open — here's how it comes "
+               "out now. Have a look and confirm again."),
     },
     # NB: no final verbs — nothing was stored, and she says what she could NOT do.
     "media_nothing_extracted": {
@@ -231,9 +252,11 @@ TEXTS = {
         "ru": "Готово, сохранила 🤍\n{lines}",
         "en": "Done, saved 🤍\n{lines}",
     },
+    # {title} arrives ALREADY quoted (media.quoted_title) — a photo-read title
+    # often carries its own guillemets and must not be wrapped twice.
     "media_line_merged": {
-        "ru": "{emoji} «{title}» — уже есть в {category} (#{row_id}), освежила заметку",
-        "en": "{emoji} «{title}» — already in {category} (#{row_id}), refreshed it",
+        "ru": "{emoji} {title} — уже есть в {category} (#{row_id}), освежила заметку",
+        "en": "{emoji} {title} — already in {category} (#{row_id}), refreshed it",
     },
     "media_correction_unclear": {
         "ru": "Не поняла правку 🤔 Скажи, например: «№2 — книга» или «убери №3».",
@@ -250,6 +273,10 @@ TEXTS = {
     "media_src_photo": {"ru": "на фото", "en": "in the photo"},
     "media_src_lookup": {"ru": "нашла", "en": "found"},
     "media_src_model": {"ru": "по памяти", "en": "from memory"},
+    # A value the merge target ALREADY holds, which this capture did not find.
+    # It needs its own label: «на фото» would claim this photo shows it and
+    # «нашла» would claim a lookup ran this turn — neither is true (2026-07-28).
+    "media_src_note": {"ru": "уже в записи", "en": "already on file"},
     "media_fields_missing": {"ru": "не нашла: {fields}", "en": "couldn't find: {fields}"},
     # Field names as they read inside the missing note (RU accusative).
     "media_fname_creator_book": {"ru": "автора", "en": "author"},
