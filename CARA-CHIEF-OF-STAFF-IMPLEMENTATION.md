@@ -466,6 +466,12 @@ permissions or targets even when it contains instruction-like text.
 - The final independent adversarial review returned PASS: exact candidate
   hashes are required throughout the evaluation corpus and any matching failed
   replay vetoes proposal readiness.
-- The historical PD deployment-notification helper is absent on this
-  repurposed host. No terminal Telegram message was fabricated through an
-  undocumented credential path.
+- The historical standalone PD deployment-notification helper is absent on
+  this repurposed host, but Cara's application-level
+  `announce_deploy_if_changed()` is the active notification engine. Its fleet
+  bot/chat settings match the host-standard protected credentials; Telegram
+  acknowledged the release send and only then did Cara persist
+  `deployed_version=072e6b0b2380`, exactly matching the installed `VERSION`.
+  The engine intentionally stores the build marker rather than the returned
+  Telegram message id, so later audits can prove API acknowledgement but
+  cannot retrieve or locate the message in the client.
