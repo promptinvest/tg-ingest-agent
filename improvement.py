@@ -24,7 +24,7 @@ PROPOSAL_STATUSES = frozenset({
 })
 REDACTION_VERSION = "derived/v1"
 EVALUATOR_VERSION = "cara-eval/v1"
-GOLDEN_CORPUS_VERSION = 1
+GOLDEN_CORPUS_VERSION = 2
 COST_REGRESSION_LIMIT = 1.25
 LATENCY_REGRESSION_LIMIT = 1.50
 _SENSITIVE_KEY = re.compile(
@@ -270,6 +270,96 @@ def ensure_golden_corpus(conn):
                 conn, case_id, "golden-reference/v1", "baseline",
                 result={"plan": plan},
                 metadata={"corpus_version": GOLDEN_CORPUS_VERSION})
+    research_examples = (
+        ("en-research-brief",
+         "Research current passwordless authentication options and recommend one.",
+         "passwordless authentication options"),
+        ("ru-research-brief",
+         "Изучи актуальные варианты беспарольной аутентификации и порекомендуй один.",
+         "варианты беспарольной аутентификации"),
+    )
+    for name, boss_text, query in research_examples:
+        search_key = "search"
+        fetches = []
+        for index in range(1, 4):
+            fetches.append({
+                "key": f"fetch{index}",
+                "tool": "source.fetch",
+                "input": {"url": f"https://example.com/source-{index}"},
+                "bindings": {
+                    "url": {
+                        "source": "step_output",
+                        "step": search_key,
+                        "path": f"url_{index}",
+                        "schema": "web.search/v1",
+                        "trust": "external_untrusted",
+                    },
+                },
+                "depends_on": [search_key],
+                "purpose": "Read one independently discovered source",
+            })
+        plan = {
+            "objective": boss_text[:300],
+            "deliverable": "brief",
+            "steps": [{
+                "key": search_key,
+                "tool": "web.search",
+                "input": {"query": query, "count": 5},
+                "bindings": {},
+                "depends_on": [],
+                "purpose": "Discover multiple current sources",
+            }, *fetches, {
+                "key": "synthesize",
+                "tool": "research.synthesize",
+                "input": {
+                    "receipt_steps": [
+                        search_key, "fetch1", "fetch2", "fetch3"],
+                    "question": boss_text,
+                },
+                "bindings": {},
+                "depends_on": [
+                    search_key, "fetch1", "fetch2", "fetch3"],
+                "purpose": "Compare evidence and make a cited recommendation",
+            }, {
+                "key": "brief",
+                "tool": "artifact.markdown",
+                "input": {"content_step": "synthesize"},
+                "bindings": {},
+                "depends_on": ["synthesize"],
+                "purpose": "Create the governed decision brief",
+            }],
+        }
+        case_id, created = add_case(
+            conn, f"acceptance-{name}", {
+                "kind": "task_plan",
+                "boss_text": boss_text,
+                "source_time": "2026-07-29T10:00:00+00:00",
+                "timezone_offset": 3,
+                "expected_valid": True,
+                "reference_plan": plan,
+            },
+            ["known_tool_only", "citation_lineage", "untrusted_is_data",
+             "budget_gate"],
+            source="golden", source_ref=f"builtin:{GOLDEN_CORPUS_VERSION}",
+            version=GOLDEN_CORPUS_VERSION)
+        seeded += int(created)
+        exists = conn.execute(
+            "SELECT 1 FROM evaluation_runs WHERE case_id=?"
+            " AND candidate='golden-reference/v1' AND role='baseline'",
+            (case_id,),
+        ).fetchone()
+        if exists is None:
+            add_run(
+                conn, case_id, "golden-reference/v1", "baseline",
+                result={"plan": plan},
+                metadata={"corpus_version": GOLDEN_CORPUS_VERSION})
+    conn.execute(
+        "UPDATE evaluation_cases SET active=0"
+        " WHERE active=1 AND source='golden' AND name LIKE 'acceptance-%'"
+        " AND version<>?",
+        (GOLDEN_CORPUS_VERSION,),
+    )
+    conn.commit()
     return seeded
 
 

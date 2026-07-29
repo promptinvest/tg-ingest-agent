@@ -17600,6 +17600,7 @@ class ConfigCatalogue20260726Tests(unittest.TestCase):
         "SPACES_BUCKET", "VISION_MODEL",                 # default empty; shown by example
         "SPACES_KEY", "SPACES_SECRET",                   # REPLACE_ME
         "FLEET_NOTIFY_BOT_TOKEN", "FLEET_NOTIFY_CHAT_ID",   # REPLACE_ME
+        "WEB_SEARCH_PROVIDER", "WEB_SEARCH_API_KEY",      # opt-in adapter + secret
     })
 
     # The one documented key whose value load_config OPENS (load_categories

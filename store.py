@@ -27,6 +27,28 @@ CREATE TABLE IF NOT EXISTS kv (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS deployment_notifications (
+  id INTEGER PRIMARY KEY,
+  deployment_id TEXT NOT NULL UNIQUE,
+  build_version TEXT NOT NULL,
+  source_revision TEXT NOT NULL,
+  source_dirty INTEGER NOT NULL DEFAULT 0,
+  summary TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  telegram_message_id INTEGER,
+  destination_fingerprint TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  sent_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_deployment_notifications_status
+  ON deployment_notifications(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_deployment_notifications_build
+  ON deployment_notifications(build_version, created_at);
+
 CREATE TABLE IF NOT EXISTS telegram_updates (
   update_id INTEGER PRIMARY KEY,
   chat_id INTEGER,
@@ -522,6 +544,7 @@ CREATE TABLE IF NOT EXISTS assistant_tasks (
   delivery_attempts INTEGER NOT NULL DEFAULT 0,
   delivered_at TEXT,
   model_calls INTEGER NOT NULL DEFAULT 0,
+  web_search_calls INTEGER NOT NULL DEFAULT 0,
   task_cost_usd REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -1652,6 +1675,7 @@ def _migrate_steps(conn):
         "delivery_attempts INTEGER NOT NULL DEFAULT 0",
         "delivered_at TEXT",
         "model_calls INTEGER NOT NULL DEFAULT 0",
+        "web_search_calls INTEGER NOT NULL DEFAULT 0",
         "task_cost_usd REAL NOT NULL DEFAULT 0",
     ):
         if ddl.split()[0] not in task_columns:
@@ -1976,6 +2000,74 @@ def kv_get(conn, key, default=None):
 def kv_set(conn, key, value):
     conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
+
+
+def deployment_notification_prepare(conn, manifest, summary, destination_fingerprint):
+    now = _now()
+    conn.execute(
+        "INSERT OR IGNORE INTO deployment_notifications"
+        " (deployment_id, build_version, source_revision, source_dirty,"
+        " summary, status,"
+        " destination_fingerprint, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+        (manifest["deployment_id"], manifest["build_version"],
+         manifest["source_revision"],
+         int(bool(manifest.get("source_dirty"))), str(summary),
+         str(destination_fingerprint), now, now),
+    )
+    conn.commit()
+    return deployment_notification_get(conn, manifest["deployment_id"])
+
+
+def deployment_notification_get(conn, deployment_id):
+    return conn.execute(
+        "SELECT * FROM deployment_notifications WHERE deployment_id = ?",
+        (str(deployment_id),),
+    ).fetchone()
+
+
+def deployment_notification_claim(conn, notification_id):
+    """Atomically claim one pending send; a stale 'sending' is never reclaimed."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute(
+            "UPDATE deployment_notifications SET status='sending',"
+            " attempts=attempts+1, updated_at=?"
+            " WHERE id=? AND status='pending'",
+            (_now(), int(notification_id)),
+        )
+        row = conn.execute(
+            "SELECT * FROM deployment_notifications WHERE id=?",
+            (int(notification_id),),
+        ).fetchone()
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return row if cur.rowcount == 1 else None
+
+
+def deployment_notification_finish(conn, notification_id, status, *,
+                                   message_id=None, error=None):
+    if status not in {"sent", "failed", "ambiguous"}:
+        raise ValueError("invalid deployment notification status")
+    if status == "sent" and (
+            not isinstance(message_id, int) or isinstance(message_id, bool)
+            or message_id <= 0):
+        raise ValueError("sent deployment notification needs a Telegram message id")
+    now = _now()
+    conn.execute(
+        "UPDATE deployment_notifications SET status=?, telegram_message_id=?,"
+        " last_error=?, sent_at=?, updated_at=? WHERE id=? AND status='sending'",
+        (status, message_id,
+         common.scrub_secrets(str(error or ""))[:1000] or None,
+         now if status == "sent" else None, now, int(notification_id)),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM deployment_notifications WHERE id=?",
+        (int(notification_id),),
+    ).fetchone()
 
 
 def kv_delete(conn, *keys):

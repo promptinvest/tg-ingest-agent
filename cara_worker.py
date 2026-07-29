@@ -24,8 +24,8 @@ MAX_RESULT_BYTES = 64 * 1024
 MAX_PENDING_FILES = 100
 MAX_PENDING_BYTES = 1024 * 1024
 TOOLS = frozenset({"worker.echo"})
-POLICY_VERSION = "task-tools/v2"
-IMPLEMENTATION_VERSION = "tasking/v2"
+POLICY_VERSION = "task-tools/v3"
+IMPLEMENTATION_VERSION = "tasking/v3"
 
 
 def _canonical(value):

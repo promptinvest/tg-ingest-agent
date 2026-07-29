@@ -134,6 +134,12 @@ fi
 runuser -u tg-ingest -g tg-ingest -G cara-worker-spool -- \
   /usr/bin/python3 /opt/tg-ingest-agent/verify_task_runtime.py
 
+/usr/bin/python3 /opt/tg-ingest-agent/deployment_notice.py verify-manifest \
+  --manifest /opt/tg-ingest-agent/DEPLOYMENT.json \
+  --build-file /opt/tg-ingest-agent/VERSION
+[ "$(sqlite3 /var/lib/tg-ingest-agent/ingest.db \
+  "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='deployment_notifications';")" = "1" ] ||
+  fail "deployment notification receipt table is missing"
 [ "$(sqlite3 /var/lib/tg-ingest-agent/ingest.db 'PRAGMA integrity_check;')" = "ok" ] ||
   fail "SQLite integrity_check failed"
 [ -z "$(sqlite3 /var/lib/tg-ingest-agent/ingest.db 'PRAGMA foreign_key_check;')" ] ||

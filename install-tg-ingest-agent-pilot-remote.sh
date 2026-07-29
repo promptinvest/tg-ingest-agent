@@ -21,7 +21,7 @@ UNIT_SRC=tg-ingest-agent.service
 WORKER_UNIT_SRC=cara-worker.service
 ENV_TEMPLATE=tg-ingest-agent.env.example
 
-MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py task_runner.py tasks_svc.py worker_client.py improvement.py cara_worker.py verify_task_runtime.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
+MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py web_search.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py task_runner.py tasks_svc.py worker_client.py improvement.py deployment_notice.py cara_worker.py verify_task_runtime.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
 
 # The unit file and the env template are STAGED FILES now, not heredocs in this
 # script: one copy of each, versioned in the repo. A stage dir that predates that
@@ -95,10 +95,19 @@ install -m 0755 "$STAGE_DIR/verify-cara-runtime.sh" \
   "$APP_DIR/verify-cara-runtime.sh"
 rm -rf "$APP_DIR/__pycache__"
 
-# Build stamp: a content hash of the installed code, so the agent announces a
-# new build to the boss only when the code actually changed (not every reboot).
-( cd "$APP_DIR" && cat agent.py $MODULES | sha1sum | cut -c1-12 ) > "$APP_DIR/VERSION"
+# Build stamp covers every runtime file this installer owns, including the two
+# systemd sandboxes and the live verifier—not only Python imports.
+( cd "$APP_DIR" && cat agent.py $MODULES verify-cara-runtime.sh \
+    "$STAGE_DIR/$UNIT_SRC" "$STAGE_DIR/$WORKER_UNIT_SRC" |
+    sha1sum | cut -c1-12 ) > "$APP_DIR/VERSION"
 chmod 0644 "$APP_DIR/VERSION"
+python3 "$APP_DIR/deployment_notice.py" write-installed \
+  --manifest "$APP_DIR/DEPLOYMENT.json" \
+  --build-version "$(cat "$APP_DIR/VERSION")" \
+  --source-revision "${DEPLOY_SOURCE_REVISION:-unknown}" \
+  --source-dirty "${DEPLOY_SOURCE_DIRTY:-false}" \
+  --test-summary "${DEPLOY_TEST_SUMMARY:-verification gate not reported}" \
+  --backup-dir "$BACKUP_DIR"
 
 # Seed a MISSING env file from the tracked example — never touch an existing one
 # (a reinstall must not blank the live secrets). This script used to carry its own

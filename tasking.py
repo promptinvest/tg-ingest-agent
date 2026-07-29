@@ -452,8 +452,15 @@ def _validate_step_binding(binding, field, step_key, spec, prior, deps):
     contract = {p: t for p, t in producer.output_paths}
     if path not in contract or trust != contract[path]:
         raise PlanError(f"{step_key}.{field} predecessor output contract mismatch")
+    searched_url = (
+        spec.id == "source.fetch"
+        and field == "url"
+        and producer.id == "web.search"
+        and path in {"url_1", "url_2", "url_3"}
+        and trust == "external_untrusted"
+    )
     if trust not in {"boss", "confirmed_local"} and (
-            spec.writes_state or field in {"url", "note_no"}):
+            spec.writes_state or (field in {"url", "note_no"} and not searched_url)):
         raise PlanError(f"{step_key}.{field} cannot trust untrusted output for this field")
     return {
         "source": "step_output",

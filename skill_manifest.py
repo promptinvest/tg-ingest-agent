@@ -43,6 +43,11 @@ TASK_TOOLS = {
         "writes_state": False, "destructive": False,
         "requires_confirmation": False, "allowed_proactive": False,
     },
+    "web.search": {
+        "risk": "network_read", "uses_llm": False, "external_network": True,
+        "writes_state": False, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
     "research.synthesize": {
         "risk": "read_only", "uses_llm": True, "external_network": False,
         "writes_state": False, "destructive": False,

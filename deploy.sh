@@ -41,10 +41,22 @@ git_env="export GIT_SSH_COMMAND='ssh -i $BOX_KEY -o IdentitiesOnly=yes -o UserKn
 # installer abort (deploy printed green while the box kept running old code).
 install_verify="
 echo '--- install ---'
+deploy_source_revision=\$(git -C '$SRC' rev-parse --short HEAD 2>/dev/null || echo unknown)
+deploy_source_dirty=false
+[ -n \"\$(git -C '$SRC' status --porcelain 2>/dev/null)\" ] && deploy_source_dirty=true
+DEPLOY_SOURCE_REVISION=\"\$deploy_source_revision\" \
+DEPLOY_SOURCE_DIRTY=\"\$deploy_source_dirty\" \
+DEPLOY_TEST_SUMMARY='full VPS unittest discovery passed' \
 STAGE_DIR='$SRC' bash '$SRC/install-tg-ingest-agent-pilot-remote.sh' 2>&1 | tail -5
 if [ -f '$SRC/verify-cara-runtime.sh' ]; then
   echo '--- live verification ---'
   bash '$SRC/verify-cara-runtime.sh'
+  python3 /opt/tg-ingest-agent/deployment_notice.py mark-verified \
+    --manifest /opt/tg-ingest-agent/DEPLOYMENT.json \
+    --verification-summary 'runtime, worker, spool, SQLite, and systemd checks passed'
+  systemctl restart tg-ingest-agent.service
+  sleep 2
+  systemctl is-active --quiet tg-ingest-agent.service
 else
   echo '--- retire post-ref worker for legacy rollback ---'
   systemctl disable --now cara-worker.service 2>/dev/null || true
@@ -112,6 +124,7 @@ echo '(return to latest with: ./deploy.sh --pull)'"
            cara-worker.service)
     SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
     DIRTY=""; [ -n "$(git status --porcelain 2>/dev/null)" ] && DIRTY=" +local-changes"
+    DIRTY_BOOL=false; [ -n "$DIRTY" ] && DIRTY_BOOL=true
     echo "deploying from ${SHA}${DIRTY}"
     remote_script="
 set -e -o pipefail
@@ -132,9 +145,18 @@ python3 -m unittest discover -p 'test_*.py' 2>&1 | grep -E '^(FAIL|ERROR):|^Ran 
 # it must never delete anything.
 rm -f '$STAGE/split-cara-nikki.sh' '$STAGE/migrate-cara-to-pd.sh'
 echo '--- install ---'
+DEPLOY_SOURCE_REVISION='${SHA}' \
+DEPLOY_SOURCE_DIRTY='${DIRTY_BOOL}' \
+DEPLOY_TEST_SUMMARY='full VPS unittest discovery passed' \
 bash install-tg-ingest-agent-pilot-remote.sh 2>&1 | tail -5
 echo '--- live verification ---'
-bash verify-cara-runtime.sh"
+bash verify-cara-runtime.sh
+python3 /opt/tg-ingest-agent/deployment_notice.py mark-verified \
+  --manifest /opt/tg-ingest-agent/DEPLOYMENT.json \
+  --verification-summary 'runtime, worker, spool, SQLite, and systemd checks passed'
+systemctl restart tg-ingest-agent.service
+sleep 2
+systemctl is-active --quiet tg-ingest-agent.service"
     fi
     tar czf - "${FILES[@]}" | ssh "${SSH_OPTS[@]}" "$HOST" "$remote_script"
     ;;

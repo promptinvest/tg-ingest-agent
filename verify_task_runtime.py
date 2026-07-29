@@ -16,6 +16,11 @@ def _canonical(value):
 
 
 def main():
+    tool_broker.assert_registry()
+    search = tool_broker.get_spec("web.search")
+    if (search is None or search.risk != "network_read"
+            or search.writes_state or not search.external_network):
+        raise RuntimeError("web.search broker contract is not active")
     value = {"text": "cara-worker-live-canary"}
     digest = hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
     cfg = SimpleNamespace(task_worker_spool="/var/lib/cara-worker/spool")

@@ -1,5 +1,17 @@
 # Cara — Capabilities, Features & Architecture
 
+> **Research & Decision Intelligence v1 (shipped 2026-07-29):** Cara can turn
+> a RU/EN research request into a governed six-step task:
+> `web.search` → three provenance-bound `source.fetch` steps →
+> `research.synthesize/v2` → `artifact.markdown`. The result is a decision
+> brief with cited findings, a cited recommendation and confidence, trade-offs,
+> source conflicts, unknowns, and clickable source links. Search is
+> provider-neutral; the first reviewed adapter is Brave Search. It is dormant
+> until `WEB_SEARCH_API_KEY` is configured, is capped per task by query count,
+> response size, time, and reserved spend, and treats every result/page as
+> untrusted data. This release changes no chat model and adds no email,
+> browser, shell, or autonomous external-write integration.
+>
 > **Chief-of-staff upgrade (shipped 2026-07-29):** Cara now has durable
 > multi-step tasks, a closed risk-tiered tool broker, evidence-based
 > self-improvement proposals, and a separately sandboxed local worker. The
@@ -11,11 +23,15 @@
 > tainted worker/fetched/model output, structured claim citations, and an
 > immutable evidence boundary for improvement proposals.
 >
-> **Production checkpoint:** all five phases are live on the Cara host. The
-> full discovery suite passed with the intentional skips only; the independent
-> adversarial review returned PASS. Both `tg-ingest-agent` and the isolated
-> `cara-worker` are active/enabled, the live spool/isolation/SQLite verifier is
-> green, and no warning-or-worse service log entries appeared after restart.
+> **Production checkpoint:** the research release passed the full 1,532-test
+> discovery suite (9 intentional skips), including adversarial cases for prompt
+> injection, malicious source instructions, forged citations, tainted URL
+> substitution, unauthorized writes, query/spend exhaustion, and ambiguous
+> Telegram delivery. Both `tg-ingest-agent` and the isolated `cara-worker` are
+> active/enabled; the live spool/isolation/SQLite/deployment-manifest verifier
+> is green. Each verified deployment now produces a durable fleet-notification
+> receipt with its deployment id, build, source revision, verification result,
+> rollback backup, and Telegram message id.
 
 **Cara** (`@cara_assist_bot`) is a personal, conversational AI assistant that lives
 in Telegram and is self-hosted on the **PD‑VPS** (`174.138.108.85`, a DigitalOcean
@@ -82,6 +98,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
                                    a cold "уточни"                           │
                                                                   bounded plan → broker
                                                                   → receipts/approval
+                                                                  │
+                                      research request ────────────┘
+                                        web.search (bounded)
+                                          → 3 × source.fetch
+                                          → research.synthesize/v2
+                                          → cited Markdown brief
 ```
 
 - **Owner‑only:** a message/reaction/button is acted on **only** when the chat id
@@ -1351,13 +1373,20 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   scope for the single‑action router).
 - **VPS stats:** "как сервер?" → CPU/mem/disk/uptime + her own footprint.
 - **Why did you do that** (`trace_query`): replays the last trace timeline.
-- **Deploy notice:** after a new build is installed, a one‑line notice goes to the shared
-  **fleet notification bot** (the ops channel the other VPSes post to) — **never into the
-  boss's chat with Cara**, so a code install can't clutter the conversation or bleed into
-  what she says. Fires once per real code change (quiet on plain reboots); silently skipped
-  if the fleet creds aren't configured. Config: `FLEET_NOTIFY_BOT_TOKEN` /
-  `FLEET_NOTIFY_CHAT_ID` / `FLEET_NOTIFY_LABEL` (copied from the box's root‑only
-  `/etc/codex-auto-update/telegram.env`, since the `tg-ingest` user can't read that file).
+- **Deploy receipt:** the installer writes an atomic `DEPLOYMENT.json` for every
+  deployment attempt, recording its unique deployment id, build, source revision/dirty
+  state, test result, rollback backup, and verification state. Only after the live verifier
+  marks that manifest `verified` does Cara send one complete terminal summary to the shared
+  **fleet notification bot** — **never into the boss's chat with Cara**. The SQLite
+  `deployment_notifications` row durably records `pending` → `sending` → `sent`, the
+  Telegram message id, and any error. A timeout or crash after send begins becomes
+  `ambiguous` and is never blindly retried, preventing duplicate success notices when the
+  transport outcome is unknowable. This is once per deployment attempt rather than once per
+  version, so a verified rollback/redeploy gets its own auditable receipt. Missing fleet
+  credentials leave a durable failed receipt rather than inventing delivery. Config:
+  `FLEET_NOTIFY_BOT_TOKEN` / `FLEET_NOTIFY_CHAT_ID` / `FLEET_NOTIFY_LABEL` (copied from the
+  box's root-only `/etc/codex-auto-update/telegram.env`, since the `tg-ingest` user can't
+  read that file).
 - **Model‑health monitor:** every `MODEL_HEALTH_INTERVAL_SECONDS` (default 30 min) she
   checks her models (chat, conversation, vision) are reachable and **messages the boss the
   moment one becomes inaccessible** (e.g. a provider/tier 403) — and again when it
@@ -1514,6 +1543,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ tasking.py       bounded plan/provenance validation and truthful task rendering
    ├─ tool_broker.py   closed risk-tiered registry, exact approvals and receipts
    ├─ task_runner.py   durable dependency-ordered step execution and recovery
+   ├─ web_search.py    provider-neutral bounded search; reviewed Brave adapter
+   ├─ deployment_notice.py atomic manifests and exact/ambiguous fleet receipts
    ├─ improvement.py  feedback/evaluation/proposals; no automatic runtime change
    ├─ worker_client.py bounded hash-bound spool transport to the isolated worker
    ├─ ingest.py        parsing, UTF-16-safe URL extraction, category+facts+summary
@@ -2085,6 +2116,16 @@ off‑box copy; recovery key retained separately from the VPS/repo) ·
 Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
 `GCAL_SA_KEY_FILE` (Calendar) · `STORAGE_BACKEND=spaces` + `SPACES_*` (DO Spaces) ·
 `FETCH_ENABLED` · `CATEGORIES`/`CATEGORIES_FILE`.
+
+Governed web research (dormant with no key): `WEB_SEARCH_API_KEY` (setting only this
+auto-selects the reviewed `brave` adapter) · `WEB_SEARCH_PROVIDER=disabled|brave` ·
+`WEB_SEARCH_TIMEOUT_SECONDS=12` (bounded 3–25) ·
+`WEB_SEARCH_MAX_BYTES=524288` · `WEB_SEARCH_RESULT_LIMIT=5` (bounded 3–8) ·
+`WEB_SEARCH_TASK_QUERY_LIMIT=2` (bounded 1–3) ·
+`WEB_SEARCH_COST_PER_QUERY_USD=0.005`. Query and spend are reserved atomically before
+each call, including retries; the fixed HTTPS endpoint does not follow redirects or use
+ambient proxies, and only three sanitized public result URLs may cross the otherwise
+closed untrusted-to-fetch boundary.
 
 **The complete catalogue is `tg-ingest-agent.env.example`, and it is now enforced
 (2026‑07‑26).** That file both documents every knob and *is* `/etc/tg-ingest-agent.env`

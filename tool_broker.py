@@ -7,6 +7,7 @@ worker), so model output never names a callable or command directly.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 from urllib.parse import urlsplit
 
 import skill_manifest
@@ -16,8 +17,8 @@ RISKS = frozenset({
     "read_only", "network_read", "draft_write", "state_write",
     "external_write", "destructive",
 })
-POLICY_VERSION = "task-tools/v2"
-IMPLEMENTATION_VERSION = "tasking/v2"
+POLICY_VERSION = "task-tools/v3"
+IMPLEMENTATION_VERSION = "tasking/v3"
 TRUST_CLASSES = frozenset({
     "boss", "confirmed_local", "external_untrusted", "model_untrusted",
 })
@@ -123,11 +124,28 @@ TOOLS = {
         output_paths=(("document", "external_untrusted"),),
         external_network=True, output_limit=64000, timeout_seconds=25,
     ),
+    "web.search": _spec(
+        "web.search", "Discover multiple Web sources", "network_read",
+        required=("query",), optional=("count", "search_lang", "freshness"),
+        output_schema="web.search/v1",
+        output_paths=(
+            ("results", "external_untrusted"),
+            ("url_1", "external_untrusted"),
+            ("url_2", "external_untrusted"),
+            ("url_3", "external_untrusted"),
+        ),
+        external_network=True, output_limit=32000, timeout_seconds=15,
+    ),
     "research.synthesize": _spec(
         "research.synthesize", "Synthesize cited findings", "read_only",
         required=("receipt_steps",), optional=("question",),
-        output_schema="research.synthesize/v1",
-        output_paths=(("claims", "model_untrusted"),),
+        output_schema="research.synthesize/v2",
+        output_paths=(
+            ("claims", "model_untrusted"),
+            ("recommendation", "model_untrusted"),
+            ("conflicts", "model_untrusted"),
+            ("unknowns", "model_untrusted"),
+        ),
         uses_llm=True, output_limit=262144, timeout_seconds=45,
     ),
     "artifact.markdown": _spec(
@@ -181,7 +199,8 @@ def assert_registry():
         if spec.risk in {"state_write", "external_write", "destructive"}:
             if not spec.writes_state or not spec.requires_confirmation:
                 raise RuntimeError(f"effect tool lacks confirmation: {spec.id}")
-        if not spec.output_schema or not spec.output_schema.endswith("/v1"):
+        if (not spec.output_schema
+                or not re.search(r"/v[1-9][0-9]*$", spec.output_schema)):
             raise RuntimeError(f"invalid output schema for {spec.id}")
         paths = []
         for path, trust in spec.output_paths:
@@ -242,6 +261,23 @@ def validate_input(spec, value):
         if parsed.username or parsed.password:
             raise ToolInputError("source.fetch: credentials in URL are forbidden")
         out = {"url": url}
+    elif spec.id == "web.search":
+        out = {
+            "query": _bounded_text(out.get("query"), 300, "query"),
+            "count": _bounded_int(out.get("count", 5), 3, 8, "count"),
+        }
+        if "search_lang" in value:
+            language = str(value.get("search_lang") or "").strip().lower()
+            if not re.fullmatch(r"[a-z]{2}", language):
+                raise ToolInputError(
+                    "web.search: search_lang must be a two-letter code")
+            out["search_lang"] = language
+        if "freshness" in value:
+            freshness = str(value.get("freshness") or "").strip().lower()
+            if freshness not in {"pd", "pw", "pm", "py"}:
+                raise ToolInputError(
+                    "web.search: freshness must be pd, pw, pm, or py")
+            out["freshness"] = freshness
     elif spec.id == "research.synthesize":
         steps = out.get("receipt_steps")
         if not isinstance(steps, list) or not 1 <= len(steps) <= 8:
@@ -330,6 +366,26 @@ def validate_output(spec, data, evidence):
         _text_output(row["url"], 2048)
         _text_output(row["title"], 300, allow_empty=True)
         _text_output(row["text"], 12000)
+    elif spec.id == "web.search":
+        rows = value["results"]
+        if not isinstance(rows, list) or not 3 <= len(rows) <= 8:
+            raise ToolOutputError("web.search: invalid results")
+        seen = set()
+        for index, row in enumerate(rows, start=1):
+            _exact_dict(row, {"rank", "title", "url", "snippet"})
+            if row["rank"] != index:
+                raise ToolOutputError("web.search: invalid rank")
+            _text_output(row["title"], 300, allow_empty=True)
+            _text_output(row["snippet"], 1200, allow_empty=True)
+            _http_output_url(row["url"], "web.search")
+            if row["url"] in seen:
+                raise ToolOutputError("web.search: duplicate URL")
+            seen.add(row["url"])
+        for index in range(1, 4):
+            url = value[f"url_{index}"]
+            _http_output_url(url, "web.search")
+            if url != rows[index - 1]["url"]:
+                raise ToolOutputError("web.search: bound URL does not match result rank")
     elif spec.id == "research.synthesize":
         claims = value["claims"]
         if not isinstance(claims, list) or not 1 <= len(claims) <= 20:
@@ -341,14 +397,32 @@ def validate_output(spec, data, evidence):
             _exact_dict(claim, {"claim", "citation_ids", "confidence", "limitation"})
             _text_output(claim["claim"], 1000)
             _text_output(claim["limitation"], 500, allow_empty=True)
-            if not isinstance(claim["confidence"], (int, float)):
-                raise ToolOutputError("research.synthesize: invalid confidence")
-            citations = claim["citation_ids"]
-            if (not isinstance(citations, list) or not citations
-                    or len(citations) > 20
-                    or any(not isinstance(cid, str) or cid not in evidence_ids
-                           for cid in citations)):
-                raise ToolOutputError("research.synthesize: invalid citation lineage")
+            _confidence(claim["confidence"])
+            _citations(claim["citation_ids"], evidence_ids)
+        recommendation = value["recommendation"]
+        _exact_dict(
+            recommendation,
+            {"text", "citation_ids", "confidence", "tradeoffs"})
+        _text_output(recommendation["text"], 1200)
+        _confidence(recommendation["confidence"])
+        _citations(recommendation["citation_ids"], evidence_ids)
+        tradeoffs = recommendation["tradeoffs"]
+        if not isinstance(tradeoffs, list) or len(tradeoffs) > 10:
+            raise ToolOutputError("research.synthesize: invalid tradeoffs")
+        for item in tradeoffs:
+            _text_output(item, 500)
+        conflicts = value["conflicts"]
+        if not isinstance(conflicts, list) or len(conflicts) > 10:
+            raise ToolOutputError("research.synthesize: invalid conflicts")
+        for conflict in conflicts:
+            _exact_dict(conflict, {"issue", "citation_ids"})
+            _text_output(conflict["issue"], 700)
+            _citations(conflict["citation_ids"], evidence_ids)
+        unknowns = value["unknowns"]
+        if not isinstance(unknowns, list) or len(unknowns) > 10:
+            raise ToolOutputError("research.synthesize: invalid unknowns")
+        for item in unknowns:
+            _text_output(item, 500)
     elif spec.id in {"artifact.markdown", "reminder.propose"}:
         key = "artifact_id" if spec.id == "artifact.markdown" else "reminder_id"
         if not isinstance(value[key], int) or value[key] <= 0:
@@ -400,6 +474,30 @@ def _exact_dict(value, keys):
 def _text_output(value, maximum, allow_empty=False):
     if not isinstance(value, str) or len(value) > maximum or (not allow_empty and not value):
         raise ToolOutputError("output text is invalid")
+
+
+def _http_output_url(value, tool):
+    _text_output(value, 2048)
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise ToolOutputError(f"{tool}: malformed URL") from exc
+    if (parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname
+            or parsed.username or parsed.password):
+        raise ToolOutputError(f"{tool}: invalid URL")
+
+
+def _confidence(value):
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not 0 <= float(value) <= 1):
+        raise ToolOutputError("research.synthesize: invalid confidence")
+
+
+def _citations(value, evidence_ids):
+    if (not isinstance(value, list) or not value or len(value) > 20
+            or any(not isinstance(cid, str) or cid not in evidence_ids
+                   for cid in value)):
+        raise ToolOutputError("research.synthesize: invalid citation lineage")
 
 
 def _bounded_text(value, maximum, name):

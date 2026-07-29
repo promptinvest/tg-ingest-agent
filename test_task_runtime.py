@@ -20,6 +20,7 @@ import task_runner
 import tasking
 import tasks_svc
 import tool_broker
+import web_search
 import worker_client
 from tg_api import TelegramError
 
@@ -38,6 +39,13 @@ class StubAgent:
             token="test-token",
             fetch_timeout=5,
             fetch_max_bytes=100_000,
+            web_search_provider="brave",
+            web_search_api_key="fixture",
+            web_search_timeout=5,
+            web_search_max_bytes=100_000,
+            web_search_result_limit=5,
+            web_search_task_query_limit=2,
+            web_search_cost_per_query_usd=0.005,
         )
         self.completed = []
         self.blocked = []
@@ -487,10 +495,18 @@ class RuntimeCase(unittest.TestCase):
                 tool_broker.ToolOutputError, "citation"):
             tool_broker.validate_output(
                 tool_broker.get_spec("research.synthesize"),
-                {"schema": "research.synthesize/v1", "value": {"claims": [{
-                    "claim": "x", "citation_ids": ["missing"],
-                    "confidence": 1.0, "limitation": "",
-                }]}}, [])
+                {"schema": "research.synthesize/v2", "value": {
+                    "claims": [{
+                        "claim": "x", "citation_ids": ["missing"],
+                        "confidence": 1.0, "limitation": "",
+                    }],
+                    "recommendation": {
+                        "text": "x", "citation_ids": ["missing"],
+                        "confidence": 1.0, "tradeoffs": [],
+                    },
+                    "conflicts": [],
+                    "unknowns": [],
+                }}, [])
 
     def test_purge_all_counts_and_removes_every_learning_and_task_row(self):
         self.source(1007, "Read my current reminders.")
@@ -848,14 +864,14 @@ class RuntimeCase(unittest.TestCase):
         self.assertEqual(value["nested"]["api_token"], "[REDACTED]")
 
     def test_seeded_acceptance_corpus_reference_replays_all_pass(self):
-        self.assertEqual(improvement.ensure_golden_corpus(self.conn), 10)
+        self.assertEqual(improvement.ensure_golden_corpus(self.conn), 12)
         rows = self.conn.execute(
             "SELECT r.score, r.invariant_failures_json"
             " FROM evaluation_runs r JOIN evaluation_cases c ON c.id=r.case_id"
             " WHERE c.name LIKE 'acceptance-%'"
             " AND r.candidate='golden-reference/v1'"
         ).fetchall()
-        self.assertEqual(len(rows), 10)
+        self.assertEqual(len(rows), 12)
         self.assertTrue(all(
             row["score"] == 1 and row["invariant_failures_json"] == "[]"
             for row in rows))
@@ -880,30 +896,65 @@ class RuntimeCase(unittest.TestCase):
             "SELECT * FROM evaluation_cases"
             " WHERE name LIKE 'acceptance-%' ORDER BY name"
         ).fetchall()
-        self.assertEqual(len(cases), 10)
+        self.assertEqual(len(cases), 12)
         reminders_before = self.conn.execute(
             "SELECT COUNT(*) FROM reminders").fetchone()[0]
+        search_rows = [{
+            "rank": index,
+            "title": f"Source {index}",
+            "url": f"https://example.com/source-{index}",
+            "snippet": f"Evidence {index}",
+        } for index in range(1, 4)]
+        citation_ids = [
+            "url:" + hashlib.sha256(
+                row["url"].encode("utf-8")).hexdigest()[:16]
+            for row in search_rows
+        ]
+        synthesis = json.dumps({
+            "claims": [{
+                "claim": "The sources support a bounded comparison.",
+                "citation_ids": citation_ids,
+                "confidence": 0.8,
+                "limitation": "Vendor evidence needs independent validation.",
+            }],
+            "recommendation": {
+                "text": "Run a reversible pilot.",
+                "citation_ids": citation_ids,
+                "confidence": 0.7,
+                "tradeoffs": ["A pilot costs time but limits commitment."],
+            },
+            "conflicts": [],
+            "unknowns": ["Long-term operational cost."],
+        })
         completed = 0
-        for offset, case in enumerate(cases, start=1):
-            payload = json.loads(case["input_json"])
-            update_id = 1100 + offset
-            self.source(update_id, payload["boss_text"])
-            task, _ = store.assistant_task_create(
-                self.conn, 1, update_id, payload["reference_plan"],
-                timezone_offset=payload["timezone_offset"])
-            result = task_runner.run_task(
-                self.agent, self.conn, task["id"], max_steps=8)
-            current = store.assistant_task_get(self.conn, task["id"])
-            completed += int(result["status"] == "completed")
-            self.assertEqual(current["status"], "completed", case["name"])
-            step_count = len(store.assistant_task_steps(
-                self.conn, task["id"]))
-            receipt_count = self.conn.execute(
-                "SELECT COUNT(*) FROM tool_receipts WHERE task_id=?"
-                " AND status IN ('ok','partial')",
-                (task["id"],)).fetchone()[0]
-            self.assertEqual(receipt_count, step_count, case["name"])
-        self.assertEqual(completed, 10)
+        with mock.patch.object(
+                web_search, "search", return_value=search_rows), \
+                mock.patch.object(
+                    fetch, "fetch",
+                    side_effect=lambda url, **kwargs: (
+                        url, "Fetched source", "Independent page evidence.")), \
+                mock.patch.object(
+                    llm, "chat_profile", return_value=synthesis):
+            for offset, case in enumerate(cases, start=1):
+                payload = json.loads(case["input_json"])
+                update_id = 1100 + offset
+                self.source(update_id, payload["boss_text"])
+                task, _ = store.assistant_task_create(
+                    self.conn, 1, update_id, payload["reference_plan"],
+                    timezone_offset=payload["timezone_offset"])
+                result = task_runner.run_task(
+                    self.agent, self.conn, task["id"], max_steps=8)
+                current = store.assistant_task_get(self.conn, task["id"])
+                completed += int(result["status"] == "completed")
+                self.assertEqual(current["status"], "completed", case["name"])
+                step_count = len(store.assistant_task_steps(
+                    self.conn, task["id"]))
+                receipt_count = self.conn.execute(
+                    "SELECT COUNT(*) FROM tool_receipts WHERE task_id=?"
+                    " AND status IN ('ok','partial')",
+                    (task["id"],)).fetchone()[0]
+                self.assertEqual(receipt_count, step_count, case["name"])
+        self.assertEqual(completed, 12)
         self.assertEqual(
             self.conn.execute(
                 "SELECT COUNT(*) FROM reminders").fetchone()[0],

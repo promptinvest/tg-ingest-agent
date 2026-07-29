@@ -27,6 +27,7 @@ import backup
 import boss_model
 import common
 import converse
+import deployment_notice
 import events
 import fetch
 import gcal
@@ -456,13 +457,20 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             return ""
 
     def announce_deploy_if_changed(self):
-        """On a NEW build, post a one-line notice to the shared FLEET notification bot
-        (the ops channel other VPSes use) — never into the boss's conversation, so a code
-        install can't clutter the personal chat or bleed into what Cara says. The installer
-        writes a content hash to VERSION on each install, so this fires on a real code
-        change but stays quiet across reboots (same files → same hash)."""
+        """Deliver one verified fleet receipt, never a conversational bot message."""
         version = self.build_version()
-        if not version or store.kv_get(self.conn, "deployed_version") == version:
+        if not version:
+            return
+        manifest = Path(__file__).resolve().parent / deployment_notice.MANIFEST_NAME
+        if manifest.exists():
+            status = deployment_notice.announce(
+                self.conn, self.cfg, manifest, version)
+            if status not in {"sent", "not_ready"}:
+                log(f"deploy notice terminal status: {status}")
+            return
+        # Legacy rollback compatibility: old installs have VERSION but no
+        # verified manifest. Keep their prior one-line behavior.
+        if store.kv_get(self.conn, "deployed_version") == version:
             return
         token = self.cfg.fleet_notify_token
         chat_id = self.cfg.fleet_notify_chat_id
