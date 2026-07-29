@@ -4,6 +4,9 @@
 > data contracts, risk-tiered approval model, self-improvement boundary, local
 > worker isolation and phased acceptance gates are in
 > [`CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md`](CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md).
+> The adversarial design gate forbids planner-invented targets, blind retries
+> after ambiguous external effects, replayable/stale approvals, treating worker
+> prose as evidence, and feeding model-authored summaries into policy truth.
 > This specification remains authoritative for shipped behavior; each completed
 > phase must be folded back into this file and `CARA.md`.
 

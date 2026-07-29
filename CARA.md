@@ -5,6 +5,11 @@
 > self-improvement proposals, and a separately sandboxed local worker. The
 > decision-complete staged specification is
 > [`CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md`](CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md).
+> An adversarial design gate now additionally requires machine-verifiable input
+> provenance, one-time approvals bound to target versions, explicit
+> `ambiguous` handling when an external effect cannot be safely reconciled,
+> tainted worker/fetched/model output, structured claim citations, and an
+> immutable evidence boundary for improvement proposals.
 > Until a phase is marked shipped there, the current capabilities and limits
 > documented below remain authoritative.
 

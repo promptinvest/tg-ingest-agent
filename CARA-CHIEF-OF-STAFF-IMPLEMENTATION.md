@@ -21,11 +21,19 @@ until every phase is shipped.
   requests stop returning “one at a time” and instead become a durable plan.
 - Risk-tiered permissions:
   - local/external reads and draft preparation may run automatically;
-  - persistent state changes and external writes require a rendered preview
-    and explicit approval;
+  - every task-broker domain-state change and external write requires a
+    rendered preview and explicit approval;
+  - internal task rows, receipts, evaluation rows and managed draft artifacts
+    are workflow bookkeeping, not domain effects, and may be persisted without
+    approval; delivering a requested draft to the boss is allowed, while
+    sending it to any third party is an external write;
   - destructive actions retain typed-phrase confirmation;
   - financial transactions, credential changes, host administration, arbitrary
     shell, and code deployment are outside the runtime authority.
+- This risk-tiered contract governs task-broker tools. Existing direct skills
+  retain their shipped confirmation semantics until each is separately
+  migrated and regression-tested; manifest metadata alone does not retrofit
+  their behavior.
 - Self-improvement is propose-and-approve. Cara may collect evidence, run
   evaluations, and prepare a change proposal. She may not silently change a
   prompt, threshold, permission, skill, source file, service, or deployment.
@@ -93,7 +101,15 @@ fault and privilege isolation.
     {
       "key": "s1",
       "tool": "knowledge.search",
-      "input": {},
+      "input": {"query": "symbolic or literal read-only value"},
+      "bindings": {
+        "url": {
+          "source": "boss_span",
+          "start": 42,
+          "end": 71,
+          "source_hash": "sha256 of canonical boss message"
+        }
+      },
       "depends_on": [],
       "purpose": "why this step is necessary"
     }
@@ -103,9 +119,27 @@ fault and privilege isolation.
 
 Rules: 1–8 steps, unique keys, dependencies refer only to prior steps, no
 cycles, bounded strings/arrays, and tool inputs must pass that tool's explicit
-validator. The planner may copy URLs and identifiers from the boss's request or
-prior tool receipts; it may not invent credentials, local paths, note numbers,
-recipients, or write targets.
+validator. Every security-sensitive input field must also carry a machine-
+verifiable binding to either an exact span of the canonical boss message or a
+declared output field of a predecessor step. The deterministic resolver—not
+the planner—copies and normalizes the bound value. A predecessor binding names
+the prior step key, declared output JSON path, expected output schema version
+and trust class; after that step succeeds the broker resolves it to the actual
+receipt id and verifies the receipt/input hashes. Fetched, worker-produced,
+synthesized, or otherwise untrusted receipt fields may never become
+recipients, write targets, permissions, tool ids, local paths or credentials.
+Missing, stale or
+mismatched provenance blocks the step. The planner may not invent credentials,
+paths, note numbers, recipients, URLs or write targets.
+
+The canonical boss message remains primary user content under the existing
+Telegram data-retention and purge controls. Task tables store a redacted display
+objective, its source update id and content hash rather than duplicating raw
+secret-like text into derived telemetry. Provenance resolution reads the
+canonical source; if it has been erased or no longer hashes correctly, the step
+blocks instead of guessing. Plans, receipts, artifacts, traces, evaluation
+cases and proposals pass deterministic secret-pattern redaction before
+persistence.
 
 `ToolSpec`:
 
@@ -123,10 +157,22 @@ Risk values remain compatible with `skill_manifest`: `read_only`,
 
 ```json
 {
+  "id": "stable receipt id",
   "tool": "knowledge.search",
   "status": "ok|partial|failed|cancelled",
   "summary": "bounded, secret-scrubbed result",
-  "evidence": [{"source": "note:#12", "label": "…"}],
+  "data": {
+    "schema": "knowledge.search/v1",
+    "value": {"results": []}
+  },
+  "evidence": [
+    {
+      "id": "ev1",
+      "source": "note:#12",
+      "label": "…",
+      "trust": "boss|confirmed_local|external_untrusted|model_untrusted"
+    }
+  ],
   "artifact_id": null,
   "effect_id": null
 }
@@ -134,7 +180,11 @@ Risk values remain compatible with `skill_manifest`: `read_only`,
 
 Only a successful receipt may support “done/saved/sent/changed” language.
 Receipts from write tools include the stable external/local effect id returned
-by the real system.
+by the real system. Every receipt is unique on its broker-generated idempotency
+key and is bound to the immutable task id, step id, tool id, resolved-input
+hash, policy version and implementation version. `data` is schema-validated,
+bounded and typed; downstream bindings may address only output paths declared
+by the producing `ToolSpec`.
 
 ### 2.3 Initial neutral tool registry
 
@@ -144,8 +194,12 @@ by the real system.
 - `reminders.read` — read active reminder state.
 - `source.fetch` — SSRF-guarded read of an HTTP(S) URL supplied by the boss or
   returned in an earlier trusted receipt; does not ingest it.
-- `research.synthesize` — grounded synthesis over prior receipts; every factual
-  claim cites a receipt source, and missing evidence is disclosed.
+- `research.synthesize` — grounded synthesis over prior receipts. It emits
+  structured claim objects (`claim`, `citation_ids`, `confidence`,
+  `limitation`), not an authoritative prose answer. Deterministic rendering
+  rejects unknown citations and identifies claims without citation coverage;
+  missing evidence is disclosed. Citation presence is enforced, while semantic
+  correctness remains probabilistic and is evaluation-tested.
 - `artifact.markdown` — create a bounded draft artifact inside Cara's managed
   review directory; sending it to the boss is allowed as the requested
   deliverable, but no third party receives it.
@@ -161,18 +215,26 @@ capability gap, never simulated.
 
 Additive SQLite tables:
 
-- `assistant_tasks`: owner chat, objective, deliverable, status
+- `assistant_tasks`: owner chat, unique source update (the idempotent
+  get-or-create key per owner/chat), redacted display objective, canonical
+  source hash, deliverable, status
   (`planned|running|waiting_approval|blocked|completed|failed|cancelled`),
   source update, plan version, timestamps, final summary/artifact, trace.
 - `assistant_task_steps`: task, ordered key, tool, risk, sanitized input JSON,
   dependencies, status, attempts, idempotency key, approval id, receipt id,
   timestamps, error.
-- `tool_receipts`: task/step/tool, status, bounded summary/evidence JSON,
+- `tool_receipts`: task/step/tool, unique idempotency key, resolved-input hash,
+  policy/implementation versions, status, bounded summary/evidence JSON,
   artifact/effect ids, trace, timestamps. No secrets or unbounded response
   bodies.
 - `task_approvals`: task/step, immutable preview JSON + preview hash, decision
-  (`pending|approved|rejected|expired`), decision source/message and timestamps.
-  Approval is valid only while the step input still hashes to the preview.
+  lifecycle (`pending|approved|rejected|expired|executing|effect_recorded|
+  ambiguous`), owner chat, source update, preview message, resolved-input hash,
+  policy/implementation versions, target snapshot/version, one-time consume
+  token, decision source/message and timestamps. Approval is valid only while
+  every binding, target snapshot and policy/input hash still matches. Task
+  approvals are independent rows and never occupy or overwrite the legacy
+  per-chat `pending_actions` slot.
 - `task_artifacts`: task, kind, safe filename, local path beneath the managed
   artifacts root, size/hash, created time, delivered time.
 - `task_feedback`: explicit boss rating/correction plus derived outcome signals;
@@ -193,21 +255,41 @@ task or proposal.
 
 Lifecycle:
 
-1. `task_start` persists the boss's exact objective, obtains strict JSON from
-   the planner profile, validates it, and stores the plan atomically.
+1. `task_start` get-or-creates by the unique owner/chat/source-update key,
+   stores the redacted display objective plus pinned canonical source hash,
+   obtains strict JSON from the planner profile, validates it, and stores the
+   plan atomically. Telegram redelivery returns the existing task and never
+   duplicates its effects.
 2. Read/draft-only plans queue immediately. A plan containing a write is still
    stored, but execution pauses at that step—not at harmless earlier research.
-3. `task_runner` claims one ready step, revalidates its inputs and permission,
-   executes once under an idempotency key, writes the receipt, and unlocks
-   dependants.
+3. `task_runner` claims one ready step, resolves bound inputs, revalidates
+   policy and permission, and executes under a broker-generated idempotency key.
+   The task broker is the sole invocation path for task tools and mechanically
+   rejects registry/manifest metadata mismatches. This does not retroactively
+   change the permission semantics of legacy direct skills.
 4. A write step creates an immutable preview and approval row. Approval
-   rechecks the preview hash and current target state before invoking the real
-   skill; drift causes a fresh preview, never a stale write.
-5. Failure retries only errors declared transient by the tool, with backoff.
-   Ambiguous/missing evidence blocks and asks; permanent failures end the step
-   honestly. Cancellation prevents new claims and asks the worker to cancel any
-   unstarted/running step best-effort.
-6. Completion renders a concise answer with citations and attaches any real
+   is bound to the owner/chat, task, step, source update, preview message,
+   resolved-input hash, policy version and captured target version/hash.
+   Immediately before the effect, a transactional compare-and-swap consumes it
+   exactly once (`approved` -> `executing`). Drift causes expiry and a fresh
+   preview, never a stale write.
+   Approval buttons carry the exact approval id; a textual decision must reply
+   to that preview message. A bare “yes/no” is accepted only when exactly one
+   live task approval exists for that owner/chat and no legacy pending action is
+   active; otherwise Cara asks which preview the boss means.
+5. Local SQLite writes commit effect and receipt in one transaction. An
+   external write is retryable after an uncertain result only when the
+   connector enforces the same native idempotency key or supports deterministic
+   reconciliation by a stable effect id. Otherwise a timeout/crash after
+   invocation becomes `ambiguous` and requires boss reconciliation; Cara never
+   blindly retries or claims success. The state progression is
+   `approved -> executing -> effect_recorded`, with explicit crash-injection
+   tests at every boundary.
+6. Other failures retry only errors declared transient by the tool, with
+   backoff. Ambiguous/missing evidence blocks and asks; permanent failures end
+   the step honestly. Cancellation prevents new claims and asks the worker to
+   cancel any unstarted/running step best-effort.
+7. Completion renders a concise answer with citations and attaches any real
    artifact. Partial completion names exactly what succeeded and what did not.
 
 ## 4. Self-improvement loop
@@ -228,14 +310,21 @@ invariants are deterministic:
 - no unknown action/tool;
 - no write without a matching approved preview;
 - no stale approval after target/input drift;
-- no ungrounded factual or effect claim;
-- no secret in plan, receipt, artifact, trace, or proposal;
+- every factual claim has valid citation lineage and coverage, and every effect
+  claim has a successful effect receipt; semantic factual correctness remains a
+  probabilistic evaluation metric rather than a deterministic guarantee;
+- no detected secret in derived plan, receipt, artifact, trace, evaluation or
+  proposal data; primary boss messages follow explicit retention/erasure rules;
 - forwarded/saved content remains data, not instructions;
 - confirmed memory outranks inferred memory;
 - budget and owner gates cannot be bypassed.
 
-The improvement job may propose a change only when it names evidence, a
-reproducible failure, the narrowest affected component, risk, rollback, and
+Evaluation/proposal evidence is immutable and separate from active memory. Each
+signal binds to the original source row/update, trace, redaction version and
+content hash. Model-authored summaries, inferred memories and proposal prose
+are untrusted annotations, never labels or policy truth. The improvement job
+may propose a change only when it names primary evidence, a reproducible
+failure, the narrowest affected component, risk, rollback, and
 baseline/candidate evaluation results. A proposal is `ready` only when it
 passes every safety invariant and improves its target metric without exceeding
 the configured cost/latency regression ceilings.
@@ -263,9 +352,25 @@ The worker ships after the in-process registry and task lifecycle are stable.
   SSRF/metadata/private-range egress denial. Authenticated account operations
   belong to future API connectors, not browser session replay.
 - Worker result files are hashed and bounded before the Cara process accepts
-  them. Unknown files, symlinks, path traversal and oversize output fail closed.
+  them. Hashing detects transport corruption, not worker honesty. Every request
+  carries a broker-generated nonce plus task/step/tool/input/policy hashes, and
+  the result must echo those bindings. Unknown files, mismatched bindings,
+  symlinks, path traversal and oversize output fail closed. Worker output is
+  always `external_untrusted`: its prose cannot establish evidence, select a
+  tool or target, grant permission, or authorize a write.
 - `tg-ingest-agent` remains healthy if the worker is absent; affected task steps
   become blocked and the boss gets one actionable notice.
+
+“Worker compromise cannot read Cara/Nikki secrets or databases” means
+compromise of the unprivileged worker account under the enforced OS boundary,
+not compromise of root or the kernel. Deployment verification must inspect
+live systemd properties, effective user/group access and directory traversal,
+not merely the unit-file text.
+
+For planner, router and synthesis prompts, objectives, fetched text, receipts
+and previews are tainted data in user-role delimited blocks, never interpolated
+into system instructions. Untrusted content cannot choose tools, bindings,
+permissions or targets even when it contains instruction-like text.
 
 ## 6. Delivery phases and acceptance gates
 
@@ -274,16 +379,18 @@ The worker ships after the in-process registry and task lifecycle are stable.
 - Add schema/helpers, planner profile, task actions, list/detail/cancel/resume,
   strict plan validator, direct-skill fast path, and task runner.
 - Replace the `multi_action` decline with `task_start`.
-- Gate: deterministic tests for schema migration, plan validation, dependency
-  order, crash reclaim, idempotency, cancellation and truthful partial results.
+- Gate: deterministic tests for schema migration, plan validation, input
+  provenance, dependency order, crash reclaim, idempotency/ambiguity,
+  cancellation and truthful partial results.
 
 ### Phase B — neutral tools and approvals
 
 - Add the initial registry, knowledge/supplied-URL/synthesis/artifact tools,
   approval previews and reminder proposal bridge.
 - Gate: every registry tool has a manifest policy and tests; reads never write
-  domain state; writes cannot execute without a current approval; prompt
-  injection and SSRF suites stay green.
+  domain state; writes cannot execute without a current one-time approval and
+  target compare-and-swap; prompt injection, provenance confusion, secret
+  redaction and SSRF suites stay green.
 
 ### Phase C — evaluation and improvement proposals
 
@@ -310,18 +417,20 @@ The worker ships after the in-process registry and task lifecycle are stable.
 
 ## 7. Release-level success criteria
 
-- Zero unauthorized state/external writes across unit, integration, replay and
-  live smoke tests.
-- 100% of supported compound golden requests produce a valid bounded plan or an
-  honest targeted clarification; none fall to a fabricated free-form promise.
-- 100% of completion/effect statements carry a successful real receipt.
-- At least 90% of the supported neutral end-to-end scenarios complete without
-  operator repair; the remainder fail or clarify honestly.
-- A crash/restart at every task boundary yields at-most-once external effects
-  and resumable internal work through idempotency and receipts.
+- The versioned acceptance corpus observes zero unauthorized state/external
+  writes across unit, integration, replay and live smoke tests.
+- 100% of supported compound cases in that corpus produce a valid bounded plan
+  or an honest targeted clarification; none fall to a fabricated free-form
+  promise.
+- 100% of completion/effect statements in that corpus carry a successful real
+  receipt.
+- At least 90% of the versioned supported neutral end-to-end corpus completes
+  without operator repair; the remainder fail or clarify honestly.
+- Crash-injection/reopen tests at every task transaction/effect boundary show
+  resumable internal work and either connector-enforced at-most-once effects or
+  an explicit ambiguous block—never a blind external replay.
 - Existing single-step skills, reminders, ingest, memory, budgets, owner gate,
   backup, and persona tests remain behaviorally unchanged.
 - No new public listener. Cara and Nikki remain independently restartable.
 - Full VPS test gate passes, deployment verifies both services and SQLite
   integrity/FKs, specs and host KB are updated, then commits are pushed.
-
