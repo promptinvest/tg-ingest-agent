@@ -12,6 +12,7 @@ from pathlib import Path
 import common
 import improvement
 import llm
+import mentor_client
 import store
 import task_runner
 import tasking
@@ -907,6 +908,16 @@ class TasksMixin:
                 cleanup_ok = False
         if not cleanup_ok:
             return False
+        try:
+            mentor_client.abandon_all_requests(
+                self.cfg.mentor_review_spool,
+                ("cara-mentor", "spool", "requests"))
+            mentor_client.abandon_all_requests(
+                self.cfg.mentor_runner_spool,
+                ("cara-mentor-runner", "spool", "requests"))
+        except mentor_client.MentorUnavailable as exc:
+            log(f"could not purge Mentor requests: {exc}")
+            return False
         finished = worker_client.finish_purge(
             self.cfg, purge_nonce, timeout_seconds=timeout_seconds)
         if not finished:
@@ -1034,6 +1045,13 @@ class TasksMixin:
             tg_send_document(
                 self.cfg.token, chat_id, filename, body,
                 caption=f"Proposal #{row['id']}", content_type="text/markdown")
+            patch = improvement.proposal_patch(self.cfg, self.conn, row)
+            if patch is not None:
+                patch_name, patch_body = patch
+                tg_send_document(
+                    self.cfg.token, chat_id, patch_name, patch_body,
+                    caption=f"Tested Mentor candidate #{row['id']}",
+                    content_type="text/x-diff")
         except (OSError, TelegramError) as exc:
             log(f"improvement export failed: {exc}")
             self.reply(chat_id, "Не смогла отправить экспорт." if lang == "ru"

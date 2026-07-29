@@ -39,6 +39,7 @@ import knowledge
 import llm
 import media
 import memory_curator
+import mentor_client
 import notes_svc
 import persona
 import proactive
@@ -747,6 +748,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         "check_proactive",
         "check_model_health",
         "check_disk_space",
+        "check_mentor_results",
         "check_weekly_improvements",
     )
 
@@ -755,6 +757,9 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         task_runner.expire_approvals(self.conn)
         self.retry_task_deliveries()
         return task_runner.tick(self, self.conn)
+
+    def check_mentor_results(self):
+        return improvement.mentor_tick(self, self.conn)
 
     def check_weekly_improvements(self):
         local = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
@@ -794,8 +799,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             self.conn, "improvement_retry_state",
             json.dumps(state, sort_keys=True))
         try:
-            created = improvement.weekly_analysis(self, self.conn)
-        except (llm.BudgetExceeded, llm.LLMError) as exc:
+            created = improvement.weekly_analysis(self, self.conn, week)
+        except (OSError, ValueError, mentor_client.MentorUnavailable) as exc:
             log(f"weekly improvement analysis deferred: {exc}")
             created = -1
         if created >= 0 or attempts >= 3:

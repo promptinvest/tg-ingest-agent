@@ -33,7 +33,8 @@ REPO="git@github.com:promptinvest/tg-ingest-agent.git"
 MODE="${1:-deploy}"
 
 SSH_OPTS=(-i "$KEY" -p "$PORT" -o IdentitiesOnly=yes -o ConnectTimeout=25
-          -o UserKnownHostsFile="$KH" -o ServerAliveInterval=15)
+          -o UserKnownHostsFile="$KH" -o ServerAliveInterval=15
+          -o ServerAliveCountMax=12)
 
 git_env="export GIT_SSH_COMMAND='ssh -i $BOX_KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=/root/.ssh/known_hosts'"
 # NOTE: every remote script sets `-o pipefail` — without it the `| tail`
@@ -58,15 +59,27 @@ if [ -f '$SRC/verify-cara-runtime.sh' ]; then
   sleep 2
   systemctl is-active --quiet tg-ingest-agent.service
 else
-  echo '--- retire post-ref worker for legacy rollback ---'
-  systemctl disable --now cara-worker.service 2>/dev/null || true
+  echo '--- retire post-ref workers for legacy rollback ---'
+  systemctl disable --now cara-worker.service cara-mentor.service \
+    cara-mentor-runner.service 2>/dev/null || true
   rm -f /etc/systemd/system/cara-worker.service \
+    /etc/systemd/system/cara-mentor.service \
+    /etc/systemd/system/cara-mentor-runner.service \
     /opt/tg-ingest-agent/cara_worker.py \
+    /opt/tg-ingest-agent/cara_mentor.py \
+    /opt/tg-ingest-agent/mentor_runner.py \
+    /opt/tg-ingest-agent/mentor_protocol.py \
+    /opt/tg-ingest-agent/mentor_client.py \
     /opt/tg-ingest-agent/verify_task_runtime.py \
     /opt/tg-ingest-agent/verify-cara-runtime.sh
-  rm -rf /var/lib/cara-worker
+  rm -rf /var/lib/cara-worker /var/lib/cara-mentor \
+    /var/lib/cara-mentor-runner /opt/cara-mentor-source
   userdel cara-worker 2>/dev/null || true
+  userdel cara-mentor 2>/dev/null || true
+  userdel cara-mentor-runner 2>/dev/null || true
   groupdel cara-worker-spool 2>/dev/null || true
+  groupdel cara-mentor-spool 2>/dev/null || true
+  groupdel cara-mentor-runner-spool 2>/dev/null || true
   systemctl daemon-reload
   systemctl is-active --quiet tg-ingest-agent
   [ \"\$(sqlite3 /var/lib/tg-ingest-agent/ingest.db 'PRAGMA integrity_check;')\" = ok ]
@@ -121,7 +134,8 @@ echo '(return to latest with: ./deploy.sh --pull)'"
            install-whisper-pilot-remote.sh
            verify-cara-runtime.sh
            tg-ingest-agent.env.example tg-ingest-agent.service
-           cara-worker.service)
+           cara-worker.service cara-mentor.service
+           cara-mentor-runner.service)
     SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
     DIRTY=""; [ -n "$(git status --porcelain 2>/dev/null)" ] && DIRTY=" +local-changes"
     DIRTY_BOOL=false; [ -n "$DIRTY" ] && DIRTY_BOOL=true
@@ -131,7 +145,8 @@ set -e -o pipefail
 mkdir -p '$STAGE'
 tar xzf - -C '$STAGE'
 cd '$STAGE'
-sed -i 's/\r\$//' *.py *.sh tg-ingest-agent.service cara-worker.service tg-ingest-agent.env.example
+sed -i 's/\r\$//' *.py *.sh tg-ingest-agent.service cara-worker.service \
+  cara-mentor.service cara-mentor-runner.service tg-ingest-agent.env.example
 echo '--- tests ---'
 python3 -m unittest discover -p 'test_*.py' 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | tail -60"
     if [ "$MODE" != "--test" ]; then

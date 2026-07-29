@@ -1,0 +1,51 @@
+[Unit]
+Description=Cara Mentor networkless candidate test runner
+After=local-fs.target
+
+[Service]
+Type=simple
+User=cara-mentor-runner
+Group=cara-mentor-runner-spool
+UMask=0027
+EnvironmentFile=/etc/cara-mentor-runner.env
+Environment=MENTOR_RUNNER_SPOOL=/var/lib/cara-mentor-runner/spool
+Environment=MENTOR_RUNNER_STATE=/var/lib/cara-mentor-runner
+Environment=MENTOR_SOURCE_DIR=/opt/cara-mentor-source
+ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/mentor_runner.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadOnlyPaths=/opt/tg-ingest-agent/mentor_runner.py /opt/tg-ingest-agent/mentor_protocol.py /opt/cara-mentor-source /etc/cara-mentor-runner.env
+InaccessiblePaths=/etc/tg-ingest-agent.env /etc/cara-mentor.env /var/lib/tg-ingest-agent /var/lib/cara-worker /var/lib/cara-mentor /etc/tg-ingest-agent-backup.key /etc/nikki-agent.env /var/lib/nikki-agent /etc/nikki-agent-backup.key /etc/codex-auto-update/telegram.env /root/.ssh
+ReadWritePaths=/var/lib/cara-mentor-runner
+RuntimeDirectory=cara-mentor-runner
+RuntimeDirectoryMode=0750
+MemoryMax=768M
+TasksMax=96
+
+[Install]
+WantedBy=multi-user.target

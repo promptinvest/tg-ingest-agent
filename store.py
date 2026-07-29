@@ -766,6 +766,33 @@ CREATE TABLE IF NOT EXISTS improvement_proposals (
   decided_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS mentor_cycles (
+  id INTEGER PRIMARY KEY,
+  cycle_uid TEXT NOT NULL UNIQUE,
+  period_key TEXT NOT NULL UNIQUE,
+  evidence_refs_json TEXT NOT NULL,
+  evidence_payload_json TEXT NOT NULL,
+  evidence_hash TEXT NOT NULL,
+  source_build TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'submitted',
+  review_job_id TEXT NOT NULL UNIQUE,
+  review_nonce TEXT NOT NULL,
+  proposal_id INTEGER REFERENCES improvement_proposals(id) ON DELETE SET NULL,
+  patch_path TEXT,
+  patch_hash TEXT,
+  target_files_json TEXT NOT NULL DEFAULT '[]',
+  runner_job_id TEXT UNIQUE,
+  runner_nonce TEXT,
+  tests_summary TEXT,
+  candidate_branch TEXT,
+  candidate_commit TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  finished_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_assistant_tasks_chat_status
   ON assistant_tasks(chat_id, status, updated_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_tasks_id_chat
@@ -792,6 +819,8 @@ CREATE INDEX IF NOT EXISTS idx_evaluation_runs_case
   ON evaluation_runs(case_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_improvement_proposals_status
   ON improvement_proposals(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_mentor_cycles_status
+  ON mentor_cycles(status, updated_at);
 
 """
 
@@ -3686,6 +3715,7 @@ def purge_preview(conn, scope, category=None):
         info["evaluation_runs"] = count("SELECT COUNT(*) FROM evaluation_runs")
         info["improvement_proposals"] = count(
             "SELECT COUNT(*) FROM improvement_proposals")
+        info["mentor_cycles"] = count("SELECT COUNT(*) FROM mentor_cycles")
     elif scope == "category":
         info["messages"] = len(_messages_in_category(conn, category))
         info["category"] = category
@@ -3727,9 +3757,13 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
         paths.extend(
             r["local_path"] for r in conn.execute(
                 "SELECT local_path FROM task_artifacts WHERE local_path IS NOT NULL"))
+        paths.extend(
+            r["patch_path"] for r in conn.execute(
+                "SELECT patch_path FROM mentor_cycles WHERE patch_path IS NOT NULL"))
         # Improvement/evaluation rows can contain redacted boss corrections and
         # task-derived evidence. Delete them explicitly; task children then
         # cascade from assistant_tasks.
+        conn.execute("DELETE FROM mentor_cycles")
         conn.execute("DELETE FROM improvement_proposals")
         conn.execute("DELETE FROM evaluation_cases")
         conn.execute("DELETE FROM task_feedback")
@@ -3768,6 +3802,10 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
         _purge_all_message_kv(conn)
         _purge_reminder_kv(conn)
         _reset_note_counters(conn)
+        conn.execute(
+            "DELETE FROM kv WHERE key IN"
+            " ('improvement_last_evidence_id','improvement_week',"
+            " 'improvement_retry_state')")
         if task_purge_nonce is not None:
             if not re.fullmatch(r"[0-9a-f]{32}", str(task_purge_nonce)):
                 raise ValueError("task purge nonce is invalid")
@@ -5110,6 +5148,109 @@ def task_approval_decide(conn, approval_id, chat_id, approve, *,
             conn, row["task_id"], "cancelled", summary="Write approval rejected", commit=False)
     conn.commit()
     return task_approval_get(conn, approval_id, chat_id) if changed else None
+
+
+def mentor_cycle_create(conn, *, cycle_uid, period_key, evidence_refs,
+                        evidence_payload, evidence_hash, source_build,
+                        source_hash, review_job_id, review_nonce):
+    now = _now()
+    conn.execute(
+        "INSERT OR IGNORE INTO mentor_cycles"
+        " (cycle_uid, period_key, evidence_refs_json, evidence_payload_json,"
+        " evidence_hash, source_build, source_hash, status, review_job_id,"
+        " review_nonce, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?, ?, ?)",
+        (
+            str(cycle_uid), str(period_key),
+            json.dumps(evidence_refs, ensure_ascii=False, sort_keys=True),
+            json.dumps(evidence_payload, ensure_ascii=False, sort_keys=True),
+            str(evidence_hash), str(source_build), str(source_hash),
+            str(review_job_id), str(review_nonce), now, now,
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM mentor_cycles WHERE period_key=?", (str(period_key),)
+    ).fetchone()
+
+
+def mentor_cycle_get(conn, cycle_id):
+    return conn.execute(
+        "SELECT * FROM mentor_cycles WHERE id=?", (int(cycle_id),)
+    ).fetchone()
+
+
+def mentor_cycle_for_period(conn, period_key):
+    return conn.execute(
+        "SELECT * FROM mentor_cycles WHERE period_key=?", (str(period_key),)
+    ).fetchone()
+
+
+def mentor_cycle_for_proposal(conn, proposal_id):
+    return conn.execute(
+        "SELECT * FROM mentor_cycles WHERE proposal_id=?", (int(proposal_id),)
+    ).fetchone()
+
+
+def mentor_cycles_open(conn, limit=5):
+    return conn.execute(
+        "SELECT * FROM mentor_cycles"
+        " WHERE status IN ('submitted','testing')"
+        " ORDER BY created_at LIMIT ?",
+        (max(1, min(int(limit), 20)),),
+    ).fetchall()
+
+
+def mentor_cycle_set_proposal(conn, cycle_id, proposal_id, *, patch_path=None,
+                              patch_hash=None, target_files=()):
+    now = _now()
+    status = "testing" if patch_hash else "proposal_only"
+    changed = conn.execute(
+        "UPDATE mentor_cycles SET proposal_id=?, patch_path=?, patch_hash=?,"
+        " target_files_json=?, status=?, updated_at=?, finished_at=?"
+        " WHERE id=? AND status='submitted'",
+        (
+            int(proposal_id), str(patch_path) if patch_path else None,
+            str(patch_hash) if patch_hash else None,
+            json.dumps(list(target_files), sort_keys=True),
+            status, now, None if patch_hash else now, int(cycle_id),
+        ),
+    ).rowcount
+    conn.commit()
+    return bool(changed)
+
+
+def mentor_cycle_set_runner(conn, cycle_id, job_id, nonce):
+    now = _now()
+    changed = conn.execute(
+        "UPDATE mentor_cycles SET runner_job_id=?, runner_nonce=?,"
+        " updated_at=? WHERE id=? AND status='testing'"
+        " AND runner_job_id IS NULL",
+        (str(job_id), str(nonce), now, int(cycle_id)),
+    ).rowcount
+    conn.commit()
+    return bool(changed)
+
+
+def mentor_cycle_finish(conn, cycle_id, *, status, tests_summary=None,
+                        branch=None, commit=None, error=None):
+    if status not in {"ready", "candidate_failed", "failed"}:
+        raise ValueError("mentor cycle terminal status is invalid")
+    now = _now()
+    changed = conn.execute(
+        "UPDATE mentor_cycles SET status=?, tests_summary=?,"
+        " candidate_branch=?, candidate_commit=?, error=?, updated_at=?,"
+        " finished_at=? WHERE id=? AND status IN ('submitted','testing')",
+        (
+            status, str(tests_summary)[:500] if tests_summary else None,
+            str(branch)[:200] if branch else None,
+            str(commit)[:80] if commit else None,
+            common.scrub_secrets(str(error or ""))[:1000] or None,
+            now, now, int(cycle_id),
+        ),
+    ).rowcount
+    conn.commit()
+    return bool(changed)
 
 
 def task_feedback_add(conn, chat_id, *, task_id=None, source_update=None,

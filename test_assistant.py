@@ -50,10 +50,24 @@ import trace as tracing
 
 
 def make_config(**overrides):
+    runtime_root = Path(
+        os.environ.get("CARA_TEST_RUNTIME_ROOT")
+        or (Path(tempfile.gettempdir()) / f"cara-unit-{os.getpid()}"))
     env = {
         "TELEGRAM_BOT_TOKEN": "123:abc",
         "ALLOWED_CHAT_IDS": "111",
         "DO_MODEL_ACCESS_KEY": "do-key",
+        # Never let an offline/unit test inherit Cara's production persistence
+        # defaults.  The Mentor runner supplies a root inside its scratch tree;
+        # ordinary VPS/CI runs get a per-process /tmp tree.
+        "DB_PATH": str(runtime_root / "tg-ingest-agent" / "ingest.db"),
+        "MEDIA_DIR": str(runtime_root / "tg-ingest-agent" / "media"),
+        "TASK_ARTIFACTS_DIR": str(
+            runtime_root / "tg-ingest-agent" / "task-artifacts"),
+        "TASK_WORKER_SPOOL": str(runtime_root / "cara-worker" / "spool"),
+        "MENTOR_REVIEW_SPOOL": str(runtime_root / "cara-mentor" / "spool"),
+        "MENTOR_RUNNER_SPOOL": str(
+            runtime_root / "cara-mentor-runner" / "spool"),
     }
     env.update(overrides)
     return common.load_config(env)
@@ -1203,7 +1217,10 @@ class PurgeFlowTests(unittest.TestCase):
         self.assertEqual(store.purge_preview(self.agent.conn, "all")["messages"], 1)  # intact
         # exact phrase deletes
         self.agent.do_purge(1, "ru", {"scope": "all"})
-        with mock.patch.object(self.agent, "reply"):
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(
+                    self.agent, "purge_task_external_state",
+                    return_value=True):
             self.agent.resolve_purge(1, "ru", store.pending_get(self.agent.conn, 1), phrase)
         self.assertEqual(store.purge_preview(self.agent.conn, "all")["messages"], 0)
 
@@ -5059,6 +5076,23 @@ class TestSuiteHygiene20260726Tests(unittest.TestCase):
     assertion while checking nothing (T12.2). None of the three fails loudly, which
     is why each gets a standing guard here.
     """
+
+    def test_default_fixture_paths_never_target_live_state(self):
+        cfg = make_config()
+        actual = tuple(map(str, (
+            cfg.db_path, cfg.media_dir, cfg.task_artifacts_dir,
+            cfg.task_worker_spool, cfg.mentor_review_spool,
+            cfg.mentor_runner_spool,
+        )))
+        production_defaults = (
+            "/var/lib/tg-ingest-agent/ingest.db",
+            "/var/lib/tg-ingest-agent/media",
+            "/var/lib/tg-ingest-agent/task-artifacts",
+            "/var/lib/cara-worker/spool",
+            "/var/lib/cara-mentor/spool",
+            "/var/lib/cara-mentor-runner/spool",
+        )
+        self.assertTrue(set(actual).isdisjoint(production_defaults))
 
     def test_event_job_tests_restore_the_global_handler_registry(self):
         """T12.3. Runs EventJobTests in-process with a foreign handler already in
@@ -11556,7 +11590,10 @@ class PurgeSemantics20260725Tests(unittest.TestCase):
         self.assertNotIn("Удалять нечего", reply.call_args[0][1])
         pending = store.pending_get(self.conn, 1)
         self.assertEqual(pending["kind"], "purge")
-        with mock.patch.object(self.agent, "reply"):
+        with mock.patch.object(self.agent, "reply"), \
+                mock.patch.object(
+                    self.agent, "purge_task_external_state",
+                    return_value=True):
             self.agent.resolve_purge(1, "ru", pending, pending["payload"]["phrase"])
         self.assertEqual(store.telegram_update_get(self.conn, 821)["payload"], "{}")
 
@@ -11569,7 +11606,10 @@ class PurgeSemantics20260725Tests(unittest.TestCase):
         say = lambda cid, text, *a, **k: sent.append(text)  # noqa: E731
         with mock.patch.object(router, "route", return_value={
                 "action": "purge", "params": {"scope": "all"}, "confidence": 0.9}), \
-                mock.patch.object(self.agent, "reply", side_effect=say):
+                mock.patch.object(self.agent, "reply", side_effect=say), \
+                mock.patch.object(
+                    self.agent, "purge_task_external_state",
+                    return_value=True):
             self.agent.process_update_batch([{"update_id": 902, "message": {
                 "chat": {"id": 1}, "from": {"id": 1},
                 "message_id": 902, "text": "удали всё"}}])
@@ -16890,7 +16930,7 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         for kept in ("Type=simple", "User=tg-ingest", "Group=tg-ingest", "UMask=0077",
                      "NotifyAccess=main", "WatchdogSec=900", "NoNewPrivileges=yes",
                      "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes",
-                     "ReadWritePaths=/var/lib/tg-ingest-agent /var/lib/cara-worker/spool/requests /var/lib/cara-worker/spool/cancel",
+                     "ReadWritePaths=/var/lib/tg-ingest-agent /var/lib/cara-worker/spool/requests /var/lib/cara-worker/spool/cancel /var/lib/cara-mentor/spool/requests /var/lib/cara-mentor-runner/spool/requests",
                      "EnvironmentFile=/etc/tg-ingest-agent.env",
                      "ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/agent.py",
                      "Restart=always", "RestartSec=10",
@@ -17072,7 +17112,8 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
                                  "install-whisper-pilot-remote.sh",
                                  "verify-cara-runtime.sh",
                                  "tg-ingest-agent.env.example", "tg-ingest-agent.service",
-                                 "cara-worker.service"])
+                                 "cara-worker.service", "cara-mentor.service",
+                                 "cara-mentor-runner.service"])
         # NAMED, not `*.sh`. WP10 archived one armed one-shot out of the repo root
         # precisely because a glob would tar it onto the live box; migrate-cara-to-pd.sh
         # stops the service, copies DBs and overwrites /etc/tg-ingest-agent.env, and
@@ -17080,7 +17121,8 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         self.assertNotIn("migrate-cara-to-pd.sh", deploy.split("FILES=(", 1)[1].split(")", 1)[0])
         # CRLF from the Windows checkout would break both of those on the box.
         self.assertIn("sed -i 's/\\r\\$//' *.py *.sh tg-ingest-agent.service "
-                      "cara-worker.service tg-ingest-agent.env.example", deploy)
+                      "cara-worker.service \\\n  cara-mentor.service "
+                      "cara-mentor-runner.service tg-ingest-agent.env.example", deploy)
 
     # --- T11.3 / T11.4 (review WP11) — two doc facts that keep rotting ------
     # The specs are not in deploy.sh's FILES, so these skip on the box and really

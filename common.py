@@ -544,6 +544,30 @@ def load_config(env=None):
         0, min(int(env.get("IMPROVEMENT_WEEKDAY") or "6"), 6))
     cfg.improvement_hour = max(
         0, min(int(env.get("IMPROVEMENT_HOUR") or "4"), 23))
+    cfg.mentor_enabled = (
+        env.get("MENTOR_ENABLED") or "true").strip().lower() == "true"
+    cfg.mentor_review_spool = Path(
+        env.get("MENTOR_REVIEW_SPOOL")
+        or "/var/lib/cara-mentor/spool")
+    cfg.mentor_runner_spool = Path(
+        env.get("MENTOR_RUNNER_SPOOL")
+        or "/var/lib/cara-mentor-runner/spool")
+    if tuple(cfg.mentor_review_spool.parts[-2:]) != ("cara-mentor", "spool"):
+        raise ValueError("MENTOR_REVIEW_SPOOL must end in cara-mentor/spool")
+    if tuple(cfg.mentor_runner_spool.parts[-2:]) != (
+            "cara-mentor-runner", "spool"):
+        raise ValueError(
+            "MENTOR_RUNNER_SPOOL must end in cara-mentor-runner/spool")
+    cfg.mentor_result_timeout_hours = max(
+        1, min(int(env.get("MENTOR_RESULT_TIMEOUT_HOURS") or "48"), 168))
+    cfg.mentor_model = (
+        env.get("MENTOR_MODEL") or cfg.do_model).strip()
+    cfg.mentor_llm_timeout = max(
+        10, min(int(env.get("MENTOR_LLM_TIMEOUT_SECONDS") or "90"), 180))
+    cfg.mentor_max_calls_per_week = max(
+        1, min(int(env.get("MENTOR_MAX_CALLS_PER_WEEK") or "4"), 12))
+    cfg.mentor_test_timeout = max(
+        120, min(int(env.get("MENTOR_TEST_TIMEOUT_SECONDS") or "600"), 1200))
     # Model-health monitor: how often to check Cara's models are reachable and
     # alert the boss the moment one becomes inaccessible (0 disables).
     cfg.model_health_interval = int(env.get("MODEL_HEALTH_INTERVAL_SECONDS") or "1800")

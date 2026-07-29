@@ -1,5 +1,15 @@
 # Cara — Capabilities, Features & Architecture
 
+> **Bounded Mentor v1 (shipped 2026-07-29):** Cara now has a separate weekly
+> reviewer that receives only redacted task feedback and unresolved issue
+> patterns — never the conversation database. It can write a proposal and, for
+> low/medium-risk behavior-only changes, a bounded candidate patch plus a
+> dedicated regression test. A second, networkless service applies that patch
+> only inside a disposable source copy and runs the full discovery suite.
+> Passing candidates become review-ready artifacts; neither service can merge,
+> push, install, restart, deploy, or alter Cara's live source, prompts, policy,
+> tools, model configuration, database, or secrets.
+>
 > **Research & Decision Intelligence v1 (shipped 2026-07-29):** Cara can turn
 > a RU/EN research request into a governed six-step task:
 > `web.search` → three provenance-bound `source.fetch` steps →
@@ -23,15 +33,17 @@
 > tainted worker/fetched/model output, structured claim citations, and an
 > immutable evidence boundary for improvement proposals.
 >
-> **Production checkpoint:** the research release passed the full 1,532-test
-> discovery suite (9 intentional skips), including adversarial cases for prompt
-> injection, malicious source instructions, forged citations, tainted URL
-> substitution, unauthorized writes, query/spend exhaustion, and ambiguous
-> Telegram delivery. Both `tg-ingest-agent` and the isolated `cara-worker` are
-> active/enabled; the live spool/isolation/SQLite/deployment-manifest verifier
-> is green. Each verified deployment now produces a durable fleet-notification
-> receipt with its deployment id, build, source revision, verification result,
-> rollback backup, and Telegram message id.
+> **Production checkpoint:** the full discovery suite is green, including
+> adversarial cases for prompt injection, malicious source instructions,
+> forged citations, tainted URL substitution, unauthorized writes, query/spend
+> exhaustion, ambiguous Telegram delivery, forged Mentor results, unsafe patch
+> paths, secret/process/network access in candidates, and high-risk
+> self-modification. The owner-facing service, local worker, Mentor, and
+> networkless candidate runner are active/enabled; the live isolation,
+> spool/source-integrity, SQLite, candidate-runner, and deployment-manifest
+> verifier is green. Each verified deployment produces a durable
+> fleet-notification receipt with its deployment id, build, source revision,
+> verification result, rollback backup, and Telegram message id.
 
 **Cara** (`@cara_assist_bot`) is a personal, conversational AI assistant that lives
 in Telegram and is self-hosted on the **PD‑VPS** (`174.138.108.85`, a DigitalOcean
@@ -40,7 +52,8 @@ in 2026‑06; there is no active standby there.
 She talks like a warm human, ingests and organizes what her owner ("boss") forwards
 her, runs reminders, answers from his own notes, learns from how they work together,
 and quietly flags things worth attention — from a stdlib-only owner-facing
-process plus an isolated local worker, with **no inbound network ports**.
+process, an isolated local worker, and two bounded Mentor services, with
+**no inbound network ports**.
 
 This document is the complete reference: what she can do, how she behaves, and how
 she's built. For the design rationale see [SOLUTION.md](SOLUTION.md); this file is
@@ -53,7 +66,7 @@ the exhaustive feature + architecture map.
 | | |
 |---|---|
 | **Surface** | Telegram bot, single owner, free‑form Russian/English, text + voice + forwards |
-| **Runtime** | owner-facing `tg-ingest-agent` plus no-network `cara-worker`, stdlib-only Python 3, long polling (no webhooks/ports) |
+| **Runtime** | owner-facing `tg-ingest-agent`, no-network `cara-worker`, inference-only `cara-mentor`, and no-network `cara-mentor-runner`; stdlib-only Python 3, long polling (no webhooks/ports) |
 | **Inference** | DigitalOcean Gradient (chat default/current `deepseek-4-flash`, default fallback `openai-gpt-oss-20b`, embeddings `BGE‑M3`); STT local `whisper.cpp` |
 | **Storage** | SQLite (WAL) + local media dir; optional DO Spaces (dormant) |
 | **Persona** | a warm, loyal human assistant persona with her own (fictional) life (the in-person companion/relationship side was split off to Nikki, 2026-07-03); **open and personal by the boss's wish** — shares her inner life and talks frankly about any personal matter, no "professional distance"; never breaks character; matches the boss's language |
@@ -1276,6 +1289,25 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   their slot done only **after a successful send** — a transient Telegram failure backs
   off 15 min and retries (up to 3 attempts, then a `sched_send_failed` issue), instead
   of silently skipping the week/day.
+- **Weekly Mentor review (2026‑07‑29):** on its own schedule (default Sunday
+  04:00 local), Cara packages explicit task feedback and unresolved issue-pattern
+  snapshots into a bounded, redacted evidence envelope. Raw conversation rows,
+  note contents, Telegram identity, deployment credentials, and the production DB
+  never cross that boundary. The separate inference-only `cara-mentor` service
+  returns a source/build/evidence-bound proposal. High-risk, policy, tool, model,
+  infrastructure, and topology changes stop there as proposal-only. A low/medium
+  behavior fix may include a size-limited unified diff against an allowlist of
+  behavioral modules plus `test_mentor_candidates.py`; added lines that touch
+  filesystem, process, network, secrets, or dynamic execution are rejected.
+  `cara-mentor-runner` has no network or inference/Telegram/deploy secrets: it
+  applies a bound candidate to a disposable copy of the exact immutable source
+  snapshot, compiles it, runs the full discovery suite, makes a scratch-local
+  `mentor/<cycle>` commit only when green, exports the patch/result, and deletes
+  the scratch tree. A passing candidate is merely **ready for owner review**.
+  Accepting it records workflow approval; it still cannot merge, push, install,
+  restart, or deploy. Each weekly review is capped at four reserved inference
+  calls, and a crash after reservation is treated as ambiguous rather than
+  blindly replayed.
 - **Daily DB backup (hardened 2026‑07‑10):** once per UTC day a durable job (`maintenance`/
   `db_backup`) snapshots `ingest.db` consistently (sqlite3 online‑backup API), keeps the
   newest `BACKUP_KEEP` (7) gzipped copies under `/var/lib/tg-ingest-agent/backups`, and
@@ -1524,7 +1556,7 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 
 ## 5. Architecture
 
-### Owner-facing process plus an isolated local worker
+### Owner-facing process plus isolated worker and Mentor boundaries
 
 ```
 agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending actions ·
@@ -1545,7 +1577,9 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ task_runner.py   durable dependency-ordered step execution and recovery
    ├─ web_search.py    provider-neutral bounded search; reviewed Brave adapter
    ├─ deployment_notice.py atomic manifests and exact/ambiguous fleet receipts
-   ├─ improvement.py  feedback/evaluation/proposals; no automatic runtime change
+   ├─ improvement.py  redacted evidence, durable Mentor cycles and proposal workflow
+   ├─ mentor_client.py strict one-way review/runner spool transport and result binding
+   ├─ mentor_protocol.py bounded envelopes, target allowlist and patch safety checks
    ├─ worker_client.py bounded hash-bound spool transport to the isolated worker
    ├─ ingest.py        parsing, UTF-16-safe URL extraction, category+facts+summary
    ├─ journals.py      structured journals: closed entry-type registry (gratitude active),
@@ -1582,6 +1616,13 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    DigitalOcean Gradient inference  ·  local whisper-server  ·  SQLite + media
           │
           └─ spool → cara_worker.py (`worker.echo` only; no network/shell/file API)
+
+weekly redacted evidence
+   └─ review spool → cara_mentor.py (inference-only; immutable source read-only)
+                           │  bound proposal / optional candidate patch
+                           ▼
+       Cara → runner spool → mentor_runner.py (no network; disposable source copy)
+                                      └─ compile + full suite + scratch-local commit
 ```
 
 ### LLM gateway (`llm.py`)
@@ -1603,12 +1644,6 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   the profile and pricing tables are parsed once per process (memoized on the config),
   and a **truncated/unparsable response body is treated as transient** — one retry of
   the preferred model and a short bench, instead of the full cooldown a hard 403 gets.
-- **Kimi K3 is an opt-in challenger, not the production default (2026-07-29).**
-  Its current DigitalOcean rate is represented in the pricing table, so trials
-  are metered honestly. It remains behind `deepseek-v4-pro` for planning,
-  synthesis, and improvement evaluation until the versioned corpus and a
-  production-shadow evaluation show a quality gain worth the materially higher
-  output cost. A commented trial profile is provided in the example env.
 - **Budget‑guarded:** every chat/STT/embedding call is priced and logged to
   `llm_usage`; daily/monthly caps warn at 80% and **hard‑stop** at 100% (above
   failover). Caps are overridable at runtime via `budget_set` — **including
@@ -2127,6 +2162,16 @@ each call, including retries; the fixed HTTPS endpoint does not follow redirects
 ambient proxies, and only three sanitized public result URLs may cross the otherwise
 closed untrusted-to-fetch boundary.
 
+Bounded Mentor: `IMPROVEMENT_WEEKDAY=6` / `IMPROVEMENT_HOUR=4` ·
+`MENTOR_ENABLED=true` · `MENTOR_REVIEW_SPOOL=/var/lib/cara-mentor/spool` ·
+`MENTOR_RUNNER_SPOOL=/var/lib/cara-mentor-runner/spool` ·
+`MENTOR_RESULT_TIMEOUT_HOURS=48` · `MENTOR_MODEL` (= Cara's current chat model) ·
+`MENTOR_LLM_TIMEOUT_SECONDS=90` · `MENTOR_MAX_CALLS_PER_WEEK=4` ·
+`MENTOR_TEST_TIMEOUT_SECONDS=600`. Only the inference key and these Mentor
+inference settings are copied to root-owned `/etc/cara-mentor.env`; the
+networkless runner receives only its test timeout in
+`/etc/cara-mentor-runner.env`.
+
 **The complete catalogue is `tg-ingest-agent.env.example`, and it is now enforced
 (2026‑07‑26).** That file both documents every knob and *is* `/etc/tg-ingest-agent.env`
 on a fresh box, so an undocumented key is a real capability loss on a rebuild rather
@@ -2149,9 +2194,12 @@ is documented twice. The lists above stay as the short tour; they are not the ca
 ## 9. Operations
 
 - **Host:** PD‑VPS (`174.138.108.85`, SSH key‑only; connection details in the PD‑VPS
-  KB). Services `tg-ingest-agent` and `cara-worker`; app
-  `/opt/tg-ingest-agent/`; app state `/var/lib/tg-ingest-agent/`; isolated
-  spool state `/var/lib/cara-worker/`. The former Pilot‑VPS is retired.
+  KB). Services `tg-ingest-agent`, `cara-worker`, `cara-mentor`, and
+  `cara-mentor-runner`; app `/opt/tg-ingest-agent/`; app state
+  `/var/lib/tg-ingest-agent/`; isolated worker state `/var/lib/cara-worker/`;
+  Mentor review state `/var/lib/cara-mentor/`; runner state
+  `/var/lib/cara-mentor-runner/`; immutable candidate source snapshot
+  `/opt/cara-mentor-source/`. The former Pilot‑VPS is retired.
 - **Deploy:** single‑connection `deploy.sh` (tar → test → install → verify) with an
   idempotent installer (backs up, preserves env, `py_compile` gate, restarts only when
   secrets are complete); `--pull` / `--rollback <sha>` supported. The installer stamps
