@@ -3,13 +3,14 @@
 # second copy in a heredoc, which had been drifting from this one.
 [Unit]
 Description=Telegram ingest agent (LLM categorization)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target cara-worker.service
+Wants=network-online.target cara-worker.service
 
 [Service]
 Type=simple
 User=tg-ingest
 Group=tg-ingest
+SupplementaryGroups=cara-worker-spool
 UMask=0077
 EnvironmentFile=/etc/tg-ingest-agent.env
 ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/agent.py
@@ -46,7 +47,8 @@ NoNewPrivileges=yes
 CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/tg-ingest-agent
+ReadWritePaths=/var/lib/tg-ingest-agent /var/lib/cara-worker/spool/requests /var/lib/cara-worker/spool/cancel
+ReadOnlyPaths=/var/lib/cara-worker/spool/results
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

@@ -42,7 +42,23 @@ git_env="export GIT_SSH_COMMAND='ssh -i $BOX_KEY -o IdentitiesOnly=yes -o UserKn
 install_verify="
 echo '--- install ---'
 STAGE_DIR='$SRC' bash '$SRC/install-tg-ingest-agent-pilot-remote.sh' 2>&1 | tail -5
-echo -n 'service: '; systemctl is-active tg-ingest-agent"
+if [ -f '$SRC/verify-cara-runtime.sh' ]; then
+  echo '--- live verification ---'
+  bash '$SRC/verify-cara-runtime.sh'
+else
+  echo '--- retire post-ref worker for legacy rollback ---'
+  systemctl disable --now cara-worker.service 2>/dev/null || true
+  rm -f /etc/systemd/system/cara-worker.service \
+    /opt/tg-ingest-agent/cara_worker.py \
+    /opt/tg-ingest-agent/verify_task_runtime.py \
+    /opt/tg-ingest-agent/verify-cara-runtime.sh
+  rm -rf /var/lib/cara-worker
+  userdel cara-worker 2>/dev/null || true
+  groupdel cara-worker-spool 2>/dev/null || true
+  systemctl daemon-reload
+  systemctl is-active --quiet tg-ingest-agent
+  [ \"\$(sqlite3 /var/lib/tg-ingest-agent/ingest.db 'PRAGMA integrity_check;')\" = ok ]
+fi"
 
 case "$MODE" in
   --pull)
@@ -91,7 +107,9 @@ echo '(return to latest with: ./deploy.sh --pull)'"
     # /etc/tg-ingest-agent.env — it stays off the box and is checked in a checkout.
     FILES=(*.py deploy.sh install-tg-ingest-agent-pilot-remote.sh
            install-whisper-pilot-remote.sh
-           tg-ingest-agent.env.example tg-ingest-agent.service)
+           verify-cara-runtime.sh
+           tg-ingest-agent.env.example tg-ingest-agent.service
+           cara-worker.service)
     SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
     DIRTY=""; [ -n "$(git status --porcelain 2>/dev/null)" ] && DIRTY=" +local-changes"
     echo "deploying from ${SHA}${DIRTY}"
@@ -100,7 +118,7 @@ set -e -o pipefail
 mkdir -p '$STAGE'
 tar xzf - -C '$STAGE'
 cd '$STAGE'
-sed -i 's/\r\$//' *.py *.sh tg-ingest-agent.service tg-ingest-agent.env.example
+sed -i 's/\r\$//' *.py *.sh tg-ingest-agent.service cara-worker.service tg-ingest-agent.env.example
 echo '--- tests ---'
 python3 -m unittest discover -p 'test_*.py' 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | tail -60"
     if [ "$MODE" != "--test" ]; then
@@ -115,7 +133,8 @@ python3 -m unittest discover -p 'test_*.py' 2>&1 | grep -E '^(FAIL|ERROR):|^Ran 
 rm -f '$STAGE/split-cara-nikki.sh' '$STAGE/migrate-cara-to-pd.sh'
 echo '--- install ---'
 bash install-tg-ingest-agent-pilot-remote.sh 2>&1 | tail -5
-echo -n 'service: '; systemctl is-active tg-ingest-agent"
+echo '--- live verification ---'
+bash verify-cara-runtime.sh"
     fi
     tar czf - "${FILES[@]}" | ssh "${SSH_OPTS[@]}" "$HOST" "$remote_script"
     ;;

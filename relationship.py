@@ -14,13 +14,16 @@ def log_event(conn, kind, summary, importance=1, source_table=None, source_id=No
     store.rel_add(conn, kind, summary, importance, source_table, source_id, title=title)
 
 
-def ongoing_threads(conn, lang):
+def ongoing_threads(conn, lang, chat_id=None):
     """Open loops worth gentle continuity / a morning brief: items awaiting a
     category, memory suggestions waiting, overdue reminders. Short strings."""
     ru = lang == "ru"
     out = []
     unsorted = conn.execute(
-        "SELECT COUNT(*) AS n FROM messages WHERE status = 'suggested'").fetchone()["n"]
+        "SELECT COUNT(*) AS n FROM messages WHERE status = 'suggested'"
+        + (" AND chat_id = ?" if chat_id is not None else ""),
+        ((int(chat_id),) if chat_id is not None else ()),
+    ).fetchone()["n"]
     if unsorted:
         out.append(f"{unsorted} заметок ждут категорию" if ru
                    else f"{unsorted} items awaiting a category")
@@ -34,8 +37,10 @@ def ongoing_threads(conn, lang):
     # own «просроченных: 0» about the same reminders.
     overdue = conn.execute(
         "SELECT COUNT(*) AS n FROM reminders WHERE status = 'active' AND due_utc < ?"
-        " AND (last_fired_at IS NULL OR last_fired_at < due_utc)",
-        (now,)).fetchone()["n"]
+        + (" AND chat_id = ?" if chat_id is not None else "")
+        + " AND (last_fired_at IS NULL OR last_fired_at < due_utc)",
+        (now, int(chat_id)) if chat_id is not None else (now,),
+    ).fetchone()["n"]
     if overdue:
         out.append(f"{overdue} просроченных напоминаний" if ru
                    else f"{overdue} overdue reminders")
@@ -70,4 +75,3 @@ def render_working_history(conn, lang, days=30):
     if confirmed == 0 and reminders_n == 0 and not events:
         return T(lang, "working_history_empty")
     return "\n".join(lines)
-

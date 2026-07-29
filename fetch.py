@@ -68,7 +68,9 @@ _JSON_CTYPES = ("application/json", "text/json", "application/ld+json", "text/pl
 class FetchError(Exception):
     def __init__(self, message, reason="fetch_failed"):
         super().__init__(message)
-        self.reason = reason  # fetch_failed | fetch_blocked | fetch_private
+        # fetch_failed is a declared transient transport/server outcome;
+        # fetch_permanent is content/protocol/input that retrying cannot repair.
+        self.reason = reason
 
 
 def _ip_blocked(ip_text):
@@ -309,7 +311,9 @@ def _fetch_one(url, timeout, max_bytes, deadline=None, ctypes=_PAGE_CTYPES):
         with opener.open(request, timeout=timeout) as response:
             ctype = response.headers.get("Content-Type", "")
             if not any(t in ctype for t in ctypes):
-                raise FetchError(f"unsupported content type: {ctype or 'unknown'}", "fetch_failed")
+                raise FetchError(
+                    f"unsupported content type: {ctype or 'unknown'}",
+                    "fetch_permanent")
             raw = _read_bounded(response, max_bytes, deadline)
             if len(raw) > max_bytes:
                 raw = raw[:max_bytes]
@@ -319,11 +323,15 @@ def _fetch_one(url, timeout, max_bytes, deadline=None, ctypes=_PAGE_CTYPES):
     except FetchError:
         raise
     except HTTPError as exc:
-        raise FetchError(f"HTTP {exc.code}", "fetch_failed") from exc
+        reason = (
+            "fetch_failed"
+            if exc.code in {408, 425, 429} or exc.code >= 500
+            else "fetch_permanent")
+        raise FetchError(f"HTTP {exc.code}", reason) from exc
     except (URLError, socket.timeout) as exc:
         raise FetchError(f"request failed: {getattr(exc, 'reason', exc)}", "fetch_failed") from exc
     except Exception as exc:
-        raise FetchError(f"unexpected: {exc}", "fetch_failed") from exc
+        raise FetchError(f"unexpected: {exc}", "fetch_permanent") from exc
 
 
 def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
@@ -344,10 +352,11 @@ def fetch(url, timeout=20, max_bytes=2 * 1024 * 1024):
             final_url, html = value
             title, text = extract_text(html)
             if not text.strip():
-                raise FetchError("no readable text extracted", "fetch_failed")
+                raise FetchError(
+                    "no readable text extracted", "fetch_permanent")
             return final_url, title, text
         url = normalize_tme(value)   # 'redirect' -> re-validate + re-pin next loop
-    raise FetchError("too many redirects", "fetch_failed")
+    raise FetchError("too many redirects", "fetch_permanent")
 
 
 def fetch_json(url, timeout=8, max_bytes=512 * 1024):
@@ -368,6 +377,8 @@ def fetch_json(url, timeout=8, max_bytes=512 * 1024):
             try:
                 return json.loads(value[1])
             except ValueError as exc:
-                raise FetchError(f"response was not valid JSON: {exc}", "fetch_failed") from exc
+                raise FetchError(
+                    f"response was not valid JSON: {exc}",
+                    "fetch_permanent") from exc
         url = value  # 'redirect' -> re-validate + re-pin next loop
-    raise FetchError("too many redirects", "fetch_failed")
+    raise FetchError("too many redirects", "fetch_permanent")

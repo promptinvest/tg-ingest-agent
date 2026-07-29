@@ -82,11 +82,13 @@ def _wrong_day(conn, cfg, now, days):
 
 # -- checks: each returns (key, text, urgent) or None -------------------------
 
-def _overdue_reminders(conn, cfg, lang, now):
+def _overdue_reminders(conn, cfg, lang, now, chat_id=None):
     n = conn.execute(
         "SELECT COUNT(*) AS n FROM reminders WHERE status='active' AND due_utc<?"
-        " AND (last_fired_at IS NULL OR last_fired_at<due_utc)",
-        (now.isoformat(),),
+        + (" AND chat_id=?" if chat_id is not None else "")
+        + " AND (last_fired_at IS NULL OR last_fired_at<due_utc)",
+        ((now.isoformat(), int(chat_id)) if chat_id is not None
+         else (now.isoformat(),)),
     ).fetchone()["n"]
     return ("overdue", T(lang, "nudge_overdue", n=n), True) if n else None
 
@@ -131,10 +133,73 @@ def _journal_prompts(conn, cfg, lang, now):
 
 
 # urgent first, then by usefulness
-CHECKS = (_overdue_reminders, _memory_candidates, _notes_review_due, _journal_prompts)
+def _task_open_loops(conn, cfg, lang, now, chat_id=None):
+    stale_cutoff = (now - timedelta(hours=24)).isoformat()
+    attention_cutoff = (now - timedelta(hours=2)).isoformat()
+    row = conn.execute(
+        "SELECT id, objective, status, due_at, delivery_status"
+        " FROM assistant_tasks"
+        " WHERE (status IN ('planned','running','waiting_approval','blocked')"
+        " OR delivery_status IN ('ambiguous','failed'))"
+        + (" AND chat_id = ?" if chat_id is not None else "")
+        + " AND (delivery_status IN ('ambiguous','failed')"
+        " OR (status IN ('planned','running') AND updated_at <= ?)"
+        " OR (status IN ('waiting_approval','blocked') AND updated_at <= ?)"
+        " OR (due_at IS NOT NULL AND due_at <= ?))"
+        " ORDER BY CASE WHEN due_at IS NOT NULL AND due_at <= ? THEN 0 ELSE 1 END,"
+        " updated_at, id LIMIT 1",
+        ((int(chat_id),) if chat_id is not None else ())
+        + (stale_cutoff, attention_cutoff, now.isoformat(), now.isoformat()),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["delivery_status"] in {"ambiguous", "failed"}:
+        text = (
+            f"У задачи #{row['id']} не доставлен подтверждённый итог. Команда "
+            "task resume повторно отправит только результат, не запуская шаги."
+            if lang == "ru" else
+            f"Task #{row['id']} has no confirmed result delivery. Use task resume "
+            "to resend only the outcome; no steps will run again."
+        )
+        key = (
+            f"proactive_candidate:task_open_loop:{int(chat_id)}"
+            if chat_id is not None else "proactive_candidate:task_open_loop")
+        store.kv_set(conn, key, str(row["id"]))
+        return "task_open_loop", text, False
+    due = bool(row["due_at"] and row["due_at"] <= now.isoformat())
+    objective = str(row["objective"] or "")
+    if lang == "ru" and not any("Ѐ" <= c <= "ӿ" for c in objective):
+        objective = "Запрос босса"
+    elif lang != "ru" and not any(
+            ("A" <= c <= "Z") or ("a" <= c <= "z") for c in objective):
+        objective = "Boss request"
+    if lang == "ru":
+        text = (
+            f"Задача #{row['id']} вышла за указанный срок: {objective}"
+            if due else
+            f"Открытая задача #{row['id']} ждёт внимания [{row['status']}]: "
+            f"{objective}"
+        )
+    else:
+        text = (
+            f"Task #{row['id']} is past its explicit due time: {objective}"
+            if due else
+            f"Open task #{row['id']} needs attention [{row['status']}]: "
+            f"{objective}"
+        )
+    key = (
+        f"proactive_candidate:task_open_loop:{int(chat_id)}"
+        if chat_id is not None else "proactive_candidate:task_open_loop")
+    store.kv_set(conn, key, str(row["id"]))
+    return "task_open_loop", text, False
+
+
+CHECKS = (
+    _overdue_reminders, _task_open_loops, _memory_candidates,
+    _notes_review_due, _journal_prompts)
 # The "≤ max_per_day non-urgent" cap counts only the NON-URGENT heartbeat nudges.
 # Urgent ones (overdue) bypass the cap, so they must not consume it either.
-NONURGENT_KEYS = ("candidates", "note_review")
+NONURGENT_KEYS = ("candidates", "note_review", "task_open_loop")
 
 
 def _nonurgent_keys(conn):
@@ -144,7 +209,7 @@ def _nonurgent_keys(conn):
         f"journal:{d['slug']}" for d in store.journal_defs(conn))
 
 
-def run(conn, cfg, lang, reply_fn, now=None):
+def run(conn, cfg, lang, reply_fn, now=None, chat_id=None):
     """Evaluate the checks and send at most ONE nudge. Returns the sent check
     key, or None. Every outcome is logged to proactive_log."""
     skill_manifest.assert_proactive_allowed(CHECK_SKILL)  # gate (raises if misconfigured)
@@ -169,7 +234,10 @@ def run(conn, cfg, lang, reply_fn, now=None):
     # / uncategorized item still gets its turn.
     any_hit = False
     for check in CHECKS:
-        hit = check(conn, cfg, lang, now)
+        hit = (
+            check(conn, cfg, lang, now, chat_id)
+            if check in {_overdue_reminders, _task_open_loops}
+            else check(conn, cfg, lang, now))
         if not hit:
             continue
         any_hit = True

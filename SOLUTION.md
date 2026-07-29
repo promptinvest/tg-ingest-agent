@@ -1,26 +1,21 @@
 # Cara — Solution Specification
 
-> **Chief-of-staff upgrade (approved 2026-07-29):** the locked architecture,
+> **Chief-of-staff upgrade (shipped 2026-07-29):** the locked architecture,
 > data contracts, risk-tiered approval model, self-improvement boundary, local
-> worker isolation and phased acceptance gates are in
+> worker isolation and acceptance evidence are in
 > [`CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md`](CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md).
 > The adversarial design gate forbids planner-invented targets, blind retries
 > after ambiguous external effects, replayable/stale approvals, treating worker
 > prose as evidence, and feeding model-authored summaries into policy truth.
-> This specification remains authoritative for shipped behavior; each completed
-> phase must be folded back into this file and `CARA.md`.
 >
-> **Checkpoint A0 (repository only, not deployed):** `tool_broker.py` compiles
-> the neutral tool contracts and `tasking.py` treats planner output as
-> untrusted, validates provenance/dependencies, redacts derived secrets, and
-> strips bound values before persistence. `store.py` has additive task, step,
-> receipt, approval and artifact tables with composite ownership foreign keys,
-> including exact tool/idempotency/policy bindings, plus canonical source-row
-> revalidation inside the creation transaction, atomic update-id deduplication and
-> non-terminal cancellation requests while an effect may still be active.
-> Nothing invokes these dormant paths yet. A0 passed the adversarial gate and
-> the full disposable-PD-VPS suite (`1490` tests; `9` skips); it remains
-> repository-only.
+> **Production checkpoint:** all phases are deployed. `tool_broker.py` exposes
+> only the reviewed neutral registry; `tasking.py` and `task_runner.py` execute
+> provenance-bound durable plans; approvals are exact and one-time; receipts,
+> delivery ambiguity, cancellation and recovery are persisted; improvement
+> proposals require exact replay evidence and never self-deploy; and
+> `cara-worker` runs the compiled-in worker surface under a separate no-network
+> OS boundary. The full discovery suite and live runtime verifier are green,
+> and the independent adversarial review returned PASS.
 
 **Cara** (`@cara_assist_bot`) is a personal conversational AI assistant living
 in Telegram, self-hosted on a DigitalOcean droplet — the **PD-VPS**
@@ -33,17 +28,20 @@ operational a closed-world router assigns the request to a specialized skill;
 anything that changes state is confirmed conversationally before it becomes
 final. She replies only to her owner, in whichever language he wrote in.
 
-Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
+Stdlib-only Python 3, long polling (no inbound ports), one owner-facing
+systemd service plus one isolated local worker service.
 
 ---
 
 ## 1. Design principles
 
-1. **One bot, one process, skills as modules.** Telegram allows a single
-   `getUpdates` poller per token, and a 1-vCPU box does not need a fleet of
-   daemons. The orchestrator is an intent router inside one systemd service;
-   each skill is a Python module behind it. Background work (curation, retries,
-   cleanup) runs as durable jobs in the same process.
+1. **One bot poller, closed skills, isolated worker.** Telegram allows a single
+   `getUpdates` poller per token. The owner-facing orchestrator remains an
+   intent router with skills as Python modules. Background bookkeeping stays
+   in its durable job loop; the separate `cara-worker` exists only for bounded,
+   compiled-in work that benefits from an OS fault/privilege boundary. It has
+   no Telegram token, connector credentials, arbitrary shell API, public
+   listener, or network access.
 2. **Store first, think second.** Every inbound message is persisted to SQLite
    before any model call. LLM outages, budget stops, and restarts never lose
    data — pending work is retried on a sweep. Every model call funnels through
@@ -164,6 +162,12 @@ Stdlib-only Python 3, long polling (no inbound ports), one systemd service.
 | `hermes.py` | Cara's business register: the `ACTIONS` domain set, the Hermes `PERSONA` prompt, and `HermesMixin` (KB ask/fetch, budget_set, review, export handlers) — mixed into the Agent, same object (§5a) |
 | `notes_svc.py` | `NotesMixin`: the notes/inbox handler domain — lists, item detail, show media, discard/recategorize/merge, purge staging + typed-phrase resolve, journals, problem log (extracted from hermes, 2026-07-01 stage 2a/2b) |
 | `reminders_svc.py` | `ReminderMixin`: reminder create/list/cancel/reschedule/rename/undo, partial drafts, deterministic fired-reminder follow-ups, the fire/expiry sweeps (extracted 2026-07-01) |
+| `tasks_svc.py` | `TasksMixin`: durable task creation/list/show/cancel/resume, exact approval review, delivery and feedback handling |
+| `tasking.py` | strict bounded plan/provenance validation, task state transitions and truthful rendering |
+| `tool_broker.py` | closed risk-tiered tool registry, input/budget/policy gates, exact one-time approvals and typed receipts |
+| `task_runner.py` | dependency-ordered durable task execution, crash reclaim, cancellation and terminal delivery recovery |
+| `improvement.py` | evidence-bound feedback/evaluation/proposal workflow; never changes code, prompts, policy or deployment automatically |
+| `worker_client.py` / `cara_worker.py` | hash-bound one-way spool protocol and isolated compiled-in worker surface (`worker.echo` only in v1; no arbitrary command/file/network API) |
 | `backup.py` | daily consistent SQLite snapshot + gzip rotation (atomic `.tmp`→`os.replace`, stray-file sweep, retention before encryption); off-box copies only as AES-256-CBC/PBKDF2-encrypted `.db.gz.enc` (Spaces or fleet chat), a size-blocked copy raises an issue instead of staying silent; plus the MONTHLY restore self-check (`verify_restore`: decrypt → gunzip → `PRAGMA integrity_check` in a scratch dir that is always removed) |
 | `ingest.py` | message parsing, URL extraction (UTF-16-safe), category + facts + summary suggestion |
 | `pdftext.py` | best-effort PDF text-layer extraction (pdfminer.six, with a stdlib regex fallback) |
@@ -213,8 +217,10 @@ own voice transcribed if enabled → text stored → deterministic short-circuit
 purge, explicit category, fired-reminder follow-ups, explicit `Удали #N` / `#N —
 удали`, greetings → `converse`) → `router.route()` → output parsed as
 JSON, validated against the closed action set, confidence-gated → dispatcher consults
-`skill_manifest.get_policy()` → skill runs or stages a pending action for confirmation →
-reply sent; conversation, trace and issue tables updated.
+`skill_manifest.get_policy()` → direct skill runs/stages its normal confirmation,
+or `task_start` creates a bounded durable plan whose steps pass the broker and
+pause on exact approval where required → reply sent; conversation, task,
+receipt, trace and issue tables updated.
 
 **What's a note vs a conversation:** only **forwards** (channel/people content) and bare
 typed notes auto-ingest. One explicit-context exception exists: if a `reminder_partial`
@@ -925,8 +931,9 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
 ## 11. Operations
 
 - **Host:** PD-VPS, `174.138.108.85:22` (SSH key-only; details in the PD-VPS KB).
-  systemd service `tg-ingest-agent`, app `/opt/tg-ingest-agent/`, state
-  `/var/lib/tg-ingest-agent/`. The former Pilot-VPS is retired.
+  systemd services `tg-ingest-agent` and `cara-worker`, app
+  `/opt/tg-ingest-agent/`, app state `/var/lib/tg-ingest-agent/`, isolated
+  spool state `/var/lib/cara-worker/`. The former Pilot-VPS is retired.
 - **Deploy:** single-connection `deploy.sh` (tar → test → install → verify) with
   an idempotent installer that backs up replaced files, preserves env, gates on
   `py_compile`, and restarts only when secrets are complete; `--pull`/`--rollback`

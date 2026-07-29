@@ -494,6 +494,32 @@ def load_config(env=None):
     # Vision model for describing photos when the chat model isn't vision-capable
     # (open-weight models). Empty -> photos categorized text-only from the caption.
     cfg.vision_model = (env.get("VISION_MODEL") or "").strip()
+    # Governed chief-of-staff tasks. These paths contain derived drafts/spool
+    # envelopes only; the isolated worker receives no provider or Telegram key.
+    cfg.task_artifacts_dir = (env.get("TASK_ARTIFACTS_DIR")
+                              or "/var/lib/tg-ingest-agent/task-artifacts").strip()
+    cfg.task_worker_spool = (env.get("TASK_WORKER_SPOOL")
+                             or "/var/lib/cara-worker/spool").strip()
+    if tuple(Path(cfg.task_artifacts_dir).parts[-2:]) != (
+            "tg-ingest-agent", "task-artifacts"):
+        raise ValueError(
+            "TASK_ARTIFACTS_DIR must be the dedicated tg-ingest-agent/task-artifacts path")
+    if tuple(Path(cfg.task_worker_spool).parts[-2:]) != (
+            "cara-worker", "spool"):
+        raise ValueError(
+            "TASK_WORKER_SPOOL must be the dedicated cara-worker/spool path")
+    cfg.task_worker_enabled = (
+        env.get("TASK_WORKER_ENABLED") or "true").strip().lower() == "true"
+    cfg.task_model_call_limit = max(
+        1, min(int(env.get("TASK_MODEL_CALL_LIMIT") or "4"), 12))
+    cfg.task_cost_limit_usd = max(
+        0.01, min(float(env.get("TASK_COST_LIMIT_USD") or "0.15"), 2.0))
+    cfg.task_open_limit = max(
+        1, min(int(env.get("TASK_OPEN_LIMIT") or "20"), 100))
+    cfg.improvement_weekday = max(
+        0, min(int(env.get("IMPROVEMENT_WEEKDAY") or "6"), 6))
+    cfg.improvement_hour = max(
+        0, min(int(env.get("IMPROVEMENT_HOUR") or "4"), 23))
     # Model-health monitor: how often to check Cara's models are reachable and
     # alert the boss the moment one becomes inaccessible (0 disables).
     cfg.model_health_interval = int(env.get("MODEL_HEALTH_INTERVAL_SECONDS") or "1800")

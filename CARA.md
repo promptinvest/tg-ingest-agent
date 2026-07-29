@@ -1,25 +1,21 @@
 # Cara — Capabilities, Features & Architecture
 
-> **Chief-of-staff upgrade (approved 2026-07-29):** Cara is being extended with
-> durable multi-step tasks, a closed risk-tiered tool broker, evidence-based
+> **Chief-of-staff upgrade (shipped 2026-07-29):** Cara now has durable
+> multi-step tasks, a closed risk-tiered tool broker, evidence-based
 > self-improvement proposals, and a separately sandboxed local worker. The
-> decision-complete staged specification is
+> decision-complete implementation specification is
 > [`CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md`](CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md).
-> An adversarial design gate now additionally requires machine-verifiable input
+> Its adversarial gate requires machine-verifiable input
 > provenance, one-time approvals bound to target versions, explicit
 > `ambiguous` handling when an external effect cannot be safely reconciled,
 > tainted worker/fetched/model output, structured claim citations, and an
 > immutable evidence boundary for improvement proposals.
-> Until a phase is marked shipped there, the current capabilities and limits
-> documented below remain authoritative.
 >
-> **Implementation checkpoint A0 (not live):** the repository now contains the
-> inert closed tool catalog, strict provenance/redaction validator, additive
-> durable-task schema with cross-task foreign-key guards, canonical
-> source-update revalidation, atomic get-or-create, and cancellation-request
-> fencing for active work. No router action or tool executor is enabled by this
-> checkpoint. Its final gate passed adversarial review and all 1,490 tests in a
-> disposable PD-VPS copy; it is not installed on the live service.
+> **Production checkpoint:** all five phases are live on the Cara host. The
+> full discovery suite passed with the intentional skips only; the independent
+> adversarial review returned PASS. Both `tg-ingest-agent` and the isolated
+> `cara-worker` are active/enabled, the live spool/isolation/SQLite verifier is
+> green, and no warning-or-worse service log entries appeared after restart.
 
 **Cara** (`@cara_assist_bot`) is a personal, conversational AI assistant that lives
 in Telegram and is self-hosted on the **PD‑VPS** (`174.138.108.85`, a DigitalOcean
@@ -27,8 +23,8 @@ droplet repurposed after the PD platform retired). The former Pilot‑VPS was re
 in 2026‑06; there is no active standby there.
 She talks like a warm human, ingests and organizes what her owner ("boss") forwards
 her, runs reminders, answers from his own notes, learns from how they work together,
-and quietly flags things worth attention — all from **one stdlib‑only Python process**
-with **no inbound network ports**.
+and quietly flags things worth attention — from a stdlib-only owner-facing
+process plus an isolated local worker, with **no inbound network ports**.
 
 This document is the complete reference: what she can do, how she behaves, and how
 she's built. For the design rationale see [SOLUTION.md](SOLUTION.md); this file is
@@ -41,11 +37,11 @@ the exhaustive feature + architecture map.
 | | |
 |---|---|
 | **Surface** | Telegram bot, single owner, free‑form Russian/English, text + voice + forwards |
-| **Runtime** | one systemd service, stdlib‑only Python 3, long polling (no webhooks/ports) |
+| **Runtime** | owner-facing `tg-ingest-agent` plus no-network `cara-worker`, stdlib-only Python 3, long polling (no webhooks/ports) |
 | **Inference** | DigitalOcean Gradient (chat default/current `deepseek-4-flash`, default fallback `openai-gpt-oss-20b`, embeddings `BGE‑M3`); STT local `whisper.cpp` |
 | **Storage** | SQLite (WAL) + local media dir; optional DO Spaces (dormant) |
 | **Persona** | a warm, loyal human assistant persona with her own (fictional) life (the in-person companion/relationship side was split off to Nikki, 2026-07-03); **open and personal by the boss's wish** — shares her inner life and talks frankly about any personal matter, no "professional distance"; never breaks character; matches the boss's language |
-| **Safety spine** | owner‑only access · permission manifest · confirm‑before‑state‑change · budget caps · SSRF guard · action‑truth · full tracing |
+| **Safety spine** | owner-only access · closed risk-tiered broker · exact one-time approvals · provenance-bound inputs · budget caps · SSRF guard · action-truth · receipts/full tracing |
 
 ---
 
@@ -81,9 +77,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
                                         │
              ┌──────────────────────────┼───────────────────────────────────┐
              ▼                          ▼                                     ▼
-        a skill (below)          converse (warm free-form Cara)        confirm/amend/cancel
-                                 ← low-confidence falls here, not        (pending actions)
-                                   a cold "уточни"
+        a direct skill           converse (warm free-form Cara)        task_start
+        (single-step)            ← low-confidence falls here, not      (compound work)
+                                   a cold "уточни"                           │
+                                                                  bounded plan → broker
+                                                                  → receipts/approval
 ```
 
 - **Owner‑only:** a message/reaction/button is acted on **only** when the chat id
@@ -1497,7 +1495,7 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 
 ## 5. Architecture
 
-### One process, modules behind a router
+### Owner-facing process plus an isolated local worker
 
 ```
 agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending actions ·
@@ -1512,6 +1510,12 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    │                   note_edit (confirmed), list_field (one field across the pinned list)
    ├─ reminders_svc.py ReminderMixin: create/list/cancel/reschedule/rename/undo, partial
    │                   drafts, fired follow-ups, the fire/expiry sweeps
+   ├─ tasks_svc.py     TasksMixin: task create/list/show/cancel/resume and approvals
+   ├─ tasking.py       bounded plan/provenance validation and truthful task rendering
+   ├─ tool_broker.py   closed risk-tiered registry, exact approvals and receipts
+   ├─ task_runner.py   durable dependency-ordered step execution and recovery
+   ├─ improvement.py  feedback/evaluation/proposals; no automatic runtime change
+   ├─ worker_client.py bounded hash-bound spool transport to the isolated worker
    ├─ ingest.py        parsing, UTF-16-safe URL extraction, category+facts+summary
    ├─ journals.py      structured journals: closed entry-type registry (gratitude active),
    │                   payload validation (lexical support), extraction, stats, md export
@@ -1545,6 +1549,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    └─ common.py        config, language detection, reactions/time helpers, STT-noise filter
           │
    DigitalOcean Gradient inference  ·  local whisper-server  ·  SQLite + media
+          │
+          └─ spool → cara_worker.py (`worker.echo` only; no network/shell/file API)
 ```
 
 ### LLM gateway (`llm.py`)
@@ -1566,6 +1572,12 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
   the profile and pricing tables are parsed once per process (memoized on the config),
   and a **truncated/unparsable response body is treated as transient** — one retry of
   the preferred model and a short bench, instead of the full cooldown a hard 403 gets.
+- **Kimi K3 is an opt-in challenger, not the production default (2026-07-29).**
+  Its current DigitalOcean rate is represented in the pricing table, so trials
+  are metered honestly. It remains behind `deepseek-v4-pro` for planning,
+  synthesis, and improvement evaluation until the versioned corpus and a
+  production-shadow evaluation show a quality gain worth the materially higher
+  output cost. A commented trial profile is provided in the example env.
 - **Budget‑guarded:** every chat/STT/embedding call is priced and logged to
   `llm_usage`; daily/monthly caps warn at 80% and **hard‑stop** at 100% (above
   failover). Caps are overridable at runtime via `budget_set` — **including
@@ -2096,8 +2108,9 @@ is documented twice. The lists above stay as the short tour; they are not the ca
 ## 9. Operations
 
 - **Host:** PD‑VPS (`174.138.108.85`, SSH key‑only; connection details in the PD‑VPS
-  KB). Service `tg-ingest-agent`; app `/opt/tg-ingest-agent/`; state
-  `/var/lib/tg-ingest-agent/`. The former Pilot‑VPS is retired.
+  KB). Services `tg-ingest-agent` and `cara-worker`; app
+  `/opt/tg-ingest-agent/`; app state `/var/lib/tg-ingest-agent/`; isolated
+  spool state `/var/lib/cara-worker/`. The former Pilot‑VPS is retired.
 - **Deploy:** single‑connection `deploy.sh` (tar → test → install → verify) with an
   idempotent installer (backs up, preserves env, `py_compile` gate, restarts only when
   secrets are complete); `--pull` / `--rollback <sha>` supported. The installer stamps

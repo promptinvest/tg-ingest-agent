@@ -20,7 +20,9 @@ from common import log
 
 
 class LLMError(Exception):
-    pass
+    def __init__(self, message, *, transient=False):
+        super().__init__(message)
+        self.transient = bool(transient)
 
 
 class BudgetExceeded(LLMError):
@@ -46,19 +48,18 @@ DEFAULT_PRICING = {
     "openai-gpt-4o": (2.5, 10.0),
     "openai-gpt-4o-mini": (0.15, 0.6),
     # Open-weight models Cara actually runs today
-    "deepseek-v4-pro": (1.74, 3.48),
-    "deepseek-4-flash": (0.14, 0.28),
-    "deepseek-3.2": (0.50, 1.60),
+    "deepseek-v4-pro": (1.392, 2.784),
+    "deepseek-4-flash": (0.112, 0.224),
+    "deepseek-3.2": (0.425, 1.36),
     "nemotron-3-nano-omni": (0.50, 0.90),
     "nemotron-nano-12b-v2-vl": (0.20, 0.60),
-    # Vision model (own-photo reactions): open Llama-4 multimodal — describes accurately on
-    # this DO tier, where Claude/GPT-4o vision are 403. DO publishes no per-model price;
-    # estimated from common Llama-4-Maverick rates (well under the $3/$15 default).
-    "llama-4-maverick": (0.20, 0.85),
+    # Vision model (own-photo reactions): open Llama-4 multimodal.
+    "llama-4-maverick": (0.25, 0.87),
     "openai-gpt-oss-20b": (0.05, 0.45),
     "openai-gpt-oss-120b": (0.10, 0.70),
-    "kimi-k2.6": (0.95, 4.0),
-    "kimi-k2.5": (0.50, 2.70),
+    "kimi-k3": (3.0, 15.0),
+    "kimi-k2.6": (0.76, 3.20),
+    "kimi-k2.5": (0.375, 2.025),
     # router:cara was a DO Inference Router (meta-endpoint) that dispatched to a
     # cheap open-weight model; price it at the deepseek-flash rate it targeted.
     "router:cara": (0.14, 0.28),
@@ -278,21 +279,28 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
         with urlopen(request, timeout=timeout or cfg.llm_timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise LLMError(_redacted_http_error(exc, cfg.do_key)) from exc
+        raise LLMError(
+            _redacted_http_error(exc, cfg.do_key),
+            transient=exc.code in {408, 425, 429} or exc.code >= 500) from exc
     except URLError as exc:
-        raise LLMError(f"inference request failed: {exc.reason}") from exc
+        raise LLMError(
+            f"inference request failed: {exc.reason}", transient=True) from exc
     except OSError as exc:
         # A read-timeout during response.read() raises a bare socket.timeout/
         # TimeoutError (NOT a URLError) — wrap it so callers' except LLMError sees it.
-        raise LLMError(f"inference request failed: {exc}") from exc
+        raise LLMError(
+            f"inference request failed: {exc}", transient=True) from exc
     except (http.client.HTTPException, UnicodeDecodeError) as exc:
         # A connection cut mid-body raises IncompleteRead (an HTTPException, NOT an
         # OSError); a body truncated inside a multibyte char (Cyrillic!) raises
         # UnicodeDecodeError. Unwrapped, either bypasses failover/cooldown entirely
         # and re-runs the whole update's side effects on retry.
-        raise LLMError(f"inference response truncated/malformed: {exc!r}") from exc
+        raise LLMError(
+            f"inference response truncated/malformed: {exc!r}",
+            transient=True) from exc
     except json.JSONDecodeError as exc:
-        raise LLMError("inference response was not valid JSON") from exc
+        raise LLMError(
+            "inference response was not valid JSON", transient=True) from exc
     elapsed = max(0.0, time.monotonic() - started)
     choices = data.get("choices") or []
     content = str((choices[0].get("message") or {}).get("content") or "") if choices else ""
@@ -520,6 +528,18 @@ def default_profiles(cfg):
         # Weekly memory consolidation (dedup + contradiction judgment) — infrequent but needs
         # real semantic judgment, so it gets a stronger model than the fast curator.
         "memory_consolidate": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
+        # Compound work is infrequent and high-leverage. Keep the fast model for
+        # routing; use the stronger open model for bounded plans/synthesis, with
+        # Flash as the independent-family availability backstop.
+        "task_planner": {"primary": "deepseek-v4-pro",
+                         "fallbacks": ["deepseek-4-flash"],
+                         "max_tokens": 1600, "json_required": True},
+        "task_synthesis": {"primary": "deepseek-v4-pro",
+                           "fallbacks": ["deepseek-4-flash"],
+                           "max_tokens": 1200, "json_required": True},
+        "improvement_evaluator": {"primary": "deepseek-v4-pro",
+                                  "fallbacks": ["deepseek-4-flash"],
+                                  "max_tokens": 1000, "json_required": True},
         # (review_balanced retired 2026-07-25: the weekly review is deterministic,
         # nothing requested the profile — a dead entry only invites stale config.)
     }
@@ -700,18 +720,25 @@ def embed(cfg, conn, skill, texts):
         with urlopen(request, timeout=cfg.llm_timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise LLMError(_redacted_http_error(exc, cfg.do_key)) from exc
+        raise LLMError(
+            _redacted_http_error(exc, cfg.do_key),
+            transient=exc.code in {408, 425, 429} or exc.code >= 500) from exc
     except URLError as exc:
-        raise LLMError(f"embeddings request failed: {exc.reason}") from exc
+        raise LLMError(
+            f"embeddings request failed: {exc.reason}", transient=True) from exc
     except OSError as exc:
         # Bare socket read-timeout (not a URLError) — wrap so index_message's
         # except LLMError catches it instead of crashing the update handler.
-        raise LLMError(f"embeddings request failed: {exc}") from exc
+        raise LLMError(
+            f"embeddings request failed: {exc}", transient=True) from exc
     except (http.client.HTTPException, UnicodeDecodeError) as exc:
         # Truncated body (IncompleteRead) / mid-multibyte cut — same class as chat().
-        raise LLMError(f"embeddings response truncated/malformed: {exc!r}") from exc
+        raise LLMError(
+            f"embeddings response truncated/malformed: {exc!r}",
+            transient=True) from exc
     except json.JSONDecodeError as exc:
-        raise LLMError("embeddings response was not valid JSON") from exc
+        raise LLMError(
+            "embeddings response was not valid JSON", transient=True) from exc
     elapsed = max(0.0, time.monotonic() - started)
     rows = sorted(data.get("data") or [], key=lambda r: r.get("index", 0))
     vectors = [[float(x) for x in r.get("embedding") or []] for r in rows]
@@ -777,7 +804,9 @@ def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
                 log("whisper-server answered on retry")
             break
         except HTTPError as exc:      # a subclass of URLError: the server DID answer
-            raise LLMError(f"whisper-server HTTP {exc.code}") from exc
+            raise LLMError(
+                f"whisper-server HTTP {exc.code}",
+                transient=exc.code in {408, 425, 429} or exc.code >= 500) from exc
         except URLError as exc:
             # Connection-level failure = the process is down/restarting, not
             # refusing this request. Retry once, then fall back to the CLI.
@@ -798,7 +827,9 @@ def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
             log(f"whisper-server timed out after {cfg.stt_local_timeout}s ({exc})")
             break
         except http.client.HTTPException as exc:
-            raise LLMError(f"whisper-server response truncated: {exc!r}") from exc
+            raise LLMError(
+                f"whisper-server response truncated: {exc!r}",
+                transient=True) from exc
     if raw is None:
         # The CLI needs BOTH halves: with the binary present but the model file
         # missing/renamed, falling through would answer "local transcription
@@ -844,7 +875,7 @@ def _transcribe_local(cfg, conn, skill, audio_path, duration_seconds):
             capture_output=True, check=True, timeout=cfg.stt_local_timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise LLMError("local transcription timed out") from exc
+        raise LLMError("local transcription timed out", transient=True) from exc
     except FileNotFoundError as exc:
         raise LLMError(f"local transcription tool missing: {exc}") from exc
     except subprocess.CalledProcessError as exc:
@@ -882,15 +913,22 @@ def _transcribe_remote(cfg, conn, skill, audio_path, duration_seconds):
         with urlopen(request, timeout=cfg.llm_timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise LLMError(_redacted_http_error(exc, cfg.do_key)) from exc
+        raise LLMError(
+            _redacted_http_error(exc, cfg.do_key),
+            transient=exc.code in {408, 425, 429} or exc.code >= 500) from exc
     except URLError as exc:
-        raise LLMError(f"transcription request failed: {exc.reason}") from exc
+        raise LLMError(
+            f"transcription request failed: {exc.reason}", transient=True) from exc
     except OSError as exc:
-        raise LLMError(f"transcription request failed: {exc}") from exc
+        raise LLMError(
+            f"transcription request failed: {exc}", transient=True) from exc
     except (http.client.HTTPException, UnicodeDecodeError) as exc:
-        raise LLMError(f"transcription response truncated/malformed: {exc!r}") from exc
+        raise LLMError(
+            f"transcription response truncated/malformed: {exc!r}",
+            transient=True) from exc
     except json.JSONDecodeError as exc:
-        raise LLMError("transcription response was not valid JSON") from exc
+        raise LLMError(
+            "transcription response was not valid JSON", transient=True) from exc
     text = str(data.get("text") or "").strip()
     cost = (max(duration_seconds, 1) / 60.0) * STT_PRICE_PER_MINUTE
     store.usage_add(conn, skill, "stt", cfg.stt_model, seconds=duration_seconds, cost_usd=cost)

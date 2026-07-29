@@ -18,6 +18,53 @@ _DEFAULT = {
     "title": {"en": "", "ru": ""},
 }
 
+# Durable-task tools use a separate namespace from router actions, but this
+# remains the canonical permission manifest.  The broker mechanically compares
+# every compiled ToolSpec against these independent policy declarations at
+# startup and immediately before invocation.
+TASK_TOOLS = {
+    "knowledge.search": {
+        "risk": "read_only", "uses_llm": False, "external_network": False,
+        "writes_state": False, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
+    "knowledge.read": {
+        "risk": "read_only", "uses_llm": False, "external_network": False,
+        "writes_state": False, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
+    "reminders.read": {
+        "risk": "read_only", "uses_llm": False, "external_network": False,
+        "writes_state": False, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
+    "source.fetch": {
+        "risk": "network_read", "uses_llm": False, "external_network": True,
+        "writes_state": False, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
+    "research.synthesize": {
+        "risk": "read_only", "uses_llm": True, "external_network": False,
+        "writes_state": False, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
+    "artifact.markdown": {
+        "risk": "draft_write", "uses_llm": False, "external_network": False,
+        "writes_state": True, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
+    "reminder.propose": {
+        "risk": "state_write", "uses_llm": False, "external_network": False,
+        "writes_state": True, "destructive": False,
+        "requires_confirmation": True, "allowed_proactive": False,
+    },
+    "worker.echo": {
+        "risk": "read_only", "uses_llm": False, "external_network": False,
+        "writes_state": False, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
+}
+
 SKILLS = {
     # -- ingest / knowledge
     "ingest": {"risk": "state_write", "uses_llm": True, "writes_state": True,
@@ -96,7 +143,37 @@ SKILLS = {
     "issues_report": {"risk": "read_only", "title": {"en": "Issues report", "ru": "Отчёт о проблемах"}},
     "report_problem": {"risk": "state_write", "writes_state": True,
                        "title": {"en": "Report a problem", "ru": "Записать проблему"}},
-    "multi_action": {"risk": "meta", "title": {"en": "One at a time", "ru": "По одному"}},
+    "multi_action": {"risk": "draft_write", "uses_llm": True, "writes_state": True,
+                     "persona_context": True,
+                     "title": {"en": "Compound tasks", "ru": "Составные задачи"}},
+    "task_start": {"risk": "draft_write", "uses_llm": True, "writes_state": True,
+                   "persona_context": True,
+                   "title": {"en": "Plan and execute tasks",
+                             "ru": "Планирование и выполнение задач"}},
+    "task_list": {"risk": "read_only",
+                  "title": {"en": "Task list", "ru": "Список задач"}},
+    "task_show": {"risk": "read_only",
+                  "title": {"en": "Task detail", "ru": "Детали задачи"}},
+    "task_cancel": {"risk": "state_write", "writes_state": True,
+                    "title": {"en": "Cancel task", "ru": "Отменить задачу"}},
+    "task_resume": {"risk": "state_write", "writes_state": True,
+                    "title": {"en": "Resume safe task step",
+                              "ru": "Продолжить безопасный шаг"}},
+    "task_feedback": {"risk": "state_write", "writes_state": True,
+                      "title": {"en": "Rate a result", "ru": "Оценить результат"}},
+    "improvement_list": {"risk": "read_only",
+                         "title": {"en": "Improvement proposals",
+                                   "ru": "Предложения улучшений"}},
+    "improvement_show": {"risk": "read_only",
+                         "title": {"en": "Improvement detail",
+                                   "ru": "Детали улучшения"}},
+    "improvement_decide": {
+        "risk": "state_write", "writes_state": True,
+        "title": {"en": "Accept/reject a proposal",
+                  "ru": "Принять/отклонить предложение"}},
+    "improvement_export": {"risk": "draft_write", "writes_state": True,
+                           "title": {"en": "Export an improvement",
+                                     "ru": "Экспорт улучшения"}},
     "set_journal": {"risk": "state_write", "writes_state": True,
                     "title": {"en": "Set journal", "ru": "Сделать дневником"}},
     "journal_show": {"risk": "read_only", "persona_context": True,
@@ -166,6 +243,13 @@ def get_policy(action):
         raise SkillPolicyError(f"Unknown skill/action: {action}")
     base.update(SKILLS[action])
     return base
+
+
+def get_tool_policy(tool_id):
+    try:
+        return dict(TASK_TOOLS[str(tool_id)])
+    except KeyError as exc:
+        raise SkillPolicyError(f"Unknown task tool: {tool_id}") from exc
 
 
 def known(action):

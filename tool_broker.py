@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """Closed tool contracts for Cara's durable assistant tasks.
 
-This module contains metadata and input-shape validation only. Tool execution
-is added behind the same registry in the next delivery batch; keeping the
-catalog inert first lets plan persistence and provenance be tested without
-accidentally enabling a state-changing path.
+This module contains the compiled metadata and input-shape boundary used by
+the task runner. Execution lives in ``task_runner.py`` (or the isolated
+worker), so model output never names a callable or command directly.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
+
+import skill_manifest
 
 
 RISKS = frozenset({
     "read_only", "network_read", "draft_write", "state_write",
     "external_write", "destructive",
 })
-POLICY_VERSION = "task-tools/v1"
-IMPLEMENTATION_VERSION = "tasking-a0/v1"
+POLICY_VERSION = "task-tools/v2"
+IMPLEMENTATION_VERSION = "tasking/v2"
 TRUST_CLASSES = frozenset({
     "boss", "confirmed_local", "external_untrusted", "model_untrusted",
 })
@@ -24,6 +25,10 @@ TRUST_CLASSES = frozenset({
 
 class ToolInputError(ValueError):
     """A planner supplied an input that is outside a tool's closed schema."""
+
+
+class ToolOutputError(ValueError):
+    """A tool returned data outside its compiled receipt schema."""
 
 
 @dataclass(frozen=True)
@@ -96,31 +101,34 @@ TOOLS = {
         required=("query",), optional=("limit",),
         output_schema="knowledge.search/v1",
         output_paths=(("results", "confirmed_local"),),
+        output_limit=64000,
     ),
     "knowledge.read": _spec(
         "knowledge.read", "Read a saved note", "read_only",
         required=("note_no",), bound=("note_no",),
         output_schema="knowledge.read/v1",
         output_paths=(("note", "confirmed_local"),),
+        output_limit=32000,
     ),
     "reminders.read": _spec(
         "reminders.read", "Read active reminders", "read_only",
         output_schema="reminders.read/v1",
         output_paths=(("reminders", "confirmed_local"),),
+        output_limit=96000,
     ),
     "source.fetch": _spec(
         "source.fetch", "Read a supplied URL", "network_read",
         required=("url",), bound=("url",),
         output_schema="source.fetch/v1",
         output_paths=(("document", "external_untrusted"),),
-        external_network=True, timeout_seconds=25,
+        external_network=True, output_limit=64000, timeout_seconds=25,
     ),
     "research.synthesize": _spec(
         "research.synthesize", "Synthesize cited findings", "read_only",
         required=("receipt_steps",), optional=("question",),
         output_schema="research.synthesize/v1",
         output_paths=(("claims", "model_untrusted"),),
-        uses_llm=True, output_limit=12000, timeout_seconds=45,
+        uses_llm=True, output_limit=262144, timeout_seconds=45,
     ),
     "artifact.markdown": _spec(
         "artifact.markdown", "Create a managed Markdown draft", "draft_write",
@@ -137,6 +145,13 @@ TOOLS = {
         output_paths=(("reminder_id", "confirmed_local"),),
         writes_state=True, requires_confirmation=True,
     ),
+    "worker.echo": _spec(
+        "worker.echo", "Sandbox transport check", "read_only",
+        required=("text",),
+        output_schema="worker.echo/v1",
+        output_paths=(("echo", "external_untrusted"),),
+        execution_site="worker", output_limit=2000, timeout_seconds=10,
+    ),
 }
 
 
@@ -148,7 +163,13 @@ def assert_registry():
     """Fail fast on a policy contradiction in the compiled registry."""
     if set(TOOLS) != {spec.id for spec in TOOLS.values()}:
         raise RuntimeError("task tool registry key/id mismatch")
+    if set(TOOLS) != set(skill_manifest.TASK_TOOLS):
+        missing = sorted(set(TOOLS) - set(skill_manifest.TASK_TOOLS))
+        extra = sorted(set(skill_manifest.TASK_TOOLS) - set(TOOLS))
+        raise RuntimeError(
+            f"task tool permission manifest mismatch: missing={missing}, extra={extra}")
     for spec in TOOLS.values():
+        assert_policy(spec)
         if spec.risk not in RISKS:
             raise RuntimeError(f"unknown risk for {spec.id}")
         if spec.execution_site not in {"agent", "worker"}:
@@ -169,6 +190,20 @@ def assert_registry():
             paths.append(path)
         if len(paths) != len(set(paths)):
             raise RuntimeError(f"duplicate output path for {spec.id}")
+
+
+def assert_policy(spec):
+    if not isinstance(spec, ToolSpec):
+        raise RuntimeError("unknown task tool")
+    policy = skill_manifest.get_tool_policy(spec.id)
+    for field in (
+        "risk", "uses_llm", "external_network", "writes_state", "destructive",
+        "requires_confirmation", "allowed_proactive",
+    ):
+        if policy.get(field) != getattr(spec, field):
+            raise RuntimeError(
+                f"task tool policy drift for {spec.id}: {field}")
+    return True
 
 
 def validate_input(spec, value):
@@ -239,9 +274,132 @@ def validate_input(spec, value):
         }
         if out["recurrence"] not in {"none", "daily", "weekly"}:
             raise ToolInputError("reminder.propose: invalid recurrence")
+    elif spec.id == "worker.echo":
+        out = {"text": _bounded_text(out.get("text"), 1000, "text")}
     else:  # Registry additions must add a validator in the same change.
         raise ToolInputError(f"{spec.id}: no input validator")
     return out
+
+
+def validate_output(spec, data, evidence):
+    """Validate post-redaction receipt data and evidence recursively."""
+    if not isinstance(spec, ToolSpec):
+        raise ToolOutputError("unknown tool")
+    _bounded_json(data, spec.output_limit)
+    _bounded_json(evidence, spec.output_limit)
+    if not isinstance(data, dict) or set(data) != {"schema", "value"}:
+        raise ToolOutputError(f"{spec.id}: output envelope mismatch")
+    if data["schema"] != spec.output_schema or not isinstance(data["value"], dict):
+        raise ToolOutputError(f"{spec.id}: output schema mismatch")
+    value = data["value"]
+    expected = {path for path, _ in spec.output_paths}
+    if set(value) != expected:
+        raise ToolOutputError(f"{spec.id}: output fields mismatch")
+    if spec.id == "knowledge.search":
+        rows = value["results"]
+        if not isinstance(rows, list) or len(rows) > 8:
+            raise ToolOutputError("knowledge.search: invalid results")
+        for row in rows:
+            _exact_dict(row, {"note_no", "category", "text"})
+            if not isinstance(row["note_no"], int):
+                raise ToolOutputError("knowledge.search: invalid note number")
+            _text_output(row["category"], 200)
+            _text_output(row["text"], 1200)
+    elif spec.id == "knowledge.read":
+        row = value["note"]
+        _exact_dict(row, {"note_no", "category", "text"})
+        if not isinstance(row["note_no"], int):
+            raise ToolOutputError("knowledge.read: invalid note number")
+        _text_output(row["category"], 200)
+        _text_output(row["text"], 5000)
+    elif spec.id == "reminders.read":
+        rows = value["reminders"]
+        if not isinstance(rows, list) or len(rows) > 50:
+            raise ToolOutputError("reminders.read: invalid reminders")
+        for row in rows:
+            _exact_dict(row, {"id", "title", "due_utc", "recurrence"})
+            if not isinstance(row["id"], int):
+                raise ToolOutputError("reminders.read: invalid id")
+            _text_output(row["title"], 200)
+            _text_output(row["due_utc"], 80)
+            if row["recurrence"] not in {"none", "daily", "weekly"}:
+                raise ToolOutputError("reminders.read: invalid recurrence")
+    elif spec.id == "source.fetch":
+        row = value["document"]
+        _exact_dict(row, {"url", "title", "text"})
+        _text_output(row["url"], 2048)
+        _text_output(row["title"], 300, allow_empty=True)
+        _text_output(row["text"], 12000)
+    elif spec.id == "research.synthesize":
+        claims = value["claims"]
+        if not isinstance(claims, list) or not 1 <= len(claims) <= 20:
+            raise ToolOutputError("research.synthesize: invalid claims")
+        evidence_ids = {
+            item["id"] for item in evidence if isinstance(item, dict) and item.get("id")
+        }
+        for claim in claims:
+            _exact_dict(claim, {"claim", "citation_ids", "confidence", "limitation"})
+            _text_output(claim["claim"], 1000)
+            _text_output(claim["limitation"], 500, allow_empty=True)
+            if not isinstance(claim["confidence"], (int, float)):
+                raise ToolOutputError("research.synthesize: invalid confidence")
+            citations = claim["citation_ids"]
+            if (not isinstance(citations, list) or not citations
+                    or len(citations) > 20
+                    or any(not isinstance(cid, str) or cid not in evidence_ids
+                           for cid in citations)):
+                raise ToolOutputError("research.synthesize: invalid citation lineage")
+    elif spec.id in {"artifact.markdown", "reminder.propose"}:
+        key = "artifact_id" if spec.id == "artifact.markdown" else "reminder_id"
+        if not isinstance(value[key], int) or value[key] <= 0:
+            raise ToolOutputError(f"{spec.id}: invalid effect id")
+    elif spec.id == "worker.echo":
+        _text_output(value["echo"], 1000)
+    else:
+        raise ToolOutputError(f"{spec.id}: output validator missing")
+    if not isinstance(evidence, list) or len(evidence) > 100:
+        raise ToolOutputError(f"{spec.id}: invalid evidence list")
+    for item in evidence:
+        _exact_dict(item, {"id", "source", "label", "trust"})
+        _text_output(item["id"], 240)
+        _text_output(item["source"], 500)
+        _text_output(item["label"], 240, allow_empty=True)
+        if item["trust"] not in TRUST_CLASSES:
+            raise ToolOutputError(f"{spec.id}: invalid evidence trust")
+    return data, evidence
+
+
+def _bounded_json(value, maximum):
+    nodes = 0
+    stack = [(value, 0)]
+    while stack:
+        current, depth = stack.pop()
+        nodes += 1
+        if nodes > 1000 or depth > 10:
+            raise ToolOutputError("output is too deep or complex")
+        if isinstance(current, dict):
+            if len(current) > 100:
+                raise ToolOutputError("output object is too large")
+            stack.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            if len(current) > 100:
+                raise ToolOutputError("output array is too large")
+            stack.extend((item, depth + 1) for item in current)
+        elif current is not None and not isinstance(current, (str, int, float, bool)):
+            raise ToolOutputError("output contains an unsupported type")
+    import json
+    if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > maximum:
+        raise ToolOutputError("output exceeds byte limit")
+
+
+def _exact_dict(value, keys):
+    if not isinstance(value, dict) or set(value) != set(keys):
+        raise ToolOutputError("output object fields mismatch")
+
+
+def _text_output(value, maximum, allow_empty=False):
+    if not isinstance(value, str) or len(value) > maximum or (not allow_empty and not value):
+        raise ToolOutputError("output text is invalid")
 
 
 def _bounded_text(value, maximum, name):

@@ -517,6 +517,13 @@ class NotesMixin:
             # in the durable inbox — disclosed, like conversation history.
             "updates_scrubbed": ("служебных копий входящих сообщений" if ru else
                                  "raw copies of incoming messages"),
+            "assistant_tasks": ("задач Cara" if ru else "Cara tasks"),
+            "task_artifacts": ("файлов задач" if ru else "task artifacts"),
+            "task_feedback": ("отзывов о задачах" if ru else "task feedback rows"),
+            "evaluation_cases": ("проверочных кейсов" if ru else "evaluation cases"),
+            "evaluation_runs": ("прогонов проверок" if ru else "evaluation runs"),
+            "improvement_proposals": (
+                "предложений улучшений" if ru else "improvement proposals"),
         }
         parts = []
         for key, label in labels.items():
@@ -556,29 +563,114 @@ class NotesMixin:
         if not any(info.get(k) for k in ("messages", "reminders",
                                          "reminders_closed", "categories",
                                          "issues", "feedback", "conversation",
-                                         "note_outcomes", "updates_scrubbed")):
-            self.reply(chat_id, T(lang, "purge_nothing"))
+                                         "note_outcomes", "updates_scrubbed",
+                                         "assistant_tasks", "task_artifacts",
+                                         "task_feedback", "evaluation_cases",
+                                         "evaluation_runs",
+                                         "improvement_proposals")):
+            self.reply(chat_id, T(lang, "purge_nothing"), record=False)
             return
         if scope in ("category", "journal"):
             phrase = T(lang, f"purge_phrase_{scope}", category=category or "?")
         else:
             phrase = T(lang, f"purge_phrase_{scope}")
-        store.pending_set(self.conn, chat_id, "purge",
-                          {"scope": scope, "category": category, "phrase": phrase}, ttl_seconds=300)
+        anticipated = dict(info)
+        if scope == "all" and getattr(self, "_current_update_id", None) is not None:
+            # The typed confirmation is itself one boss conversation turn and
+            # one completed inbound update. Preview replies are deliberately
+            # not recorded, so these are the only predictable additions.
+            anticipated["conversation"] = anticipated.get("conversation", 0) + 1
+            # The purge-request update is still pending during this preview and
+            # becomes terminal after the handler; the future confirmation
+            # update is the second raw copy included in the exact scope.
+            anticipated["updates_scrubbed"] = anticipated.get("updates_scrubbed", 0) + 2
+        store.pending_set(
+            self.conn, chat_id, "purge",
+            {"scope": scope, "category": category, "phrase": phrase,
+             "anticipated": anticipated}, ttl_seconds=300)
         self.reply(chat_id, T(lang, "purge_preview",
-                              impact=self._purge_impact_text(lang, info), phrase=phrase))
+                              impact=self._purge_impact_text(lang, anticipated),
+                              phrase=phrase), record=False)
 
     def resolve_purge(self, chat_id, lang, pending, text):
         payload = pending["payload"]
         store.pending_clear(self.conn, chat_id)
         if text.strip().casefold() != str(payload.get("phrase") or "").strip().casefold():
-            self.reply(chat_id, T(lang, "purge_cancelled"))
+            self.reply(chat_id, T(lang, "purge_cancelled"), record=False)
             return
-        info, paths = store.purge_execute(self.conn, payload["scope"], payload.get("category"))
+        actual = store.purge_preview(
+            self.conn, payload["scope"], payload.get("category"))
+        compare_actual = dict(actual)
+        if (payload["scope"] == "all"
+                and getattr(self, "_current_update_id", None) is not None):
+            # The confirmation update is still status=pending until this
+            # handler returns, so the generic scrub predicate cannot count it
+            # yet. It is nevertheless part of this purge and is scrubbed below.
+            compare_actual["updates_scrubbed"] = (
+                compare_actual.get("updates_scrubbed", 0) + 1)
+        if compare_actual != (payload.get("anticipated") or compare_actual):
+            # State changed while the destructive card was open. Never execute
+            # a wider purge than the exact preview the boss confirmed.
+            phrase = payload["phrase"]
+            anticipated = dict(actual)
+            if (payload["scope"] == "all"
+                    and getattr(self, "_current_update_id", None) is not None):
+                anticipated["conversation"] = anticipated.get("conversation", 0) + 1
+                anticipated["updates_scrubbed"] = anticipated.get(
+                    "updates_scrubbed", 0) + 2
+            store.pending_set(
+                self.conn, chat_id, "purge",
+                {"scope": payload["scope"], "category": payload.get("category"),
+                 "phrase": phrase, "anticipated": anticipated}, ttl_seconds=300)
+            self.reply(
+                chat_id, T(lang, "purge_preview",
+                                impact=self._purge_impact_text(lang, anticipated),
+                                phrase=phrase), record=False)
+            return
+        purge_nonce = None
+        if payload["scope"] == "all":
+            try:
+                # Create a durable DB-side nonce first. The worker marker is
+                # published only after purge_execute commits db_committed.
+                purge_nonce = self.prepare_task_purge()
+            except Exception as exc:
+                log(f"PURGE all refused before durable task-file marker: {exc}")
+                self.reply(
+                    chat_id,
+                    ("Не начала очистку: изолированный worker не принял "
+                     "надёжный маркер удаления. Попробуй ещё раз."
+                     if lang == "ru" else
+                     "Purge was not started: the isolated worker could not accept "
+                     "a durable deletion marker. Please retry."),
+                    record=False)
+                return
+        info, paths = store.purge_execute(
+            self.conn, payload["scope"], payload.get("category"),
+            task_purge_nonce=purge_nonce)
+        if payload["scope"] == "all" and getattr(self, "_current_update_id", None) is not None:
+            self.conn.execute(
+                "UPDATE telegram_updates SET payload = '{}', last_error = NULL,"
+                " status = 'done', updated_at = ?"
+                " WHERE update_id = ?",
+                (store._now(), int(self._current_update_id)))
+            self.conn.commit()
+            info["updates_scrubbed"] = info.get("updates_scrubbed", 0) + 1
         for path in paths:
             Path(path).unlink(missing_ok=True)
+        if payload["scope"] == "all":
+            worker_purged = self.purge_task_external_state(purge_nonce)
+        else:
+            worker_purged = True
         log(f"PURGE scope={payload['scope']} category={payload.get('category')} by operator")
-        self.reply(chat_id, T(lang, "purge_done", impact=self._purge_impact_text(lang, info)))
+        done = T(lang, "purge_done", impact=self._purge_impact_text(lang, info))
+        if not worker_purged:
+            done += (
+                "\nWorker-файлы помечены для удаления, но подтверждение ещё не получено."
+                if lang == "ru" else
+                "\nWorker files are durably marked for deletion, but acknowledgement "
+                "is still pending."
+            )
+        self.reply(chat_id, done, record=False)
 
     def resolve_items(self, params):
         """Resolve one or more items: an explicit ids list, a count of most

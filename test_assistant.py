@@ -106,14 +106,15 @@ class GatewayTests(unittest.TestCase):
         # the meter (the 2026-06-19 budget spike). Lock the real DO rates in.
         table = llm.pricing_table(make_config())
         for slug, pair in {
-            "deepseek-4-flash": (0.14, 0.28),
-            "deepseek-v4-pro": (1.74, 3.48),
+            "deepseek-4-flash": (0.112, 0.224),
+            "deepseek-v4-pro": (1.392, 2.784),
             "nemotron-3-nano-omni": (0.50, 0.90),
             "openai-gpt-oss-20b": (0.05, 0.45),
-            "kimi-k2.6": (0.95, 4.0),
+            "kimi-k3": (3.0, 15.0),
+            "kimi-k2.6": (0.76, 3.20),
         }.items():
             self.assertEqual(table.get(slug), pair, slug)
-            self.assertNotEqual(table.get(slug), llm.DEFAULT_CHAT_PRICE, slug)
+            self.assertIn(slug, table)
 
     def test_budget_states(self):
         cfg = make_config(BUDGET_DAILY_USD="1.0", BUDGET_MONTHLY_USD="100")
@@ -1794,12 +1795,14 @@ class ConversationDispatchTests(unittest.TestCase):
                           "until_utc": "2020-01-02T00:00:00+00:00"}, "что было?")
         self.assertEqual(r.call_args[0][1], T("ru", "recall_conversation_empty"))
 
-    def test_multi_action_asks_one_at_a_time(self):
+    def test_multi_action_enters_the_durable_task_engine(self):
         with mock.patch.object(router, "route",
                                return_value={"action": "multi_action", "params": {}, "confidence": 0.85}), \
-                mock.patch.object(self.agent, "reply") as r:
+                mock.patch.object(self.agent, "do_task_start") as start:
             self.agent.dispatch(1, {}, "первое закрой, второе - напомни в 14:00")
-        self.assertEqual(r.call_args[0][1], texts.T(self.agent.lang(), "one_at_a_time"))
+        start.assert_called_once_with(
+            1, self.agent.lang(),
+            "первое закрой, второе - напомни в 14:00", None)
         self.assertTrue(skill_manifest.known("multi_action"))
 
     def test_report_problem_logs_boss_reported_issue(self):
@@ -9181,6 +9184,7 @@ class JournalPromptTests(unittest.TestCase):
     def test_followup_after_journal_nudge_invites_entry(self):
         store.kv_set(self.conn, "proactive_context", json.dumps(
             {"kind": "journal:gratitude", "ids": [],
+             "chat_id": 1,
              "sent_at": datetime.now(timezone.utc).isoformat()}))
         with mock.patch.object(self.agent, "reply") as r:
             handled = self.agent._resolve_proactive_followup(1, "ru", "давай")
@@ -11556,12 +11560,10 @@ class PurgeSemantics20260725Tests(unittest.TestCase):
             self.agent.resolve_purge(1, "ru", pending, pending["payload"]["phrase"])
         self.assertEqual(store.telegram_update_get(self.conn, 821)["payload"], "{}")
 
-    def test_the_confirming_turn_survives_the_purge_it_triggers(self):
-        """A purge always executes from INSIDE dispatch, so the confirming
-        update's own inbox row is still 'pending': it is neither counted by the
-        preview nor scrubbed. That residue is deliberate — a scrubbed pending row
-        makes `replay_pending_updates` raise `KeyError('update_id')` at startup,
-        outside the sqlite-only containment guard — and it is temporary."""
+    def test_the_confirming_turn_is_atomically_scrubbed_and_closed(self):
+        """The exact preview includes both in-flight update copies. Execution
+        scrubs the confirming payload and marks that inbox row done in the same
+        transaction, so a crash cannot leave an unreplayable pending ``{}``."""
         self._inbox_row(901, self.SECRET)          # an earlier, already-handled turn
         sent = []
         say = lambda cid, text, *a, **k: sent.append(text)  # noqa: E731
@@ -11575,22 +11577,15 @@ class PurgeSemantics20260725Tests(unittest.TestCase):
             self.agent.process_update_batch([{"update_id": 903, "message": {
                 "chat": {"id": 1}, "from": {"id": 1},
                 "message_id": 903, "text": phrase}}])
-        # Both counts are honest about the turn in flight: at PREVIEW time only
-        # 901 is terminal (902 is the asking turn), at EXECUTE time 901 and 902
-        # are (903 is the confirming turn). The residue is always the live turn.
-        self.assertIn("1 служебных копий входящих сообщений", sent[0])
-        self.assertIn("2 служебных копий входящих сообщений", sent[-1])
+        self.assertIn("3 служебных копий входящих сообщений", sent[0])
+        self.assertIn("3 служебных копий входящих сообщений", sent[-1])
         payloads = {r["update_id"]: r["payload"] for r in self.conn.execute(
             "SELECT update_id, payload FROM telegram_updates").fetchall()}
         self.assertEqual(payloads[901], "{}")
         self.assertEqual(payloads[902], "{}")
         self.assertNotIn(self.SECRET, payloads[901] + payloads[902])
-        # the confirming turn's own copy survives, and stays REPLAYABLE
-        self.assertEqual(json.loads(payloads[903])["update_id"], 903)
-        self.assertIn(phrase, payloads[903])
-        # …until it reaches a terminal state, when the next purge scrubs it
-        store.purge_execute(self.conn, "all")
         self.assertEqual(store.telegram_update_get(self.conn, 903)["payload"], "{}")
+        self.assertEqual(store.telegram_update_get(self.conn, 903)["status"], "done")
 
     # -- T4.3 the bulk note wipe must write the same ledger --------------------
 
@@ -15282,6 +15277,7 @@ class AuditFixes20260726Tests(unittest.TestCase):
     def _queue_note_review_nudge(self, ids):
         store.kv_set(self.conn, "proactive_context", json.dumps(
             {"kind": "note_review", "ids": list(ids),
+             "chat_id": 1,
              "sent_at": datetime.now(timezone.utc).isoformat()}))
 
     def test_a_nudge_review_snapshots_only_what_the_card_listed(self):
@@ -16867,7 +16863,8 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         self.assertNotIn("<<'UNIT'", installer)
         self.assertIn("UNIT_SRC=tg-ingest-agent.service", installer)
         self.assertIn('install -m 0644 "$STAGE_DIR/$UNIT_SRC" "$UNIT_FILE"', installer)
-        self.assertIn('for required in tg_ingest_agent.py "$UNIT_SRC" "$ENV_TEMPLATE" $MODULES',
+        self.assertIn(
+            'for required in tg_ingest_agent.py verify-cara-runtime.sh "$UNIT_SRC"',
                       installer)
         for directive in ("CapabilityBoundingSet=",
                           "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
@@ -16893,7 +16890,7 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         for kept in ("Type=simple", "User=tg-ingest", "Group=tg-ingest", "UMask=0077",
                      "NotifyAccess=main", "WatchdogSec=900", "NoNewPrivileges=yes",
                      "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes",
-                     "ReadWritePaths=/var/lib/tg-ingest-agent",
+                     "ReadWritePaths=/var/lib/tg-ingest-agent /var/lib/cara-worker/spool/requests /var/lib/cara-worker/spool/cancel",
                      "EnvironmentFile=/etc/tg-ingest-agent.env",
                      "ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/agent.py",
                      "Restart=always", "RestartSec=10",
@@ -17073,7 +17070,9 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         self.assertEqual(files, ["*.py", "deploy.sh",
                                  "install-tg-ingest-agent-pilot-remote.sh",
                                  "install-whisper-pilot-remote.sh",
-                                 "tg-ingest-agent.env.example", "tg-ingest-agent.service"])
+                                 "verify-cara-runtime.sh",
+                                 "tg-ingest-agent.env.example", "tg-ingest-agent.service",
+                                 "cara-worker.service"])
         # NAMED, not `*.sh`. WP10 archived one armed one-shot out of the repo root
         # precisely because a glob would tar it onto the live box; migrate-cara-to-pd.sh
         # stops the service, copies DBs and overwrites /etc/tg-ingest-agent.env, and
@@ -17081,7 +17080,7 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         self.assertNotIn("migrate-cara-to-pd.sh", deploy.split("FILES=(", 1)[1].split(")", 1)[0])
         # CRLF from the Windows checkout would break both of those on the box.
         self.assertIn("sed -i 's/\\r\\$//' *.py *.sh tg-ingest-agent.service "
-                      "tg-ingest-agent.env.example", deploy)
+                      "cara-worker.service tg-ingest-agent.env.example", deploy)
 
     # --- T11.3 / T11.4 (review WP11) — two doc facts that keep rotting ------
     # The specs are not in deploy.sh's FILES, so these skip on the box and really

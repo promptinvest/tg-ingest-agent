@@ -19,6 +19,7 @@ from pathlib import Path
 
 import common
 import tasking
+import tool_broker
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (
@@ -513,6 +514,15 @@ CREATE TABLE IF NOT EXISTS assistant_tasks (
   trace_id TEXT,
   final_summary TEXT,
   final_artifact_id INTEGER,
+  due_at TEXT,
+  next_action_at TEXT,
+  status_message_id INTEGER,
+  final_message_id INTEGER,
+  delivery_status TEXT NOT NULL DEFAULT 'pending',
+  delivery_attempts INTEGER NOT NULL DEFAULT 0,
+  delivered_at TEXT,
+  model_calls INTEGER NOT NULL DEFAULT 0,
+  task_cost_usd REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT,
@@ -541,6 +551,10 @@ CREATE TABLE IF NOT EXISTS assistant_task_steps (
   idempotency_key TEXT NOT NULL UNIQUE,
   approval_id INTEGER,
   receipt_id INTEGER,
+  worker_job_id TEXT,
+  worker_nonce TEXT,
+  worker_input_hash TEXT,
+  worker_submitted_at TEXT,
   claimed_at TEXT,
   finished_at TEXT,
   error TEXT,
@@ -589,6 +603,22 @@ CREATE TABLE IF NOT EXISTS tool_receipts (
     REFERENCES task_artifacts(task_id, id)
 );
 
+CREATE TABLE IF NOT EXISTS task_step_attempts (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES assistant_tasks(id) ON DELETE CASCADE,
+  step_id INTEGER NOT NULL,
+  attempt_no INTEGER NOT NULL,
+  invocation_uid TEXT NOT NULL UNIQUE,
+  input_hash TEXT,
+  status TEXT NOT NULL DEFAULT 'started',
+  error TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  UNIQUE(step_id, attempt_no),
+  FOREIGN KEY (task_id, step_id)
+    REFERENCES assistant_task_steps(task_id, id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS task_approvals (
   id INTEGER PRIMARY KEY,
   task_id INTEGER NOT NULL REFERENCES assistant_tasks(id) ON DELETE CASCADE,
@@ -608,6 +638,7 @@ CREATE TABLE IF NOT EXISTS task_approvals (
   decision_source TEXT,
   decision_message_id INTEGER,
   created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00',
   decided_at TEXT,
   executing_at TEXT,
   effect_recorded_at TEXT,
@@ -636,8 +667,86 @@ CREATE TABLE IF NOT EXISTS task_artifacts (
   UNIQUE(task_id, id)
 );
 
+CREATE TABLE IF NOT EXISTS task_feedback (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER REFERENCES assistant_tasks(id) ON DELETE SET NULL,
+  chat_id INTEGER NOT NULL,
+  source_update INTEGER,
+  trace_id TEXT,
+  outbound_message_id INTEGER,
+  rating INTEGER,
+  correction TEXT,
+  signal TEXT NOT NULL DEFAULT 'explicit',
+  source_hash TEXT,
+  correction_hash TEXT,
+  redaction_version TEXT NOT NULL DEFAULT 'derived/v1',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_note_uses (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES assistant_tasks(id) ON DELETE CASCADE,
+  receipt_id INTEGER NOT NULL REFERENCES tool_receipts(id) ON DELETE CASCADE,
+  chat_id INTEGER NOT NULL,
+  note_no INTEGER NOT NULL,
+  delivered_message_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(task_id, chat_id, note_no),
+  FOREIGN KEY (task_id, chat_id) REFERENCES assistant_tasks(id, chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_cases (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  input_json TEXT NOT NULL,
+  invariants_json TEXT NOT NULL,
+  source TEXT NOT NULL,
+  source_ref TEXT,
+  content_hash TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  UNIQUE(name, version)
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_runs (
+  id INTEGER PRIMARY KEY,
+  case_id INTEGER NOT NULL REFERENCES evaluation_cases(id) ON DELETE CASCADE,
+  candidate TEXT NOT NULL,
+  role TEXT NOT NULL,
+  score REAL NOT NULL,
+  invariant_failures_json TEXT NOT NULL DEFAULT '[]',
+  model TEXT,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  latency_seconds REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  result_json TEXT NOT NULL DEFAULT '{}',
+  evaluator_version TEXT NOT NULL DEFAULT 'cara-eval/v1',
+  replay_key TEXT NOT NULL DEFAULT '',
+  result_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS improvement_proposals (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  hypothesis TEXT NOT NULL,
+  proposed_change TEXT NOT NULL,
+  risk TEXT NOT NULL,
+  rollback TEXT NOT NULL,
+  baseline_metrics_json TEXT NOT NULL DEFAULT '{}',
+  candidate_metrics_json TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'draft',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  decided_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_assistant_tasks_chat_status
   ON assistant_tasks(chat_id, status, updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_tasks_id_chat
+  ON assistant_tasks(id, chat_id);
 CREATE INDEX IF NOT EXISTS idx_task_steps_ready
   ON assistant_task_steps(task_id, status, ordinal);
 CREATE INDEX IF NOT EXISTS idx_task_approvals_live
@@ -647,6 +756,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_approvals_one_live_step
   WHERE status IN ('pending', 'approved', 'executing', 'ambiguous');
 CREATE INDEX IF NOT EXISTS idx_tool_receipts_task
   ON tool_receipts(task_id, step_id);
+CREATE INDEX IF NOT EXISTS idx_task_step_attempts_step
+  ON task_step_attempts(step_id, attempt_no);
+CREATE INDEX IF NOT EXISTS idx_task_feedback_task
+  ON task_feedback(task_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_feedback_source
+  ON task_feedback(chat_id, source_update, task_id, signal)
+  WHERE source_update IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_task_note_uses_created
+  ON task_note_uses(created_at, task_id);
+CREATE INDEX IF NOT EXISTS idx_evaluation_runs_case
+  ON evaluation_runs(case_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_improvement_proposals_status
+  ON improvement_proposals(status, updated_at);
 
 """
 
@@ -1519,6 +1641,58 @@ def _migrate_steps(conn):
     _migrate_gratitude_builtin(conn)
     _migrate_note_outcomes(conn)
     _migrate_catalog_categories(conn)
+    # A0 created the task core before the worker, delivery and learning fields
+    # existed. CREATE TABLE IF NOT EXISTS cannot extend those databases.
+    task_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(assistant_tasks)")}
+    for ddl in (
+        "due_at TEXT", "next_action_at TEXT", "status_message_id INTEGER",
+        "final_message_id INTEGER",
+        "delivery_status TEXT NOT NULL DEFAULT 'pending'",
+        "delivery_attempts INTEGER NOT NULL DEFAULT 0",
+        "delivered_at TEXT",
+        "model_calls INTEGER NOT NULL DEFAULT 0",
+        "task_cost_usd REAL NOT NULL DEFAULT 0",
+    ):
+        if ddl.split()[0] not in task_columns:
+            conn.execute(f"ALTER TABLE assistant_tasks ADD COLUMN {ddl}")
+    step_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(assistant_task_steps)")}
+    for ddl in (
+        "worker_job_id TEXT", "worker_nonce TEXT", "worker_input_hash TEXT",
+        "worker_submitted_at TEXT",
+    ):
+        if ddl.split()[0] not in step_columns:
+            conn.execute(f"ALTER TABLE assistant_task_steps ADD COLUMN {ddl}")
+    approval_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(task_approvals)")}
+    if "expires_at" not in approval_columns:
+        conn.execute("ALTER TABLE task_approvals ADD COLUMN expires_at TEXT")
+        conn.execute(
+            "UPDATE task_approvals SET expires_at = "
+            "datetime(created_at, '+24 hours') WHERE expires_at IS NULL")
+    feedback_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(task_feedback)")}
+    if "correction_hash" not in feedback_columns:
+        conn.execute("ALTER TABLE task_feedback ADD COLUMN correction_hash TEXT")
+    eval_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(evaluation_runs)")}
+    if "metadata_json" not in eval_columns:
+        conn.execute(
+            "ALTER TABLE evaluation_runs ADD COLUMN metadata_json"
+            " TEXT NOT NULL DEFAULT '{}'")
+    if "result_json" not in eval_columns:
+        conn.execute(
+            "ALTER TABLE evaluation_runs ADD COLUMN result_json"
+            " TEXT NOT NULL DEFAULT '{}'")
+    if "evaluator_version" not in eval_columns:
+        conn.execute(
+            "ALTER TABLE evaluation_runs ADD COLUMN evaluator_version"
+            " TEXT NOT NULL DEFAULT 'legacy/unverified'")
+    if "replay_key" not in eval_columns:
+        conn.execute(
+            "ALTER TABLE evaluation_runs ADD COLUMN replay_key"
+            " TEXT NOT NULL DEFAULT ''")
 
 
 NOTE_OUTCOME_MIRROR_KINDS = (
@@ -2262,7 +2436,7 @@ def set_capture_meta(conn, message_id, meta, now=None):
     conn.commit()
 
 
-def note_mark_used(conn, message_id):
+def note_mark_used(conn, message_id, *, source="real_use", commit=True):
     """Count a REAL use only: detail opened, cited in a delivered answer,
     included in a delivered export, or an accepted resurfacing — never mere
     ranking/retrieval."""
@@ -2280,8 +2454,9 @@ def note_mark_used(conn, message_id):
     )
     if cur.rowcount and (row["use_count"] or 0) == 0:
         note_outcome_record(conn, message_id, "first_used", occurred_at=stamp,
-                            source="real_use", commit=False)
-    conn.commit()
+                            source=source, commit=False)
+    if commit:
+        conn.commit()
     return cur.rowcount > 0
 
 
@@ -2894,7 +3069,8 @@ def messages_missing_chunks(conn, limit=3):
     ).fetchall()
 
 
-def list_messages(conn, category=None, query=None, limit=10, state=None):
+def list_messages(conn, category=None, query=None, limit=10, state=None,
+                  chat_id=None):
     """Recent stored messages, optionally filtered by category (exact,
     case-insensitive incl. Cyrillic) or a substring query over text, summary,
     key facts, category, and source. Delegates to list_messages_filtered —
@@ -2903,10 +3079,11 @@ def list_messages(conn, category=None, query=None, limit=10, state=None):
     which silently blinded bulk recategorize / resolve_item / the router's
     recent-item hint to anything older once the inbox outgrew 200.)"""
     return list_messages_filtered(conn, category=category, query=query, limit=limit,
-                                  state=state)
+                                  state=state, chat_id=chat_id)
 
 
-def list_messages_filtered(conn, category=None, query=None, limit=None, state=None):
+def list_messages_filtered(conn, category=None, query=None, limit=None, state=None,
+                           chat_id=None):
     """Visible notes matching the filter, newest-first (Python-filtered for Cyrillic
     casefold). limit=None returns the full list (pagination callers slice); a limit
     stops the scan EARLY. The messages cursor is iterated LAZILY (ORDER BY id DESC is a
@@ -2946,8 +3123,14 @@ def list_messages_filtered(conn, category=None, query=None, limit=None, state=No
         return r["f"] if r else None
 
     out = []
+    sql = "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested')"
+    args = ()
+    if chat_id is not None:
+        sql += " AND chat_id = ?"
+        args = (int(chat_id),)
+    sql += " ORDER BY id DESC"
     for row in conn.execute(  # lazy reverse-rowid cursor — stops fetching once `limit` is hit
-            "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested') ORDER BY id DESC"):
+            sql, args):
         row_category = row["category"] or row["suggested_category"] or ""
         if cat and row_category.casefold() != cat:
             continue
@@ -3151,13 +3334,20 @@ def note_no_value(n):
         return None
 
 
-def message_by_note_no(conn, n):
+def message_by_note_no(conn, n, chat_id=None):
     """Resolve a stable note number to its row, or None. Numbers never shift, so this is the
     same note tomorrow. Owner-only, so note_no is effectively global."""
     n = note_no_value(n)
     if n is None:
         return None
-    return conn.execute("SELECT * FROM messages WHERE note_no = ? LIMIT 1", (n,)).fetchone()
+    if chat_id is None:
+        return conn.execute(
+            "SELECT * FROM messages WHERE note_no = ? LIMIT 1", (n,)
+        ).fetchone()
+    return conn.execute(
+        "SELECT * FROM messages WHERE note_no = ? AND chat_id = ? LIMIT 1",
+        (n, int(chat_id)),
+    ).fetchone()
 
 
 def message_update_raw_text(conn, message_id, raw_text):
@@ -3396,6 +3586,14 @@ def purge_preview(conn, scope, category=None):
         info["note_outcomes"] = count("SELECT COUNT(*) FROM note_outcomes")
         info["updates_scrubbed"] = count(
             "SELECT COUNT(*) FROM telegram_updates " + _SCRUBBABLE_UPDATES)
+        info["assistant_tasks"] = count("SELECT COUNT(*) FROM assistant_tasks")
+        info["task_artifacts"] = count("SELECT COUNT(*) FROM task_artifacts")
+        info["task_feedback"] = count("SELECT COUNT(*) FROM task_feedback")
+        info["task_note_uses"] = count("SELECT COUNT(*) FROM task_note_uses")
+        info["evaluation_cases"] = count("SELECT COUNT(*) FROM evaluation_cases")
+        info["evaluation_runs"] = count("SELECT COUNT(*) FROM evaluation_runs")
+        info["improvement_proposals"] = count(
+            "SELECT COUNT(*) FROM improvement_proposals")
     elif scope == "category":
         info["messages"] = len(_messages_in_category(conn, category))
         info["category"] = category
@@ -3426,7 +3624,7 @@ def purge_preview(conn, scope, category=None):
     return info
 
 
-def purge_execute(conn, scope, category=None):
+def purge_execute(conn, scope, category=None, task_purge_nonce=None):
     """Run the purge. Returns (summary_dict, media_paths_to_unlink).
     Preserves llm_usage and preferences in every scope."""
     info = purge_preview(conn, scope, category)
@@ -3434,6 +3632,17 @@ def purge_execute(conn, scope, category=None):
     if scope == "all":
         paths = [r["local_path"] for r in
                  conn.execute("SELECT local_path FROM images WHERE local_path IS NOT NULL")]
+        paths.extend(
+            r["local_path"] for r in conn.execute(
+                "SELECT local_path FROM task_artifacts WHERE local_path IS NOT NULL"))
+        # Improvement/evaluation rows can contain redacted boss corrections and
+        # task-derived evidence. Delete them explicitly; task children then
+        # cascade from assistant_tasks.
+        conn.execute("DELETE FROM improvement_proposals")
+        conn.execute("DELETE FROM evaluation_cases")
+        conn.execute("DELETE FROM task_feedback")
+        conn.execute("DELETE FROM task_note_uses")
+        conn.execute("DELETE FROM assistant_tasks")
         # journal_entries before messages (manual cascade; FK would fail closed).
         # journal_definitions stay, like preferences — config, not content; the
         # gratitude built-in self-heals its category on the next start.
@@ -3467,6 +3676,16 @@ def purge_execute(conn, scope, category=None):
         _purge_all_message_kv(conn)
         _purge_reminder_kv(conn)
         _reset_note_counters(conn)
+        if task_purge_nonce is not None:
+            if not re.fullmatch(r"[0-9a-f]{32}", str(task_purge_nonce)):
+                raise ValueError("task purge nonce is invalid")
+            conn.execute(
+                "INSERT INTO kv(key,value) VALUES('task_purge_authorization',?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (json.dumps({
+                    "nonce": str(task_purge_nonce), "phase": "db_committed",
+                }, sort_keys=True),),
+            )
     elif scope == "category":
         ids = _messages_in_category(conn, category)
         for mid in ids:
@@ -4020,13 +4239,15 @@ def assistant_tasks_for_chat(conn, chat_id, limit=10, include_terminal=True):
         ).fetchall()
     return conn.execute(
         "SELECT * FROM assistant_tasks WHERE chat_id = ?"
-        " AND status NOT IN ('completed', 'failed', 'cancelled')"
+        " AND (status NOT IN ('completed', 'failed', 'cancelled')"
+        " OR delivery_status IN ('ambiguous','failed'))"
         " ORDER BY updated_at DESC, id DESC LIMIT ?",
         (int(chat_id), limit),
     ).fetchall()
 
 
-def assistant_task_create(conn, chat_id, source_update, plan, trace_id=None):
+def assistant_task_create(conn, chat_id, source_update, plan, trace_id=None,
+                          timezone_offset=None):
     """Validate and atomically get-or-create a task and all of its steps.
 
     ``(row, created)`` is returned. The unique owner/chat source-update key is
@@ -4045,15 +4266,25 @@ def assistant_task_create(conn, chat_id, source_update, plan, trace_id=None):
         source = assistant_task_source(conn, chat_id, source_update)
         if source is None:
             raise ValueError("task source update is missing, foreign, or not boss-authored")
-        plan = tasking.validate_plan(plan, source["text"])
+        update = telegram_update_get(conn, source_update)
+        plan = tasking.validate_plan(
+            plan, source["text"],
+            source_time=update["received_at"] if update else None,
+            timezone_offset=(
+                pref_get(conn, "timezone_offset", 0)
+                if timezone_offset is None else int(timezone_offset)),
+        )
+        if plan.get("capability_gaps"):
+            raise ValueError("incomplete task plans cannot be persisted")
         cur = conn.execute(
             "INSERT INTO assistant_tasks"
             " (chat_id, source_update, source_hash, objective, deliverable,"
-            " status, plan_version, plan_json, trace_id, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)",
+            " status, plan_version, plan_json, trace_id, due_at, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?)",
             (chat_id, source_update, str(plan["source_hash"]),
              str(plan["objective"]), str(plan["deliverable"]),
-             int(plan["version"]), _task_json(plan), trace_id, now, now),
+             int(plan["version"]), _task_json(plan), trace_id,
+             plan.get("due_at"), now, now),
         )
         task_id = cur.lastrowid
         for step in plan["steps"]:
@@ -4103,7 +4334,7 @@ def assistant_task_cancel(conn, task_id, chat_id):
         conn.execute("BEGIN IMMEDIATE")
         active_step = conn.execute(
             "SELECT 1 FROM assistant_task_steps WHERE task_id = ?"
-            " AND status IN ('claimed', 'running') LIMIT 1",
+            " AND status IN ('claimed', 'running', 'waiting_worker') LIMIT 1",
             (int(task_id),),
         ).fetchone()
         active_effect = conn.execute(
@@ -4114,7 +4345,9 @@ def assistant_task_cancel(conn, task_id, chat_id):
         next_status = "cancel_requested" if (active_step or active_effect) else "cancelled"
         changed = conn.execute(
             "UPDATE assistant_tasks SET status = ?, updated_at = ?,"
-            " completed_at = ? WHERE id = ? AND chat_id = ?"
+            " completed_at = ?, delivery_status='pending',"
+            " final_message_id=NULL, delivered_at=NULL, next_action_at=NULL"
+            " WHERE id = ? AND chat_id = ?"
             " AND status NOT IN ('completed', 'failed', 'cancelled')",
             (next_status, now, now if next_status == "cancelled" else None,
              int(task_id), int(chat_id)),
@@ -4139,6 +4372,739 @@ def assistant_task_cancel(conn, task_id, chat_id):
         conn.rollback()
         raise
     return next_status if changed else None
+
+
+def assistant_task_step_get(conn, step_id, task_id=None):
+    if task_id is None:
+        return conn.execute(
+            "SELECT * FROM assistant_task_steps WHERE id = ?", (int(step_id),)
+        ).fetchone()
+    return conn.execute(
+        "SELECT * FROM assistant_task_steps WHERE id = ? AND task_id = ?",
+        (int(step_id), int(task_id)),
+    ).fetchone()
+
+
+def assistant_task_step_by_key(conn, task_id, step_key):
+    return conn.execute(
+        "SELECT * FROM assistant_task_steps WHERE task_id = ? AND step_key = ?",
+        (int(task_id), str(step_key)),
+    ).fetchone()
+
+
+def assistant_task_set_status(conn, task_id, status, *, summary=None, artifact_id=None,
+                              error=None, commit=True):
+    allowed = {
+        "planned", "running", "waiting_approval", "blocked", "cancel_requested",
+        "completed", "failed", "cancelled",
+    }
+    if status not in allowed:
+        raise ValueError("invalid task status")
+    now = _now()
+    terminal = status in _TASK_TERMINAL
+    transitions = {
+        "planned": ("planned", "blocked", "failed"),
+        "running": ("planned", "running", "waiting_approval"),
+        "waiting_approval": ("planned", "running", "waiting_approval"),
+        "blocked": ("planned", "running", "waiting_approval", "blocked"),
+        "cancel_requested": ("planned", "running", "waiting_approval", "blocked"),
+        "completed": ("running",),
+        "failed": ("planned", "running", "blocked"),
+        "cancelled": ("planned", "running", "waiting_approval", "blocked",
+                      "cancel_requested"),
+    }
+    expected = transitions[status]
+    placeholders = ",".join("?" for _ in expected)
+    changed = conn.execute(
+        "UPDATE assistant_tasks SET status = ?, final_summary = COALESCE(?, final_summary),"
+        " final_artifact_id = COALESCE(?, final_artifact_id), updated_at = ?,"
+        " completed_at = CASE WHEN ? THEN ? ELSE completed_at END"
+        f" WHERE id = ? AND status IN ({placeholders})",
+        (status, tasking.redact_derived_text(summary)[:2000] if summary else None,
+         artifact_id, now, int(terminal), now, int(task_id), *expected),
+    ).rowcount
+    if error:
+        conn.execute(
+            "UPDATE assistant_task_steps SET error = COALESCE(error, ?), updated_at = ?"
+            " WHERE task_id = ? AND status = 'blocked'",
+            (tasking.redact_derived_text(error)[:500], now, int(task_id)),
+        )
+    if commit:
+        conn.commit()
+    return bool(changed)
+
+
+def assistant_task_resume(conn, task_id, chat_id):
+    row = assistant_task_get(conn, task_id, chat_id)
+    if row is None or row["status"] not in {"blocked", "failed"}:
+        return False
+    source = assistant_task_source(conn, chat_id, row["source_update"])
+    if source is None or tasking.source_hash(source["text"]) != row["source_hash"]:
+        return False
+    stale = conn.execute(
+        "SELECT 1 FROM assistant_task_steps WHERE task_id = ?"
+        " AND (policy_version != ? OR implementation_version != ?) LIMIT 1",
+        (int(task_id), tool_broker.POLICY_VERSION,
+         tool_broker.IMPLEMENTATION_VERSION),
+    ).fetchone()
+    unsafe = conn.execute(
+        "SELECT 1 FROM task_approvals WHERE task_id = ?"
+        " AND status IN ('executing','ambiguous') LIMIT 1",
+        (int(task_id),),
+    ).fetchone()
+    if stale or unsafe:
+        return False
+    now = _now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # An explicit boss resume grants one additional invocation only to
+        # non-effect steps. Failed attempts never wrote an immutable receipt.
+        conn.execute(
+            "UPDATE assistant_task_steps SET max_attempts = max_attempts + 1"
+            " WHERE task_id = ? AND status IN ('blocked','failed')"
+            " AND risk IN ('read_only','network_read','draft_write')"
+            " AND attempts >= max_attempts",
+            (int(task_id),),
+        )
+        requeued = conn.execute(
+            "UPDATE assistant_task_steps SET status = 'pending', error = NULL,"
+            " claimed_at = NULL, finished_at = NULL, updated_at = ?"
+            " WHERE task_id = ? AND status IN ('blocked', 'failed')"
+            " AND attempts < max_attempts"
+            " AND risk IN ('read_only','network_read','draft_write')",
+            (now, int(task_id)),
+        ).rowcount
+        changed = 0
+        if requeued:
+            changed = conn.execute(
+                "UPDATE assistant_tasks SET status = 'planned', completed_at = NULL,"
+                " delivery_status = 'pending', final_message_id = NULL,"
+                " delivered_at = NULL,"
+                " next_action_at = NULL, updated_at = ? WHERE id = ? AND chat_id = ?"
+                " AND status IN ('blocked', 'failed')",
+                (now, int(task_id), int(chat_id)),
+            ).rowcount
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return bool(changed)
+
+
+def assistant_task_authorize_redelivery(conn, task_id, chat_id):
+    """Let the boss explicitly retry an outcome whose first send is ambiguous.
+
+    This changes only delivery state.  It never reopens task steps or replays
+    an effect.
+    """
+    now = _now()
+    changed = conn.execute(
+        "UPDATE assistant_tasks SET delivery_status='pending',"
+        " next_action_at=NULL, updated_at=? WHERE id=? AND chat_id=?"
+        " AND status IN ('completed','blocked','cancelled')"
+        " AND delivery_status IN ('ambiguous','failed')",
+        (now, int(task_id), int(chat_id)),
+    ).rowcount
+    conn.commit()
+    return bool(changed)
+
+
+def assistant_task_begin_delivery(conn, task_id):
+    """Durably cross the pre-send boundary before calling Telegram."""
+    now = _now()
+    changed = conn.execute(
+        "UPDATE assistant_tasks SET delivery_status='sending',"
+        " next_action_at=NULL, updated_at=? WHERE id=?"
+        " AND delivery_status IN ('pending','retry')",
+        (now, int(task_id)),
+    ).rowcount
+    conn.commit()
+    return assistant_task_get(conn, task_id) if changed else None
+
+
+def assistant_task_summary_update(conn, task_id, summary, *, commit=True):
+    safe = tasking.redact_derived_text(summary)[:2000]
+    conn.execute(
+        "UPDATE assistant_tasks SET final_summary=?, updated_at=? WHERE id=?",
+        (safe, _now(), int(task_id)),
+    )
+    if commit:
+        conn.commit()
+
+
+def assistant_task_reclaim_stale(conn):
+    """Recover steps owned by a process that died before recording a receipt."""
+    now = _now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # A success receipt is the durable truth.  Older/crashed processes may
+        # have committed it before stamping the attempt/step; repair that
+        # boundary first so such rows cannot wedge forever.
+        recovered = conn.execute(
+            "UPDATE assistant_task_steps SET status = 'succeeded',"
+            " receipt_id = (SELECT r.id FROM tool_receipts r"
+            " WHERE r.step_id = assistant_task_steps.id"
+            " AND r.task_id = assistant_task_steps.task_id LIMIT 1),"
+            " finished_at = ?, updated_at = ?"
+            " WHERE status IN ('claimed','running','waiting_worker')"
+            " AND EXISTS (SELECT 1 FROM tool_receipts r"
+            " WHERE r.step_id = assistant_task_steps.id"
+            " AND r.task_id = assistant_task_steps.task_id)",
+            (now, now),
+        ).rowcount
+        conn.execute(
+            "UPDATE task_step_attempts SET status = 'succeeded', finished_at = ?,"
+            " error = NULL WHERE status IN ('started','waiting')"
+            " AND EXISTS (SELECT 1 FROM assistant_task_steps s"
+            " WHERE s.id = task_step_attempts.step_id AND s.status = 'succeeded'"
+            " AND s.receipt_id IS NOT NULL)",
+            (now,),
+        )
+        # Every interrupted invocation remains an immutable failed attempt.
+        # The mutable step can be retried under a new attempt number.
+        conn.execute(
+            "UPDATE task_step_attempts SET status = 'failed', finished_at = ?,"
+            " error = 'reclaimed after process restart'"
+            " WHERE status = 'started' AND EXISTS ("
+            " SELECT 1 FROM assistant_task_steps s"
+            " WHERE s.id = task_step_attempts.step_id"
+            " AND s.status IN ('claimed','running')"
+            " AND NOT EXISTS (SELECT 1 FROM tool_receipts r"
+            " WHERE r.step_id = s.id AND r.task_id = s.task_id))",
+            (now,),
+        )
+        requeued = conn.execute(
+            "UPDATE assistant_task_steps SET status = 'pending', claimed_at = NULL,"
+            " error = 'reclaimed after process restart', updated_at = ?"
+            " WHERE status IN ('claimed', 'running') AND attempts < max_attempts"
+            " AND NOT EXISTS (SELECT 1 FROM tool_receipts"
+            " WHERE tool_receipts.step_id = assistant_task_steps.id)",
+            (now,),
+        ).rowcount
+        failed = conn.execute(
+            "UPDATE assistant_task_steps SET status = 'blocked', finished_at = ?,"
+            " error = 'process died at retry boundary', updated_at = ?"
+            " WHERE status IN ('claimed', 'running') AND attempts >= max_attempts"
+            " AND NOT EXISTS (SELECT 1 FROM tool_receipts"
+            " WHERE tool_receipts.step_id = assistant_task_steps.id)",
+            (now, now),
+        ).rowcount
+        # The only shipped write adapter (reminder.propose) records its SQLite
+        # effect, receipt, step and effect_recorded status in ONE transaction.
+        # An executing row after reopen therefore proves that transaction did
+        # not commit. Expire the consumed approval and queue a fresh preview;
+        # never auto-run the write after restart.
+        local_reopened = conn.execute(
+            "UPDATE task_step_attempts SET status='failed', finished_at=?,"
+            " error='process restarted before local effect transaction'"
+            " WHERE status='waiting' AND step_id IN ("
+            " SELECT a.step_id FROM task_approvals a"
+            " JOIN assistant_task_steps s ON s.id=a.step_id AND s.task_id=a.task_id"
+            " WHERE a.status='executing' AND s.tool='reminder.propose'"
+            " AND NOT EXISTS (SELECT 1 FROM tool_receipts r"
+            " WHERE r.task_id=a.task_id AND r.step_id=a.step_id))",
+            (now,),
+        ).rowcount
+        conn.execute(
+            "UPDATE assistant_task_steps SET status='pending', approval_id=NULL,"
+            " max_attempts=max_attempts+1, claimed_at=NULL, finished_at=NULL,"
+            " error='fresh approval required after restart', updated_at=?"
+            " WHERE status='waiting_approval' AND id IN ("
+            " SELECT a.step_id FROM task_approvals a"
+            " WHERE a.status='executing'"
+            " AND NOT EXISTS (SELECT 1 FROM tool_receipts r"
+            " WHERE r.task_id=a.task_id AND r.step_id=a.step_id))"
+            " AND tool='reminder.propose'",
+            (now,),
+        )
+        conn.execute(
+            "UPDATE task_approvals SET status='expired', decided_at=?"
+            " WHERE status='executing' AND step_id IN ("
+            " SELECT id FROM assistant_task_steps"
+            " WHERE tool='reminder.propose' AND status='pending')"
+            " AND NOT EXISTS (SELECT 1 FROM tool_receipts r"
+            " WHERE r.task_id=task_approvals.task_id"
+            " AND r.step_id=task_approvals.step_id)",
+            (now,),
+        )
+        conn.execute(
+            "UPDATE assistant_tasks SET status='planned', next_action_at=NULL,"
+            " updated_at=? WHERE status='waiting_approval'"
+            " AND EXISTS (SELECT 1 FROM assistant_task_steps s"
+            " WHERE s.task_id=assistant_tasks.id AND s.status='pending'"
+            " AND s.error='fresh approval required after restart')",
+            (now,),
+        )
+        # Any future non-transactional/external adapter retains the explicit
+        # ambiguous boundary; it must reconcile rather than replay.
+        ambiguous = conn.execute(
+            "UPDATE task_approvals SET status = 'ambiguous'"
+            " WHERE status = 'executing'"
+        ).rowcount
+        conn.execute(
+            "UPDATE task_step_attempts SET status = 'blocked', finished_at = ?,"
+            " error = 'write outcome requires reconciliation'"
+            " WHERE status = 'waiting' AND step_id IN ("
+            " SELECT step_id FROM task_approvals WHERE status = 'ambiguous')",
+            (now,),
+        )
+        # A crash after recording the boss's decision but before the
+        # approved->executing CAS has definitely performed no effect. Re-open
+        # that already-delivered card so the boss can confirm again; never
+        # auto-run a write merely because the process restarted.
+        conn.execute(
+            "UPDATE task_approvals SET status = 'pending', decision_source = NULL,"
+            " decision_message_id = NULL, decided_at = NULL"
+            " WHERE status = 'approved' AND expires_at > ?",
+            (now,),
+        )
+        expired_approved = conn.execute(
+            "UPDATE task_approvals SET status = 'expired', decided_at = ?"
+            " WHERE status = 'approved' AND expires_at <= ?",
+            (now, now),
+        ).rowcount
+        conn.execute(
+            "UPDATE task_step_attempts SET status = 'blocked', finished_at = ?,"
+            " error = 'approval expired during restart'"
+            " WHERE status = 'waiting' AND step_id IN ("
+            " SELECT step_id FROM task_approvals WHERE status = 'expired')",
+            (now,),
+        )
+        conn.execute(
+            "UPDATE assistant_task_steps SET status = 'blocked', finished_at = ?,"
+            " error = 'approval expired during restart', updated_at = ?"
+            " WHERE status = 'waiting_approval' AND approval_id IN ("
+            " SELECT id FROM task_approvals WHERE status = 'expired')",
+            (now, now),
+        )
+        conn.execute(
+            "UPDATE assistant_task_steps SET status = 'blocked',"
+            " error = 'write outcome requires reconciliation', updated_at = ?"
+            " WHERE approval_id IN (SELECT id FROM task_approvals"
+            " WHERE status = 'ambiguous')",
+            (now,),
+        )
+        conn.execute(
+            "UPDATE assistant_tasks SET status = 'planned', updated_at = ?"
+            " WHERE status = 'running' AND EXISTS (SELECT 1 FROM assistant_task_steps s"
+            " WHERE s.task_id = assistant_tasks.id AND s.status = 'pending')",
+            (now,),
+        )
+        conn.execute(
+            "UPDATE assistant_tasks SET status = 'blocked', updated_at = ?"
+            " WHERE status IN ('running', 'planned', 'waiting_approval')"
+            " AND EXISTS (SELECT 1 FROM assistant_task_steps s"
+            " WHERE s.task_id = assistant_tasks.id AND s.status = 'blocked')",
+            (now,),
+        )
+        # Telegram may have accepted the message before the process died.
+        # Blind retry would duplicate a result, so only an explicit boss action
+        # may move this state back to pending.
+        conn.execute(
+            "UPDATE assistant_tasks SET delivery_status='ambiguous',"
+            " next_action_at=NULL, updated_at=?"
+            " WHERE delivery_status='sending'",
+            (now,),
+        )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return requeued + recovered + local_reopened, failed + ambiguous + expired_approved
+
+
+def assistant_task_claim_ready_step(conn, task_id):
+    """Atomically claim the first dependency-ready step for one task."""
+    now = _now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        task = assistant_task_get(conn, task_id)
+        if task is None or task["status"] not in {"planned", "running"}:
+            conn.commit()
+            return None
+        rows = assistant_task_steps(conn, task_id)
+        statuses = {row["step_key"]: row["status"] for row in rows}
+        chosen = None
+        for row in rows:
+            if row["status"] != "pending":
+                continue
+            try:
+                deps = json.loads(row["dependencies_json"] or "[]")
+            except (TypeError, ValueError):
+                deps = []
+            if all(statuses.get(dep) == "succeeded" for dep in deps):
+                chosen = row
+                break
+            if any(statuses.get(dep) in {"failed", "blocked", "cancelled"} for dep in deps):
+                conn.execute(
+                    "UPDATE assistant_task_steps SET status = 'blocked',"
+                    " error = 'dependency did not complete', finished_at = ?, updated_at = ?"
+                    " WHERE id = ? AND status = 'pending'",
+                    (now, now, row["id"]),
+                )
+        if chosen is None:
+            conn.commit()
+            return None
+        changed = conn.execute(
+            "UPDATE assistant_task_steps SET status = 'claimed',"
+            " attempts = attempts + 1, claimed_at = ?, updated_at = ?"
+            " WHERE id = ? AND status = 'pending' AND attempts < max_attempts",
+            (now, now, chosen["id"]),
+        ).rowcount
+        if not changed:
+            conn.commit()
+            return None
+        attempt_no = int(chosen["attempts"] or 0) + 1
+        invocation_uid = "inv_" + hashlib.sha256(
+            f"{chosen['idempotency_key']}:{attempt_no}:{now}".encode("utf-8")
+        ).hexdigest()[:32]
+        conn.execute(
+            "INSERT INTO task_step_attempts"
+            " (task_id, step_id, attempt_no, invocation_uid, status, started_at)"
+            " VALUES (?, ?, ?, ?, 'started', ?)",
+            (int(task_id), chosen["id"], attempt_no, invocation_uid, now),
+        )
+        conn.execute(
+            "UPDATE assistant_tasks SET status = 'running', next_action_at=NULL,"
+            " updated_at = ?"
+            " WHERE id = ? AND status IN ('planned', 'running')",
+            (now, int(task_id)),
+        )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return assistant_task_step_get(conn, chosen["id"], task_id)
+
+
+def task_attempt_finish(conn, step_id, status, *, input_hash=None, error=None,
+                        commit=True):
+    if status not in {"succeeded", "blocked", "failed", "cancelled", "waiting"}:
+        raise ValueError("invalid attempt status")
+    row = conn.execute(
+        "SELECT id FROM task_step_attempts WHERE step_id = ?"
+        " AND status IN ('started','waiting') ORDER BY attempt_no DESC LIMIT 1",
+        (int(step_id),),
+    ).fetchone()
+    if row is None:
+        return False
+    finished = None if status == "waiting" else _now()
+    changed = conn.execute(
+        "UPDATE task_step_attempts SET status = ?, input_hash = COALESCE(?, input_hash),"
+        " error = ?, finished_at = ? WHERE id = ?"
+        " AND status IN ('started','waiting')",
+        (status, input_hash,
+         tasking.redact_derived_text(error)[:500] if error else None,
+         finished, row["id"]),
+    ).rowcount
+    if commit:
+        conn.commit()
+    return bool(changed)
+
+
+def assistant_task_step_status(conn, step_id, status, *, error=None, receipt_id=None,
+                               approval_id=None, commit=True):
+    allowed = {
+        "pending", "claimed", "running", "waiting_worker", "waiting_approval", "succeeded",
+        "blocked", "failed", "cancelled",
+    }
+    if status not in allowed:
+        raise ValueError("invalid task step status")
+    now = _now()
+    finished = now if status in {"succeeded", "blocked", "failed", "cancelled"} else None
+    transitions = {
+        "pending": ("claimed", "running"),
+        "claimed": ("pending",),
+        "running": ("claimed",),
+        "waiting_worker": ("claimed",),
+        "waiting_approval": ("claimed",),
+        "succeeded": ("claimed", "running", "waiting_worker", "waiting_approval"),
+        "blocked": ("pending", "claimed", "running", "waiting_worker",
+                    "waiting_approval", "blocked"),
+        "failed": ("claimed", "running", "blocked"),
+        "cancelled": ("pending", "claimed", "running", "waiting_worker",
+                      "waiting_approval", "blocked"),
+    }
+    expected = transitions[status]
+    placeholders = ",".join("?" for _ in expected)
+    parent_guard = (
+        " AND EXISTS (SELECT 1 FROM assistant_tasks t"
+        " WHERE t.id = assistant_task_steps.task_id"
+        " AND t.status NOT IN ('cancel_requested','cancelled','failed','completed'))"
+        if status not in {"cancelled"} else ""
+    )
+    changed = conn.execute(
+        "UPDATE assistant_task_steps SET status = ?, error = ?,"
+        " receipt_id = COALESCE(?, receipt_id), approval_id = COALESCE(?, approval_id),"
+        " finished_at = COALESCE(?, finished_at), updated_at = ?"
+        f" WHERE id = ? AND status IN ({placeholders}){parent_guard}",
+        (status, tasking.redact_derived_text(error)[:500] if error else None,
+         receipt_id, approval_id, finished, now, int(step_id), *expected),
+    ).rowcount
+    if commit:
+        conn.commit()
+    return bool(changed)
+
+
+def task_receipt_by_idempotency(conn, idempotency_key):
+    return conn.execute(
+        "SELECT * FROM tool_receipts WHERE idempotency_key = ?",
+        (str(idempotency_key),),
+    ).fetchone()
+
+
+def task_receipt_create(conn, step, *, input_hash, status, summary, data,
+                        evidence=(), artifact_id=None, effect_id=None, trace_id=None,
+                        commit=True):
+    if status not in {"ok", "partial"}:
+        raise ValueError("only successful or partial outcomes are immutable receipts")
+    safe_summary = tasking.redact_derived_text(summary)[:1000]
+    safe_data = json.loads(tasking.redact_derived_text(_task_json(data)))
+    safe_evidence = json.loads(tasking.redact_derived_text(_task_json(list(evidence))))
+    spec = tool_broker.get_spec(step["tool"])
+    tool_broker.validate_output(spec, safe_data, safe_evidence)
+    material = f"{step['idempotency_key']}:{input_hash}:{status}"
+    receipt_uid = "rcpt_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+    cur = conn.execute(
+        "INSERT INTO tool_receipts"
+        " (receipt_uid, idempotency_key, task_id, step_id, tool, input_hash,"
+        " policy_version, implementation_version, status, summary, data_json,"
+        " evidence_json, artifact_id, effect_id, trace_id, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (receipt_uid, step["idempotency_key"], step["task_id"], step["id"],
+         step["tool"], input_hash, step["policy_version"],
+         step["implementation_version"], status, safe_summary,
+         _task_json(safe_data), _task_json(safe_evidence), artifact_id,
+         tasking.redact_derived_text(effect_id)[:300] if effect_id else None,
+         trace_id, _now()),
+    )
+    if commit:
+        conn.commit()
+    return conn.execute("SELECT * FROM tool_receipts WHERE id = ?", (cur.lastrowid,)).fetchone()
+
+
+def task_artifact_create(conn, task_id, kind, safe_filename, local_path,
+                         size_bytes, sha256, *, commit=True):
+    existing = conn.execute(
+        "SELECT * FROM task_artifacts WHERE task_id = ? AND local_path = ?"
+        " ORDER BY id LIMIT 1",
+        (int(task_id), str(local_path)),
+    ).fetchone()
+    if existing is not None:
+        if (existing["sha256"] != str(sha256)
+                or int(existing["size_bytes"]) != int(size_bytes)
+                or existing["safe_filename"] != str(safe_filename)):
+            raise ValueError("managed artifact row conflicts with existing content")
+        return existing["id"]
+    cur = conn.execute(
+        "INSERT INTO task_artifacts"
+        " (task_id, kind, safe_filename, local_path, size_bytes, sha256, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (int(task_id), str(kind), str(safe_filename), str(local_path),
+         int(size_bytes), str(sha256), _now()),
+    )
+    if commit:
+        conn.commit()
+    return cur.lastrowid
+
+
+def task_artifact_mark_delivered(conn, artifact_id):
+    conn.execute(
+        "UPDATE task_artifacts SET delivered_at = COALESCE(delivered_at, ?)"
+        " WHERE id = ?", (_now(), int(artifact_id)),
+    )
+    conn.commit()
+
+
+def task_approval_get(conn, approval_id, chat_id=None):
+    if chat_id is None:
+        return conn.execute(
+            "SELECT * FROM task_approvals WHERE id = ?", (int(approval_id),)
+        ).fetchone()
+    return conn.execute(
+        "SELECT * FROM task_approvals WHERE id = ? AND chat_id = ?",
+        (int(approval_id), int(chat_id)),
+    ).fetchone()
+
+
+def task_approvals_live(conn, chat_id):
+    return conn.execute(
+        "SELECT * FROM task_approvals WHERE chat_id = ?"
+        " AND status IN ('pending', 'approved') ORDER BY created_at, id",
+        (int(chat_id),),
+    ).fetchall()
+
+
+def task_approval_create(conn, task, step, preview, input_hash, target_snapshot,
+                         target_version):
+    now = _now()
+    expires = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    preview_json = _task_json(preview)
+    preview_hash = hashlib.sha256(preview_json.encode("utf-8")).hexdigest()
+    token_material = f"{task['id']}:{step['id']}:{input_hash}:{preview_hash}:{now}"
+    consume_token = hashlib.sha256(token_material.encode("utf-8")).hexdigest()
+    cur = conn.execute(
+        "INSERT INTO task_approvals"
+        " (task_id, step_id, chat_id, source_update, preview_json, preview_hash,"
+        " input_hash, policy_version, implementation_version, target_snapshot_json,"
+        " target_version, consume_token, status, created_at, expires_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+        (task["id"], step["id"], task["chat_id"], task["source_update"],
+         preview_json, preview_hash, input_hash, step["policy_version"],
+         step["implementation_version"], _task_json(target_snapshot),
+         str(target_version), consume_token, now, expires),
+    )
+    approval_id = cur.lastrowid
+    assistant_task_step_status(
+        conn, step["id"], "waiting_approval", approval_id=approval_id, commit=False)
+    assistant_task_set_status(conn, task["id"], "waiting_approval", commit=False)
+    conn.commit()
+    return task_approval_get(conn, approval_id)
+
+
+def task_approval_attach_message(conn, approval_id, message_id):
+    conn.execute(
+        "UPDATE task_approvals SET preview_message_id = ?"
+        " WHERE id = ? AND status = 'pending'",
+        (int(message_id), int(approval_id)),
+    )
+    conn.commit()
+
+
+def task_approval_decide(conn, approval_id, chat_id, approve, *,
+                         decision_source, decision_message_id=None,
+                         preview_message_id=None):
+    now = _now()
+    row = task_approval_get(conn, approval_id, chat_id)
+    if row is None or row["status"] != "pending":
+        return None
+    if row["expires_at"] <= now:
+        conn.execute(
+            "UPDATE task_approvals SET status = 'expired', decided_at = ?"
+            " WHERE id = ? AND status = 'pending'",
+            (now, int(approval_id)),
+        )
+        assistant_task_step_status(
+            conn, row["step_id"], "blocked", error="Approval expired", commit=False)
+        task_attempt_finish(
+            conn, row["step_id"], "blocked",
+            error="Approval expired", commit=False)
+        assistant_task_set_status(conn, row["task_id"], "blocked", commit=False)
+        conn.commit()
+        return None
+    # Creation and Telegram delivery are two systems. A crash can leave the
+    # approval row without a delivered preview; that row is not actionable.
+    if row["preview_message_id"] is None:
+        return None
+    if preview_message_id is None:
+        return None
+    if int(row["preview_message_id"]) != int(preview_message_id):
+        return None
+    status = "approved" if approve else "rejected"
+    changed = conn.execute(
+        "UPDATE task_approvals SET status = ?, decision_source = ?,"
+        " decision_message_id = ?, decided_at = ?"
+        " WHERE id = ? AND chat_id = ? AND status = 'pending'",
+        (status, str(decision_source), decision_message_id, now,
+         int(approval_id), int(chat_id)),
+    ).rowcount
+    if changed and not approve:
+        task_attempt_finish(
+            conn, row["step_id"], "cancelled", error="approval rejected",
+            commit=False)
+        assistant_task_step_status(
+            conn, row["step_id"], "cancelled", error="approval rejected", commit=False)
+        assistant_task_set_status(
+            conn, row["task_id"], "cancelled", summary="Write approval rejected", commit=False)
+    conn.commit()
+    return task_approval_get(conn, approval_id, chat_id) if changed else None
+
+
+def task_feedback_add(conn, chat_id, *, task_id=None, source_update=None,
+                      trace_id=None, outbound_message_id=None, rating=None,
+                      correction=None, signal="explicit"):
+    if rating is not None:
+        rating = int(rating)
+        if rating < 1 or rating > 5:
+            raise ValueError("rating must be 1..5")
+    safe = tasking.redact_derived_text(correction)[:1000] if correction else None
+    task = assistant_task_get(conn, task_id, chat_id) if task_id is not None else None
+    if task is None:
+        raise ValueError("feedback task is missing or belongs to another chat")
+    if (task["delivery_status"] != "delivered"
+            or task["final_message_id"] is None
+            or int(outbound_message_id or -1) != int(task["final_message_id"])):
+        raise ValueError("feedback must bind to the delivered task result")
+    if source_update is None or trace_id is None:
+        raise ValueError("feedback source update and trace are required")
+    update = telegram_update_get(conn, source_update)
+    if (update is None or update["chat_id"] is None
+            or int(update["chat_id"]) != int(chat_id)):
+        raise ValueError("feedback source update is missing or foreign")
+    trace = conn.execute(
+        "SELECT 1 FROM traces WHERE trace_id=? AND chat_id=?",
+        (str(trace_id), int(chat_id)),
+    ).fetchone()
+    if trace is None:
+        raise ValueError("feedback trace is missing or foreign")
+    correction_hash = tasking.source_hash(safe) if safe else None
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO task_feedback"
+        " (task_id, chat_id, source_update, trace_id, outbound_message_id,"
+        " rating, correction, signal, source_hash, correction_hash, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (task_id, int(chat_id), source_update, trace_id, outbound_message_id,
+         rating, safe, str(signal), task["source_hash"], correction_hash, _now()),
+    )
+    if cur.rowcount:
+        feedback_id = cur.lastrowid
+    else:
+        existing = conn.execute(
+            "SELECT * FROM task_feedback WHERE chat_id=? AND source_update=?"
+            " AND task_id=? AND signal=?",
+            (int(chat_id), source_update, task_id, str(signal)),
+        ).fetchone()
+        if (existing is None
+                or existing["rating"] != rating
+                or existing["correction"] != safe
+                or existing["outbound_message_id"] != outbound_message_id
+                or existing["source_hash"] != task["source_hash"]):
+            raise ValueError("feedback redelivery conflicts with durable evidence")
+        feedback_id = existing["id"]
+    conn.commit()
+    return feedback_id
+
+
+def task_note_use_record(conn, task_id, receipt_id, message_id,
+                         delivered_message_id, *, commit=True):
+    """Idempotently attribute one note use to a delivered task result."""
+    row = conn.execute(
+        "SELECT m.chat_id, m.note_no, m.knowledge_state"
+        " FROM messages m JOIN assistant_tasks t"
+        " ON t.id=? AND t.chat_id=m.chat_id"
+        " JOIN tool_receipts r ON r.id=? AND r.task_id=t.id"
+        " WHERE m.id=?",
+        (int(task_id), int(receipt_id), int(message_id)),
+    ).fetchone()
+    if row is None or row["knowledge_state"] is None or row["note_no"] is None:
+        return False
+    now = _now()
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO task_note_uses"
+        " (task_id, receipt_id, chat_id, note_no, delivered_message_id, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (int(task_id), int(receipt_id), int(row["chat_id"]), int(row["note_no"]),
+         int(delivered_message_id), now),
+    )
+    if cur.rowcount:
+        note_mark_used(
+            conn, message_id, source="assistant_task", commit=False)
+        note_outcome_record(
+            conn, message_id, "note_cited", occurred_at=now,
+            source="assistant_task", source_event_id=cur.lastrowid, commit=False)
+    if commit:
+        conn.commit()
+    return bool(cur.rowcount)
 
 
 # -- reminders ----------------------------------------------------------------

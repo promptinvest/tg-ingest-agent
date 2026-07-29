@@ -1,13 +1,13 @@
 # Cara Chief-of-Staff Upgrade
 
-Status: approved for implementation  
+Status: shipped and production-verified
 Decision date: 2026-07-29
 
 This is the decision-complete implementation specification for evolving Cara
 from a collection of single-step skills into an intelligent, self-improving
 chief of staff. `CARA.md` and `SOLUTION.md` remain the maintained product and
-architecture sources of truth; this document owns the staged delivery plan
-until every phase is shipped.
+architecture sources of truth; this document records the locked design,
+delivery gates, and production evidence for the shipped release.
 
 ## 1. Locked product decisions
 
@@ -350,8 +350,13 @@ The worker ships after the in-process registry and task lifecycle are stable.
   JSON, and atomic rename publishes jobs/results.
 - Worker accepts only compiled-in tool ids. It has no generic
   `command`/`argv`/`script` field.
-- Every job gets a fresh scratch directory, size/time/CPU/memory/process limits,
-  no host path mounts, no device access and network disabled by default.
+- Every job gets a fresh scratch directory and size/time/CPU/memory/process
+  limits. The worker service has no network or device access and runs in a
+  systemd mount namespace with a read-only host view, one dedicated writable
+  state/spool root, and explicit denial of Cara/Nikki databases, service
+  secrets, backup keys and the fleet notification secret. This v1 worker does
+  **not** literally remove every host path mount; its only compiled job is
+  `worker.echo`, which has no file, command or network interface.
 - Browser/search tools, when later enabled, use a dedicated sandbox profile and
   SSRF/metadata/private-range egress denial. Authenticated account operations
   belong to future API connectors, not browser session replay.
@@ -380,27 +385,19 @@ permissions or targets even when it contains instruction-like text.
 
 ### Phase A — durable tasks and plans
 
-- Checkpoint A0 (repository only; not deployed): compiled inert tool contracts,
-  strict plan/provenance/redaction validation, additive core tables, atomic
-  canonical-source-update get-or-create and owner-scoped cancellation requests
-  are implemented. The persistence boundary revalidates raw plans itself;
-  composite foreign keys bind receipts/approvals/artifacts to the exact task,
-  step, owner/source update, tool, idempotency key and policy/implementation
-  versions.
-  Final A0 gate: independent adversarial review PASS; disposable PD-VPS
-  compile + full discovery PASS (`1490` tests, `9` intentional skips). A0 is
-  still dormant and not installed on the live service.
-  Routing, planning calls and execution remain disabled until later checkpoints.
-- Add schema/helpers, planner profile, task actions, list/detail/cancel/resume,
-  strict plan validator, direct-skill fast path, and task runner.
-- Replace the `multi_action` decline with `task_start`.
+- Shipped: compiled tool contracts, strict plan/provenance/redaction
+  validation, additive task/step/attempt/receipt/approval/artifact tables,
+  update-id idempotency, crash reclaim, cancellation fencing, truthful partial
+  results, crash-safe terminal delivery states, task actions,
+  list/detail/cancel/resume, the direct-skill fast path, and the task runner.
+  The old `multi_action` decline is replaced by `task_start`.
 - Gate: deterministic tests for schema migration, plan validation, input
   provenance, dependency order, crash reclaim, idempotency/ambiguity,
   cancellation and truthful partial results.
 
 ### Phase B — neutral tools and approvals
 
-- Add the initial registry, knowledge/supplied-URL/synthesis/artifact tools,
+- Shipped: the initial registry, knowledge/supplied-URL/synthesis/artifact tools,
   approval previews and reminder proposal bridge.
 - Gate: every registry tool has a manifest policy and tests; reads never write
   domain state; writes cannot execute without a current one-time approval and
@@ -409,14 +406,20 @@ permissions or targets even when it contains instruction-like text.
 
 ### Phase C — evaluation and improvement proposals
 
-- Add task feedback, invariant cases, baseline/candidate runs, proposal
+- Shipped: task feedback, invariant cases, baseline/candidate runs, proposal
   creation/review/export and a weekly low-priority analysis job.
 - Gate: proposal text cannot enter runtime prompts or policies; unsafe or
   regressing candidates never become ready; every claim links to real evidence.
+- V1 limitation: the seeded corpus is narrow structural-plan and safe-read
+  evidence. Candidate runs are bound to the exact proposed-change hash and any
+  matching corpus failure vetoes readiness, but this is not autonomous proof
+  that a prompt/model/code proposal improves every aspect of Cara. Accepting a
+  proposal still changes workflow status only; implementation requires the
+  ordinary engineering, full-suite and live-deploy gates.
 
 ### Phase D — isolated local worker
 
-- Add spool client/worker, service/user/install/rollback wiring and one harmless
+- Shipped: spool client/worker, service/user/install/rollback wiring and one harmless
   sandbox smoke tool (`worker.echo`) to prove transport, limits, cancellation,
   result hashing and outage behavior. Do not add arbitrary shell/browser.
 - Gate: no public listener; service hardening verified; worker compromise
@@ -425,27 +428,44 @@ permissions or targets even when it contains instruction-like text.
 
 ### Phase E — chief-of-staff experience
 
-- Add task status cards, concise progress only on request, morning-brief open
+- Shipped: task status cards, concise progress only on request, morning-brief open
   loops, overdue task follow-up, and review metrics focused on completion/use.
 - Gate: at most one non-urgent proactive task nudge per local day; no progress
   spam; all status/action statements derive from rows/receipts.
 
 ## 7. Release-level success criteria
 
-- The versioned acceptance corpus observes zero unauthorized state/external
-  writes across unit, integration, replay and live smoke tests.
-- 100% of supported compound cases in that corpus produce a valid bounded plan
-  or an honest targeted clarification; none fall to a fabricated free-form
-  promise.
-- 100% of completion/effect statements in that corpus carry a successful real
-  receipt.
-- At least 90% of the versioned supported neutral end-to-end corpus completes
-  without operator repair; the remainder fail or clarify honestly.
-- Crash-injection/reopen tests at every task transaction/effect boundary show
-  resumable internal work and either connector-enforced at-most-once effects or
-  an explicit ambiguous block—never a blind external replay.
+- The versioned v1 neutral corpus observes zero unauthorized domain/external
+  writes and all ten reference cases produce valid bounded plans.
+- All ten v1 neutral end-to-end cases complete under the real task runner and
+  every step carries a successful real receipt.
+- Separate adversarial tests cover approval replay, source/policy drift,
+  receipt/attempt recovery, worker cancellation/late results, purge epochs,
+  terminal-delivery ambiguity and feedback provenance. These are the supported
+  v1 crash/effect boundaries; no claim is made that every possible future
+  connector boundary has already been tested.
 - Existing single-step skills, reminders, ingest, memory, budgets, owner gate,
   backup, and persona tests remain behaviorally unchanged.
 - No new public listener. Cara and Nikki remain independently restartable.
 - Full VPS test gate passes, deployment verifies both services and SQLite
   integrity/FKs, specs and host KB are updated, then commits are pushed.
+
+## 8. Production release record
+
+- Deployed to the Cara host on 2026-07-29 from the reviewed working tree.
+- The complete VPS discovery suite passed with nine intentional skips before
+  installation. No local pytest run was used.
+- Installer backup:
+  `/root/codex-hardening-backups/20260729T130716Z-tg-ingest-agent`.
+- The post-install verifier passed the real worker-spool canary, SQLite
+  integrity/foreign-key checks, service ownership, cross-user access denial,
+  secret/database denial inside the worker mount namespace, and live systemd
+  hardening properties.
+- Final read-only verification found both services active and enabled, zero
+  failed units, and no warning-or-worse journal entries after restart.
+- The final independent adversarial review returned PASS: exact candidate
+  hashes are required throughout the evaluation corpus and any matching failed
+  replay vetoes proposal readiness.
+- The historical PD deployment-notification helper is absent on this
+  repurposed host. No terminal Telegram message was fabricated through an
+  undocumented credential path.

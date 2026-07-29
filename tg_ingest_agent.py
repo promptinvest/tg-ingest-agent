@@ -53,8 +53,12 @@ import spend
 import storage
 import store
 import sysinfo
+import task_runner
+import tasks_svc
 import texts
+import tool_broker
 import trace
+import improvement
 from common import Config, ShutdownInterrupt, current_trace, load_config, log  # noqa: F401
 from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
                     tg_send_document_file_id, tg_send_photo,
@@ -115,7 +119,23 @@ _DISPATCH = {
     "set_journal":         lambda s, c: s.do_set_journal(c.chat_id, c.lang, c.params),
     "journal_show":        lambda s, c: s.do_journal_show(c.chat_id, c.lang, c.params),
     "journal_prompt":      lambda s, c: s.do_journal_prompt(c.chat_id, c.lang, c.params),
-    "multi_action":        lambda s, c: s.reply(c.chat_id, T(c.lang, "one_at_a_time")),
+    "multi_action":        lambda s, c: s.do_task_start(
+        c.chat_id, c.lang, c.text, c.msg_id),
+    "task_start":          lambda s, c: s.do_task_start(
+        c.chat_id, c.lang, c.text, c.msg_id),
+    "task_list":           lambda s, c: s.do_task_list(c.chat_id, c.lang, c.params),
+    "task_show":           lambda s, c: s.do_task_show(c.chat_id, c.lang, c.params),
+    "task_cancel":         lambda s, c: s.do_task_cancel(c.chat_id, c.lang, c.params),
+    "task_resume":         lambda s, c: s.do_task_resume(c.chat_id, c.lang, c.params),
+    "task_feedback":       lambda s, c: s.do_task_feedback(
+        c.chat_id, c.lang, c.params, c.text),
+    "improvement_list":    lambda s, c: s.do_improvement_list(c.chat_id, c.lang),
+    "improvement_show":    lambda s, c: s.do_improvement_show(
+        c.chat_id, c.lang, c.params),
+    "improvement_decide":  lambda s, c: s.do_improvement_decide(
+        c.chat_id, c.lang, c.params),
+    "improvement_export":  lambda s, c: s.do_improvement_export(
+        c.chat_id, c.lang, c.params),
     "review":              lambda s, c: s.do_review(c.chat_id, c.lang, c.params),
     "converse":            _dispatch_default,
     "persona":             _dispatch_default,
@@ -156,13 +176,16 @@ _LIST_REPLACING_ACTIONS = frozenset({
 })
 
 
-class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixin):
+class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
+            reminders_svc.ReminderMixin, notes_svc.NotesMixin):
     def __init__(self, cfg):
         # Fail fast if a router action lacks a manifest policy (P0.1: the
         # manifest is the live permission gate, not just documentation).
         skill_manifest.assert_covers(router.ACTIONS)
+        tool_broker.assert_registry()
         self.cfg = cfg
         self.conn = store.open_db(cfg.db_path)
+        improvement.ensure_golden_corpus(self.conn)
         cfg.media_dir.mkdir(parents=True, exist_ok=True)
         for name in cfg.seed_categories:
             normalized = llm.normalize_category(name)
@@ -202,6 +225,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         if ev_requeued or ev_dead:
             log(f"reclaimed stale events after restart: {ev_requeued} requeued,"
                 f" {ev_dead} failed")
+        task_requeued, task_blocked = store.assistant_task_reclaim_stale(self.conn)
+        if task_requeued or task_blocked:
+            log(f"reclaimed assistant tasks: {task_requeued} requeued,"
+                f" {task_blocked} blocked/ambiguous")
+        self.recover_pending_task_purge()
         self.albums = {}  # media_group_id -> {"parts": [...], "deadline": float}
         # Consecutive sqlite containment breaks in the inbound path, and whether
         # the boss has already been told about THIS stall (see _db_stall).
@@ -240,6 +268,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # Raw text of the message he's replying to/quoting this turn ("" when none)
         # — referential saves («сохрани это» as a reply) resolve against it.
         self.turn_reply_quote = ""
+        # Exact Telegram message id replied to in this turn.  Task feedback
+        # without an explicit task id is accepted only when this binds to that
+        # task's delivered final message.
+        self.turn_reply_message_id = None
         # The reminder whose FIRED NOTIFICATION he's replying to this turn (or
         # None) — the strongest binding for a close/snooze follow-up.
         self.turn_reply_reminder_id = None
@@ -695,6 +727,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
     # tuple built inline in run()) so that dropping a monitor from the loop is a
     # visible, testable change instead of a silent feature death in production.
     SCHEDULER_TICKS = (
+        "check_assistant_tasks",
         "fire_due_reminders",
         "check_budget_notice",
         "check_weekly_review",
@@ -706,7 +739,62 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         "check_proactive",
         "check_model_health",
         "check_disk_space",
+        "check_weekly_improvements",
     )
+
+    def check_assistant_tasks(self):
+        self.recover_pending_task_purge(timeout_seconds=0.1)
+        task_runner.expire_approvals(self.conn)
+        self.retry_task_deliveries()
+        return task_runner.tick(self, self.conn)
+
+    def check_weekly_improvements(self):
+        local = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
+        if (local.weekday() != self.cfg.improvement_weekday
+                or local.hour < self.cfg.improvement_hour):
+            return 0
+        week = local.strftime("%G-W%V")
+        if store.kv_get(self.conn, "improvement_week") == week:
+            return 0
+        now = datetime.now(timezone.utc)
+        raw = store.kv_get(self.conn, "improvement_retry_state")
+        try:
+            state = json.loads(raw or "")
+        except (TypeError, ValueError):
+            state = None
+        if not isinstance(state, dict) or state.get("week") != week:
+            state = {"week": week, "attempts": 0, "next_at": None}
+        try:
+            next_at = datetime.fromisoformat(state.get("next_at") or "")
+            if next_at.tzinfo is None:
+                next_at = next_at.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            next_at = None
+        if next_at is not None and now < next_at:
+            return 0
+        attempts = min(3, int(state.get("attempts") or 0) + 1)
+        delays = (3600, 6 * 3600, 24 * 3600)
+        state = {
+            "week": week,
+            "attempts": attempts,
+            "next_at": (now + timedelta(
+                seconds=delays[attempts - 1])).isoformat(),
+        }
+        # Persist the attempt before the call so a process crash cannot turn
+        # the ordinary scheduler loop into a model-call storm.
+        store.kv_set(
+            self.conn, "improvement_retry_state",
+            json.dumps(state, sort_keys=True))
+        try:
+            created = improvement.weekly_analysis(self, self.conn)
+        except (llm.BudgetExceeded, llm.LLMError) as exc:
+            log(f"weekly improvement analysis deferred: {exc}")
+            created = -1
+        if created >= 0 or attempts >= 3:
+            store.kv_set(self.conn, "improvement_week", week)
+            store.kv_set(self.conn, "improvement_retry_state", "")
+            return max(0, created)
+        return 0
 
     def watchdog_ping(self):
         """Tell systemd the loop is still moving (WatchdogSec in the unit).
@@ -1014,6 +1102,20 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                                importance=1, title=f"reaction {emoji}")
         if sentiment == "negative":
             store.issue_add(self.conn, chat_id, "negative_reaction", emoji)
+        task = self.conn.execute(
+            "SELECT * FROM assistant_tasks WHERE chat_id = ?"
+            " AND final_message_id = ? AND delivery_status = 'delivered'"
+            " ORDER BY id DESC LIMIT 1",
+            (int(chat_id), int(mr.get("message_id") or 0)),
+        ).fetchone()
+        if task is not None and sentiment in {"positive", "negative"}:
+            store.task_feedback_add(
+                self.conn, chat_id, task_id=task["id"],
+                source_update=getattr(self, "_current_update_id", None),
+                trace_id=current_trace(),
+                outbound_message_id=mr.get("message_id"),
+                rating=5 if sentiment == "positive" else 1,
+                signal="reaction")
         log(f"boss reacted {emoji} ({sentiment}) on message {mr.get('message_id')}")
 
     # -- Edited messages -------------------------------------------------------
@@ -1435,6 +1537,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         self.turn_lang = None
         self.turn_extra = []
         self.turn_reply_quote = ""
+        self.turn_reply_message_id = None
         self.turn_reply_reminder_id = None
         self.turn_reply_suggestion_id = None
         self._own_photo_turn = False
@@ -1555,6 +1658,7 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # What he's replying to / quoting is context for understanding "this".
         reply_to_msg = msg.get("reply_to_message")
         if reply_to_msg:
+            self.turn_reply_message_id = reply_to_msg.get("message_id")
             row = store.find_by_suggestion_message(
                 self.conn, chat_id, reply_to_msg.get("message_id"))
             if row and text and not (auto_store or own_media):
@@ -1981,6 +2085,11 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         # identical word orders cannot randomly alternate between real deletion
         # confirmation and a blocked converse claim.
         if pending is None and self._dispatch_numbered_delete(chat_id, lang, text):
+            return
+        # Task write approvals are bound to the exact delivered preview card.
+        # A bare yes/no is accepted only when there is exactly one live task
+        # approval and no legacy pending action competing for the same words.
+        if self.resolve_task_approval_text(chat_id, text, msg, pending):
             return
         # A short reply to a proactive nudge belongs to the exact queue that was
         # offered. Do this before small-talk/router handling so «Давай» cannot
@@ -3782,7 +3891,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
         tid = trace.start(self.conn, "proactive_tick", chat_id)
         try:
             sent = proactive.run(self.conn, self.cfg, lang,
-                                 lambda text: self.reply(chat_id, text))
+                                 lambda text: self.reply(chat_id, text),
+                                 chat_id=chat_id)
             # Snapshot the exact queue behind the delivered nudge. A later
             # «Давай»/"show them" can then continue deterministically.
             if sent:
@@ -3799,8 +3909,16 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
                         " AND due_utc<=? AND (last_fired_at IS NULL OR last_fired_at<due_utc)"
                         " ORDER BY due_utc, id", (chat_id, now_iso)
                     ).fetchall()]
+                elif sent == "task_open_loop":
+                    try:
+                        ids = [int(store.kv_get(
+                            self.conn,
+                            f"proactive_candidate:task_open_loop:{chat_id}"))]
+                    except (TypeError, ValueError):
+                        ids = []
                 store.kv_set(self.conn, "proactive_context", json.dumps(
-                    {"kind": sent, "sent_at": now_iso, "ids": ids},
+                    {"kind": sent, "sent_at": now_iso, "ids": ids,
+                     "chat_id": int(chat_id)},
                     ensure_ascii=False,
                 ))
             if sent == "overdue":
@@ -3825,6 +3943,8 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             if sent_at.tzinfo is None:
                 sent_at = sent_at.replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) - sent_at > timedelta(minutes=15):
+                return False
+            if int(context.get("chat_id")) != int(chat_id):
                 return False
             ids = [int(value) for value in context.get("ids") or []]
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -3861,6 +3981,20 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return True
         if kind == "overdue":
             self.reply(chat_id, self._reminder_list_body(chat_id, lang))
+            return True
+        if kind == "task_open_loop":
+            task = (
+                store.assistant_task_get(self.conn, ids[0], chat_id)
+                if len(ids) == 1 else None)
+            if task is None:
+                self.reply(
+                    chat_id,
+                    "Эта задача уже недоступна." if lang == "ru"
+                    else "That task is no longer available.",
+                    record=False)
+            else:
+                self.reply(
+                    chat_id, self._task_detail(task, lang), record=False)
             return True
         if isinstance(kind, str) and kind.startswith("journal:"):
             # Journal invitation accepted: invite the entry itself. His next
@@ -4074,11 +4208,14 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             return
         self.turn_lang = None
         lang = self.lang()
-        text = review.morning_brief(self.conn, self.cfg, lang, self.tz_offset(), self.owner_name())
+        chat_id = next(iter(self.cfg.allowed_chat_ids))
+        text = review.morning_brief(
+            self.conn, self.cfg, lang, self.tz_offset(), self.owner_name(),
+            chat_id=chat_id)
         if not text:
             store.kv_set(self.conn, "morning_brief_day", day)  # nothing worth a ping today
             return
-        if self._send_all(text):
+        if self.reply(chat_id, text):
             store.kv_set(self.conn, "morning_brief_fails", "0")
             store.kv_set(self.conn, "morning_brief_day", day)
         elif self._sched_send_gave_up("morning_brief"):
@@ -4148,6 +4285,10 @@ class Agent(hermes.HermesMixin, reminders_svc.ReminderMixin, notes_svc.NotesMixi
             self.answer_callback(callback_id, "Not allowed.")
             return
         data = callback.get("data") or ""
+        if data.startswith("ta|"):
+            self.handle_task_approval_callback(
+                callback_id, chat_id, msg, data)
+            return
         if data.startswith("mc|"):
             self.handle_memory_callback(callback_id, chat_id, msg, data)
             return

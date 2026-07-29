@@ -8,20 +8,26 @@ fi
 
 STAGE_DIR="${STAGE_DIR:-/root/tg-ingest-agent-stage}"
 SERVICE=tg-ingest-agent
+WORKER_SERVICE=cara-worker
 APP_USER=tg-ingest
+WORKER_USER=cara-worker
+WORKER_GROUP=cara-worker-spool
 APP_DIR=/opt/tg-ingest-agent
 STATE_DIR=/var/lib/tg-ingest-agent
 ENV_FILE=/etc/tg-ingest-agent.env
 UNIT_FILE=/etc/systemd/system/${SERVICE}.service
+WORKER_UNIT_FILE=/etc/systemd/system/${WORKER_SERVICE}.service
 UNIT_SRC=tg-ingest-agent.service
+WORKER_UNIT_SRC=cara-worker.service
 ENV_TEMPLATE=tg-ingest-agent.env.example
 
-MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
+MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py task_runner.py tasks_svc.py worker_client.py improvement.py cara_worker.py verify_task_runtime.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
 
 # The unit file and the env template are STAGED FILES now, not heredocs in this
 # script: one copy of each, versioned in the repo. A stage dir that predates that
 # change must fail loudly here rather than install half a service.
-for required in tg_ingest_agent.py "$UNIT_SRC" "$ENV_TEMPLATE" $MODULES; do
+for required in tg_ingest_agent.py verify-cara-runtime.sh "$UNIT_SRC" \
+  "$WORKER_UNIT_SRC" "$ENV_TEMPLATE" $MODULES; do
   if [ ! -f "$STAGE_DIR/$required" ]; then
     echo "Missing $STAGE_DIR/$required (stage it first)." >&2
     exit 1
@@ -45,7 +51,7 @@ find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-tg-ingest-agent' -p
 
 BACKUP_DIR="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-tg-ingest-agent"
 mkdir -p "$BACKUP_DIR"
-for existing in "$ENV_FILE" "$UNIT_FILE"; do
+for existing in "$ENV_FILE" "$UNIT_FILE" "$WORKER_UNIT_FILE"; do
   if [ -f "$existing" ]; then
     cp -a "$existing" "$BACKUP_DIR/"
   fi
@@ -62,13 +68,31 @@ apt-get install -y --no-install-recommends python3 ca-certificates sqlite3 pytho
 
 id "$APP_USER" >/dev/null 2>&1 || \
   useradd --system --home "$STATE_DIR" --shell /usr/sbin/nologin "$APP_USER"
+getent group "$WORKER_GROUP" >/dev/null 2>&1 || groupadd --system "$WORKER_GROUP"
+id "$WORKER_USER" >/dev/null 2>&1 || \
+  useradd --system --gid "$WORKER_GROUP" --home /var/lib/cara-worker \
+    --shell /usr/sbin/nologin "$WORKER_USER"
 
 install -d -m 0755 "$APP_DIR"
 install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$STATE_DIR" "$STATE_DIR/media"
+install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$STATE_DIR/task-artifacts"
+# One-way spool ownership: Cara can create/remove requests and cancellation
+# markers but cannot alter results; the networkless worker can create/remove
+# results but cannot alter requests/cancellation.
+install -d -m 0750 -o root -g "$WORKER_GROUP" /var/lib/cara-worker
+install -d -m 0750 -o root -g "$WORKER_GROUP" /var/lib/cara-worker/spool
+install -d -m 2750 -o "$APP_USER" -g "$WORKER_GROUP" \
+  /var/lib/cara-worker/spool/requests /var/lib/cara-worker/spool/cancel
+install -d -m 2750 -o "$WORKER_USER" -g "$WORKER_GROUP" \
+  /var/lib/cara-worker/spool/results
+install -d -m 0700 -o "$WORKER_USER" -g "$WORKER_GROUP" \
+  /var/lib/cara-worker/scratch
 install -m 0755 "$STAGE_DIR/tg_ingest_agent.py" "$APP_DIR/agent.py"
 for module in $MODULES; do
   install -m 0644 "$STAGE_DIR/$module" "$APP_DIR/$module"
 done
+install -m 0755 "$STAGE_DIR/verify-cara-runtime.sh" \
+  "$APP_DIR/verify-cara-runtime.sh"
 rm -rf "$APP_DIR/__pycache__"
 
 # Build stamp: a content hash of the installed code, so the agent announces a
@@ -91,23 +115,31 @@ fi
 # be a heredoc here with the repo's copy as a dead duplicate beside it — two files
 # to keep in sync, and only one of them deployed.
 install -m 0644 "$STAGE_DIR/$UNIT_SRC" "$UNIT_FILE"
+install -m 0644 "$STAGE_DIR/$WORKER_UNIT_SRC" \
+  "/etc/systemd/system/${WORKER_SERVICE}.service"
 
 python3 -m py_compile "$APP_DIR/agent.py" $(for m in $MODULES; do echo "$APP_DIR/$m"; done)
 rm -rf "$APP_DIR/__pycache__"
 systemctl daemon-reload
 systemctl enable "$SERVICE.service"
+systemctl enable "$WORKER_SERVICE.service"
 
 # Anchored to line start: only an ACTIVE `KEY=REPLACE_ME` counts. A commented
 # example line (`# SPACES_KEY=REPLACE_ME`, present in env.example) must not stop
 # a healthy service on reinstall. The `=` must stay in the pattern.
 if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=REPLACE_ME' "$ENV_FILE"; then
   systemctl stop "$SERVICE.service" 2>/dev/null || true
+  systemctl stop "$WORKER_SERVICE.service" 2>/dev/null || true
   echo "WARNING: $ENV_FILE still contains REPLACE_ME placeholders."
   echo "Fill in the secrets, then: systemctl start $SERVICE"
 else
+  systemctl restart "$WORKER_SERVICE.service"
   systemctl restart "$SERVICE.service"
   sleep 2
-  systemctl --no-pager --full status "$SERVICE.service" || true
+  systemctl is-active --quiet "$WORKER_SERVICE.service" || {
+    systemctl --no-pager --full status "$WORKER_SERVICE.service"; exit 1; }
+  systemctl is-active --quiet "$SERVICE.service" || {
+    systemctl --no-pager --full status "$SERVICE.service"; exit 1; }
 fi
 
 echo "tg-ingest-agent install complete (backups in $BACKUP_DIR)"

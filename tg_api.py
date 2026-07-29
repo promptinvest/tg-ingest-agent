@@ -24,10 +24,12 @@ TRANSPORT_ERRORS = (TimeoutError, http.client.HTTPException, OSError, ValueError
 
 
 class TelegramError(Exception):
-    def __init__(self, message, status=None, retry_after=None):
+    def __init__(self, message, status=None, retry_after=None,
+                 outcome_unknown=False):
         super().__init__(message)
         self.status = status
         self.retry_after = retry_after
+        self.outcome_unknown = bool(outcome_unknown)
 
 
 def http_error(method, exc):
@@ -52,6 +54,7 @@ def http_error(method, exc):
         f"{method} failed with HTTP {exc.code}: {description}",
         status=exc.code,
         retry_after=retry_after,
+        outcome_unknown=exc.code >= 500,
     )
 
 
@@ -76,9 +79,11 @@ def tg_call(token, method, params=None, timeout=35):
     except HTTPError as exc:
         raise http_error(method, exc) from exc
     except URLError as exc:
-        raise TelegramError(f"{method} failed: {exc.reason}") from exc
+        raise TelegramError(
+            f"{method} failed: {exc.reason}", outcome_unknown=True) from exc
     except TRANSPORT_ERRORS as exc:
-        raise TelegramError(f"{method} failed: {exc!r}") from exc
+        raise TelegramError(
+            f"{method} failed: {exc!r}", outcome_unknown=True) from exc
     if not payload.get("ok"):
         raise TelegramError(f"{method} returned ok=false: {payload.get('description')}")
     return payload.get("result")
@@ -103,9 +108,13 @@ def tg_send_document(token, chat_id, filename, content_bytes, caption=None,
     except HTTPError as exc:
         raise http_error("sendDocument", exc) from exc
     except URLError as exc:
-        raise TelegramError(f"sendDocument failed: {exc.reason}") from exc
+        raise TelegramError(
+            f"sendDocument failed: {exc.reason}",
+            outcome_unknown=True) from exc
     except TRANSPORT_ERRORS as exc:
-        raise TelegramError(f"sendDocument failed: {exc!r}") from exc
+        raise TelegramError(
+            f"sendDocument failed: {exc!r}",
+            outcome_unknown=True) from exc
     if not payload.get("ok"):
         raise TelegramError(f"sendDocument returned ok=false: {payload.get('description')}")
     return payload.get("result")

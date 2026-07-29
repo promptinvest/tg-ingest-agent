@@ -269,13 +269,17 @@ class PlanValidationTests(unittest.TestCase):
             "end": recurrence_start + len("daily"), "source_hash": digest,
             "transform": "literal",
         }
-        normalized = tasking.validate_plan(plan, source)
+        normalized = tasking.validate_plan(
+            plan, source, source_time="2026-07-29T07:00:00+00:00",
+            timezone_offset=3)
         self.assertEqual(normalized["steps"][0]["input"]["recurrence"],
                          {"$bound": "recurrence"})
 
         plan["steps"][0]["input"]["due_utc"] = "2026-07-30T06:00:00"
         with self.assertRaisesRegex(tasking.PlanError, "timezone"):
-            tasking.validate_plan(plan, source)
+            tasking.validate_plan(
+                plan, source, source_time="2026-07-29T07:00:00+00:00",
+                timezone_offset=3)
 
 
 class TaskPersistenceTests(unittest.TestCase):
@@ -455,7 +459,7 @@ class TaskPersistenceTests(unittest.TestCase):
         original_validate = tasking.validate_plan
         blocked = []
 
-        def validate_while_competing(plan, source):
+        def validate_while_competing(plan, source, **kwargs):
             other = sqlite3.connect(str(self.db_path), timeout=0)
             try:
                 other.execute("DELETE FROM conversation WHERE update_id = 9109")
@@ -465,7 +469,7 @@ class TaskPersistenceTests(unittest.TestCase):
                 other.rollback()
             finally:
                 other.close()
-            return original_validate(plan, source)
+            return original_validate(plan, source, **kwargs)
 
         with mock.patch.object(tasking, "validate_plan", side_effect=validate_while_competing):
             row, created = store.assistant_task_create(

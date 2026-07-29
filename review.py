@@ -290,6 +290,45 @@ def collect(conn, period):
     data["mem_confirmed"] = len(store.boss_items(conn, "confirmed", limit=200))
     data["mem_inferred"] = len(store.boss_items(conn, "inferred", limit=200))
     data["mem_candidates"] = len(data["pending_candidates"])
+    data["task_status_counts"] = {
+        row["status"]: row["n"] for row in conn.execute(
+            "SELECT status, COUNT(*) AS n FROM assistant_tasks"
+            " WHERE created_at>=? GROUP BY status", (since,))
+    }
+    data["task_total"] = sum(data["task_status_counts"].values())
+    data["task_completed_period"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM assistant_tasks"
+        " WHERE status='completed' AND completed_at>=?", (since,)
+    ).fetchone()["n"]
+    data["task_avg_completion_seconds"] = conn.execute(
+        "SELECT AVG((julianday(completed_at)-julianday(created_at))*86400.0) AS n"
+        " FROM assistant_tasks WHERE completed_at>=? AND status='completed'",
+        (since,),
+    ).fetchone()["n"]
+    data["task_attempts"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM task_step_attempts WHERE started_at>=?",
+        (since,),
+    ).fetchone()["n"]
+    data["task_retries"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM task_step_attempts"
+        " WHERE started_at>=? AND attempt_no>1", (since,),
+    ).fetchone()["n"]
+    data["task_receipts"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM tool_receipts WHERE created_at>=?", (since,)
+    ).fetchone()["n"]
+    data["task_delivered"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM assistant_tasks"
+        " WHERE delivered_at>=? AND delivery_status='delivered'", (since,)
+    ).fetchone()["n"]
+    feedback = conn.execute(
+        "SELECT COUNT(*) AS n, AVG(rating) AS avg_rating FROM task_feedback"
+        " WHERE created_at>=?", (since,)
+    ).fetchone()
+    data["task_feedback_count"] = feedback["n"]
+    data["task_avg_rating"] = feedback["avg_rating"]
+    data["task_note_uses"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM task_note_uses WHERE created_at>=?", (since,)
+    ).fetchone()["n"]
     data.update(collect_note_outcomes(conn, since, now))
     return data
 
@@ -410,7 +449,7 @@ def collect_note_outcomes(conn, since, now):
     return out
 
 
-def morning_brief(conn, cfg, lang, tz_offset, owner):
+def morning_brief(conn, cfg, lang, tz_offset, owner, chat_id=None):
     """A warm daily brief — today's reminders, overdue ones, open threads.
     Returns None when there's genuinely nothing worth a ping."""
     import relationship
@@ -419,9 +458,12 @@ def morning_brief(conn, cfg, lang, tz_offset, owner):
     now_naive = now.replace(tzinfo=None)
     today_local = (now + timedelta(hours=tz_offset)).date()
     overdue, fired_unacked, today = [], [], []
-    for r in conn.execute("SELECT title, due_utc, recurrence, last_fired_at FROM reminders"
-                          " WHERE status = 'active'"
-                          " ORDER BY due_utc LIMIT 50"):
+    for r in conn.execute(
+            "SELECT title, due_utc, recurrence, last_fired_at FROM reminders"
+            " WHERE status = 'active'"
+            + (" AND chat_id = ?" if chat_id is not None else "")
+            + " ORDER BY due_utc LIMIT 50",
+            ((int(chat_id),) if chat_id is not None else ())):
         try:
             due = datetime.fromisoformat(r["due_utc"])
         except (ValueError, TypeError):
@@ -434,8 +476,37 @@ def morning_brief(conn, cfg, lang, tz_offset, owner):
             overdue.append(r["title"])
         elif (due + timedelta(hours=tz_offset)).date() == today_local:
             today.append(((due + timedelta(hours=tz_offset)).strftime("%H:%M"), r["title"]))
-    threads = relationship.ongoing_threads(conn, lang)
-    if not (overdue or fired_unacked or today or threads):
+    threads = relationship.ongoing_threads(conn, lang, chat_id=chat_id)
+    task_rows = conn.execute(
+        "SELECT id, objective, status, due_at, updated_at, delivery_status"
+        " FROM assistant_tasks"
+        " WHERE (status NOT IN ('completed','failed','cancelled')"
+        " OR delivery_status IN ('ambiguous','failed'))"
+        + (" AND chat_id = ?" if chat_id is not None else "")
+        + " ORDER BY COALESCE(due_at, updated_at), id LIMIT 8",
+        ((int(chat_id),) if chat_id is not None else ()),
+    ).fetchall()
+    task_open, task_overdue = [], []
+    for task in task_rows:
+        objective = str(task["objective"] or "")
+        if ru and not re.search(r"[А-Яа-яЁё]", objective):
+            objective = "Запрос босса"
+        elif not ru and not re.search(r"[A-Za-z]", objective):
+            objective = "Boss request"
+        state = (
+            "delivery needs explicit resend"
+            if task["delivery_status"] in {"ambiguous", "failed"}
+            else task["status"])
+        label = f"#{task['id']} {objective[:120]} [{state}]"
+        due = None
+        try:
+            due = datetime.fromisoformat(task["due_at"]) if task["due_at"] else None
+            if due is not None and due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            due = None
+        (task_overdue if due is not None and due <= now else task_open).append(label)
+    if not (overdue or fired_unacked or today or threads or task_open or task_overdue):
         return None
     lines = [f"Доброе утро, {owner} ☀️" if ru else f"Good morning, {owner} ☀️"]
     if today:
@@ -448,6 +519,14 @@ def morning_brief(conn, cfg, lang, tz_offset, owner):
                       else "✅ Awaiting acknowledgement: ") + ", ".join(fired_unacked[:5]))
     if threads:
         lines.append(("🗂 Ещё открыто: " if ru else "🗂 Still open: ") + "; ".join(threads))
+    if task_overdue:
+        lines.append(
+            ("⏰ Задачи с прошедшим сроком: " if ru else "⏰ Tasks past due: ")
+            + "; ".join(task_overdue[:5]))
+    if task_open:
+        lines.append(
+            ("🧭 Открытые задачи: " if ru else "🧭 Open task loops: ")
+            + "; ".join(task_open[:5]))
     digest = journal_digest(conn, lang)
     if digest:
         lines.append(digest)
@@ -578,6 +657,32 @@ def chat_text(conn, cfg, lang, period="week"):
     turns = sum(r["n"] for r in data["conversation_turns"])
     lines.append((f"  Реплик в диалоге: {turns}" if ru
                   else f"  Conversation turns: {turns}"))
+    task_counts = data["task_status_counts"]
+    avg_seconds = data["task_avg_completion_seconds"]
+    avg_text = (
+        f"{avg_seconds / 60:.1f}m" if avg_seconds is not None else "—")
+    lines.append(
+        (f"  🧭 Задачи: {data['task_total']} · выполнено "
+         f"{task_counts.get('completed', 0)} · заблокировано "
+         f"{task_counts.get('blocked', 0)} · отменено "
+         f"{task_counts.get('cancelled', 0)} · среднее {avg_text}"
+         f" · завершено за период {data['task_completed_period']}"
+         if ru else
+         f"  🧭 Tasks: {data['task_total']} · completed "
+         f"{task_counts.get('completed', 0)} · blocked "
+         f"{task_counts.get('blocked', 0)} · cancelled "
+         f"{task_counts.get('cancelled', 0)} · avg {avg_text}"
+         f" · completed this period {data['task_completed_period']}"))
+    lines.append(
+        (f"  🔧 Попытки: {data['task_attempts']} · повторы "
+         f"{data['task_retries']} · квитанции {data['task_receipts']} · "
+         f"доставлено {data['task_delivered']} · использовано заметок "
+         f"{data['task_note_uses']}"
+         if ru else
+         f"  🔧 Attempts: {data['task_attempts']} · retries "
+         f"{data['task_retries']} · receipts {data['task_receipts']} · "
+         f"delivered {data['task_delivered']} · task-mediated note uses "
+         f"{data['task_note_uses']}"))
     if data["issue_counts"]:
         issues = ", ".join(f"{_issue_label(r['kind'], lang)}: {r['n']}" for r in data["issue_counts"])
         lines.append(("  ⚠️ Проблемы: " if ru else "  ⚠️ Issues: ") + issues)
@@ -692,6 +797,29 @@ def markdown(conn, cfg, period="week"):
         lines.append("- reminder lifecycle events:")
         for row in data["reminder_events"]:
             lines.append(f"  - {row['event']}: {row['n']}")
+    task_counts = data["task_status_counts"]
+    avg_seconds = data["task_avg_completion_seconds"]
+    lines += [
+        "",
+        "## Assistant-task outcomes",
+        f"- created: **{data['task_total']}** · completed: "
+        f"**{task_counts.get('completed', 0)}** · blocked: "
+        f"**{task_counts.get('blocked', 0)}** · cancelled: "
+        f"**{task_counts.get('cancelled', 0)}** · failed: "
+        f"**{task_counts.get('failed', 0)}**",
+        f"- completed during this report period (all creation cohorts): "
+        f"**{data['task_completed_period']}**",
+        f"- average completed elapsed time: "
+        f"{(avg_seconds / 60):.2f} minutes"
+        if avg_seconds is not None else "- average completed elapsed time: n/a",
+        f"- attempts: {data['task_attempts']} · retries: {data['task_retries']} · "
+        f"immutable receipts: {data['task_receipts']}",
+        f"- final results delivered: {data['task_delivered']} · "
+        f"task-mediated note uses: {data['task_note_uses']}",
+        f"- explicit feedback: {data['task_feedback_count']} · "
+        + (f"average rating: {data['task_avg_rating']:.2f}/5"
+           if data["task_avg_rating"] is not None else "average rating: n/a"),
+    ]
     lines.append("")
     lines.append("## Learning")
     lines.append("- new categories: " + (", ".join(data["new_categories"]) or "none"))

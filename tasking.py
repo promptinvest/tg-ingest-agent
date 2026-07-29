@@ -8,6 +8,7 @@ and returns a persistence-safe representation with bound values removed.
 import hashlib
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 import common
 import tool_broker
@@ -19,7 +20,9 @@ MAX_OBJECTIVE = 300
 MAX_PURPOSE = 240
 DELIVERABLES = frozenset({"answer", "brief", "comparison", "checklist", "draft"})
 STEP_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
-ALLOWED_PLAN_KEYS = frozenset({"objective", "deliverable", "steps"})
+ALLOWED_PLAN_KEYS = frozenset({
+    "objective", "deliverable", "steps", "capability_gaps",
+})
 ALLOWED_STEP_KEYS = frozenset({
     "key", "tool", "input", "bindings", "depends_on", "purpose",
 })
@@ -29,13 +32,15 @@ ALLOWED_BINDING_KEYS = frozenset({
 })
 TRANSFORMS = frozenset({
     "literal", "url", "positive_int", "reminder_title", "reminder_due",
+    "reminder_recurrence",
 })
 FIELD_TRANSFORMS = {
     ("knowledge.read", "note_no"): frozenset({"positive_int"}),
     ("source.fetch", "url"): frozenset({"url"}),
     ("reminder.propose", "title"): frozenset({"reminder_title", "literal"}),
     ("reminder.propose", "due_utc"): frozenset({"reminder_due"}),
-    ("reminder.propose", "recurrence"): frozenset({"literal"}),
+    ("reminder.propose", "recurrence"): frozenset({
+        "literal", "reminder_recurrence"}),
 }
 
 # These patterns deliberately target credential shapes, not generic long text.
@@ -75,7 +80,7 @@ def contains_recognizable_secret(value):
     return redact_derived_text(text) != text
 
 
-def validate_plan(value, canonical_source):
+def validate_plan(value, canonical_source, *, source_time=None, timezone_offset=0):
     """Validate planner JSON and return a redacted, persistence-safe plan.
 
     Security-sensitive input values are checked against their binding and then
@@ -93,9 +98,17 @@ def validate_plan(value, canonical_source):
     deliverable = str(value.get("deliverable") or "").strip()
     if deliverable not in DELIVERABLES:
         raise PlanError("invalid deliverable")
+    gaps = value.get("capability_gaps", [])
+    if not isinstance(gaps, list) or len(gaps) > MAX_STEPS:
+        raise PlanError(f"capability_gaps must contain 0..{MAX_STEPS} entries")
+    safe_gaps = []
+    for index, gap in enumerate(gaps, start=1):
+        safe_gaps.append(_text(gap, MAX_PURPOSE, f"capability_gaps[{index}]"))
     steps = value.get("steps")
-    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_STEPS:
-        raise PlanError(f"steps must contain 1..{MAX_STEPS} entries")
+    if (not isinstance(steps, list) or len(steps) > MAX_STEPS
+            or (not steps and not safe_gaps)):
+        raise PlanError(
+            f"steps must contain 1..{MAX_STEPS} entries unless capability gaps are explicit")
 
     canonical_source = str(canonical_source or "")
     canonical_hash = source_hash(canonical_source)
@@ -104,17 +117,31 @@ def validate_plan(value, canonical_source):
         "objective": redact_derived_text(objective),
         "deliverable": deliverable,
         "source_hash": canonical_hash,
+        "time_context": {
+            "source_time": _aware_utc(source_time).isoformat(),
+            "timezone_offset": int(timezone_offset),
+        },
+        "due_at": None,
+        "capability_gaps": [
+            redact_derived_text(gap) for gap in safe_gaps
+        ],
         "steps": [],
     }
     prior = {}
     for ordinal, raw_step in enumerate(steps, start=1):
-        step = _validate_step(raw_step, ordinal, prior, canonical_source, canonical_hash)
+        step = _validate_step(
+            raw_step, ordinal, prior, canonical_source, canonical_hash,
+            normalized["time_context"])
         prior[step["key"]] = step
         normalized["steps"].append(step)
+        if step.get("task_due_at") and (
+                normalized["due_at"] is None
+                or step["task_due_at"] < normalized["due_at"]):
+            normalized["due_at"] = step["task_due_at"]
     return normalized
 
 
-def _validate_step(raw, ordinal, prior, canonical_source, canonical_hash):
+def _validate_step(raw, ordinal, prior, canonical_source, canonical_hash, time_context):
     if not isinstance(raw, dict):
         raise PlanError(f"step {ordinal} must be an object")
     unknown = set(raw) - ALLOWED_STEP_KEYS
@@ -179,12 +206,12 @@ def _validate_step(raw, ordinal, prior, canonical_source, canonical_hash):
             continue
         safe_bindings[field] = _validate_binding(
             binding, field, input_value, key, spec, prior, normalized_deps,
-            canonical_source, canonical_hash,
+            canonical_source, canonical_hash, time_context,
         )
         safe_inputs[field] = {"$bound": field}
 
     _validate_step_references(key, spec, safe_inputs, prior, normalized_deps)
-    return {
+    normalized = {
         "key": key,
         "ordinal": ordinal,
         "tool": spec.id,
@@ -197,10 +224,13 @@ def _validate_step(raw, ordinal, prior, canonical_source, canonical_hash):
         "purpose": purpose,
         "status": "pending",
     }
+    if spec.id == "reminder.propose":
+        normalized["task_due_at"] = inputs["due_utc"]
+    return normalized
 
 
 def _validate_binding(binding, field, input_value, step_key, spec, prior, deps,
-                      canonical_source, canonical_hash):
+                      canonical_source, canonical_hash, time_context):
     if not isinstance(binding, dict):
         raise PlanError(f"{step_key}.{field} binding must be an object")
     unknown = set(binding) - ALLOWED_BINDING_KEYS
@@ -211,14 +241,14 @@ def _validate_binding(binding, field, input_value, step_key, spec, prior, deps,
     if source == "boss_span":
         return _validate_boss_binding(
             binding, field, input_value, step_key, spec,
-            canonical_source, canonical_hash)
+            canonical_source, canonical_hash, time_context)
     if source == "step_output":
         return _validate_step_binding(binding, field, step_key, spec, prior, deps)
     raise PlanError(f"{step_key}.{field} binding source is invalid")
 
 
 def _validate_boss_binding(binding, field, input_value, step_key, spec,
-                           canonical_source, canonical_hash):
+                           canonical_source, canonical_hash, time_context):
     if binding.get("source_hash") != canonical_hash:
         raise PlanError(f"{step_key}.{field} source hash mismatch")
     start = binding.get("start")
@@ -237,7 +267,12 @@ def _validate_boss_binding(binding, field, input_value, step_key, spec,
         raise PlanError(
             f"{step_key}.{field} transform {transform!r} is not allowed")
     selected = canonical_source[start:end]
-    _verify_bound_literal(step_key, field, input_value, selected, transform)
+    if spec.writes_state and contains_recognizable_secret(selected):
+        raise PlanError(
+            f"{step_key}.{field} contains secret material that cannot be "
+            "safely duplicated into an approval preview")
+    _verify_bound_literal(
+        step_key, field, input_value, selected, transform, time_context)
     return {
         "source": "boss_span",
         "start": start,
@@ -247,7 +282,7 @@ def _validate_boss_binding(binding, field, input_value, step_key, spec,
     }
 
 
-def _verify_bound_literal(step_key, field, value, selected, transform):
+def _verify_bound_literal(step_key, field, value, selected, transform, time_context):
     selected = selected.strip()
     if not selected:
         raise PlanError(f"{step_key}.{field} span is blank")
@@ -263,14 +298,145 @@ def _verify_bound_literal(step_key, field, value, selected, transform):
         if match is None or int(match.group(1)) != expected:
             raise PlanError(f"{step_key}.{field} does not match its numbered boss span")
     elif transform == "reminder_title":
-        if str(value).strip().casefold() not in selected.casefold():
-            raise PlanError(f"{step_key}.{field} title is not present in its boss span")
+        if str(value).strip().casefold() != selected.casefold():
+            raise PlanError(f"{step_key}.{field} title does not exactly match its boss span")
     elif transform == "reminder_due":
-        # The execution resolver re-runs deterministic date parsing and compares
-        # the resulting UTC value. At plan time we can still require that the
-        # planner bound a real, non-empty boss span instead of invented text.
-        if len(selected) > 120:
-            raise PlanError(f"{step_key}.{field} due span is too large")
+        try:
+            selected_due = parse_bound_due(
+                selected, time_context["source_time"],
+                time_context["timezone_offset"])
+        except (TypeError, ValueError) as exc:
+            raise PlanError(f"{step_key}.{field} boss time is not deterministic") from exc
+        if selected_due != str(value).strip():
+            raise PlanError(f"{step_key}.{field} does not match its boss span")
+    elif transform == "reminder_recurrence":
+        selected_recurrence = parse_bound_recurrence(selected)
+        if selected_recurrence != str(value).strip().lower():
+            raise PlanError(f"{step_key}.{field} recurrence does not match its boss span")
+
+
+def _aware_utc(value):
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(
+                str(value or "").strip().replace("Z", "+00:00"))
+        except ValueError:
+            parsed = datetime.now(timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def parse_bound_due(value, source_time, timezone_offset):
+    """Resolve a deliberately narrow, replayable boss-authored time phrase."""
+    text = " ".join(str(value or "").casefold().replace(",", " ").split())
+    text = text.strip(" .!?")
+    try:
+        parsed = datetime.fromisoformat(text.replace("z", "+00:00"))
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        if parsed.tzinfo is None:
+            raise ValueError("absolute task time needs a timezone")
+        parsed = parsed.astimezone(timezone.utc)
+        if source_time is None or parsed <= _aware_utc(source_time):
+            raise ValueError("absolute task time must be after the source message")
+        return parsed.isoformat()
+
+    offset = timedelta(hours=int(timezone_offset))
+    local_base = _aware_utc(source_time) + offset
+    clock = r"([01]?\d|2[0-3])(?:[:.]([0-5]\d))?\s*(am|pm)?"
+    day_patterns = (
+        (r"(?:day after tomorrow)(?:\s+at)?\s+" + clock, 2, False),
+        (r"послезавтра(?:\s+в)?\s+" + clock, 2, False),
+        (r"tomorrow(?:\s+at)?\s+" + clock, 1, False),
+        (r"завтра(?:\s+в)?\s+" + clock, 1, False),
+        (r"today(?:\s+at)?\s+" + clock, 0, True),
+        (r"сегодня(?:\s+в)?\s+" + clock, 0, True),
+    )
+    match = None
+    day_delta = None
+    explicit_today = False
+    for pattern, delta, is_today in day_patterns:
+        match = re.fullmatch(pattern, text)
+        if match:
+            day_delta, explicit_today = delta, is_today
+            break
+
+    weekdays = {
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6,
+        "понедельник": 0, "вторник": 1, "среду": 2, "четверг": 3,
+        "пятницу": 4, "субботу": 5, "воскресенье": 6,
+    }
+    weekday = None
+    explicit_next = bool(re.match(
+        r"^(?:next\s+|(?:в\s+)?следующ(?:ий|ую)\s+)", text))
+    if match is None:
+        weekday_names = "|".join(map(re.escape, weekdays))
+        match = re.fullmatch(
+            rf"(?:(?:every|next)\s+)?({weekday_names})(?:\s+at)?\s+{clock}",
+            text)
+        if match is None:
+            match = re.fullmatch(
+                rf"(?:кажд(?:ый|ую)\s+|(?:в\s+)?следующ(?:ий|ую)\s+|в\s+)?"
+                rf"({weekday_names})(?:\s+в)?\s+{clock}",
+                text)
+        if match is not None:
+            weekday = weekdays[match.group(1)]
+            # The weekday name is capture 1, clock begins at capture 2.
+            hour_group = 2
+        else:
+            hour_group = 1
+    else:
+        hour_group = 1
+
+    if match is None:
+        match = re.fullmatch(r"(?:at|в)?\s*" + clock, text)
+        hour_group = 1
+    if match is None:
+        raise ValueError("unsupported or ambiguous time phrase")
+    hour = int(match.group(hour_group))
+    minute = int(match.group(hour_group + 1) or 0)
+    suffix = match.group(hour_group + 2)
+    if suffix and not 1 <= hour <= 12:
+        raise ValueError("12-hour clock must use 1..12")
+    if suffix == "pm" and hour < 12:
+        hour += 12
+    elif suffix == "am" and hour == 12:
+        hour = 0
+    if weekday is not None:
+        day_delta = (weekday - local_base.weekday()) % 7
+        if explicit_next and day_delta == 0:
+            day_delta = 7
+    elif day_delta is None:
+        day_delta = 0
+    local_due = (local_base + timedelta(days=day_delta)).replace(
+        hour=hour, minute=minute, second=0, microsecond=0)
+    if explicit_today and local_due <= local_base:
+        raise ValueError("explicit today time is already past")
+    if weekday is not None and local_due <= local_base:
+        local_due += timedelta(days=7)
+    elif day_delta == 0 and local_due <= local_base:
+        local_due += timedelta(days=1)
+    return (local_due - offset).astimezone(timezone.utc).isoformat()
+
+
+def parse_bound_recurrence(value):
+    text = " ".join(str(value or "").casefold().split())
+    if re.search(r"\b(?:every day|daily|каждый день|ежедневно)\b", text):
+        return "daily"
+    if re.search(
+            r"\b(?:every week|weekly|каждую неделю|еженедельно|"
+            r"every (?:mon|tues|wednes|thurs|fri|satur|sun)day|"
+            r"кажд(?:ый|ую) (?:понедельник|вторник|среду|четверг|пятницу|"
+            r"субботу|воскресенье))\b", text):
+        return "weekly"
+    if text in {"none", "once", "one time", "один раз", "разово"}:
+        return "none"
+    raise ValueError("unsupported recurrence")
 
 
 def _validate_step_binding(binding, field, step_key, spec, prior, deps):
