@@ -1,5 +1,12 @@
 # Cara — Solution Specification
 
+> **Chief-of-staff upgrade (approved 2026-07-29):** the locked architecture,
+> data contracts, risk-tiered approval model, self-improvement boundary, local
+> worker isolation and phased acceptance gates are in
+> [`CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md`](CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md).
+> This specification remains authoritative for shipped behavior; each completed
+> phase must be folded back into this file and `CARA.md`.
+
 **Cara** (`@cara_assist_bot`) is a personal conversational AI assistant living
 in Telegram, self-hosted on a DigitalOcean droplet — the **PD-VPS**
 (`174.138.108.85`). Her former Pilot-VPS home was retired in 2026-06; there is

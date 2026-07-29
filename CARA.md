@@ -1,5 +1,13 @@
 # Cara — Capabilities, Features & Architecture
 
+> **Chief-of-staff upgrade (approved 2026-07-29):** Cara is being extended with
+> durable multi-step tasks, a closed risk-tiered tool broker, evidence-based
+> self-improvement proposals, and a separately sandboxed local worker. The
+> decision-complete staged specification is
+> [`CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md`](CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md).
+> Until a phase is marked shipped there, the current capabilities and limits
+> documented below remain authoritative.
+
 **Cara** (`@cara_assist_bot`) is a personal, conversational AI assistant that lives
 in Telegram and is self-hosted on the **PD‑VPS** (`174.138.108.85`, a DigitalOcean
 droplet repurposed after the PD platform retired). The former Pilot‑VPS was retired
