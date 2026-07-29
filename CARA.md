@@ -12,6 +12,14 @@
 > immutable evidence boundary for improvement proposals.
 > Until a phase is marked shipped there, the current capabilities and limits
 > documented below remain authoritative.
+>
+> **Implementation checkpoint A0 (not live):** the repository now contains the
+> inert closed tool catalog, strict provenance/redaction validator, additive
+> durable-task schema with cross-task foreign-key guards, canonical
+> source-update revalidation, atomic get-or-create, and cancellation-request
+> fencing for active work. No router action or tool executor is enabled by this
+> checkpoint. Its final gate passed adversarial review and all 1,490 tests in a
+> disposable PD-VPS copy; it is not installed on the live service.
 
 **Cara** (`@cara_assist_bot`) is a personal, conversational AI assistant that lives
 in Telegram and is self-hosted on the **PD‑VPS** (`174.138.108.85`, a DigitalOcean

@@ -218,7 +218,8 @@ Additive SQLite tables:
 - `assistant_tasks`: owner chat, unique source update (the idempotent
   get-or-create key per owner/chat), redacted display objective, canonical
   source hash, deliverable, status
-  (`planned|running|waiting_approval|blocked|completed|failed|cancelled`),
+  (`planned|running|waiting_approval|blocked|cancel_requested|completed|failed|
+  cancelled`),
   source update, plan version, timestamps, final summary/artifact, trace.
 - `assistant_task_steps`: task, ordered key, tool, risk, sanitized input JSON,
   dependencies, status, attempts, idempotency key, approval id, receipt id,
@@ -288,7 +289,10 @@ Lifecycle:
 6. Other failures retry only errors declared transient by the tool, with
    backoff. Ambiguous/missing evidence blocks and asks; permanent failures end
    the step honestly. Cancellation prevents new claims and asks the worker to
-   cancel any unstarted/running step best-effort.
+   cancel any unstarted/running step best-effort. A task with a claimed/running
+   step or `executing` approval becomes `cancel_requested`; it is not reported
+   `cancelled` until that boundary stops or reconciles. Every claim, approval
+   consume and effect-record CAS rechecks the parent status.
 7. Completion renders a concise answer with citations and attaches any real
    artifact. Partial completion names exactly what succeeded and what did not.
 
@@ -376,6 +380,17 @@ permissions or targets even when it contains instruction-like text.
 
 ### Phase A — durable tasks and plans
 
+- Checkpoint A0 (repository only; not deployed): compiled inert tool contracts,
+  strict plan/provenance/redaction validation, additive core tables, atomic
+  canonical-source-update get-or-create and owner-scoped cancellation requests
+  are implemented. The persistence boundary revalidates raw plans itself;
+  composite foreign keys bind receipts/approvals/artifacts to the exact task,
+  step, owner/source update, tool, idempotency key and policy/implementation
+  versions.
+  Final A0 gate: independent adversarial review PASS; disposable PD-VPS
+  compile + full discovery PASS (`1490` tests, `9` intentional skips). A0 is
+  still dormant and not installed on the live service.
+  Routing, planning calls and execution remain disabled until later checkpoints.
 - Add schema/helpers, planner profile, task actions, list/detail/cancel/resume,
   strict plan validator, direct-skill fast path, and task runner.
 - Replace the `multi_action` decline with `task_start`.

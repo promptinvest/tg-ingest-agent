@@ -9,6 +9,18 @@
 > prose as evidence, and feeding model-authored summaries into policy truth.
 > This specification remains authoritative for shipped behavior; each completed
 > phase must be folded back into this file and `CARA.md`.
+>
+> **Checkpoint A0 (repository only, not deployed):** `tool_broker.py` compiles
+> the neutral tool contracts and `tasking.py` treats planner output as
+> untrusted, validates provenance/dependencies, redacts derived secrets, and
+> strips bound values before persistence. `store.py` has additive task, step,
+> receipt, approval and artifact tables with composite ownership foreign keys,
+> including exact tool/idempotency/policy bindings, plus canonical source-row
+> revalidation inside the creation transaction, atomic update-id deduplication and
+> non-terminal cancellation requests while an effect may still be active.
+> Nothing invokes these dormant paths yet. A0 passed the adversarial gate and
+> the full disposable-PD-VPS suite (`1490` tests; `9` skips); it remains
+> repository-only.
 
 **Cara** (`@cara_assist_bot`) is a personal conversational AI assistant living
 in Telegram, self-hosted on a DigitalOcean droplet — the **PD-VPS**

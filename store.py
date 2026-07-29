@@ -8,6 +8,7 @@ messages.status lifecycle:
   failed    -> LLM gave up after LLM_MAX_ATTEMPTS
   duplicate -> re-forward of an already stored channel post
 """
+import hashlib
 import json
 import re
 import sqlite3
@@ -17,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import common
+import tasking
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (
@@ -494,6 +496,157 @@ CREATE TABLE IF NOT EXISTS journal_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_journal_entries_journal
   ON journal_entries(journal_id, occurred_at);
+
+-- Durable chief-of-staff tasks. The canonical boss text remains in
+-- telegram_updates/conversation; this table stores only a redacted display
+-- objective plus a hash that pins all provenance spans to that exact source.
+CREATE TABLE IF NOT EXISTS assistant_tasks (
+  id INTEGER PRIMARY KEY,
+  chat_id INTEGER NOT NULL,
+  source_update INTEGER NOT NULL,
+  source_hash TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  deliverable TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planned',
+  plan_version INTEGER NOT NULL,
+  plan_json TEXT NOT NULL,
+  trace_id TEXT,
+  final_summary TEXT,
+  final_artifact_id INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  UNIQUE(chat_id, source_update),
+  UNIQUE(id, chat_id, source_update),
+  FOREIGN KEY (id, final_artifact_id)
+    REFERENCES task_artifacts(task_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS assistant_task_steps (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES assistant_tasks(id) ON DELETE CASCADE,
+  step_key TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  tool TEXT NOT NULL,
+  risk TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  implementation_version TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  bindings_json TEXT NOT NULL DEFAULT '{}',
+  dependencies_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 2,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  approval_id INTEGER,
+  receipt_id INTEGER,
+  claimed_at TEXT,
+  finished_at TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(task_id, step_key),
+  UNIQUE(task_id, ordinal),
+  UNIQUE(task_id, id),
+  UNIQUE(task_id, id, policy_version, implementation_version),
+  UNIQUE(task_id, id, tool, idempotency_key, policy_version,
+         implementation_version),
+  FOREIGN KEY (task_id, id, approval_id)
+    REFERENCES task_approvals(task_id, step_id, id),
+  FOREIGN KEY (task_id, id, receipt_id)
+    REFERENCES tool_receipts(task_id, step_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS tool_receipts (
+  id INTEGER PRIMARY KEY,
+  receipt_uid TEXT NOT NULL UNIQUE,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  task_id INTEGER NOT NULL REFERENCES assistant_tasks(id) ON DELETE CASCADE,
+  step_id INTEGER NOT NULL,
+  tool TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  implementation_version TEXT NOT NULL,
+  status TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  artifact_id INTEGER,
+  effect_id TEXT,
+  trace_id TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(task_id, id),
+  UNIQUE(task_id, step_id, id),
+  FOREIGN KEY (task_id, step_id, tool, idempotency_key, policy_version,
+               implementation_version)
+    REFERENCES assistant_task_steps(
+      task_id, id, tool, idempotency_key, policy_version, implementation_version
+    ) ON DELETE CASCADE,
+  FOREIGN KEY (task_id, step_id)
+    REFERENCES assistant_task_steps(task_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (task_id, artifact_id)
+    REFERENCES task_artifacts(task_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS task_approvals (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES assistant_tasks(id) ON DELETE CASCADE,
+  step_id INTEGER NOT NULL,
+  chat_id INTEGER NOT NULL,
+  source_update INTEGER NOT NULL,
+  preview_json TEXT NOT NULL,
+  preview_hash TEXT NOT NULL,
+  preview_message_id INTEGER,
+  input_hash TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  implementation_version TEXT NOT NULL,
+  target_snapshot_json TEXT NOT NULL,
+  target_version TEXT NOT NULL,
+  consume_token TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'pending',
+  decision_source TEXT,
+  decision_message_id INTEGER,
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  executing_at TEXT,
+  effect_recorded_at TEXT,
+  UNIQUE(task_id, id),
+  UNIQUE(task_id, step_id, id),
+  FOREIGN KEY (task_id, step_id)
+    REFERENCES assistant_task_steps(task_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (task_id, step_id, policy_version, implementation_version)
+    REFERENCES assistant_task_steps(
+      task_id, id, policy_version, implementation_version
+    ),
+  FOREIGN KEY (task_id, chat_id, source_update)
+    REFERENCES assistant_tasks(id, chat_id, source_update)
+);
+
+CREATE TABLE IF NOT EXISTS task_artifacts (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES assistant_tasks(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  safe_filename TEXT NOT NULL,
+  local_path TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  delivered_at TEXT,
+  UNIQUE(task_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_tasks_chat_status
+  ON assistant_tasks(chat_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_task_steps_ready
+  ON assistant_task_steps(task_id, status, ordinal);
+CREATE INDEX IF NOT EXISTS idx_task_approvals_live
+  ON task_approvals(chat_id, status, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_approvals_one_live_step
+  ON task_approvals(step_id)
+  WHERE status IN ('pending', 'approved', 'executing', 'ambiguous');
+CREATE INDEX IF NOT EXISTS idx_tool_receipts_task
+  ON tool_receipts(task_id, step_id);
 
 """
 
@@ -3808,6 +3961,184 @@ def issues_resolved(conn, since_iso, limit=20):
         " ORDER BY resolved_at DESC LIMIT ?",
         (since_iso, limit),
     ).fetchall()
+
+
+# -- durable assistant tasks -------------------------------------------------
+
+_TASK_TERMINAL = frozenset({"completed", "failed", "cancelled"})
+
+
+def _task_json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"))
+
+
+def assistant_task_by_source(conn, chat_id, source_update):
+    return conn.execute(
+        "SELECT * FROM assistant_tasks WHERE chat_id = ? AND source_update = ?",
+        (int(chat_id), int(source_update)),
+    ).fetchone()
+
+
+def assistant_task_source(conn, chat_id, source_update):
+    """Canonical boss text for a task, pinned to a real durable update."""
+    update = telegram_update_get(conn, source_update)
+    if update is None or update["chat_id"] is None or int(update["chat_id"]) != int(chat_id):
+        return None
+    return conn.execute(
+        "SELECT text FROM conversation WHERE chat_id = ? AND update_id = ?"
+        " AND role = 'user' AND source = 'boss' ORDER BY id LIMIT 1",
+        (int(chat_id), int(source_update)),
+    ).fetchone()
+
+
+def assistant_task_get(conn, task_id, chat_id=None):
+    if chat_id is None:
+        return conn.execute(
+            "SELECT * FROM assistant_tasks WHERE id = ?", (int(task_id),)
+        ).fetchone()
+    return conn.execute(
+        "SELECT * FROM assistant_tasks WHERE id = ? AND chat_id = ?",
+        (int(task_id), int(chat_id)),
+    ).fetchone()
+
+
+def assistant_task_steps(conn, task_id):
+    return conn.execute(
+        "SELECT * FROM assistant_task_steps WHERE task_id = ? ORDER BY ordinal",
+        (int(task_id),),
+    ).fetchall()
+
+
+def assistant_tasks_for_chat(conn, chat_id, limit=10, include_terminal=True):
+    limit = max(1, min(int(limit), 50))
+    if include_terminal:
+        return conn.execute(
+            "SELECT * FROM assistant_tasks WHERE chat_id = ?"
+            " ORDER BY updated_at DESC, id DESC LIMIT ?",
+            (int(chat_id), limit),
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM assistant_tasks WHERE chat_id = ?"
+        " AND status NOT IN ('completed', 'failed', 'cancelled')"
+        " ORDER BY updated_at DESC, id DESC LIMIT ?",
+        (int(chat_id), limit),
+    ).fetchall()
+
+
+def assistant_task_create(conn, chat_id, source_update, plan, trace_id=None):
+    """Validate and atomically get-or-create a task and all of its steps.
+
+    ``(row, created)`` is returned. The unique owner/chat source-update key is
+    the Telegram-redelivery idempotency boundary; a replay gets the original
+    task even if the caller submits a different model plan.
+    """
+    chat_id = int(chat_id)
+    source_update = int(source_update)
+    now = _now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = assistant_task_by_source(conn, chat_id, source_update)
+        if existing is not None:
+            conn.commit()
+            return existing, False
+        source = assistant_task_source(conn, chat_id, source_update)
+        if source is None:
+            raise ValueError("task source update is missing, foreign, or not boss-authored")
+        plan = tasking.validate_plan(plan, source["text"])
+        cur = conn.execute(
+            "INSERT INTO assistant_tasks"
+            " (chat_id, source_update, source_hash, objective, deliverable,"
+            " status, plan_version, plan_json, trace_id, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)",
+            (chat_id, source_update, str(plan["source_hash"]),
+             str(plan["objective"]), str(plan["deliverable"]),
+             int(plan["version"]), _task_json(plan), trace_id, now, now),
+        )
+        task_id = cur.lastrowid
+        for step in plan["steps"]:
+            material = _task_json({
+                "task": task_id,
+                "version": plan["version"],
+                "key": step["key"],
+                "tool": step["tool"],
+                "policy_version": step["policy_version"],
+                "implementation_version": step["implementation_version"],
+                "input": step["input"],
+                "bindings": step["bindings"],
+            })
+            idem = "task-step:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+            conn.execute(
+                "INSERT INTO assistant_task_steps"
+                " (task_id, step_key, ordinal, tool, risk, policy_version,"
+                " implementation_version, purpose, input_json, bindings_json,"
+                " dependencies_json, status, idempotency_key, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+                (task_id, str(step["key"]), int(step["ordinal"]), str(step["tool"]),
+                 str(step["risk"]), str(step["policy_version"]),
+                 str(step["implementation_version"]), str(step["purpose"]),
+                 _task_json(step["input"]),
+                 _task_json(step["bindings"]), _task_json(step["depends_on"]),
+                 idem, now, now),
+            )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return assistant_task_get(conn, task_id), True
+
+
+def assistant_task_cancel(conn, task_id, chat_id):
+    """Request cancellation without claiming a still-running effect has stopped.
+
+    Returns ``cancelled`` when no step/effect is active, ``cancel_requested``
+    when an active boundary must finish/reconcile, and ``None`` when the task
+    is absent or already terminal.
+    """
+    row = assistant_task_get(conn, task_id, chat_id)
+    if row is None or row["status"] in _TASK_TERMINAL:
+        return None
+    now = _now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        active_step = conn.execute(
+            "SELECT 1 FROM assistant_task_steps WHERE task_id = ?"
+            " AND status IN ('claimed', 'running') LIMIT 1",
+            (int(task_id),),
+        ).fetchone()
+        active_effect = conn.execute(
+            "SELECT 1 FROM task_approvals WHERE task_id = ?"
+            " AND status IN ('executing', 'ambiguous') LIMIT 1",
+            (int(task_id),),
+        ).fetchone()
+        next_status = "cancel_requested" if (active_step or active_effect) else "cancelled"
+        changed = conn.execute(
+            "UPDATE assistant_tasks SET status = ?, updated_at = ?,"
+            " completed_at = ? WHERE id = ? AND chat_id = ?"
+            " AND status NOT IN ('completed', 'failed', 'cancelled')",
+            (next_status, now, now if next_status == "cancelled" else None,
+             int(task_id), int(chat_id)),
+        ).rowcount
+        if changed:
+            conn.execute(
+                "UPDATE assistant_task_steps SET status = 'cancelled',"
+                " finished_at = ?, updated_at = ? WHERE task_id = ?"
+                " AND status IN ('pending', 'blocked', 'waiting_approval')"
+                " AND NOT EXISTS (SELECT 1 FROM task_approvals"
+                " WHERE task_approvals.step_id = assistant_task_steps.id"
+                " AND task_approvals.status IN ('executing', 'ambiguous'))",
+                (now, now, int(task_id)),
+            )
+            conn.execute(
+                "UPDATE task_approvals SET status = 'expired', decided_at = ?"
+                " WHERE task_id = ? AND status IN ('pending', 'approved')",
+                (now, int(task_id)),
+            )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return next_status if changed else None
 
 
 # -- reminders ----------------------------------------------------------------
