@@ -26,12 +26,24 @@ from texts import T
 class NotesMixin:
     """Notes/inbox, journals, and the problem log. Mixed into the Agent."""
 
-    _REPORT_TRIGGERS = (
-        "запиши в проблем", "добавь в проблем", "запиши проблем", "в проблемы",
-        "добавь в ошибк", "запиши в ошибк", "это ошибк", "была ошибка", "запиши ошибк",
-        "log this as a problem", "log as a problem", "report a problem", "add to issues",
-        "log this issue", "note this problem",
+    _REPORT_REQUEST = re.compile(
+        r"^(?:(?:запиши|добавь)(?:\s+это)?\s+(?:в\s+)?(?:проблемы|ошибки)|"
+        r"(?:log|report)(?:\s+this)?\s+(?:as\s+)?(?:a\s+)?(?:problem|issue)|"
+        r"add(?:\s+this)?\s+to\s+issues)"
+        r"(?:\s*[:—-]\s*(?P<detail>.+))?[.! ]*$",
+        re.IGNORECASE,
     )
+
+    def report_problem_request(self, text):
+        """Return ``(matched, detail)`` for a strict issue-log command.
+
+        Kept deterministic so a pending note/category card cannot reinterpret
+        ``Запиши в проблемы`` as a correction to that card.
+        """
+        value = " ".join(str(text or "").strip().split())
+        match = self._REPORT_REQUEST.fullmatch(value)
+        return (match is not None,
+                str(match.group("detail") or "").strip() if match else "")
 
     def do_report_problem(self, chat_id, lang, params, text):
         """Record a boss-reported problem ('запиши в проблемы', 'добавь в
@@ -42,17 +54,25 @@ class NotesMixin:
         of logging the command back to itself."""
         detail = str(params.get("detail") or "").strip()
         cur = (text or "").strip()
-        low = detail.casefold() or cur.casefold()
         # The router often echoes the trigger (or a stale example) as 'detail'; treat any
         # trigger-only detail as empty and reach back into the conversation for the real issue.
-        if not detail or any(t in low for t in self._REPORT_TRIGGERS):
-            prior = [r["text"].strip() for r in store.convo_recent(self.conn, chat_id, limit=8)
+        issue_context = None
+        if not detail or self.report_problem_request(detail)[0]:
+            recent = store.convo_recent(self.conn, chat_id, limit=8)
+            prior = [r["text"].strip() for r in recent
                      if r["role"] == "user" and r["text"].strip()
                      and r["text"].strip().casefold() != cur.casefold()
-                     and not any(t in r["text"].strip().casefold() for t in self._REPORT_TRIGGERS)]
-            context = prior[-1] if prior else ""
-            detail = (f"{cur} | {context}" if context else cur)
-        store.issue_add(self.conn, chat_id, "boss_reported", detail[:500])
+                     and not self.report_problem_request(r["text"])[0]]
+            detail = prior[-1] if prior else cur
+            turns = [
+                {"role": r["role"], "source": store.convo_row_source(r),
+                 "text": str(r["text"] or "")[:240]}
+                for r in recent
+                if str(r["text"] or "").strip().casefold() != cur.casefold()
+            ][-6:]
+            issue_context = {"turns": turns} if turns else None
+        store.issue_add(self.conn, chat_id, "boss_reported", detail[:500],
+                        context=issue_context)
         self.reply(chat_id, T(lang, "problem_logged"))
 
     def do_set_journal(self, chat_id, lang, params):

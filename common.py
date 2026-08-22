@@ -630,9 +630,10 @@ def load_config(env=None):
     # guess). Uses the same SSRF-guarded fetcher and its timeout/size caps.
     cfg.ingest_read_links = (env.get("INGEST_READ_LINKS") or "true").strip().lower() == "true"
     cfg.ingest_fetch_chars = int(env.get("INGEST_FETCH_CHARS") or "3500")
-    # Daily DB backup (backup.py): a consistent snapshot, rotated locally and
-    # encrypted before any off-box copy (Spaces or fleet notify chat).
+    # Scheduled DB backup (backup.py): a consistent snapshot, rotated locally
+    # and encrypted before any off-box copy (Spaces or fleet notify chat).
     cfg.backup_enabled = (env.get("BACKUP_ENABLED") or "true").strip().lower() == "true"
+    cfg.backup_interval_days = max(1, int(env.get("BACKUP_INTERVAL_DAYS") or "7"))
     cfg.backup_keep = max(1, int(env.get("BACKUP_KEEP") or "7"))
     cfg.backup_encryption_key_file = Path(
         env.get("BACKUP_ENCRYPTION_KEY_FILE") or "/etc/tg-ingest-agent-backup.key")

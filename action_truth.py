@@ -235,6 +235,61 @@ _CLAIM_PATTERNS = (
         r"\b(?:queue|list|everything)\s+is\s+(?:clear|empty|sorted)\b|"
         r"\bi(?:'ll|\s+will)\s+(?:take|put)\s+(?:this\s+)?(?:into|on)\s+(?:the\s+)?work\b",
         re.IGNORECASE),
+    # 9) Completed schedule/config changes expressed without one of the generic
+    # data nouns. These exact shapes caused two live lies: «Отложили до
+    # воскресенья» changed no note/reminder, and «перестала кидать сообщение…»
+    # changed no preference. Time/message cues keep ordinary narrative use out.
+    re.compile(
+        r"(?:^|[.!?]\s*)\s*(?:(?:хорошо|ладно|поняла|ок(?:ей)?|договорились)"
+        r"[,!:— -]*(?:я\s+)?|я\s+)?(?P<verb>отложил[аи]?|отложено|перенесла|"
+        r"перенесено|перенесена|перенес[её]н|перенесли)\s+(?:до|на)\s+"
+        r"(?:завтра|послезавтра|"
+        r"понедельник|вторник|сред[уы]|четверг|пятниц[уы]|суббот[уы]|воскресень[ея]|"
+        r"\d{1,2}(?::\d{2})?)\b",
+        re.IGNORECASE | re.MULTILINE),
+    re.compile(
+        r"(?:^|[.!?]\s*)\s*(?:"
+        r"(?:хорошо|ладно|поняла(?:\s+тебя)?|ок(?:ей)?|договорились)"
+        r"[,!:— -]*(?:я\s+)?|"
+        r"(?:я\s+)?(?=[^\n.!?]{0,140}\b(?:тебе|вам|для\s+тебя|для\s+вас|"
+        r"(?:это|эти)\s+(?:сообщен\w*|уведомлен\w*)|подборк\w*|пинг\w*|"
+        r"ежедневн\w*\s+(?:сообщен\w*|уведомлен\w*)|"
+        r"check-ins?|morning\s+briefs?)\b))"
+        r"(?P<verb>отключила|выключила)\b"
+        r"[^\n.!?]{0,100}?\b(?:сообщен\w*|уведомлен\w*|напомина\w*|пинг\w*|"
+        r"подборк\w*|messages?|notifications?|reminders?|pings?|check-ins?)\b",
+        re.IGNORECASE | re.MULTILINE),
+    re.compile(
+        r"(?:^|[.!?]\s*)\s*(?:"
+        r"(?:хорошо|ладно|поняла(?:\s+тебя)?|ок(?:ей)?|договорились)"
+        r"[,!:— -]*(?:я\s+)?|"
+        r"(?:я\s+)?(?=[^\n.!?]{0,140}\b(?:тебе|вам|для\s+тебя|для\s+вас|"
+        r"(?:это|эти)\s+(?:сообщен\w*|уведомлен\w*)|подборк\w*|пинг\w*|"
+        r"ежедневн\w*\s+(?:сообщен\w*|уведомлен\w*)|"
+        r"напомина\w*|check-ins?|morning\s+briefs?)\b))"
+        r"(?P<verb>перестала)\b"
+        r"[^\n.!?]{0,80}?\b(?:писать|присылать|показывать|кид\w*|отправля\w*|"
+        r"напомина\w*|пинг\w*|send\w*|show\w*|message\w*|notif\w*)\b"
+        r"[^\n.!?]{0,60}?\b(?:автомат\w*|ежедневно|каждый\s+день|"
+        r"каждое\s+утро|по\s+утрам|automatically|daily|every\s+day|"
+        r"every\s+morning)\b",
+        re.IGNORECASE | re.MULTILINE),
+    # 10) A concrete future reminder commitment is also an action claim. Keep
+    # it narrow: conditional/offered «Если хочешь, напомню» remains conversation;
+    # a first-person/pro-drop commitment plus a concrete repeat/time is the lie.
+    re.compile(
+        r"(?:^|[.!?]\s*)(?![^\n.!?]*\b(?:если|if)\b)"
+        r"\s*(?:(?:хорошо|ладно|поняла|ок(?:ей)?|договорились|"
+        r"okay|ok|sure)\b[^\n.!?]{0,25}?\b|(?:я\s+)?)"
+        r"(?P<verb>напомню|i(?:['’]?ll|\s+will)\s+remind)\b"
+        r"[^\n.!?]{0,50}?(?:\bснова\b|\bещ[её]\s+раз\b|"
+        r"\b(?:завтра|послезавтра|понедельник|вторник|сред[ау]|четверг|"
+        r"пятниц[ау]|суббот[ау]|воскресенье|утром|дн[её]м|вечером|ночью)\b|"
+        r"\bв\s+\d{1,2}(?::\d{2})?\b|\bчерез\s+(?:\d+|час)\b|"
+        r"\b(?:again|tomorrow|monday|tuesday|wednesday|thursday|friday|"
+        r"saturday|sunday|this\s+(?:morning|afternoon|evening|night))\b|"
+        r"\bat\s+\d)",
+        re.IGNORECASE | re.MULTILINE),
 )
 
 # A completed verb behind a NEGATION is an honest denial, not a claim («я её не
@@ -310,7 +365,39 @@ def _line_around(value, start, end):
 
 def _past_reference(value, start, end):
     """True when the line explicitly places the action in an EARLIER exchange."""
+    fragment = value[start:end]
+    # A future reminder commitment may name its due part of day («утром в 10»,
+    # «this evening at 6»). Those tokens are not past-reference evidence for
+    # the future-tense verb itself and must not disarm the action guard.
+    if re.match(r"(?:напомню\b|i(?:['’]?ll|\s+will)\s+remind\b)",
+                fragment, re.IGNORECASE):
+        if re.match(
+                r"(?:напомню\b\s*,?\s*что\b|"
+                r"i(?:['’]?ll|\s+will)\s+remind\s+you\s+that\b)",
+                fragment, re.IGNORECASE):
+            # «Напомню, что завтра встреча» / “I'll remind you that…”
+            # communicates information; it does not promise a scheduled nudge.
+            return True
+        return False
+    line_start = value.rfind("\n", 0, start) + 1
     line = _line_around(value, start, end)
+    if re.match(r"(?:отложил[аи]?|отложено|перенесла|перенесено|перенесена|"
+                r"перенес[её]н|перенесли)\b", fragment,
+                re.IGNORECASE) and re.match(
+                    r"\s*[,;:—-]?\s*(?:утром|дн[её]м|вечером|ночью)\b", value[end:],
+                    re.IGNORECASE):
+        # Here the day-part follows the target date and describes its due time.
+        # A real historical marker BEFORE the verb still wins («вчера
+        # отложили ... вечером»); the due word alone may not excuse the claim.
+        return bool(_PAST_MARKER_RE.search(value[line_start:start]))
+    if re.match(r"(?:перестала|отключила|выключила)\b", fragment,
+                re.IGNORECASE) and re.search(
+                    r"\b(?:утром|дн[её]м|вечером|ночью)\b[^\n.!?]{0,30}"
+                    r"\b(?:каждый\s+день|ежедневно)\b", fragment,
+                    re.IGNORECASE):
+        # In «перестала присылать ... утром каждый день», the day-part is the
+        # disabled cadence, not a claim that the change happened this morning.
+        return bool(_PAST_MARKER_RE.search(value[line_start:start]))
     if _COMPLETION_HEAD_RE.search(line):
         return False
     return bool(_PAST_MARKER_RE.search(line))

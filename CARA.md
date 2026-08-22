@@ -227,9 +227,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   concrete route that would — «могу добавить «X» (2022) в Movies отдельной записью —
   добавить?» — grounded only in what the app can really perform. The rewrite runs IN
   CHARACTER (her persona prompt is prepended; she never breaks it) and on the same real
-  catalog grounding the first pass had, so it can tell «never existed» from «exists, saved
-  earlier» instead of confidently denying a real save — and it may name only numbers from
-  HIS message or from that block, never one the rejected draft invented. If that second
+  catalog grounding requested by HIS message, so it can tell «never existed» from «exists,
+  saved earlier» instead of confidently denying a real save — and the delivered repair may
+  repeat only note numbers HE typed, never one the rejected draft invented. If that second
   pass claims an action too, the deterministic template wins; the guard is never traded for
   fluency. Both attempts are logged (`converse_action_claim` + `converse_action_repaired` /
   `converse_action_claim_retry` / `converse_action_repair_failed`) so the pattern stays
@@ -939,7 +939,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   of the newest note. State views: «покажи архив» /
   «покажи входящие» open the exact lifecycle view with pagination, and «что у
   тебя есть?» now leads with the notes overview (активные · входящие · на
-  пересмотр · архив).
+  пересмотр · архив). **Automatic three-note invitations are opt-in and OFF by
+  default (2026‑08‑21):** manual review remains available, while
+  `proactive_note_review=on` is required for the recurring «Нашла 3
+  сохранёнки…» message or its suggested-note line in the morning brief.
+  «Не пиши это каждый день» on that fresh invitation, or a direct request to
+  stop saved-note suggestions, disables only this nudge and leaves reminders,
+  other proactive checks, and an unrelated pending card untouched.
 - **Related‑note resurfacing (2026‑07‑17 — one, or nothing):** after a
   delivered KB answer Cara may add at most ONE compact hint («К слову, у тебя
   есть ещё #N по этой теме — открыть?») drawn from the real retrieval ranking —
@@ -1124,8 +1130,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     "не поняла" and quietly land in the problem log instead of running.
   - **"Покажи их" right after an overdue nudge** shows the **real list** (exact titles), not a
     free-text retelling that could blank the names out.
-  - **"Запиши в проблемы" logs the actual problem.** A bare report captures *what you just
-    said*, not the words "запиши в проблемы" echoed back at itself.
+  - **"Запиши в проблемы" logs the actual problem.** A strict bare report bypasses an
+    unrelated pending card, captures the preceding user message plus a bounded exchange
+    context, and leaves that pending card intact. A `:`/dash suffix is stored verbatim as
+    the issue; the trigger words are never logged back at themselves.
   - **Rename** a reminder's title in place ("переименуй #2 в «Иван Доронин»").
   - **Reschedule / undo:** "перенеси напоминание про банк на пятницу" moves it; an
     explicit title that matches nothing active is reported (never silently moves a
@@ -1138,6 +1146,19 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     **The meridiem is read too (2026‑07‑27):** «tomorrow at 5 pm» / «завтра в 5
     вечера» re‑arms at **17:00**, not 05:00 — am/pm and «утра/дня/вечера/ночи» right
     after the clock time are applied instead of dropped.
+    A bare «Через час» is a one-hour snooze. A live `reminder_partial` or calendar
+    draft — and any other live confirmation card — outranks the stale
+    `last_reminder_id` fallback, so «Через полчаса» can finish the new reminder and
+    «Готово» can confirm a journal card instead of silently acting on an older fired one;
+    an explicit Telegram Reply to the fired reminder remains the strongest binding.
+  - **A gratitude answer remains the answer, never the later “Да”.** When a live
+    gratitude reminder is followed by a plain declarative message (the real incident was
+    «Заправился бензином»), Cara proposes that exact text through the existing
+    «Благодарности» journal confirmation card. The category is bound from the active
+    journal, category inference is bypassed, and only the subsequent «Да»/«Готово»
+    confirms the original row. Questions, forwarded/media content, slash commands and
+    strong action commands route normally; nothing is auto-saved. A router outage restores
+    the fired-reminder context, and the trace records the effective `ingest` boundary.
   - **"Это напоминание"** binds to the one you were just dealing with; if it's genuinely
     ambiguous she asks which and **remembers what you wanted** — your "второе" / "#2" /
     "про банк" then completes the move/rename on the right one (never a stray close).
@@ -1159,7 +1180,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   - **From a note:** "поставь напоминание по заметке N" uses note N's real subject as
     the title (not a literal "Заметка N").
 - **Calendar:** "добавь в календарь" → `.ics` file (no setup) or Google Calendar via a
-  service account; `auto_calendar` syncs every confirmed reminder.
+  service account; `auto_calendar` syncs every confirmed reminder. An incomplete new-event
+  request opens a `calendar_partial` handoff. The next typed or single forwarded numeric
+  date/time/title (for example «25.08 в 19 стрижка») completes that exact event as inert
+  data and is never filed as a note; invalid forwarded data is consumed, clarified, and
+  leaves the draft open. A missing named reminder still fails closed as not found.
 - **Spend report:** "сколько потратили за месяц?" → totals by skill & model + budget
   status.
 - **Budget control:** "подними дневной лимит до $3" / "set the monthly AI budget to
@@ -1308,9 +1333,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   restart, or deploy. Each weekly review is capped at four reserved inference
   calls, and a crash after reservation is treated as ambiguous rather than
   blindly replayed.
-- **Daily DB backup (hardened 2026‑07‑10):** once per UTC day a durable job (`maintenance`/
-  `db_backup`) snapshots `ingest.db` consistently (sqlite3 online‑backup API), keeps the
-  newest `BACKUP_KEEP` (7) gzipped copies under `/var/lib/tg-ingest-agent/backups`, and
+- **Weekly DB backup (cadence changed 2026‑08‑21; hardened 2026‑07‑10):** when the
+  last successful UTC backup date is at least `BACKUP_INTERVAL_DAYS` old (default 7), a
+  durable job (`maintenance`/`db_backup`) snapshots `ingest.db` consistently (sqlite3
+  online‑backup API), keeps the newest `BACKUP_KEEP` (7; seven weekly recovery points with
+  the defaults) gzipped copies under `/var/lib/tg-ingest-agent/backups`, and
   encrypts every **off‑box** copy with AES‑256‑CBC/PBKDF2 (200,000 iterations) using
   `BACKUP_ENCRYPTION_KEY_FILE` before sending it to Spaces or the fleet notify chat.
   A missing key or failed transfer makes the durable job retry; plaintext is refused.
@@ -1347,15 +1374,17 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   a **terminally failed backup tells the boss** once a day, then holds the retry for an
   hour (only TODAY's failures count — failed job rows live 90 days — and the "told him"
   stamp lands only after Telegram confirms delivery, so a blip doesn't swallow the notice
-  and a permanent cause doesn't repeat it hourly). The UTC day is stamped only after a
-  **successful** run — a failed morning is retried the same day instead of being marked done.
+  and a permanent cause doesn't repeat it hourly). The existing `backup_day` success stamp
+  is the rolling anchor, so migration does not create a duplicate; a missing, malformed, or
+  future stamp fails open. It advances only after a **successful** run — a failed due backup
+  remains eligible instead of being marked done.
 - **Monthly restore self‑check (2026‑07‑26):** nothing ever proved a snapshot could be
   turned back INTO a database — the job was green once the file was written and sent. A
   second durable job (`maintenance`/`backup_verify`, one per calendar month, tick
   `check_backup_verify`) now takes the newest snapshot through the real recovery path:
   decrypt with `BACKUP_ENCRYPTION_KEY_FILE`, gunzip, open read‑only, `PRAGMA
   integrity_check`, and confirm it is Cara's schema — in a `backups/restore-check/`
-  scratch dir removed on every path (the daily sweep also clears one left by a killed
+  scratch dir removed on every path (the scheduled sweep also clears one left by a killed
   run, since it holds a DECRYPTED copy). "Newest" is by stamp across both forms, taking
   the encrypted copy of THAT stamp. ANY failure — including an out-of-disk error while
   copying — logs a `backup_restore_failed` issue and holds the retry a day; the month is
@@ -1372,8 +1401,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   when it recovers past threshold + 2 pct. Same debounced state‑change shape as the
   model‑health monitor — a full disk breaks every write at once, so the warning has to
   arrive while there is still room to act. `DISK_ALERT_MIN_FREE_PCT=0` disables.
-- **Proactive heartbeat:** gentle, suggestion‑only nudges — overdue reminders, memory
-  candidates waiting, items needing a category — throttled (≤1 non‑urgent/day),
+- **Proactive heartbeat:** gentle, suggestion‑only nudges — overdue reminders and memory
+  candidates waiting; automatic saved-note review invitations are opt-in and default off —
+  throttled (≤1 non‑urgent/day),
   quiet‑hours‑aware (22:00–08:00), fully audited; never acts. **A "sent" is recorded only
   on real delivery** (2026‑07‑02), so a transient Telegram error doesn't mark the day's
   nudge delivered and lose it. **One calendar (2026‑07‑26):** the daily cap and the
@@ -1385,20 +1415,22 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   A delivered nudge snapshots its type + row ids for 15 minutes; a short «Давай»/«Да»/
   “show them” opens that exact memory/review/reminder queue deterministically.
   **The generic "unsorted pile" nudge was replaced (2026‑07‑17)** by the **note‑review
-  invitation** — «Нашла N сохранёнок, по которым стоит принять решение — показать?» —
+  invitation**, now opt-in (2026‑08‑21) — «Нашла N сохранёнок, по которым стоит принять
+  решение — показать?» —
   which opens the exact snapshotted ≤3‑item review batch (untriaged items surface there
   as one of the deterministic review reasons); chat can never answer about an unrelated
   item or falsely say the queue is clean.
   A one-shot that already fired and is waiting for “готово” is not overdue and cannot
   generate another urgent overdue nudge.
 - **Tune her proactivity** (`proactive_prefs`): "пиши только по выходным", "не беспокой
-  до 10", "отключи напоминания", "можно почаще" → stored overrides (on/off, days,
-  quiet window, frequency) the heartbeat honors.
+  до 10", "отключи напоминания", "можно почаще", "не предлагай сохранёнки" → stored
+  overrides (on/off, days, quiet window, frequency, saved-note review) the heartbeat honors.
 - **Issues report:** "какие были проблемы на этой неделе?" → a summary of logged
   communication issues (unclear/out‑of‑scope/STT/corrections…).
-- **Report a problem** (`report_problem`): "запиши в проблемы" / "добавь в ошибки" logs
-  a boss‑reported issue (surfaces in the review) — distinct from the issues report,
-  which only *shows* them.
+- **Report a problem** (`report_problem`): "запиши в проблемы" / "добавь в ошибки" is a
+  strict deterministic command that logs the preceding exchange (or its explicit suffix),
+  bypasses but preserves an unrelated pending card, and surfaces in the review — distinct
+  from the issues report, which only *shows* them.
 - **One at a time** (`multi_action`): a message bundling two+ distinct commands ("первое
   закрой, второе напомни…") is recognised and she asks to take them one at a time,
   rather than silently misfiring (full multi‑step execution is intentionally out of
@@ -1603,8 +1635,8 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ sysinfo.py       read-only host stats (/proc, statvfs)
    ├─ fetch.py         SSRF-guarded URL reader
    ├─ storage.py       binary backend (local; DO Spaces S3 SigV4, dormant)
-   ├─ backup.py        daily consistent DB snapshot: local rotation + encrypted off-box
-   │                   copy (Spaces or fleet notify chat), as a durable daily job;
+   ├─ backup.py        weekly-by-default DB snapshot: local rotation + encrypted off-box
+   │                   copy (Spaces or fleet notify chat), as a durable scheduled job;
    │                   monthly restore self-check (decrypt → gunzip → integrity_check)
    ├─ llm.py           budget-guarded gateway: chat profiles + failover + cooldowns,
    │                   embeddings, STT (local/local_server/remote), pricing, budgets
@@ -1635,6 +1667,9 @@ weekly redacted evidence
   open‑weight slug** (`openai-gpt-oss-20b`), not the tier‑403 `openai-gpt-4o` that used
   to be a dead fallback on a fresh deploy; a profile added via `LLM_PROFILES_JSON`
   without a `primary` is backfilled with the configured chat model so it can't crash a turn.
+  DigitalOcean's `kimi-k2.6` transport requires temperature `1`; the gateway enforces that
+  model-specific constraint after profile selection while leaving every other model's requested
+  temperature unchanged (2026‑08‑21).
   A malformed `fallbacks` is coerced the same way (2026‑07‑27): a bare string is wrapped
   into a one‑element list (it used to iterate per CHARACTER — one doomed call, cooldown row
   and unpriced warning per letter), any other scalar is dropped to `[]` — both logged.
@@ -2143,7 +2178,7 @@ itself is off until he asks for it — §3) · `PROACTIVE_ENABLED=true` ·
 Learning: `HABIT_THRESHOLD=10` — how many consecutive same‑category filings from one
 source before she offers to auto‑confirm that source (§3; the offer still needs a yes).
 
-Backup: `BACKUP_ENABLED=true` · `BACKUP_KEEP=7` ·
+Backup: `BACKUP_ENABLED=true` · `BACKUP_INTERVAL_DAYS=7` · `BACKUP_KEEP=7` ·
 `BACKUP_ENCRYPTION_KEY_FILE=/etc/tg-ingest-agent-backup.key` (local gzip plus encrypted
 off‑box copy; recovery key retained separately from the VPS/repo) ·
 `DISK_ALERT_MIN_FREE_PCT=10` (low‑disk alert, 0 disables; added 2026‑07‑25).

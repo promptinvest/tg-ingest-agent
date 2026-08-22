@@ -73,7 +73,7 @@ KB for SSH/deploy/model details.
   the preview — journals, problem log), `reminders_svc.py` (reminder handlers,
   partial drafts, fired follow-ups, fire/expiry sweeps). `converse.py` holds
   free-form warm Cara; `action_truth.py` guards "done/saved" wording;
-  `backup.py` runs the daily encrypted off-box DB backup. Own PHOTOS are never
+  `backup.py` runs the weekly-by-default encrypted off-box DB backup. Own PHOTOS are never
   stored (retired 2026-07-16) — own text/PDF docs still save via caption.
 - `llm.py` — DO Gradient gateway (chat + local/remote Whisper STT), pricing,
   budgets, JSON parsing helpers.
@@ -93,8 +93,9 @@ KB for SSH/deploy/model details.
   `memory_curator.py` (proposes candidates, confirm-before-store; reply-only,
   pulled via memory_review), `relationship.py` (evidence-based working history),
   `proactive.py` (heartbeat — suggestion-only, throttled, quiet-hours/weekday gated).
-  Proactive is ENABLED: heartbeat nudges (overdue reminders / memory candidates /
-  note-review invitation), an opt-in morning brief, and a model-health monitor that alerts
+  Proactive is ENABLED: heartbeat nudges (overdue reminders / memory candidates;
+  automatic note-review invitations are opt-in and default off), an opt-in morning brief,
+  and a model-health monitor that alerts
   the boss when a model goes down/recovers (skipped while budget-stopped).
   Persona: time-of-day & weekend-aware voice in a FRIENDLY register only — no
   flirtation or intimate conversation (owner decision 2026-07-06; that register

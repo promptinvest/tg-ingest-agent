@@ -71,7 +71,7 @@ ACTIONS = {
     "persona",           # params: topic in character|relationship — who you are / how you relate
     "boss_query",        # what do you know about me
     "memory_why",        # why/how do you know that about me (provenance)
-    "proactive_prefs",   # params: enabled/days/quiet_start/quiet_end/max_per_day — tune nudges
+    "proactive_prefs",   # params: enabled/days/quiet hours/max_per_day/note_review — tune nudges
     "boss_memory_update", # params: op (remember|forget|confirm), value/id, kind
     "style_update",      # params: tone (warmer|neutral|concise) / intensity
     "trace_query",       # why did you do that / show last trace
@@ -241,6 +241,8 @@ NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and
 "можно писать почаще" / "you can check in more often" -> {"action": "proactive_prefs", "params": {"max_per_day": 3}, "confidence": 0.82}
 "делай мне утреннюю сводку" / "присылай утренний бриф" / "give me a morning brief" -> {"action": "proactive_prefs", "params": {"morning_brief": true}, "confidence": 0.88}
 "не нужна утренняя сводка" / "stop the morning brief" -> {"action": "proactive_prefs", "params": {"morning_brief": false}, "confidence": 0.88}
+"не пиши про три сохранёнки каждый день" / "stop suggesting saved notes" -> {"action": "proactive_prefs", "params": {"note_review": false}, "confidence": 0.92}
+"предлагай мне разбирать сохранёнки" / "suggest saved-note reviews" -> {"action": "proactive_prefs", "params": {"note_review": true}, "confidence": 0.9}
 "запомни про меня: я не люблю длинные ответы" / "remember about me: I prefer short answers" -> {"action": "boss_memory_update", "params": {"op": "remember", "value": "предпочитает короткие ответы", "kind": "tone"}, "confidence": 0.9}
 "забудь #3" / "forget what you know about my tone" -> {"action": "boss_memory_update", "params": {"op": "forget", "value": "#3"}, "confidence": 0.9}
 "подтверди #2" / "confirm #2" -> {"action": "boss_memory_update", "params": {"op": "confirm", "value": "#2"}, "confidence": 0.9}
@@ -264,6 +266,7 @@ NOTE: merge_categories DEDUPLICATES (folds a duplicate category into another and
 "да" (with a pending action) -> {"action": "confirm", "params": {}, "confidence": 0.95}
 "Лящук" / "позвонить в банк" / "про встречу с Иваном" (pending reminder_partial, need=title) -> {"action": "amend", "params": {"title": "встреча Лящук"}, "confidence": 0.9}
 "в 17:00" / "завтра в 9" / "в пятницу в 14" (pending reminder_partial, need=time) -> {"action": "amend", "params": {"due_utc": "<that time, local, converted to UTC>"}, "confidence": 0.9}
+"25.08 в 19:00 стрижка" (pending calendar_partial) -> {"action": "amend", "params": {"title": "стрижка", "due_utc": "<25 Aug 19:00 local converted to UTC>"}, "confidence": 0.92}
 "нет, лучше в 16:00" (pending reminder) -> {"action": "amend", "params": {"due_utc": "<same day 16:00 local in UTC>"}, "confidence": 0.9}
 "это скорее крипта" (pending category) -> {"action": "amend", "params": {"category": "крипта"}, "confidence": 0.9}
 "категория - Документы" / "категория: крипта" / "в категорию Документы" / "set category to Documents" (pending category) -> {"action": "amend", "params": {"category": "Документы"}, "confidence": 0.92}

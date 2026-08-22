@@ -14,19 +14,20 @@ def log_event(conn, kind, summary, importance=1, source_table=None, source_id=No
     store.rel_add(conn, kind, summary, importance, source_table, source_id, title=title)
 
 
-def ongoing_threads(conn, lang, chat_id=None):
+def ongoing_threads(conn, lang, chat_id=None, include_suggested=True):
     """Open loops worth gentle continuity / a morning brief: items awaiting a
     category, memory suggestions waiting, overdue reminders. Short strings."""
     ru = lang == "ru"
     out = []
-    unsorted = conn.execute(
-        "SELECT COUNT(*) AS n FROM messages WHERE status = 'suggested'"
-        + (" AND chat_id = ?" if chat_id is not None else ""),
-        ((int(chat_id),) if chat_id is not None else ()),
-    ).fetchone()["n"]
-    if unsorted:
-        out.append(f"{unsorted} заметок ждут категорию" if ru
-                   else f"{unsorted} items awaiting a category")
+    if include_suggested:
+        unsorted = conn.execute(
+            "SELECT COUNT(*) AS n FROM messages WHERE status = 'suggested'"
+            + (" AND chat_id = ?" if chat_id is not None else ""),
+            ((int(chat_id),) if chat_id is not None else ()),
+        ).fetchone()["n"]
+        if unsorted:
+            out.append(f"{unsorted} заметок ждут категорию" if ru
+                       else f"{unsorted} items awaiting a category")
     cands = len(store.candidates_pending(conn, limit=20))
     if cands:
         out.append(f"{cands} предложений в память" if ru else f"{cands} memory suggestions")

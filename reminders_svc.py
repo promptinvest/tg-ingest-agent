@@ -358,7 +358,7 @@ class ReminderMixin:
         m = re.search(r"(\d{1,3})\s*(часа|часов|час|ч|hours?|hrs?)\b", t)
         if m:
             return "amend", {"snooze_minutes": max(1, int(m.group(1))) * 60}
-        if re.search(r"(?:на|ещ[ёе])\s+час(?:ок)?\b|\ban hour\b", t):
+        if re.search(r"(?:на|ещ[ёе]|через)\s+час(?:ок)?\b|\ban hour\b", t):
             return "amend", {"snooze_minutes": 60}
         return None
 
@@ -443,6 +443,14 @@ class ReminderMixin:
             return True
         if context is None:
             context = live_pending
+        if context is None and pending is not None:
+            # ANY current non-fired card is stronger than the stale
+            # last_reminder_id fallback. In production, «Через полчаса» was the
+            # missing time for a new reminder_partial; a gratitude capture also
+            # leaves a category card whose «Готово» must confirm the entry, not
+            # close the alarm behind it. An explicit Telegram reply to a fired
+            # notification still wins above because it names the exact reminder.
+            return False
         if context is None:
             last_id = store.kv_get(self.conn, "last_reminder_id")
             try:

@@ -150,6 +150,118 @@ def title_from_forward(text):
     return (title.strip(" .,!?:;—-") or original)[:MAX_TITLE_CHARS]
 
 
+_CALENDAR_DATE = re.compile(
+    r"(?<!\d)(?P<day>[0-3]?\d)[./-](?P<month>[01]?\d)"
+    r"(?:[./-](?P<year>\d{2}|\d{4}))?(?!\d)")
+_CALENDAR_TIME_WITH_PREP = re.compile(
+    r"\b(?:в|at)\s*(?P<hour>[01]?\d|2[0-3])"
+    r"(?:(?::|\.)(?P<minute>[0-5]\d))?"
+    r"(?:\s*(?P<meridiem>am|pm|утра|дня|вечера|ночи)\b)?\b"
+    r"(?![:.]\d)", re.IGNORECASE)
+_CALENDAR_TIME_CLOCK = re.compile(
+    r"(?<![\d.])(?P<hour>[01]?\d|2[0-3])[:.]"
+    r"(?P<minute>[0-5]\d)(?:\s*(?P<meridiem>am|pm|утра|дня|вечера|ночи)\b)?"
+    r"(?!\d)", re.IGNORECASE)
+
+
+def _valid_calendar_date_candidate(match):
+    """Reject clock-like DD.MM matches that cannot be calendar dates.
+
+    A bare dotted clock such as ``19.00`` matches the deliberately permissive
+    numeric-date regex too.  Validate candidates before the ambiguity check so
+    ``25.08 19.00`` has one date and one clock, while real competing dates still
+    make the forward ambiguous.  Year-specific validity is checked later using
+    the actual/inferred year; 2000 keeps an otherwise valid 29.02 candidate.
+    """
+    try:
+        datetime(2000, int(match.group("month")), int(match.group("day")))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def calendar_details_from_forward(text, offset_hours, now=None):
+    """Extract one numeric local date/time and a title from forwarded DATA.
+
+    This deliberately is not a general instruction parser. It exists only after
+    the owner opened a calendar draft; fixed numeric fields are interpreted and
+    the remaining text becomes an inert event title. No wording in the forward
+    is executed. Missing/invalid fields return an empty/partial dict.
+    """
+    original = re.sub(r"\s+", " ", str(text or "")).strip()
+    prepared_times = list(_CALENDAR_TIME_WITH_PREP.finditer(original))
+    # A dotted clock inside an explicit «в 19.00» also resembles DD.MM. Do not
+    # count that same span as a second date when deciding ambiguity.
+    date_matches = [
+        candidate for candidate in _CALENDAR_DATE.finditer(original)
+        if _valid_calendar_date_candidate(candidate)
+        and not any(candidate.start() < tm.end() and tm.start() < candidate.end()
+                    for tm in prepared_times)
+    ]
+    if len(date_matches) != 1:
+        return {}
+    date_match = date_matches[0]
+    time_matches = [
+        candidate for candidate in prepared_times
+        if candidate.end() <= date_match.start() or candidate.start() >= date_match.end()
+    ]
+    # Collect clocks even when one explicit в/at clock exists: «в 19 или
+    # 20:00» is still ambiguous. Overlapping spans are the SAME clock written
+    # with a preposition and must be deduplicated.
+    for candidate in _CALENDAR_TIME_CLOCK.finditer(original):
+        if not (candidate.end() <= date_match.start()
+                or candidate.start() >= date_match.end()):
+            continue
+        if any(candidate.start() < current.end()
+               and current.start() < candidate.end() for current in time_matches):
+            continue
+        time_matches.append(candidate)
+    # Never guess which pair wins in a reschedule/change forward. It is safer to
+    # keep the draft and ask than create the old of two explicitly named events.
+    if len(time_matches) != 1:
+        return {}
+    time_match = time_matches[0]
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    offset = timedelta(hours=float(offset_hours))
+    local_now = now + offset
+    year_raw = date_match.group("year")
+    year = local_now.year if not year_raw else int(year_raw)
+    if year_raw and len(year_raw) == 2:
+        year += 2000
+    try:
+        hour = int(time_match.group("hour"))
+        meridiem = str(time_match.group("meridiem") or "").casefold()
+        if meridiem in {"pm", "дня", "вечера"} and hour < 12:
+            hour += 12
+        elif meridiem in {"am", "утра", "ночи"} and hour == 12:
+            hour = 0
+        local_due = datetime(
+            year, int(date_match.group("month")), int(date_match.group("day")),
+            hour, int(time_match.group("minute") or 0),
+            tzinfo=timezone.utc,
+        )
+    except ValueError:
+        return {}
+    due = local_due - offset
+    if not year_raw and due <= now:
+        try:
+            local_due = local_due.replace(year=year + 1)
+        except ValueError:  # 29 February into a non-leap year
+            return {}
+        due = local_due - offset
+    # Delete only the two parsed spans; everything else is an inert title.
+    chars = list(original)
+    for match in (date_match, time_match):
+        for i in range(match.start(), match.end()):
+            chars[i] = " "
+    title = re.sub(r"\s+", " ", "".join(chars)).strip(" .,!?:;—-👇")
+    return {
+        "title": title[:MAX_TITLE_CHARS],
+        "due_utc": due.isoformat(),
+        "recurrence": "none",
+    }
+
+
 def parse_iso_utc(value):
     """Parse an ISO timestamp to aware-UTC datetime; None when invalid."""
     try:

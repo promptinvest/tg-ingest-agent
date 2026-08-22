@@ -476,7 +476,13 @@ def morning_brief(conn, cfg, lang, tz_offset, owner, chat_id=None):
             overdue.append(r["title"])
         elif (due + timedelta(hours=tz_offset)).date() == today_local:
             today.append(((due + timedelta(hours=tz_offset)).strftime("%H:%M"), r["title"]))
-    threads = relationship.ongoing_threads(conn, lang, chat_id=chat_id)
+    # The morning brief must not become a second route for the disabled recurring
+    # saved-note advertisement. Other real open loops still appear normally.
+    note_review_on = str(store.pref_get(
+        conn, "proactive_note_review") or "off").strip().casefold() in {
+            "1", "true", "yes", "да", "on"}
+    threads = relationship.ongoing_threads(
+        conn, lang, chat_id=chat_id, include_suggested=note_review_on)
     task_rows = conn.execute(
         "SELECT id, objective, status, due_at, updated_at, delivery_status"
         " FROM assistant_tasks"

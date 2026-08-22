@@ -62,6 +62,10 @@ TEXTS = {
         "ru": "Нашла {n} сохранёнки(ок), по которым стоит принять решение — показать?",
         "en": "I've got {n} note(s) worth a quick decision — want to see them?",
     },
+    "note_review_nudges_off": {
+        "ru": "Автоподборка трёх сохранёнок теперь выключена. Ручной обзор остаётся 🙂",
+        "en": "The automatic three-note review is now off. Manual review still works 🙂",
+    },
     "related_note_hint": {
         "ru": "К слову, у тебя есть ещё #{row_id} ({category}) по этой теме — открыть?",
         "en": "By the way, you also have #{row_id} ({category}) on this — open it?",
@@ -772,6 +776,14 @@ TEXTS = {
     "calendar_not_found": {
         "ru": "Не поняла, какое событие добавить — назови напоминание или время 🤔",
         "en": "Not sure which event to add — name a reminder or give me a time 🤔",
+    },
+    "calendar_need_details": {
+        "ru": "Пришли название и дату со временем следующим сообщением — можно переслать, например: «25.08 в 19:00 стрижка» 📅",
+        "en": "Send the title, date, and time next — forwarding it is fine, for example: “25.08 at 19:00 haircut” 📅",
+    },
+    "calendar_partial_cancelled": {
+        "ru": "Хорошо, событие не добавляю.",
+        "en": "Okay, I won't add the event.",
     },
     "delete_confirm": {
         "ru": "Удалить #{row_id} [{category}] «{snippet}»? Это насовсем — скажи «да», и я удалю.",

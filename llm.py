@@ -248,6 +248,12 @@ def _estimate_prompt_tokens(messages):
     return sum(_estimate_tokens(p) for p in parts)
 
 
+_FIXED_MODEL_TEMPERATURES = {
+    # DigitalOcean's Kimi endpoint rejects every other value with HTTP 400.
+    "kimi-k2.6": 1,
+}
+
+
 def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
          timeout=None):
     """Budget-guarded chat completion; logs usage; returns content string."""
@@ -257,6 +263,7 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
     common.watchdog_ping()
     _check_budget(cfg, conn)
     model = model or cfg.do_model
+    temperature = _FIXED_MODEL_TEMPERATURES.get(model, temperature)
     payload = {
         "model": model,
         "messages": messages,

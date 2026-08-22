@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily database backup: a consistent SQLite snapshot, kept locally (rotated)
+"""Scheduled database backup: a consistent SQLite snapshot, kept locally (rotated)
 and copied OFF-BOX after encryption. The droplet was wiped once before, and
 ingest.db is the single file everything Cara is lives in.
 
@@ -10,7 +10,7 @@ Off-box targets, in order of preference:
 With neither configured the snapshot is still taken locally and a WARNING is
 logged — a local-only copy does not survive a droplet wipe.
 
-Runs as a durable daily job ("maintenance"/"db_backup"): retried on failure,
+Runs as a durable weekly-by-default job ("maintenance"/"db_backup"): retried on failure,
 survives restarts, never blocks the live request path.
 """
 import gzip
@@ -257,14 +257,14 @@ def offsite(cfg, encrypted_path, conn=None):
         _size_alert(conn, len(data))
         tg_send_document(cfg.fleet_notify_token, cfg.fleet_notify_chat_id,
                          encrypted_path.name, data,
-                         caption=f"🗄 {cfg.fleet_notify_label} — daily DB backup",
+                         caption=f"🗄 {cfg.fleet_notify_label} — encrypted DB backup",
                          content_type="application/octet-stream")
         return "telegram:fleet"
     return ""  # unreachable, kept defensive for future target types
 
 
 def run(cfg, conn):
-    """The daily backup job body; returns a result dict for the job log.
+    """The scheduled backup job body; returns a result dict for the job log.
 
     Pings the watchdog between its phases (2026-07-27): `runtime.drain` pings
     only BETWEEN jobs, so without these the whole backup — online-backup copy,
@@ -475,7 +475,7 @@ def verify_restore(cfg, conn=None):
         src, encrypted = latest_snapshot(cfg)
         if src is None:
             raise BackupRestoreError(
-                "no snapshot to verify — the daily backup has never produced one")
+                "no snapshot to verify — the scheduled backup has never produced one")
         # ONE number bounds both halves of this: the disk precheck and the gunzip.
         # The first version passed `free - MARGIN` to the gunzip, so on the live
         # box (~68 GB free, a tens-of-MB archive) the write cap was ~400x the

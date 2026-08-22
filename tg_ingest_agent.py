@@ -210,7 +210,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                          lambda ctx, conn, payload, job: {"removed": ctx.housekeep()})
         runtime.register("maintenance", "pending_expire",
                          lambda ctx, conn, payload, job: {"expired": store.pending_expire(conn)})
-        # Daily off-box DB backup — the single file everything Cara is lives in.
+        # Scheduled off-box DB backup — the single file everything Cara is lives in.
         runtime.register("maintenance", "db_backup",
                          lambda ctx, conn, payload, job: ctx.run_db_backup(conn))
         # Monthly proof that yesterday's snapshot is still a restorable database.
@@ -742,7 +742,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         "check_weekly_review",
         "check_morning_brief",
         "check_daily_curator",
-        "check_daily_backup",
+        "check_scheduled_backup",
         "check_backup_verify",
         "check_memory_consolidation",
         "check_proactive",
@@ -1664,6 +1664,9 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         # reminder confirmation.  A forward alone remains inert.
         if auto_store and text and not msg.get("media_group_id"):
             pending = store.pending_get(self.conn, chat_id)
+            if self.continue_partial_calendar_from_forward(
+                    chat_id, self.lang(), pending, text):
+                return
             if self.continue_partial_reminder_from_forward(
                     chat_id, self.lang(), pending, text):
                 return
@@ -1992,6 +1995,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
     def do_calendar_add(self, chat_id, lang, params):
         draft = reminders.validate_draft(params)
         if draft:
+            pending = store.pending_get(self.conn, chat_id)
             event = {
                 "uid": f"event-{int(time.time())}",
                 "title": draft["title"],
@@ -1999,16 +2003,74 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 "duration_minutes": self.cfg.event_duration_minutes,
                 "recurrence": draft["recurrence"],
             }
-            self.send_to_calendar(chat_id, event)
+            sent = self.send_to_calendar(chat_id, event)
+            if sent and pending and pending.get("kind") == "calendar_partial":
+                store.pending_clear(self.conn, chat_id)
+            return sent
         else:
-            rows = store.reminders_active(self.conn, chat_id)
-            row = reminders.find_by_query(rows, params)
+            selector = any(params.get(key) not in (None, "")
+                           for key in ("id", "title_query"))
+            rows = store.reminders_active(self.conn, chat_id) if selector else []
+            row = reminders.find_by_query(rows, params) if selector else None
             if row:
                 self.send_to_calendar(
                     chat_id, gcal.event_from_reminder(row, self.cfg.event_duration_minutes)
                 )
-            else:
+            elif selector:
                 self.reply(chat_id, T(lang, "calendar_not_found"))
+            else:
+                payload = {"recurrence": "none"}
+                title = str(params.get("title") or "").strip()
+                if title:
+                    payload["title"] = title[:reminders.MAX_TITLE_CHARS]
+                due = reminders.parse_iso_utc(params.get("due_utc"))
+                if due is not None:
+                    payload["due_utc"] = due.isoformat()
+                store.pending_set(self.conn, chat_id, "calendar_partial", payload)
+                self.reply(chat_id, T(lang, "calendar_need_details"))
+
+    def continue_partial_calendar(self, chat_id, lang, pending, action, params):
+        """Complete a calendar draft without turning it into a saved note."""
+        if not pending or pending.get("kind") != "calendar_partial":
+            return False
+        if action == "cancel":
+            store.pending_clear(self.conn, chat_id)
+            self.reply(chat_id, T(lang, "calendar_partial_cancelled"))
+            return True
+        selector = action == "calendar_add" and any(
+            params.get(key) not in (None, "") for key in ("id", "title_query"))
+        if selector:
+            # A named existing reminder is a fresh calendar intent, not missing
+            # data for this new-event draft. Abandon the draft and let dispatch
+            # run the ordinary selector path below.
+            store.pending_clear(self.conn, chat_id)
+            return False
+        if action not in {"amend", "confirm", "calendar_add"}:
+            store.pending_clear(self.conn, chat_id)  # the boss moved on
+            return False
+        merged = dict(pending.get("payload") or {})
+        for key in ("title", "due_utc", "recurrence"):
+            if params.get(key) not in (None, ""):
+                merged[key] = params[key]
+        draft = reminders.validate_draft(merged)
+        if not draft:
+            store.pending_set(self.conn, chat_id, "calendar_partial", merged)
+            self.reply(chat_id, T(lang, "calendar_need_details"))
+            return True
+        self.do_calendar_add(chat_id, lang, draft)
+        return True
+
+    def continue_partial_calendar_from_forward(self, chat_id, lang, pending, text):
+        """Use the next forwarded numeric date/time/title as inert event data."""
+        if not pending or pending.get("kind") != "calendar_partial":
+            return False
+        fields = reminders.calendar_details_from_forward(text, self.tz_offset())
+        if not fields:
+            # This single forward belongs to the open calendar handoff. Falling
+            # through would file it as a note — the exact production failure.
+            self.reply(chat_id, T(lang, "calendar_need_details"))
+            return True
+        return self.continue_partial_calendar(chat_id, lang, pending, "amend", fields)
 
     def do_help(self, chat_id, lang):
         self.reply(chat_id, T(lang, "capabilities") + "\n— "
@@ -2035,6 +2097,26 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         store.kv_set(self.conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
         msg_id = msg.get("message_id")
         pending = store.pending_get(self.conn, chat_id)
+        # A recurring saved-note opt-out is a preference command about Cara's
+        # own proactive behavior, never the answer to whichever confirmation
+        # card happens to occupy the single pending slot. Resolve it before
+        # purge/journal-edit handlers can consume the words as their payload;
+        # the exact destructive purge phrase cannot match this narrow parser.
+        if self._disable_note_review_request(chat_id, lang, text):
+            return
+        # A problem-report command is about the exchange that just failed, not
+        # an answer to a purge, journal-edit, or category card. Keep it ahead of
+        # every consuming pending resolver; the exact destructive purge phrase
+        # does not match this strict, anchored command parser.
+        report_problem, problem_detail = self.report_problem_request(text)
+        if report_problem:
+            problem_policy = skill_manifest.get_policy("report_problem")
+            trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED,
+                        "action=report_problem source=explicit_problem_report",
+                        skill="report_problem",
+                        data={"confidence": 1.0, "risk": problem_policy["risk"]})
+            self.do_report_problem(chat_id, lang, {"detail": problem_detail}, text)
+            return
         # A pending purge is confirmed ONLY by typing the exact phrase —
         # handled deterministically (no LLM), so a stray "да" can't wipe data.
         if pending and pending["kind"] == "purge":
@@ -2088,9 +2170,13 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         # reminder -> he dictates the gratitude. That content must be SAVED, not eaten as
         # the ack. Unless the message is a bare ack/snooze, drop the pending and route it
         # normally so 'запиши благодарность …' ingests into the journal.
+        fired_gratitude_category = None
+        fired_pending_context = None
         if (pending and pending["kind"] == "reminder_fired"
                 and not self._is_reminder_ack(
                     text, str(pending["payload"].get("title") or ""))):
+            fired_pending_context = pending
+            fired_gratitude_category = self._fired_gratitude_category(pending, msg)
             store.pending_clear(self.conn, chat_id)
             pending = None
         # Basic #N deletion is a closed-world state command, not a language-
@@ -2129,16 +2215,28 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                                     extra_context="\n".join(
                                         x for x in self.turn_extra if x) or None)
         except llm.BudgetExceeded as exc:
+            if fired_pending_context and store.pending_get(self.conn, chat_id) is None:
+                store.pending_set(self.conn, chat_id, "reminder_fired",
+                                  fired_pending_context["payload"])
             store.issue_add(self.conn, chat_id, "budget_stop", text[:200])
             self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
                                   period=T(lang, f"period_{exc.period}")))
             return
         except llm.LLMError as exc:
+            if fired_pending_context and store.pending_get(self.conn, chat_id) is None:
+                store.pending_set(self.conn, chat_id, "reminder_fired",
+                                  fired_pending_context["payload"])
             log(f"router failed: {exc}")
             store.issue_add(self.conn, chat_id, "llm_error", f"router: {exc}")
             self.reply(chat_id, T(lang, "llm_error"))
             return
         action, params = decision["action"], decision["params"]
+        gratitude_capture = bool(fired_gratitude_category and action == "converse")
+        if gratitude_capture:
+            # This is the effective write boundary the trace/audit policy must
+            # describe. The normal journal confirmation card still decides
+            # whether the proposed entry is actually committed.
+            action, params = "ingest", {}
         # Mobilize the companion register when he's doing real work, so her resting tone
         # turns businesslike and eases back once tasks stop (off-hours -> playful again).
         if action in self.BUSINESS_REGISTER_ACTIONS:
@@ -2152,15 +2250,34 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         policy = skill_manifest.get_policy(action)
         log(f"routed chat={chat_id} action={action} risk={policy['risk']} "
             f"confidence={decision['confidence']:.2f}")
-        trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED, f"action={action}",
-                    skill=action, data={"confidence": decision["confidence"],
-                                        "risk": policy["risk"]})
+        trace.event(
+            self.conn, current_trace(), trace.ROUTER_COMPLETED,
+            f"action={action}" + (" source=fired_gratitude" if gratitude_capture else ""),
+            skill=action, data={"confidence": decision["confidence"],
+                                "risk": policy["risk"],
+                                **({"source": "fired_gratitude"}
+                                   if gratitude_capture else {})})
+
+        # The real Aug-06 failure was a plain gratitude answer after the daily
+        # gratitude reminder: the router conversed, asked whether to save it,
+        # then the next «Да» became the note.  When the live reminder and an
+        # active gratitude journal make the referent deterministic, turn only a
+        # declarative `converse` reading into the ordinary journal confirmation
+        # card. Clarifications, unsupported requests and real commands retain
+        # their routed action; nothing is auto-confirmed.
+        if gratitude_capture:
+            self.do_ingest(chat_id, lang, msg,
+                           forced_category=fired_gratitude_category)
+            return
 
         # Completing a half-specified reminder ("напомни в 17:00" -> "про что?"
         # -> "Лящук"): stitch the answer into the partial draft. Returns False
         # if the message is an unrelated intent (partial abandoned, fall through).
         if pending and pending["kind"] == "reminder_partial":
             if self.continue_partial_reminder(chat_id, lang, pending, action, params):
+                return
+        if pending and pending["kind"] == "calendar_partial":
+            if self.continue_partial_calendar(chat_id, lang, pending, action, params):
                 return
 
         # C3's pin describes the list ON HIS SCREEN. Every action that puts a
@@ -2176,6 +2293,48 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         # converse-family actions fall through to warm free-form Cara (`_dispatch_default`).
         _DISPATCH.get(action, _dispatch_default)(
             self, _Ctx(action, chat_id, lang, params, text, msg, msg_id, pending))
+
+    _GRATITUDE_CAPTURE_COMMAND_RE = re.compile(
+        r"^\s*(?:/|(?:покажи|покажите|выведи|перечисли|открой|найди|"
+        r"удали|убери|сотри|очисти|напомни|поставь|перенеси|отложи|"
+        r"сохрани|запиши|добавь|отключи|выключи|перестань|отправь|пришли|"
+        r"создай|сделай|измени|исправь|переименуй|объедини|закрой|отмени|"
+        r"включи|show|list|delete|remove|clear|remind|set|move|reschedule|"
+        r"snooze|save|write|add|disable|turn\s+off|stop|send|create|make|"
+        r"change|fix|rename|merge|close|cancel|enable|open|find)\b)",
+        re.IGNORECASE,
+    )
+
+    def _fired_gratitude_category(self, pending, msg):
+        """Return the active gratitude journal for a plain typed reminder reply.
+
+        This is intentionally narrow: forwarded/media data and non-gratitude
+        reminders route normally, as do explicit commands after the router has
+        classified them.  The category comes from durable journal state, never
+        from the reminder's free-form title.
+        """
+        if not pending or pending.get("kind") != "reminder_fired":
+            return ""
+        if not journals.is_gratitude_name(
+                (pending.get("payload") or {}).get("title")):
+            return ""
+        if not isinstance(msg, dict) or not str(msg.get("text") or "").strip():
+            return ""
+        typed = str(msg.get("text") or "").strip()
+        if self._GRATITUDE_CAPTURE_COMMAND_RE.match(typed):
+            return ""
+        if typed.endswith("?") or re.match(
+                r"^(?:кто|что|где|когда|как|почему|зачем|сколько|како\w*|"
+                r"what|who|where|when|how|why|which)\b",
+                typed, re.IGNORECASE):
+            return ""
+        if msg.get("forward_origin") or any(
+                msg.get(key) for key in (
+                    "photo", "document", "voice", "audio", "video", "animation")):
+            return ""
+        gdef = store.journal_def_get(self.conn, journals.GRATITUDE_SLUG)
+        category = str(gdef["category"] or "").strip() if gdef and gdef["active"] else ""
+        return category if category and store.is_journal(self.conn, category) else ""
 
     def handle_command(self, chat_id, name):
         lang = self.lang()
@@ -2444,7 +2603,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             try:
                 link = gcal.insert_event(self.cfg, self.conn, event)
                 self.reply(chat_id, T(lang, "calendar_added", title=event["title"], link=link))
-                return
+                return True  # the external insert succeeded even if its ack was lost
             except gcal.CalendarError as exc:
                 log(f"gcal insert failed, falling back to .ics: {exc}")
         ics = gcal.make_ics([event])
@@ -2454,9 +2613,11 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 caption=T(lang, "calendar_ics", title=event["title"]),
             )
             store.convo_add(self.conn, chat_id, "bot", f"[.ics file: {event['title']}]")
+            return True
         except TelegramError as exc:
             store.issue_add(self.conn, chat_id, "calendar_failed", str(exc)[:200])
             self.reply(chat_id, T(lang, "calendar_failed", error=str(exc)[:200]))
+            return False
 
     # -- Free-form conversation (Cara as a person)
 
@@ -2725,7 +2886,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
     # keep fact-free. Every weak stem here is either fully inflected or paired
     # with a data noun.
     _CATALOG_CUE_RE = re.compile(
-        r"#\s*\d"
+        r"[#№]\s*\d"
         # «заметок» has a fill vowel — the stem «заметк» is not in it at all.
         r"|\bзамет(?:к\w*|ок)\b"
         r"|\bзапис(?:ь|и|ью|ей|ям|ями|ях)\b"
@@ -2748,7 +2909,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
     # rather than something she is tempted to recite (hand-rendering his lists is
     # forbidden in CHARACTER — the deterministic list_items owns that).
     CATALOG_GROUNDING_LIMIT = 10
-    # Every «#N» in his own message is resolved individually, because the ordinary
+    # Every supported note-number spelling in his own message is resolved
+    # individually, because the ordinary
     # listing is not the whole truth: an ARCHIVED note and a journal entry are
     # invisible to it, and denying a note that exists is the same failure as
     # inventing one that doesn't. Capped so a paste full of «#» can't grow the prompt.
@@ -2756,7 +2918,14 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
     # The digit run is matched in FULL and an over-long one is skipped, never
     # truncated: a `\d{1,6}` cap turned «#1234567» into an authoritative
     # «#123456: NO SUCH NOTE» — a confident statement about a number he never named.
-    _NOTE_REF_RE = re.compile(r"#\s*(\d+)")
+    _NOTE_REF_RE = re.compile(
+        r"(?:[#№]\s*|(?:номер\w*|замет(?:к\w*|ок)|"
+        r"запис(?:ь|и|ью|ей|ям|ями|ях)|notes?|entr(?:y|ies))\s+)(\d+)\b",
+        re.IGNORECASE,
+    )
+    # Compatibility name for older callers/tests. Both safety paths now share
+    # the exact same grammar and normalization.
+    _REPLY_NOTE_REF_RE = _NOTE_REF_RE
     _NOTE_REF_MAX_DIGITS = 6
     # A title he names instead of a number: «какой номер у заметки про смету?»,
     # «а «Дюна» сохранена?». Without this the NUMBERS RULE turns an answerable
@@ -2766,19 +2935,29 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         re.IGNORECASE)
     CATALOG_TITLE_LIMIT = 2
 
+    @classmethod
+    def _note_ref_numbers(cls, text, limit=None):
+        """Normalized, de-duplicated supported note refs in source order."""
+        out, seen = [], set()
+        for match in cls._NOTE_REF_RE.finditer(str(text or "")):
+            digits = match.group(1)
+            if len(digits) > cls._NOTE_REF_MAX_DIGITS:
+                continue
+            number = int(digits)
+            if number in seen:
+                continue
+            seen.add(number)
+            out.append(number)
+            if limit is not None and len(out) >= limit:
+                break
+        return out
+
     def _note_refs_grounding(self, text):
-        """Resolved truth for each #N he named: EXISTS (with category, title and
+        """Resolved truth for each note number he named: EXISTS (with category, title and
         lifecycle state) or NO SUCH NOTE. Looked up by stable number, so an archived
         or journal note answers for itself instead of falling out of the listing."""
-        out, seen = [], set()
-        for m in self._NOTE_REF_RE.finditer(str(text or "")):
-            digits = m.group(1)
-            if len(digits) > self._NOTE_REF_MAX_DIGITS:
-                continue         # out of range — not resolved, and never truncated
-            n = int(digits)
-            if n in seen:
-                continue
-            seen.add(n)
+        out = []
+        for n in self._note_ref_numbers(text, limit=self.CATALOG_REF_LIMIT):
             row = store.message_by_note_no(self.conn, n)
             if row is None:
                 out.append(f"    #{n}: NO SUCH NOTE — this number holds nothing")
@@ -2788,8 +2967,6 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                     row["summary"] or row["raw_text"] or "").split())[:70]
                 state = row["knowledge_state"] or "active"
                 out.append(f"    #{n}: EXISTS — [{cat}] {title} ({state})")
-            if len(out) >= self.CATALOG_REF_LIMIT:
-                break
         return out
 
     def _note_titles_grounding(self, text):
@@ -2936,9 +3113,9 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                     data={"note_chunks": len(rows), "ms": round(ms, 1)})
         return "\n\n".join(blocks)
 
-    # Note numbers named in HER reply. The digit run must end at a word boundary, so
-    # an over-long «#1234567» matches nothing at all rather than being read as #123456.
-    _REPLY_NOTE_REF_RE = re.compile(r"#\s*(\d{1,6})\b")
+    # Note numbers named in HER reply use the same normalized extractor as the
+    # owner's grounding above. Over-long runs are skipped, never truncated to a
+    # different valid-looking number.
     # How far back his own «#N» is still considered "he said it", so that answering
     # «а где #52?» with «#52 не существует» is never mistaken for inventing #52.
     UNGROUNDED_NUMBER_LOOKBACK = 6
@@ -2950,21 +3127,19 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         but only this can tell whether it listened. A number he named himself is
         excluded on purpose: «такой записи нет» about HIS number is the honest answer,
         not a fabrication."""
-        found = {int(m.group(1)) for m in self._REPLY_NOTE_REF_RE.finditer(reply or "")}
+        found = set(self._note_ref_numbers(reply))
         if not found:
             return []
         try:
             suspect = sorted(n for n in found if n > store.note_no_max(self.conn))
             if not suspect:
                 return []
-            his = {int(m.group(1))
-                   for m in self._REPLY_NOTE_REF_RE.finditer(user_text or "")}
+            his = set(self._note_ref_numbers(user_text))
             for row in store.convo_recent(self.conn, chat_id,
                                           limit=self.UNGROUNDED_NUMBER_LOOKBACK):
                 if row["role"] != "user":
                     continue
-                his.update(int(m.group(1))
-                           for m in self._REPLY_NOTE_REF_RE.finditer(row["text"] or ""))
+                his.update(self._note_ref_numbers(row["text"] or ""))
         except sqlite3.Error as exc:      # best-effort, never fatal to a reply
             log(f"ungrounded-number check failed: {exc}")
             return []
@@ -3134,8 +3309,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         "deleted or renumbered — not even as a promise about this reply;\n"
         "4. states NO note number, count, date or title that is not either in HIS "
         "message or in the REAL state block below. A number that appears only in the "
-        "rejected draft is a number that does not exist: you may say it does not "
-        "exist, never that it holds something. Invent nothing.\n"
+        "rejected draft must not appear in your rewrite at all — not even to deny it. "
+        "Invent nothing.\n"
         "Only offer things you can actually do (listed below). Two or three "
         "sentences, no lists, no headings, no apology theatre.\n"
         "You are talking to him, not reporting on yourself: never mention a draft, a "
@@ -3152,7 +3327,9 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         catalog grounding the first pass had, so it can tell 'never existed' from
         'exists, saved earlier' instead of confidently denying a real save."""
         fallback = T(lang, "action_not_done")
-        grounding = self._catalog_grounding(user_text) or self._catalog_grounding(blocked_reply)
+        # Never let the rejected draft authorize its own invented number. Only
+        # what HE actually asked about may open catalog grounding for the repair.
+        grounding = self._catalog_grounding(user_text)
         system = (
             f"{converse.CHARACTER}\n\n"
             f"{self._ACTION_REPAIR_SYSTEM.format(problem=problem or self._REPAIR_PROBLEM_ACTION)}\n"
@@ -3188,6 +3365,15 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 or action_truth.freeform_claims_artifact(second):
             store.issue_add(self.conn, chat_id, "converse_action_claim_retry", second[:300])
             log("second pass ALSO claimed an action — sending the deterministic template")
+            return fallback
+        allowed_refs = set(self._note_ref_numbers(user_text))
+        leaked_refs = sorted(set(self._note_ref_numbers(second)) - allowed_refs)
+        if leaked_refs:
+            store.issue_add(
+                self.conn, chat_id, "converse_action_claim_retry", second[:300],
+                context={"draft_only_numbers": leaked_refs})
+            log("second pass repeated note numbers absent from the boss's message — "
+                "sending the deterministic template")
             return fallback
         # Logged as an issue too: a repaired reply is still a fabrication that
         # reached the guard, and the pattern must stay visible in the reports.
@@ -3429,6 +3615,20 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             mb = params.get("morning_brief")
             mb = mb if isinstance(mb, bool) else str(mb).strip().lower() in ("1", "true", "yes", "да", "on")
             store.pref_set(self.conn, "morning_brief", "on" if mb else "off")
+            changed = True
+        if "note_review" in params:
+            nr = params.get("note_review")
+            nr = nr if isinstance(nr, bool) else str(nr).strip().lower() in (
+                "1", "true", "yes", "да", "on")
+            store.pref_set(self.conn, "proactive_note_review", "on" if nr else "off")
+            if not nr:
+                try:
+                    context = json.loads(store.kv_get(
+                        self.conn, "proactive_context") or "")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    context = None
+                if isinstance(context, dict) and context.get("kind") == "note_review":
+                    store.kv_set(self.conn, "proactive_context", "")
             changed = True
         for src, key in (("quiet_start", "quiet_start"), ("quiet_end", "quiet_end"),
                          ("max_per_day", "proactive_max_per_day")):
@@ -3738,17 +3938,26 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
     # on every sweep, but a transient one still gets several shots the same day.
     BACKUP_RETRY_MINUTES = 60
 
-    def check_daily_backup(self):
-        """Enqueue the daily DB backup job once per UTC day (durable — the job
-        runner retries a failed snapshot/off-box copy). The day is stamped by the
-        job's SUCCESS path, not here: stamping at enqueue time marked a failed day
-        done until the next UTC day, so one bad morning cost the whole backup."""
+    def check_scheduled_backup(self):
+        """Enqueue a DB backup when the rolling UTC-day interval has elapsed.
+
+        ``backup_day`` remains the last-success stamp so existing installations
+        migrate without a one-off duplicate. Missing, malformed, or future stamps
+        fail open: a clock/config accident must not suppress backups indefinitely.
+        The stamp is written only by the job's SUCCESS path, so failures retry.
+        """
         if not self.cfg.backup_enabled:
             return
         now = datetime.now(timezone.utc)
         self.check_backup_failure(now)
-        if store.kv_get(self.conn, "backup_day") == now.strftime("%Y-%m-%d"):
-            return
+        last_success = store.kv_get(self.conn, "backup_day")
+        if last_success:
+            try:
+                age_days = (now.date() - datetime.fromisoformat(last_success).date()).days
+            except (TypeError, ValueError):
+                age_days = -1
+            if 0 <= age_days < self.cfg.backup_interval_days:
+                return
         if self._sched_backing_off("backup", now):
             return
         if not jobs.has_pending(self.conn, "maintenance", "db_backup"):
@@ -3811,7 +4020,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         """Enqueue the MONTHLY restore self-check (durable job). A backup nobody
         has ever restored is a hope, not a backup — this one decrypts the newest
         snapshot with the on-box key, gunzips it and runs `PRAGMA integrity_check`
-        on the result. Like `check_daily_backup`, the month is stamped by the
+        on the result. Like `check_scheduled_backup`, the month is stamped by the
         job's SUCCESS path so a failed month keeps trying."""
         if not self.cfg.backup_enabled:
             return
@@ -3962,8 +4171,13 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             ids = [int(value) for value in context.get("ids") or []]
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             return False
-        store.kv_set(self.conn, "proactive_context", "")
         kind = context.get("kind")
+        if kind == "note_review" and not proactive.note_review_enabled(self.conn):
+            # A router-parsed opt-out may race with the short follow-up window.
+            # Preference state is authoritative over an older invitation.
+            store.kv_set(self.conn, "proactive_context", "")
+            return False
+        store.kv_set(self.conn, "proactive_context", "")
         if kind == "candidates":
             rows = [store.candidate_get(self.conn, cid) for cid in ids]
             rows = [row for row in rows if row is not None and row["status"] == "pending"]
@@ -4017,6 +4231,69 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             self.reply(chat_id, T(lang, "journal_prompt_go", category=category))
             return True
         return False
+
+    def _disable_note_review_request(self, chat_id, lang, text):
+        """Turn off only the recurring saved-note advertisement when asked.
+
+        Direct wording is unambiguous without context. A deictic ``don't send
+        this every day`` is accepted only while the recent proactive context
+        proves that "this" was the note-review invitation. Other reminders and
+        proactive checks remain enabled, and an unrelated pending action stays.
+        """
+        t = " ".join(str(text or "").strip().casefold().split()).rstrip(".!?")
+        direct = bool(re.fullmatch(
+            r"(?=[^\n]{0,140}(?:сохран[её]н\w*|замет\w*|saved[- ]notes?|"
+            r"note[- ]reviews?))(?:"
+            r"(?=[^\n]{0,140}(?:каждый\s+день|ежедневно|утром|авто\w*|"
+            r"подборк\w*|пинг\w*|предлаг\w*|suggest\w*|review\w*))"
+            r"(?:не\s+(?:пиши|присылай|показывай|предлагай)|"
+            r"перестань\s+(?:писать|присылать|показывать|предлагать))[^\n]{0,130}"
+            r"|(?=[^\n]{0,140}(?:авто\w*|подборк\w*|пинг\w*|предлаг\w*|"
+            r"сообщен\w*|messages?|suggest\w*|review\w*))"
+            r"(?:отключи|убери|stop|disable|turn\s+off)[^\n]{0,130})",
+            t,
+        ))
+        deictic = bool(re.fullmatch(
+            r"(?:не\s+(?:пиши|присылай)\s+(?:это\s+)?(?:каждый\s+день|ежедневно)|"
+            r"перестань\s+(?:это\s+)?(?:писать|присылать)(?:\s+каждый\s+день)?|"
+            r"don'?t\s+(?:send|show)\s+(?:this|it)\s+(?:every\s+day|daily))",
+            t,
+        ))
+        context = None
+        if direct or deictic:
+            try:
+                context = json.loads(store.kv_get(self.conn, "proactive_context") or "")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                context = None
+        if deictic:
+            try:
+                sent_at = datetime.fromisoformat(context["sent_at"])
+                if sent_at.tzinfo is None:
+                    sent_at = sent_at.replace(tzinfo=timezone.utc)
+                recent_note_review = (
+                    context.get("kind") == "note_review"
+                    and int(context.get("chat_id")) == int(chat_id)
+                    and datetime.now(timezone.utc) - sent_at <= timedelta(minutes=15)
+                )
+            except (KeyError, TypeError, ValueError):
+                recent_note_review = False
+            if not recent_note_review:
+                return False
+        if not direct and not deictic:
+            return False
+        store.pref_set(self.conn, "proactive_note_review", "off")
+        if isinstance(context, dict) and context.get("kind") == "note_review":
+            store.kv_set(self.conn, "proactive_context", "")
+        policy = skill_manifest.get_policy("proactive_prefs")
+        trace.event(
+            self.conn, current_trace(), trace.ROUTER_COMPLETED,
+            "action=proactive_prefs source=explicit_note_review_opt_out",
+            skill="proactive_prefs",
+            data={"confidence": 1.0, "risk": policy["risk"],
+                  "preference": "proactive_note_review", "value": "off"},
+        )
+        self.reply(chat_id, T(lang, "note_review_nudges_off"))
+        return True
 
     def _whisper_cli_available(self):
         """True when the cold whisper-cli fallback can actually run — llm's
@@ -5698,7 +5975,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         self.reply_chunks(chat_id, T(lang, "read_media_result", name=name,
                                      content=content[:1500]))
 
-    def do_ingest(self, chat_id, lang, msg):
+    def do_ingest(self, chat_id, lang, msg, forced_category=None):
         """Router `ingest` → store the message as a note — EXCEPT the boss's own
         pictures: those are conversation, not notes (own-photo storage retired
         2026-07-16), so an explicit «сохрани это фото» gets an honest decline
@@ -5725,7 +6002,10 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                                       n=len(parts) - len(kept)))
             if kept:
                 parts = kept
-        self.finalize(parts)
+        if forced_category:
+            self.finalize(parts, forced_category=forced_category)
+        else:
+            self.finalize(parts)
 
     def _store_attachments(self, row_id, parts, skip=None):
         """Download and store a message's media. `skip` holds the
@@ -5881,7 +6161,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                                                     forwarded=True)
         return bool(handled)
 
-    def finalize(self, parts):
+    def finalize(self, parts, forced_category=None):
         lang = self.lang()
         first = parts[0]
         chat_id = first["chat"]["id"]
@@ -5993,7 +6273,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                            reply_to)
                 return
         row = store.get_message(self.conn, row_id)
-        suggestion = self.suggest_row(row)
+        suggestion = (self.suggest_row(row, forced_category=forced_category)
+                      if forced_category else self.suggest_row(row))
         if not suggestion:
             self.reply(chat_id, T(lang, "stored_retry", row_id=self.note_no(row_id)), reply_to)
             return
@@ -6035,9 +6316,15 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
     def _is_meta_summary(cls, summary):
         return bool(cls._META_SUMMARY_RE.search(summary or ""))
 
-    def suggest_row(self, row):
+    def suggest_row(self, row, forced_category=None):
         """Get an LLM suggestion for a stored row; returns (category,
-        alternatives, summary) or None when the LLM call failed."""
+        alternatives, summary) or None when the LLM call failed.
+
+        ``forced_category`` is reserved for a destination proven by local state
+        (currently the active gratitude journal behind a fired reminder).  It
+        bypasses category inference but retains the normal confirmation card and
+        structured-journal draft boundary.
+        """
         row_id = row["id"]
         urls = [r["url"] for r in store.message_urls(self.conn, row_id)]
         image_paths = [r["local_path"] for r in store.message_images(self.conn, row_id)
@@ -6046,7 +6333,11 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         referential = False
         page_text = ""
         capture_meta = {}
-        if not (row["raw_text"] or urls or image_paths):
+        forced_category = self._match_journal_category(
+            forced_category, store.journal_categories(self.conn))
+        if forced_category:
+            category, alternatives, summary, facts = forced_category, [], "", []
+        elif not (row["raw_text"] or urls or image_paths):
             category, alternatives, summary, facts = (
                 self.cfg.fallback_category, [], "(no analyzable content)", []
             )

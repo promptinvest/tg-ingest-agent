@@ -102,7 +102,7 @@ is nothing older left for a deeper offset to address.
 | `/etc/tg-ingest-agent.env` | config + secrets, mode 0600 (seeded from `tg-ingest-agent.env.example`) |
 | `/var/lib/tg-ingest-agent/ingest.db` | SQLite |
 | `/var/lib/tg-ingest-agent/media/` | downloaded photos and voice files |
-| `/var/lib/tg-ingest-agent/backups/` | daily DB snapshots (rotated; off-box copies are encrypted) |
+| `/var/lib/tg-ingest-agent/backups/` | weekly-by-default DB snapshots (rotated; off-box copies are encrypted) |
 | `/etc/systemd/system/tg-ingest-agent.service` | unit — installed verbatim from the tracked `tg-ingest-agent.service` (single source of truth) |
 
 ## Tests

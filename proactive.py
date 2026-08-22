@@ -55,7 +55,15 @@ def settings(conn, cfg):
         "quiet_end": _int("quiet_end", cfg.quiet_end),
         "max_per_day": _int("proactive_max_per_day", cfg.proactive_max_per_day),
         "days": (store.pref_get(conn, "proactive_days") or "all").lower(),  # all|weekdays|weekends
+        # Deliberately opt-in. Saved notes stay available to manual review and
+        # contextual retrieval; only the recurring three-note advertisement is off.
+        "note_review": note_review_enabled(conn),
     }
+
+
+def note_review_enabled(conn):
+    value = str(store.pref_get(conn, "proactive_note_review") or "off").strip().casefold()
+    return value in {"1", "true", "yes", "да", "on"}
 
 
 def in_quiet_hours(cfg, conn, now, cfg_settings=None):
@@ -102,6 +110,8 @@ def _notes_review_due(conn, cfg, lang, now):
     """The review INVITATION (plan v1.1 §9.3): replaces the old generic
     "unsorted pile" nudge — untriaged items still surface here, as one of the
     deterministic review reasons, framed as a decision worth a minute."""
+    if not note_review_enabled(conn):
+        return None
     batch = store.notes_review_candidates(conn, now=now, limit=3)
     return (("note_review", T(lang, "nudge_note_review", n=len(batch)), False)
             if batch else None)
