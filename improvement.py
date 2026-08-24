@@ -464,7 +464,8 @@ def _evidence_snapshot(conn, item):
 
 
 def proposal_create(conn, *, kind, hypothesis, proposed_change, risk, rollback,
-                    evidence, baseline_run_id=None, candidate_run_id=None):
+                    evidence=None, evidence_snapshots=None, baseline_run_id=None,
+                    candidate_run_id=None, commit=True):
     if kind not in PROPOSAL_KINDS or risk not in PROPOSAL_RISKS:
         raise ValueError("proposal kind or risk is invalid")
     safe_hypothesis = _safe(hypothesis, 1200)
@@ -472,7 +473,11 @@ def proposal_create(conn, *, kind, hypothesis, proposed_change, risk, rollback,
     safe_rollback = _safe(rollback, 1200)
     if not safe_hypothesis or not safe_change or not safe_rollback:
         raise ValueError("proposal hypothesis, change, and rollback are required")
-    snapshots = [_safe_tree(_evidence_snapshot(conn, item)) for item in evidence]
+    if evidence_snapshots is not None:
+        snapshots = [_safe_tree(item) for item in evidence_snapshots]
+    else:
+        snapshots = [
+            _safe_tree(_evidence_snapshot(conn, item)) for item in (evidence or [])]
     if not snapshots:
         raise ValueError("proposal needs primary evidence")
     baseline = _run_snapshot(conn, baseline_run_id) if baseline_run_id else {}
@@ -513,7 +518,8 @@ def proposal_create(conn, *, kind, hypothesis, proposed_change, risk, rollback,
          safe_change, risk, safe_rollback,
          _canonical(baseline), _canonical(candidate), status, now, now),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.lastrowid
 
 
@@ -762,7 +768,7 @@ def weekly_analysis(agent, conn, period_key=None):
     period_key = period_key or local.strftime("%G-W%V")
     if store.mentor_cycle_for_period(conn, period_key) is not None:
         return 0
-    evidence, evidence_payload, feedback = _weekly_evidence(conn)
+    evidence, evidence_payload, _feedback = _weekly_evidence(conn)
     if not evidence:
         return 0
     source_build, source_hash = _source_identity(agent)
@@ -788,11 +794,145 @@ def weekly_analysis(agent, conn, period_key=None):
         source_hash=source_hash,
         review_job_id=request["job_id"],
         review_nonce=request["nonce"],
+        review_request_hash=mentor_protocol.digest(request),
+        feedback_cursor_end=max(
+            (int(item["id"]) for item in evidence
+             if item.get("kind") == "feedback"), default=0),
     )
     mentor_client.publish_review(agent.cfg, request)
-    if feedback:
-        store.kv_set(conn, "improvement_last_evidence_id", feedback[-1]["id"])
     return 1 if cycle else 0
+
+
+def replay_failed_mentor_cycle(agent, conn, period_key, expected_evidence_hash):
+    """Create or republish one audit-linked replay without mutating its parent."""
+    original = store.mentor_cycle_for_period(conn, period_key)
+    if (original is None or original["status"] != "failed"
+            or original["proposal_id"] is not None
+            or original["evidence_hash"] != str(expected_evidence_hash)):
+        raise ValueError("Mentor recovery source is not eligible")
+    refs, payload = _cycle_evidence(original)
+    existing = store.mentor_cycle_recovery(conn, original["id"])
+    if existing is not None:
+        existing_refs, existing_payload = _cycle_evidence(existing)
+        if (existing["evidence_hash"] != original["evidence_hash"]
+                or existing_refs != refs or existing_payload != payload):
+            raise ValueError("stored Mentor recovery evidence changed")
+        attempt = store.mentor_attempt_active(
+            conn, existing["id"], "proposal")
+        if existing["status"] == "submitted" and attempt is not None:
+            request = _review_request_for_cycle(existing)
+            if mentor_protocol.digest(request) != attempt["request_hash"]:
+                raise ValueError("stored Mentor recovery request changed")
+            mentor_client.publish_review(agent.cfg, request)
+        return existing, False
+    source_build, source_hash = _source_identity(agent)
+    request = mentor_client.build_review_request(
+        evidence=payload, source_build=source_build, source_hash=source_hash)
+    if request["evidence_hash"] != original["evidence_hash"]:
+        raise ValueError("Mentor recovery evidence changed during redaction")
+    replay_period = f"{period_key}-replay-1"
+    cycle_uid = (
+        original["cycle_uid"][:55] + "-replay-"
+        + hashlib.sha256(source_hash.encode("utf-8")).hexdigest()[:8]
+    )
+    cycle = store.mentor_cycle_create(
+        conn, cycle_uid=cycle_uid, period_key=replay_period,
+        evidence_refs=refs, evidence_payload=payload,
+        evidence_hash=original["evidence_hash"], source_build=source_build,
+        source_hash=source_hash, review_job_id=request["job_id"],
+        review_nonce=request["nonce"],
+        review_request_hash=mentor_protocol.digest(request),
+        feedback_cursor_end=max(
+            (int(item["id"]) for item in refs
+             if item.get("kind") == "feedback"), default=0),
+        recovery_of_cycle_id=original["id"],
+    )
+    if (cycle is not None
+            and cycle["recovery_of_cycle_id"] != original["id"]):
+        raise ValueError("Mentor recovery period is occupied")
+    if cycle is None:
+        cycle = store.mentor_cycle_recovery(conn, original["id"])
+    if cycle is None:
+        raise ValueError("Mentor recovery cycle could not be created")
+    created = cycle["review_job_id"] == request["job_id"]
+    replay_refs, replay_payload = _cycle_evidence(cycle)
+    if (cycle["recovery_of_cycle_id"] != original["id"]
+            or cycle["evidence_hash"] != original["evidence_hash"]
+            or replay_refs != refs or replay_payload != payload):
+        raise ValueError("Mentor recovery cycle binding changed")
+    mentor_client.publish_review(agent.cfg, _review_request_for_cycle(cycle))
+    return cycle, created
+
+
+def _cycle_evidence(cycle):
+    try:
+        refs = json.loads(cycle["evidence_refs_json"])
+        payload = json.loads(cycle["evidence_payload_json"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("stored Mentor evidence is malformed") from exc
+    if (not isinstance(refs, list) or not refs or not isinstance(payload, list)
+            or len(refs) != len(payload)
+            or mentor_protocol.digest(payload) != cycle["evidence_hash"]):
+        raise ValueError("stored Mentor evidence binding is invalid")
+    for ref, snapshot in zip(refs, payload):
+        if not isinstance(ref, dict) or set(ref) != {"kind", "id"} \
+                or not isinstance(snapshot, dict):
+            raise ValueError("stored Mentor evidence reference is invalid")
+        if snapshot.get("kind") != ref["kind"] \
+                or str(snapshot.get("id")) != str(ref["id"]):
+            raise ValueError("stored Mentor evidence identity changed")
+    return refs, payload
+
+
+def _review_request_for_cycle(cycle):
+    _refs, payload = _cycle_evidence(cycle)
+    request = mentor_client.build_review_request(
+        evidence=payload, source_build=cycle["source_build"],
+        source_hash=cycle["source_hash"], job_id=cycle["review_job_id"])
+    if (request["nonce"] != cycle["review_nonce"]
+            or request["evidence_hash"] != cycle["evidence_hash"]):
+        raise ValueError("stored Mentor review binding changed")
+    return request
+
+
+def _accept_review_proposal(conn, cycle, attempt, proposal, latency_seconds):
+    refs, snapshots = _cycle_evidence(cycle)
+    proposal = mentor_protocol.validate_proposal(proposal)
+    proposal_hash = mentor_protocol.digest(proposal)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        current = store.mentor_cycle_get(conn, cycle["id"])
+        if current is None or current["status"] != "submitted":
+            raise ValueError("Mentor proposal cycle is no longer submitted")
+        proposal_id = proposal_create(
+            conn, kind=proposal["kind"], hypothesis=proposal["hypothesis"],
+            proposed_change=proposal["proposed_change"], risk=proposal["risk"],
+            rollback=proposal["rollback"], evidence_snapshots=snapshots,
+            commit=False,
+        )
+        if not store.mentor_cycle_accept_proposal(
+                conn, cycle["id"], proposal_id, proposal_hash,
+                proposal["target_files"], commit=False):
+            raise ValueError("Mentor proposal transition failed")
+        if not store.mentor_attempt_finish(
+                conn, attempt["id"], status="succeeded",
+                latency_seconds=latency_seconds, commit=False):
+            raise ValueError("Mentor proposal attempt transition failed")
+        try:
+            cursor = int(store.kv_get(
+                conn, "improvement_last_evidence_id", "0") or 0)
+        except (TypeError, ValueError):
+            cursor = 0
+        cursor = max(cursor, int(current["feedback_cursor_end"] or 0))
+        conn.execute(
+            "INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)",
+            ("improvement_last_evidence_id", str(cursor)),
+        )
+        conn.commit()
+        return proposal_id
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def _patch_file(cfg, cycle_uid, patch=None):
@@ -821,6 +961,96 @@ def _patch_file(cfg, cycle_uid, patch=None):
     return path
 
 
+def _candidate_proposal(conn, cycle):
+    row = proposal_get(conn, cycle["proposal_id"])
+    if row is None:
+        raise ValueError("Mentor candidate proposal is missing")
+    proposal = mentor_protocol.validate_proposal({
+        "kind": row["kind"], "hypothesis": row["hypothesis"],
+        "proposed_change": row["proposed_change"], "risk": row["risk"],
+        "rollback": row["rollback"],
+        "target_files": json.loads(cycle["target_files_json"]),
+    })
+    if mentor_protocol.digest(proposal) != cycle["proposal_hash"]:
+        raise ValueError("stored Mentor proposal binding changed")
+    return proposal
+
+
+def _candidate_request(conn, cycle, attempt):
+    proposal = _candidate_proposal(conn, cycle)
+    request = mentor_client.build_candidate_request(
+        cycle_uid=cycle["cycle_uid"], attempt_no=attempt["attempt_no"],
+        proposal=proposal, evidence_hash=cycle["evidence_hash"],
+        source_build=cycle["source_build"], source_hash=cycle["source_hash"],
+        job_id=attempt["job_id"],
+    )
+    if (request["nonce"] != attempt["nonce"]
+            or mentor_protocol.digest(request) != attempt["request_hash"]):
+        raise ValueError("stored Mentor candidate request changed")
+    return request
+
+
+def _start_candidate_attempt(agent, conn, cycle):
+    last = store.mentor_attempt_last(conn, cycle["id"], "candidate")
+    paid_attempts = store.mentor_attempt_count(
+        conn, cycle["id"], "candidate")
+    if paid_attempts >= 3:
+        store.mentor_cycle_finish(
+            conn, cycle["id"], status="candidate_failed",
+            error="candidate_retry_exhausted")
+        return 1
+    attempt_no = int(last["attempt_no"] if last is not None else 0) + 1
+    job_id = mentor_protocol.new_job_id("candidate")
+    proposal = _candidate_proposal(conn, cycle)
+    request = mentor_client.build_candidate_request(
+        cycle_uid=cycle["cycle_uid"], attempt_no=attempt_no,
+        proposal=proposal, evidence_hash=cycle["evidence_hash"],
+        source_build=cycle["source_build"], source_hash=cycle["source_hash"],
+        job_id=job_id,
+    )
+    attempt = store.mentor_candidate_attempt_start(
+        conn, cycle["id"], attempt_no=attempt_no, job_id=job_id,
+        nonce=request["nonce"], request_hash=mentor_protocol.digest(request),
+    )
+    if attempt is None:
+        return 0
+    try:
+        mentor_client.publish_candidate(agent.cfg, request)
+    except mentor_client.MentorUnavailable as exc:
+        common.log(
+            f"Mentor candidate {attempt['id']} publish deferred locally: {exc}")
+        return 0
+    return 1
+
+
+def _next_iso_week(now):
+    start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    return (start + timedelta(days=7 - start.weekday())).isoformat()
+
+
+def _finish_phase_failure(conn, cycle, attempt, *, candidate, error_class,
+                          latency_seconds=None, transient=False):
+    attempt_status = (
+        "ambiguous" if error_class == "ambiguous"
+        else "transient_failed" if transient else "permanent_failed")
+    terminal = "candidate_failed" if candidate else "failed"
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if not store.mentor_attempt_finish(
+                conn, attempt["id"], status=attempt_status,
+                error_class=error_class, latency_seconds=latency_seconds,
+                commit=False):
+            raise ValueError("Mentor attempt terminal transition failed")
+        if not store.mentor_cycle_finish(
+                conn, cycle["id"], status=terminal, error=error_class,
+                db_commit=False):
+            raise ValueError("Mentor cycle terminal transition failed")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
 def _prepare_runner(agent, conn, cycle):
     patch_path = Path(cycle["patch_path"] or "")
     if not patch_path.is_file():
@@ -847,11 +1077,16 @@ def _prepare_runner(agent, conn, cycle):
         if not store.mentor_cycle_set_runner(
                 conn, cycle["id"], request["job_id"], request["nonce"]):
             return 0
-    mentor_client.publish_runner(agent.cfg, request)
+    try:
+        mentor_client.publish_runner(agent.cfg, request)
+    except mentor_client.MentorUnavailable as exc:
+        common.log(
+            f"Mentor runner {request['job_id']} publish deferred locally: {exc}")
+        return 0
     return 1
 
 
-def _record_candidate(conn, cycle, result):
+def _record_candidate(conn, cycle, result, *, commit=True):
     proposal = proposal_get(conn, cycle["proposal_id"])
     if proposal is None or proposal["status"] != "draft":
         raise ValueError("Mentor proposal is not candidate-ready")
@@ -889,7 +1124,7 @@ def _record_candidate(conn, cycle, result):
         "duration_seconds": result["duration_seconds"],
         "ready": bool(passed),
     }
-    conn.execute(
+    changed = conn.execute(
         "UPDATE improvement_proposals SET evidence_json=?,"
         " candidate_metrics_json=?, status=?, updated_at=?"
         " WHERE id=? AND status='draft'",
@@ -897,48 +1132,62 @@ def _record_candidate(conn, cycle, result):
             _canonical(evidence), _canonical(metrics),
             "ready" if passed else "draft", _now(), proposal["id"],
         ),
-    )
-    conn.commit()
+    ).rowcount
+    if not changed:
+        raise ValueError("Mentor proposal candidate transition failed")
+    if commit:
+        conn.commit()
     return passed
+
+
+def _ack_completed_mentor_jobs(agent, conn):
+    """Crash-safe spool cleanup after DB state is already authoritative."""
+    for cycle in store.mentor_legacy_reviews_unacknowledged(conn):
+        if mentor_client.acknowledge(
+                agent.cfg.mentor_review_spool, cycle["review_job_id"]):
+            store.mentor_legacy_review_mark_acknowledged(conn, cycle["id"])
+    for attempt in store.mentor_attempts_unacknowledged(conn):
+        if mentor_client.acknowledge(
+                agent.cfg.mentor_review_spool, attempt["job_id"]):
+            store.mentor_attempt_mark_acknowledged(conn, attempt["id"])
+    for cycle in store.mentor_runners_unacknowledged(conn):
+        if mentor_client.acknowledge(
+                agent.cfg.mentor_runner_spool, cycle["runner_job_id"]):
+            store.mentor_runner_mark_acknowledged(conn, cycle["id"])
 
 
 def mentor_tick(agent, conn):
     """Reconcile Mentor and runner results without ever executing a candidate."""
     if not getattr(agent.cfg, "mentor_enabled", True):
         return 0
+    _ack_completed_mentor_jobs(agent, conn)
     handled = 0
     now = datetime.now(timezone.utc)
     for cycle in store.mentor_cycles_open(conn):
         try:
-            created = datetime.fromisoformat(cycle["created_at"])
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
-        except (TypeError, ValueError):
-            created = now
-        if now - created > timedelta(
-                hours=agent.cfg.mentor_result_timeout_hours):
-            store.mentor_cycle_finish(
-                conn, cycle["id"], status="failed",
-                error="Mentor result timed out")
-            mentor_client.acknowledge(
-                agent.cfg.mentor_review_spool, cycle["review_job_id"])
-            if cycle["runner_job_id"]:
-                mentor_client.acknowledge(
-                    agent.cfg.mentor_runner_spool, cycle["runner_job_id"])
-            handled += 1
-            continue
-        try:
             if cycle["status"] == "submitted":
-                request = mentor_client.build_review_request(
-                    evidence=json.loads(cycle["evidence_payload_json"]),
-                    source_build=cycle["source_build"],
-                    source_hash=cycle["source_hash"],
-                    job_id=cycle["review_job_id"],
-                )
-                if (request["nonce"] != cycle["review_nonce"]
-                        or request["evidence_hash"] != cycle["evidence_hash"]):
-                    raise ValueError("stored Mentor review binding changed")
-                mentor_client.publish_review(agent.cfg, request)
+                attempt = store.mentor_attempt_active(
+                    conn, cycle["id"], "proposal")
+                if attempt is None:
+                    raise ValueError("Mentor proposal attempt is missing")
+                if _attempt_timed_out(
+                        attempt, now, agent.cfg.mentor_result_timeout_hours):
+                    _finish_phase_failure(
+                        conn, cycle, attempt, candidate=False,
+                        error_class="ambiguous")
+                    mentor_client.acknowledge(
+                        agent.cfg.mentor_review_spool, cycle["review_job_id"])
+                    handled += 1
+                    continue
+                request = _review_request_for_cycle(cycle)
+                if mentor_protocol.digest(request) != attempt["request_hash"]:
+                    raise ValueError("stored Mentor proposal request changed")
+                try:
+                    mentor_client.publish_review(agent.cfg, request)
+                except mentor_client.MentorUnavailable as exc:
+                    common.log(
+                        f"Mentor proposal {attempt['id']} publish deferred locally: {exc}")
+                    continue
                 result = mentor_client.poll_review(
                     agent.cfg,
                     job_id=cycle["review_job_id"],
@@ -949,39 +1198,119 @@ def mentor_tick(agent, conn):
                 )
                 if result is None:
                     continue
-                proposal = result["proposal"]
-                proposal_id = proposal_create(
-                    conn,
-                    kind=proposal["kind"],
-                    hypothesis=proposal["hypothesis"],
-                    proposed_change=proposal["proposed_change"],
-                    risk=proposal["risk"],
-                    rollback=proposal["rollback"],
-                    evidence=json.loads(cycle["evidence_refs_json"]),
-                )
-                candidate = result["candidate"]
-                if candidate is None:
-                    store.mentor_cycle_set_proposal(
-                        conn, cycle["id"], proposal_id)
+                if result["status"] == "error":
+                    _finish_phase_failure(
+                        conn, cycle, attempt, candidate=False,
+                        error_class=result["error_code"],
+                        latency_seconds=result["duration_seconds"],
+                        transient=result["retryable"],
+                    )
                     mentor_client.acknowledge(
-                        agent.cfg.mentor_review_spool,
-                        cycle["review_job_id"])
+                        agent.cfg.mentor_review_spool, cycle["review_job_id"])
                     handled += 1
                     continue
-                patch_path = _patch_file(
-                    agent.cfg, cycle["cycle_uid"], candidate["patch"])
-                if not store.mentor_cycle_set_proposal(
-                        conn, cycle["id"], proposal_id,
-                        patch_path=patch_path,
-                        patch_hash=candidate["patch_hash"],
-                        target_files=candidate["target_files"]):
-                    raise ValueError("Mentor cycle proposal transition failed")
+                _accept_review_proposal(
+                    conn, cycle, attempt, result["proposal"],
+                    result["duration_seconds"])
                 mentor_client.acknowledge(
                     agent.cfg.mentor_review_spool, cycle["review_job_id"])
                 cycle = store.mentor_cycle_get(conn, cycle["id"])
-                handled += _prepare_runner(agent, conn, cycle)
+                handled += 1
+                if cycle["status"] == "candidate_deferred":
+                    handled += _start_candidate_attempt(agent, conn, cycle)
+                continue
+            if cycle["status"] == "candidate_deferred":
+                handled += _start_candidate_attempt(agent, conn, cycle)
+                continue
+            if cycle["status"] == "candidate_pending":
+                attempt = store.mentor_attempt_active(
+                    conn, cycle["id"], "candidate")
+                if attempt is None:
+                    raise ValueError("Mentor candidate attempt is missing")
+                if _attempt_timed_out(
+                        attempt, now, agent.cfg.mentor_result_timeout_hours):
+                    _finish_phase_failure(
+                        conn, cycle, attempt, candidate=True,
+                        error_class="ambiguous")
+                    mentor_client.acknowledge(
+                        agent.cfg.mentor_review_spool, attempt["job_id"])
+                    handled += 1
+                    continue
+                request = _candidate_request(conn, cycle, attempt)
+                try:
+                    mentor_client.publish_candidate(agent.cfg, request)
+                except mentor_client.MentorUnavailable as exc:
+                    common.log(
+                        f"Mentor candidate {attempt['id']} publish deferred locally: {exc}")
+                    continue
+                result = mentor_client.poll_candidate(
+                    agent.cfg, job_id=attempt["job_id"], nonce=attempt["nonce"],
+                    cycle_uid=cycle["cycle_uid"],
+                    attempt_no=attempt["attempt_no"],
+                    proposal_hash=cycle["proposal_hash"],
+                    evidence_hash=cycle["evidence_hash"],
+                    source_build=cycle["source_build"],
+                    source_hash=cycle["source_hash"],
+                )
+                if result is None:
+                    continue
+                if result["status"] == "error":
+                    inference_no = store.mentor_attempt_count(
+                        conn, cycle["id"], "candidate")
+                    if result["error_code"] == "weekly_cap":
+                        if not store.mentor_candidate_cap_defer(
+                                conn, cycle["id"], attempt["id"],
+                                _next_iso_week(now)):
+                            raise ValueError("Mentor cap defer transition failed")
+                    elif result["retryable"] and inference_no < 3:
+                        hours = 1 if inference_no == 1 else 6
+                        if not store.mentor_cycle_defer_candidate(
+                                conn, cycle["id"], attempt["id"],
+                                next_at=(now + timedelta(hours=hours)).isoformat(),
+                                error_class=result["error_code"],
+                                latency_seconds=result["duration_seconds"],
+                        ):
+                            raise ValueError(
+                                "Mentor candidate defer transition failed")
+                    else:
+                        _finish_phase_failure(
+                            conn, cycle, attempt, candidate=True,
+                            error_class=result["error_code"],
+                            latency_seconds=result["duration_seconds"],
+                            transient=result["retryable"],
+                        )
+                    mentor_client.acknowledge(
+                        agent.cfg.mentor_review_spool, attempt["job_id"])
+                    handled += 1
+                    continue
+                candidate = result["candidate"]
+                if candidate["target_files"] != json.loads(
+                        cycle["target_files_json"]):
+                    raise ValueError("Mentor candidate targets changed after proposal")
+                patch_path = _patch_file(
+                    agent.cfg, cycle["cycle_uid"], candidate["patch"])
+                if not store.mentor_cycle_set_candidate(
+                        conn, cycle["id"], attempt["id"], patch_path=patch_path,
+                        patch_hash=candidate["patch_hash"],
+                        target_files=candidate["target_files"],
+                        latency_seconds=result["duration_seconds"]):
+                    raise ValueError("Mentor candidate transition failed")
+                mentor_client.acknowledge(
+                    agent.cfg.mentor_review_spool, attempt["job_id"])
+                cycle = store.mentor_cycle_get(conn, cycle["id"])
+                handled += 1 + _prepare_runner(agent, conn, cycle)
                 continue
             if cycle["status"] == "testing":
+                if _cycle_timed_out(
+                        cycle, now, agent.cfg.mentor_result_timeout_hours):
+                    store.mentor_cycle_finish(
+                        conn, cycle["id"], status="candidate_failed",
+                        error="runner_timeout")
+                    if cycle["runner_job_id"]:
+                        mentor_client.acknowledge(
+                            agent.cfg.mentor_runner_spool, cycle["runner_job_id"])
+                    handled += 1
+                    continue
                 if not cycle["runner_job_id"]:
                     handled += _prepare_runner(agent, conn, cycle)
                     continue
@@ -1002,7 +1331,12 @@ def mentor_tick(agent, conn):
                 )
                 if request["nonce"] != cycle["runner_nonce"]:
                     raise ValueError("stored Mentor runner binding changed")
-                mentor_client.publish_runner(agent.cfg, request)
+                try:
+                    mentor_client.publish_runner(agent.cfg, request)
+                except mentor_client.MentorUnavailable as exc:
+                    common.log(
+                        f"Mentor runner {request['job_id']} publish deferred locally: {exc}")
+                    continue
                 result = mentor_client.poll_runner(
                     agent.cfg,
                     job_id=cycle["runner_job_id"],
@@ -1015,26 +1349,73 @@ def mentor_tick(agent, conn):
                 )
                 if result is None:
                     continue
-                passed = _record_candidate(conn, cycle, result)
-                store.mentor_cycle_finish(
-                    conn, cycle["id"],
-                    status="ready" if passed else "candidate_failed",
-                    tests_summary=result["tests_summary"],
-                    branch=result["branch"],
-                    commit=result["commit"],
-                    error=result["error"],
-                )
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    passed = _record_candidate(
+                        conn, cycle, result, commit=False)
+                    if not store.mentor_cycle_finish(
+                            conn, cycle["id"],
+                            status="ready" if passed else "candidate_failed",
+                            tests_summary=result["tests_summary"],
+                            branch=result["branch"],
+                            commit=result["commit"],
+                            error=result["error"], db_commit=False):
+                        raise ValueError("Mentor runner transition failed")
+                    conn.commit()
+                except BaseException:
+                    conn.rollback()
+                    raise
                 mentor_client.acknowledge(
                     agent.cfg.mentor_runner_spool, cycle["runner_job_id"])
                 handled += 1
-        except (OSError, ValueError, mentor_client.MentorUnavailable) as exc:
+        except (OSError, ValueError, mentor_client.MentorUnavailable,
+                mentor_protocol.MentorProtocolError) as exc:
             common.log(f"Mentor cycle {cycle['id']} failed closed: {exc}")
-            store.mentor_cycle_finish(
-                conn, cycle["id"], status="failed", error=str(exc))
-            mentor_client.acknowledge(
-                agent.cfg.mentor_review_spool, cycle["review_job_id"])
+            cycle = store.mentor_cycle_get(conn, cycle["id"])
+            attempt = None
+            if cycle["status"] == "submitted":
+                attempt = store.mentor_attempt_active(
+                    conn, cycle["id"], "proposal")
+            elif cycle["status"] == "candidate_pending":
+                attempt = store.mentor_attempt_active(
+                    conn, cycle["id"], "candidate")
+            if attempt is not None:
+                _finish_phase_failure(
+                    conn, cycle, attempt,
+                    candidate=cycle["status"] != "submitted",
+                    error_class="protocol")
+                mentor_client.acknowledge(
+                    agent.cfg.mentor_review_spool, attempt["job_id"])
+            else:
+                store.mentor_cycle_finish(
+                    conn, cycle["id"],
+                    status=("failed" if cycle["proposal_id"] is None
+                            else "candidate_failed"),
+                    error="protocol",
+                )
             if cycle["runner_job_id"]:
                 mentor_client.acknowledge(
                     agent.cfg.mentor_runner_spool, cycle["runner_job_id"])
             handled += 1
+    _ack_completed_mentor_jobs(agent, conn)
     return handled
+
+
+def _attempt_timed_out(attempt, now, hours):
+    try:
+        created = datetime.fromisoformat(attempt["created_at"])
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return True
+    return now - created > timedelta(hours=hours)
+
+
+def _cycle_timed_out(cycle, now, hours):
+    try:
+        updated = datetime.fromisoformat(cycle["updated_at"])
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return True
+    return now - updated > timedelta(hours=hours)

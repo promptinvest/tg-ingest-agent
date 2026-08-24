@@ -44,7 +44,7 @@ def build_review_request(*, evidence, source_build, source_hash, job_id=None):
     safe_evidence = _redacted(evidence)
     evidence_hash = protocol.digest(safe_evidence)
     request = {
-        "version": protocol.PROTOCOL_VERSION,
+        "version": protocol.INFERENCE_PROTOCOL_VERSION,
         "job_id": job_id,
         "nonce": nonce,
         "evidence": safe_evidence,
@@ -98,13 +98,13 @@ def poll_review(cfg, *, job_id, nonce, evidence_hash, source_build, source_hash)
         return None
     required = {
         "version", "job_id", "nonce", "evidence_hash", "source_build",
-        "source_hash", "status", "proposal", "candidate", "error",
-        "result_hash",
+        "source_hash", "status", "proposal", "retryable", "error_code",
+        "error", "duration_seconds", "result_hash",
     }
     if not isinstance(value, dict) or set(value) != required:
         raise MentorUnavailable("mentor review result schema is invalid")
     for key, expected in (
-        ("version", protocol.PROTOCOL_VERSION),
+        ("version", protocol.INFERENCE_PROTOCOL_VERSION),
         ("job_id", job_id),
         ("nonce", nonce),
         ("evidence_hash", evidence_hash),
@@ -116,34 +116,142 @@ def poll_review(cfg, *, job_id, nonce, evidence_hash, source_build, source_hash)
     payload = {
         "status": value["status"],
         "proposal": value["proposal"],
-        "candidate": value["candidate"],
+        "retryable": value["retryable"],
+        "error_code": value["error_code"],
         "error": value["error"],
+        "duration_seconds": value["duration_seconds"],
     }
     if value["result_hash"] != protocol.digest(payload):
         raise MentorUnavailable("mentor review result hash mismatch")
-    if value["status"] != "ok":
-        raise MentorUnavailable(
-            protocol.safe_text(str(value["error"] or "mentor review failed"), 300))
-    proposal = protocol.validate_proposal(value["proposal"])
+    _validate_inference_outcome(value, "review")
+    if value["status"] == "error":
+        if value["proposal"] is not None:
+            raise MentorUnavailable("failed mentor review returned a proposal")
+        return payload
+    return {**payload, "proposal": protocol.validate_proposal(value["proposal"])}
+
+
+def _validate_inference_outcome(value, phase):
+    if value.get("status") not in {"ok", "error"}:
+        raise MentorUnavailable(f"mentor {phase} result status is invalid")
+    if not isinstance(value.get("retryable"), bool):
+        raise MentorUnavailable(f"mentor {phase} retry flag is invalid")
+    duration = value.get("duration_seconds")
+    if (isinstance(duration, bool) or not isinstance(duration, (int, float))
+            or duration < 0 or duration > 3600):
+        raise MentorUnavailable(f"mentor {phase} duration is invalid")
+    if value["status"] == "ok":
+        if value["retryable"] or value.get("error_code") is not None \
+                or value.get("error") is not None:
+            raise MentorUnavailable(f"mentor {phase} success fields are invalid")
+        return
+    if value.get("error_code") not in protocol.INFERENCE_ERROR_CODES:
+        raise MentorUnavailable(f"mentor {phase} error class is invalid")
+    if value["retryable"] != (
+            value["error_code"] in protocol.RETRYABLE_INFERENCE_ERROR_CODES):
+        raise MentorUnavailable(f"mentor {phase} retry class is inconsistent")
+    protocol.safe_text(str(value.get("error") or "mentor inference failed"), 300)
+
+
+def build_candidate_request(*, cycle_uid, attempt_no, proposal, evidence_hash,
+                            source_build, source_hash, job_id=None):
+    proposal = protocol.validate_proposal(proposal)
+    if not proposal["target_files"]:
+        raise MentorUnavailable("proposal-only review has no candidate")
+    attempt_no = int(attempt_no)
+    if not 1 <= attempt_no <= 1000:
+        raise MentorUnavailable("mentor candidate attempt is invalid")
+    job_id = job_id or protocol.new_job_id("candidate")
+    if not protocol.valid_job_id(job_id, "candidate"):
+        raise MentorUnavailable("mentor candidate job id is invalid")
+    request = {
+        "version": protocol.INFERENCE_PROTOCOL_VERSION,
+        "job_id": job_id,
+        "nonce": job_id.removeprefix("candidate_"),
+        "cycle_uid": protocol.safe_text(cycle_uid, 80),
+        "attempt_no": attempt_no,
+        "proposal": proposal,
+        "proposal_hash": protocol.digest(proposal),
+        "evidence_hash": protocol.safe_text(evidence_hash, 64),
+        "source_build": protocol.safe_text(str(source_build), 100),
+        "source_hash": protocol.safe_text(str(source_hash), 64),
+    }
+    if len(protocol.canonical(request).encode("utf-8")) \
+            > protocol.MAX_CANDIDATE_REQUEST_BYTES:
+        raise MentorUnavailable("mentor candidate request is too large")
+    return request
+
+
+def publish_candidate(cfg, request):
+    requests, _ = _spool(cfg.mentor_review_spool)
+    _quota(requests)
+    job_id = request["job_id"]
+    target = requests / f"{job_id}.json"
+    if target.exists():
+        return {"job_id": job_id, "nonce": request["nonce"]}
+    try:
+        protocol.atomic_publish(requests, f"{job_id}.json", request)
+    except OSError as exc:
+        raise MentorUnavailable(f"mentor candidate submit failed: {exc}") from exc
+    return {"job_id": job_id, "nonce": request["nonce"]}
+
+
+def poll_candidate(cfg, *, job_id, nonce, cycle_uid, attempt_no,
+                   proposal_hash, evidence_hash, source_build, source_hash):
+    if not protocol.valid_job_id(job_id, "candidate") or nonce != job_id[10:]:
+        raise MentorUnavailable("mentor candidate binding is invalid")
+    _, results = _spool(cfg.mentor_review_spool)
+    try:
+        value = protocol.read_regular_json(
+            results / f"{job_id}.json", protocol.MAX_CANDIDATE_RESULT_BYTES)
+    except OSError as exc:
+        raise MentorUnavailable(f"mentor candidate result unavailable: {exc}") from exc
+    if value is None:
+        return None
+    required = {
+        "version", "job_id", "nonce", "cycle_uid", "attempt_no",
+        "proposal_hash", "evidence_hash", "source_build", "source_hash",
+        "status", "candidate", "retryable", "error_code", "error",
+        "duration_seconds", "result_hash",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise MentorUnavailable("mentor candidate result schema is invalid")
+    for key, expected in (
+        ("version", protocol.INFERENCE_PROTOCOL_VERSION), ("job_id", job_id),
+        ("nonce", nonce), ("cycle_uid", cycle_uid),
+        ("attempt_no", int(attempt_no)), ("proposal_hash", proposal_hash),
+        ("evidence_hash", evidence_hash), ("source_build", str(source_build)),
+        ("source_hash", str(source_hash)),
+    ):
+        if value.get(key) != expected:
+            raise MentorUnavailable(f"mentor candidate binding mismatch: {key}")
+    payload = {
+        "status": value["status"], "candidate": value["candidate"],
+        "retryable": value["retryable"], "error_code": value["error_code"],
+        "error": value["error"], "duration_seconds": value["duration_seconds"],
+    }
+    if value["result_hash"] != protocol.digest(payload):
+        raise MentorUnavailable("mentor candidate result hash mismatch")
+    _validate_inference_outcome(value, "candidate")
+    if value["status"] == "error":
+        if value["candidate"] is not None:
+            raise MentorUnavailable("failed mentor candidate returned a patch")
+        return payload
     candidate = value["candidate"]
-    if proposal["target_files"]:
-        if not isinstance(candidate, dict) or set(candidate) != {
-                "patch", "patch_hash", "target_files"}:
-            raise MentorUnavailable("mentor candidate is missing")
-        targets = protocol.validate_target_files(candidate["target_files"])
-        if targets != proposal["target_files"]:
-            raise MentorUnavailable("mentor candidate targets changed after proposal")
-        patch = protocol.validate_patch(candidate["patch"], targets)
-        if candidate["patch_hash"] != protocol.digest(patch):
-            raise MentorUnavailable("mentor candidate patch hash mismatch")
-        candidate = {
-            "patch": patch,
-            "patch_hash": candidate["patch_hash"],
+    if not isinstance(candidate, dict) or set(candidate) != {
+            "patch", "patch_hash", "target_files"}:
+        raise MentorUnavailable("mentor candidate is missing")
+    targets = protocol.validate_target_files(candidate["target_files"])
+    patch = protocol.validate_patch(candidate["patch"], targets)
+    if candidate["patch_hash"] != protocol.digest(patch):
+        raise MentorUnavailable("mentor candidate patch hash mismatch")
+    return {
+        **payload,
+        "candidate": {
+            "patch": patch, "patch_hash": candidate["patch_hash"],
             "target_files": targets,
-        }
-    elif candidate is not None:
-        raise MentorUnavailable("proposal-only review returned an executable candidate")
-    return {"proposal": proposal, "candidate": candidate}
+        },
+    }
 
 
 def build_runner_request(*, cycle_uid, patch, patch_hash, target_files,
@@ -247,6 +355,7 @@ def acknowledge(root, job_id):
     requests, _ = _spool(root)
     try:
         (requests / f"{job_id}.json").unlink(missing_ok=True)
+        protocol.fsync_dir(requests)
         return True
     except OSError:
         return False
@@ -264,4 +373,5 @@ def abandon_all_requests(root, expected_tail):
         if path.is_dir() or path.is_symlink() or path.suffix != ".json":
             raise MentorUnavailable("unexpected Mentor request spool entry")
         path.unlink()
+    protocol.fsync_dir(requests)
     return not any(requests.iterdir())

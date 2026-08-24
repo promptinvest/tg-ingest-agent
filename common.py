@@ -565,7 +565,7 @@ def load_config(env=None):
     cfg.mentor_llm_timeout = max(
         10, min(int(env.get("MENTOR_LLM_TIMEOUT_SECONDS") or "90"), 180))
     cfg.mentor_max_calls_per_week = max(
-        1, min(int(env.get("MENTOR_MAX_CALLS_PER_WEEK") or "4"), 12))
+        1, min(int(env.get("MENTOR_MAX_CALLS_PER_WEEK") or "4"), 4))
     cfg.mentor_test_timeout = max(
         120, min(int(env.get("MENTOR_TEST_TIMEOUT_SECONDS") or "600"), 1200))
     # Model-health monitor: how often to check Cara's models are reachable and

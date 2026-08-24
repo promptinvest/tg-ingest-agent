@@ -778,12 +778,18 @@ CREATE TABLE IF NOT EXISTS mentor_cycles (
   status TEXT NOT NULL DEFAULT 'submitted',
   review_job_id TEXT NOT NULL UNIQUE,
   review_nonce TEXT NOT NULL,
+  review_acknowledged_at TEXT,
   proposal_id INTEGER REFERENCES improvement_proposals(id) ON DELETE SET NULL,
+  proposal_hash TEXT,
+  feedback_cursor_end INTEGER NOT NULL DEFAULT 0,
+  next_candidate_at TEXT,
+  recovery_of_cycle_id INTEGER REFERENCES mentor_cycles(id) ON DELETE SET NULL,
   patch_path TEXT,
   patch_hash TEXT,
   target_files_json TEXT NOT NULL DEFAULT '[]',
   runner_job_id TEXT UNIQUE,
   runner_nonce TEXT,
+  runner_acknowledged_at TEXT,
   tests_summary TEXT,
   candidate_branch TEXT,
   candidate_commit TEXT,
@@ -791,6 +797,23 @@ CREATE TABLE IF NOT EXISTS mentor_cycles (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mentor_attempts (
+  id INTEGER PRIMARY KEY,
+  cycle_id INTEGER NOT NULL REFERENCES mentor_cycles(id) ON DELETE CASCADE,
+  phase TEXT NOT NULL,
+  attempt_no INTEGER NOT NULL,
+  job_id TEXT NOT NULL UNIQUE,
+  nonce TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  error_class TEXT,
+  latency_seconds REAL,
+  created_at TEXT NOT NULL,
+  finished_at TEXT,
+  acknowledged_at TEXT,
+  UNIQUE(cycle_id, phase, attempt_no)
 );
 
 CREATE INDEX IF NOT EXISTS idx_assistant_tasks_chat_status
@@ -821,6 +844,10 @@ CREATE INDEX IF NOT EXISTS idx_improvement_proposals_status
   ON improvement_proposals(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_mentor_cycles_status
   ON mentor_cycles(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_mentor_attempts_cycle
+  ON mentor_attempts(cycle_id, phase, attempt_no);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mentor_attempts_one_pending
+  ON mentor_attempts(cycle_id, phase) WHERE status='pending';
 
 """
 
@@ -1746,6 +1773,55 @@ def _migrate_steps(conn):
         conn.execute(
             "ALTER TABLE evaluation_runs ADD COLUMN replay_key"
             " TEXT NOT NULL DEFAULT ''")
+    mentor_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(mentor_cycles)")}
+    added_feedback_cursor = "feedback_cursor_end" not in mentor_columns
+    for ddl in (
+        "proposal_hash TEXT",
+        "feedback_cursor_end INTEGER NOT NULL DEFAULT 0",
+        "next_candidate_at TEXT",
+        "recovery_of_cycle_id INTEGER REFERENCES mentor_cycles(id) ON DELETE SET NULL",
+        "runner_acknowledged_at TEXT",
+        "review_acknowledged_at TEXT",
+    ):
+        if ddl.split()[0] not in mentor_columns:
+            conn.execute(f"ALTER TABLE mentor_cycles ADD COLUMN {ddl}")
+    if added_feedback_cursor:
+        for row in conn.execute(
+                "SELECT id, evidence_refs_json FROM mentor_cycles").fetchall():
+            try:
+                refs = json.loads(row["evidence_refs_json"])
+                end = max(
+                    (int(item["id"]) for item in refs
+                     if item.get("kind") == "feedback"), default=0)
+            except (AttributeError, KeyError, TypeError, ValueError):
+                end = 0
+            if end:
+                conn.execute(
+                    "UPDATE mentor_cycles SET feedback_cursor_end=? WHERE id=?",
+                    (end, row["id"]),
+                )
+    attempt_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(mentor_attempts)")}
+    if "acknowledged_at" not in attempt_columns:
+        conn.execute("ALTER TABLE mentor_attempts ADD COLUMN acknowledged_at TEXT")
+    # A pre-v2 proposal request cannot be safely rebound to the new split
+    # envelope or its possibly existing inflight marker. Preserve its evidence
+    # as a failed audit row so the guarded recovery-child path can replay it
+    # with a fresh v2 identity; never improvise an attempt row for the old job.
+    conn.execute(
+        "UPDATE mentor_cycles SET status='failed', error=?, updated_at=?,"
+        " finished_at=? WHERE status='submitted' AND NOT EXISTS"
+        " (SELECT 1 FROM mentor_attempts"
+        "  WHERE mentor_attempts.cycle_id=mentor_cycles.id)",
+        ("protocol_upgrade_requires_recovery", _now(), _now()),
+    )
+    # These refer to columns added above, so they must be created here rather
+    # than in SCHEMA (which runs before ALTER on an existing database).
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_mentor_cycles_one_recovery"
+        " ON mentor_cycles(recovery_of_cycle_id)"
+        " WHERE recovery_of_cycle_id IS NOT NULL")
 
 
 NOTE_OUTCOME_MIRROR_KINDS = (
@@ -4273,6 +4349,21 @@ def issue_resolve(conn, kind, detail, resolution):
     return cur.rowcount
 
 
+def issue_resolve_exact(conn, fingerprint, expected_last_issue_id, resolution):
+    """Resolve one reviewed pattern only if no newer observation reopened it."""
+    now = _now()
+    cur = conn.execute(
+        "UPDATE issue_patterns SET status='resolved', resolved_at=?, resolution=?"
+        " WHERE status='open' AND fingerprint=? AND last_issue_id=?",
+        (
+            now, str(resolution or "")[:300], str(fingerprint),
+            int(expected_last_issue_id),
+        ),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def issue_counts(conn, since_iso):
     return conn.execute(
         "SELECT kind, COUNT(*) AS n FROM issues WHERE ts >= ? GROUP BY kind ORDER BY n DESC",
@@ -4297,7 +4388,7 @@ def issue_open_patterns(conn, kinds=None, limit=20):
     params.append(limit)
     return conn.execute(
         f"SELECT kind, fingerprint, occurrences AS n, first_seen_at, last_seen_at,"
-        f" detail, status, context FROM issue_patterns WHERE {where}"
+        f" last_issue_id, detail, status, context FROM issue_patterns WHERE {where}"
         " ORDER BY last_seen_at DESC LIMIT ?",
         params,
     ).fetchall()
@@ -5152,26 +5243,78 @@ def task_approval_decide(conn, approval_id, chat_id, approve, *,
 
 def mentor_cycle_create(conn, *, cycle_uid, period_key, evidence_refs,
                         evidence_payload, evidence_hash, source_build,
-                        source_hash, review_job_id, review_nonce):
+                        source_hash, review_job_id, review_nonce,
+                        review_request_hash, feedback_cursor_end=0,
+                        recovery_of_cycle_id=None):
     now = _now()
-    conn.execute(
-        "INSERT OR IGNORE INTO mentor_cycles"
-        " (cycle_uid, period_key, evidence_refs_json, evidence_payload_json,"
-        " evidence_hash, source_build, source_hash, status, review_job_id,"
-        " review_nonce, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?, ?, ?)",
-        (
-            str(cycle_uid), str(period_key),
-            json.dumps(evidence_refs, ensure_ascii=False, sort_keys=True),
-            json.dumps(evidence_payload, ensure_ascii=False, sort_keys=True),
-            str(evidence_hash), str(source_build), str(source_hash),
-            str(review_job_id), str(review_nonce), now, now,
-        ),
-    )
-    conn.commit()
-    return conn.execute(
-        "SELECT * FROM mentor_cycles WHERE period_key=?", (str(period_key),)
-    ).fetchone()
+    refs_json = json.dumps(evidence_refs, ensure_ascii=False, sort_keys=True)
+    payload_json = json.dumps(
+        evidence_payload, ensure_ascii=False, sort_keys=True)
+    recovery_id = (
+        int(recovery_of_cycle_id) if recovery_of_cycle_id is not None else None)
+    expected = {
+        "cycle_uid": str(cycle_uid), "period_key": str(period_key),
+        "evidence_refs_json": refs_json, "evidence_payload_json": payload_json,
+        "evidence_hash": str(evidence_hash), "source_build": str(source_build),
+        "source_hash": str(source_hash), "review_job_id": str(review_job_id),
+        "review_nonce": str(review_nonce),
+        "feedback_cursor_end": max(0, int(feedback_cursor_end)),
+        "recovery_of_cycle_id": recovery_id,
+    }
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cycle = conn.execute(
+            "SELECT * FROM mentor_cycles WHERE period_key=?", (str(period_key),)
+        ).fetchone()
+        if cycle is None and recovery_id is not None:
+            cycle = conn.execute(
+                "SELECT * FROM mentor_cycles WHERE recovery_of_cycle_id=?",
+                (recovery_id,),
+            ).fetchone()
+        if cycle is not None:
+            if any(cycle[key] != value for key, value in expected.items()):
+                # A unique-key collision must never publish the caller's newly
+                # generated orphan request under an unrelated stored cycle.
+                if cycle["recovery_of_cycle_id"] == recovery_id \
+                        and recovery_id is not None:
+                    conn.commit()
+                    return cycle
+                raise ValueError("Mentor cycle identity already exists")
+            conn.commit()
+            return cycle
+        conn.execute(
+            "INSERT INTO mentor_cycles"
+            " (cycle_uid, period_key, evidence_refs_json, evidence_payload_json,"
+            " evidence_hash, source_build, source_hash, status, review_job_id,"
+            " review_nonce, feedback_cursor_end, recovery_of_cycle_id, created_at,"
+            " updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?, ?, ?, ?, ?)",
+            (
+                expected["cycle_uid"], expected["period_key"], refs_json,
+                payload_json, expected["evidence_hash"], expected["source_build"],
+                expected["source_hash"], expected["review_job_id"],
+                expected["review_nonce"], expected["feedback_cursor_end"],
+                recovery_id, now, now,
+            ),
+        )
+        cycle_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO mentor_attempts"
+            " (cycle_id, phase, attempt_no, job_id, nonce, request_hash, status,"
+            " created_at) VALUES (?, 'proposal', 1, ?, ?, ?, 'pending', ?)",
+            (
+                cycle_id, str(review_job_id), str(review_nonce),
+                str(review_request_hash), now,
+            ),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        raise ValueError("Mentor cycle identity already exists") from exc
+    except BaseException:
+        conn.rollback()
+        raise
+    return mentor_cycle_get(conn, cycle_id)
 
 
 def mentor_cycle_get(conn, cycle_id):
@@ -5192,32 +5335,272 @@ def mentor_cycle_for_proposal(conn, proposal_id):
     ).fetchone()
 
 
+def mentor_cycle_recovery(conn, cycle_id):
+    return conn.execute(
+        "SELECT * FROM mentor_cycles WHERE recovery_of_cycle_id=?",
+        (int(cycle_id),),
+    ).fetchone()
+
+
 def mentor_cycles_open(conn, limit=5):
     return conn.execute(
         "SELECT * FROM mentor_cycles"
-        " WHERE status IN ('submitted','testing')"
+        " WHERE status IN"
+        " ('submitted','candidate_deferred','candidate_pending','testing')"
         " ORDER BY created_at LIMIT ?",
         (max(1, min(int(limit), 20)),),
     ).fetchall()
 
 
-def mentor_cycle_set_proposal(conn, cycle_id, proposal_id, *, patch_path=None,
-                              patch_hash=None, target_files=()):
-    now = _now()
-    status = "testing" if patch_hash else "proposal_only"
+def mentor_attempt_get(conn, attempt_id):
+    return conn.execute(
+        "SELECT * FROM mentor_attempts WHERE id=?", (int(attempt_id),)
+    ).fetchone()
+
+
+def mentor_attempt_for_job(conn, job_id):
+    return conn.execute(
+        "SELECT * FROM mentor_attempts WHERE job_id=?", (str(job_id),)
+    ).fetchone()
+
+
+def mentor_attempt_active(conn, cycle_id, phase):
+    return conn.execute(
+        "SELECT * FROM mentor_attempts WHERE cycle_id=? AND phase=?"
+        " AND status='pending' ORDER BY attempt_no DESC LIMIT 1",
+        (int(cycle_id), str(phase)),
+    ).fetchone()
+
+
+def mentor_attempt_last(conn, cycle_id, phase):
+    return conn.execute(
+        "SELECT * FROM mentor_attempts WHERE cycle_id=? AND phase=?"
+        " ORDER BY attempt_no DESC, id DESC LIMIT 1",
+        (int(cycle_id), str(phase)),
+    ).fetchone()
+
+
+def mentor_attempt_count(conn, cycle_id, phase):
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM mentor_attempts WHERE cycle_id=? AND phase=?"
+        " AND status!='cap_deferred'",
+        (int(cycle_id), str(phase)),
+    ).fetchone()["n"]
+
+
+def mentor_attempts_unacknowledged(conn, limit=20):
+    return conn.execute(
+        "SELECT * FROM mentor_attempts WHERE status!='pending'"
+        " AND acknowledged_at IS NULL ORDER BY finished_at, id LIMIT ?",
+        (max(1, min(int(limit), 100)),),
+    ).fetchall()
+
+
+def mentor_attempt_mark_acknowledged(conn, attempt_id):
     changed = conn.execute(
-        "UPDATE mentor_cycles SET proposal_id=?, patch_path=?, patch_hash=?,"
-        " target_files_json=?, status=?, updated_at=?, finished_at=?"
-        " WHERE id=? AND status='submitted'",
-        (
-            int(proposal_id), str(patch_path) if patch_path else None,
-            str(patch_hash) if patch_hash else None,
-            json.dumps(list(target_files), sort_keys=True),
-            status, now, None if patch_hash else now, int(cycle_id),
-        ),
+        "UPDATE mentor_attempts SET acknowledged_at=?"
+        " WHERE id=? AND status!='pending' AND acknowledged_at IS NULL",
+        (_now(), int(attempt_id)),
     ).rowcount
     conn.commit()
     return bool(changed)
+
+
+def mentor_runners_unacknowledged(conn, limit=20):
+    return conn.execute(
+        "SELECT * FROM mentor_cycles WHERE runner_job_id IS NOT NULL"
+        " AND finished_at IS NOT NULL AND runner_acknowledged_at IS NULL"
+        " ORDER BY finished_at, id LIMIT ?",
+        (max(1, min(int(limit), 100)),),
+    ).fetchall()
+
+
+def mentor_legacy_reviews_unacknowledged(conn, limit=20):
+    return conn.execute(
+        "SELECT * FROM mentor_cycles WHERE review_acknowledged_at IS NULL"
+        " AND status!='submitted' AND NOT EXISTS"
+        " (SELECT 1 FROM mentor_attempts"
+        "  WHERE mentor_attempts.cycle_id=mentor_cycles.id)"
+        " ORDER BY finished_at, id LIMIT ?",
+        (max(1, min(int(limit), 100)),),
+    ).fetchall()
+
+
+def mentor_legacy_review_mark_acknowledged(conn, cycle_id):
+    changed = conn.execute(
+        "UPDATE mentor_cycles SET review_acknowledged_at=?"
+        " WHERE id=? AND review_acknowledged_at IS NULL AND status!='submitted'"
+        " AND NOT EXISTS (SELECT 1 FROM mentor_attempts"
+        "  WHERE mentor_attempts.cycle_id=mentor_cycles.id)",
+        (_now(), int(cycle_id)),
+    ).rowcount
+    conn.commit()
+    return bool(changed)
+
+
+def mentor_runner_mark_acknowledged(conn, cycle_id):
+    changed = conn.execute(
+        "UPDATE mentor_cycles SET runner_acknowledged_at=?"
+        " WHERE id=? AND runner_job_id IS NOT NULL"
+        " AND finished_at IS NOT NULL AND runner_acknowledged_at IS NULL",
+        (_now(), int(cycle_id)),
+    ).rowcount
+    conn.commit()
+    return bool(changed)
+
+
+def mentor_attempt_finish(conn, attempt_id, *, status, error_class=None,
+                          latency_seconds=None, commit=True):
+    if status not in {
+            "succeeded", "transient_failed", "permanent_failed", "ambiguous",
+            "cap_deferred"}:
+        raise ValueError("mentor attempt status is invalid")
+    now = _now()
+    changed = conn.execute(
+        "UPDATE mentor_attempts SET status=?, error_class=?, latency_seconds=?,"
+        " finished_at=? WHERE id=? AND status='pending'",
+        (
+            status, str(error_class)[:80] if error_class else None,
+            max(0.0, float(latency_seconds))
+            if latency_seconds is not None else None,
+            now, int(attempt_id),
+        ),
+    ).rowcount
+    if commit:
+        conn.commit()
+    return bool(changed)
+
+
+def mentor_cycle_accept_proposal(conn, cycle_id, proposal_id, proposal_hash,
+                                 target_files, *, commit=True):
+    now = _now()
+    targets = list(target_files)
+    status = "candidate_deferred" if targets else "proposal_only"
+    changed = conn.execute(
+        "UPDATE mentor_cycles SET proposal_id=?, proposal_hash=?,"
+        " target_files_json=?, status=?, next_candidate_at=?, error=NULL,"
+        " updated_at=?, finished_at=? WHERE id=? AND status='submitted'"
+        " AND proposal_id IS NULL",
+        (
+            int(proposal_id), str(proposal_hash), json.dumps(targets, sort_keys=True),
+            status, now if targets else None, now, None if targets else now,
+            int(cycle_id),
+        ),
+    ).rowcount
+    if commit:
+        conn.commit()
+    return bool(changed)
+
+
+def mentor_candidate_attempt_start(conn, cycle_id, *, attempt_no, job_id, nonce,
+                                   request_hash):
+    now = _now()
+    cycle = mentor_cycle_get(conn, cycle_id)
+    if (cycle is None or cycle["status"] != "candidate_deferred"
+            or (cycle["next_candidate_at"] and cycle["next_candidate_at"] > now)):
+        return None
+    try:
+        conn.execute(
+            "INSERT INTO mentor_attempts"
+            " (cycle_id, phase, attempt_no, job_id, nonce, request_hash, status,"
+            " created_at) VALUES (?, 'candidate', ?, ?, ?, ?, 'pending', ?)",
+            (
+                int(cycle_id), int(attempt_no), str(job_id), str(nonce),
+                str(request_hash), now,
+            ),
+        )
+        changed = conn.execute(
+            "UPDATE mentor_cycles SET status='candidate_pending',"
+            " next_candidate_at=NULL, updated_at=?"
+            " WHERE id=? AND status='candidate_deferred'",
+            (now, int(cycle_id)),
+        ).rowcount
+        if not changed:
+            conn.rollback()
+            return None
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return mentor_attempt_active(conn, cycle_id, "candidate")
+
+
+def mentor_candidate_cap_defer(conn, cycle_id, attempt_id, next_at):
+    now = _now()
+    try:
+        if not mentor_attempt_finish(
+                conn, attempt_id, status="cap_deferred",
+                error_class="weekly_cap", commit=False):
+            conn.rollback()
+            return False
+        changed = conn.execute(
+            "UPDATE mentor_cycles SET status='candidate_deferred',"
+            " next_candidate_at=?, error=?, updated_at=?"
+            " WHERE id=? AND status='candidate_pending'",
+            (str(next_at), "weekly_cap", now, int(cycle_id)),
+        ).rowcount
+        if not changed:
+            conn.rollback()
+            return False
+        conn.commit()
+        return True
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def mentor_cycle_defer_candidate(conn, cycle_id, attempt_id, *, next_at,
+                                 error_class, latency_seconds):
+    now = _now()
+    try:
+        if not mentor_attempt_finish(
+                conn, attempt_id, status="transient_failed",
+                error_class=error_class, latency_seconds=latency_seconds,
+                commit=False):
+            conn.rollback()
+            return False
+        changed = conn.execute(
+            "UPDATE mentor_cycles SET status='candidate_deferred',"
+            " next_candidate_at=?, error=?, updated_at=?"
+            " WHERE id=? AND status='candidate_pending'",
+            (str(next_at), str(error_class)[:1000], now, int(cycle_id)),
+        ).rowcount
+        if not changed:
+            conn.rollback()
+            return False
+        conn.commit()
+        return True
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def mentor_cycle_set_candidate(conn, cycle_id, attempt_id, *, patch_path,
+                               patch_hash, target_files, latency_seconds=None):
+    now = _now()
+    try:
+        if not mentor_attempt_finish(
+                conn, attempt_id, status="succeeded",
+                latency_seconds=latency_seconds, commit=False):
+            conn.rollback()
+            return False
+        changed = conn.execute(
+            "UPDATE mentor_cycles SET patch_path=?, patch_hash=?,"
+            " target_files_json=?, status='testing', next_candidate_at=NULL,"
+            " error=NULL, updated_at=? WHERE id=? AND status='candidate_pending'",
+            (
+                str(patch_path), str(patch_hash),
+                json.dumps(list(target_files), sort_keys=True), now, int(cycle_id),
+            ),
+        ).rowcount
+        if not changed:
+            conn.rollback()
+            return False
+        conn.commit()
+        return True
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def mentor_cycle_set_runner(conn, cycle_id, job_id, nonce):
@@ -5233,14 +5616,15 @@ def mentor_cycle_set_runner(conn, cycle_id, job_id, nonce):
 
 
 def mentor_cycle_finish(conn, cycle_id, *, status, tests_summary=None,
-                        branch=None, commit=None, error=None):
+                        branch=None, commit=None, error=None, db_commit=True):
     if status not in {"ready", "candidate_failed", "failed"}:
         raise ValueError("mentor cycle terminal status is invalid")
     now = _now()
     changed = conn.execute(
         "UPDATE mentor_cycles SET status=?, tests_summary=?,"
         " candidate_branch=?, candidate_commit=?, error=?, updated_at=?,"
-        " finished_at=? WHERE id=? AND status IN ('submitted','testing')",
+        " finished_at=? WHERE id=? AND status IN"
+        " ('submitted','candidate_deferred','candidate_pending','testing')",
         (
             status, str(tests_summary)[:500] if tests_summary else None,
             str(branch)[:200] if branch else None,
@@ -5249,7 +5633,8 @@ def mentor_cycle_finish(conn, cycle_id, *, status, tests_summary=None,
             now, now, int(cycle_id),
         ),
     ).rowcount
-    conn.commit()
+    if db_commit:
+        conn.commit()
     return bool(changed)
 
 

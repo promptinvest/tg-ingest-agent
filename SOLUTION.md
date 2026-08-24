@@ -1,8 +1,12 @@
 # Cara — Solution Specification
 
-> **Bounded Mentor v1 (shipped 2026-07-29):** a separate inference-only reviewer
+> **Bounded Mentor v2 reliability (2026-08-24; v1 shipped 2026-07-29):** a
+> separate inference-only reviewer
 > consumes bounded redacted feedback/issue evidence, not conversations, and may
 > propose a low/medium-risk behavior patch plus a dedicated regression test.
+> Proposal and candidate inference are separate bound jobs: the proposal and
+> immutable reviewed evidence commit first; only classified transient candidate
+> failures retry, at most three times under the hard four-call weekly ledger.
 > A separate networkless runner evaluates the source/build/hash-bound patch
 > against an immutable deployment snapshot in disposable storage. Green output
 > becomes a review-ready artifact only: neither service can merge, push,
@@ -265,19 +269,53 @@ unknowns, and the actual clickable source URLs.
 from explicit task ratings/comments and unresolved issue-pattern snapshots. Cara
 redacts and caps that evidence, records its hash and the exact source
 build/content hash, then atomically publishes a nonce-bound review request. The
-separate Mentor reserves from its weekly call ledger before inference. Its first
-strict-JSON result is always a proposal; only low/medium behavior changes may
-request a second call for a unified diff against the closed module allowlist and
-the dedicated candidate test file. Cara validates every binding and patch rule
-before writing the patch artifact and publishing a new runner request. The
+separate Mentor reserves from its fsync-backed weekly call ledger before every
+inference; an existing corrupt/unreadable ledger fails closed instead of resetting
+usage. Its first strict-JSON result is always proposal-only. Cara atomically
+inserts the proposal from the cycle's immutable `evidence_payload_json`, links its
+proposal hash, completes the proposal-attempt row, selects `proposal_only` or
+`candidate_deferred`, and monotonically advances the feedback cursor. A submit or
+failed proposal never advances that cursor; resolving a live issue after submission
+cannot alter what the proposal records. Only low/medium behavior changes may then
+request a separate candidate job for a unified diff against the closed module
+allowlist and dedicated candidate test file. Cara validates every echoed source,
+evidence, proposal, request and patch binding before writing the artifact and
+publishing a new runner request. The
 networkless runner independently revalidates the envelope, applies the patch to
 a disposable copy of `/opt/cara-mentor-source`, compiles, runs full discovery,
 and returns only bounded status/digest/summary plus a scratch-local commit id.
 Cara marks a candidate ready only when all hashes, nonce, source/build, test
 summary and commit shape match. High-risk/tool/policy/model/infrastructure
 suggestions remain proposal-only; owner acceptance changes proposal state but
-does not apply code. Crashes after inference reservation are ambiguous and are
-not blindly replayed.
+does not apply code. The inference service fsyncs the new inflight marker file
+and directory before making a paid call; Cara fsyncs request-directory deletion
+before committing the matching acknowledgement. Crashes after inference
+reservation are therefore preserved as ambiguous and are not blindly replayed,
+and a durably acknowledged request cannot resurrect after a host crash.
+
+The persisted cycle states are `submitted` (proposal in flight),
+`candidate_deferred` (proposal safe; waiting for due/backoff), `candidate_pending`
+(one candidate job in flight), `testing`, and terminal `proposal_only`, `ready`,
+`candidate_failed`, or `failed`. One non-reused `mentor_attempts` row binds each proposal
+or candidate job to its request hash and stores only phase, ordinal, outcome,
+closed error class, and latency—never model output. Candidate timeout, transport,
+HTTP 408/425/429/5xx failures defer 1 hour after attempt 1 and 6 hours after attempt
+2; attempt 3 exhausts the cycle but leaves its draft proposal visible. Malformed
+JSON/schema, inconsistent retry classes, forged hashes/nonces, unsafe patch paths,
+source drift, permanent HTTP errors, and an ambiguous restart or scheduler result
+timeout are terminal.
+A weekly-cap refusal occurs before inference, records that job as `cap_deferred`,
+and defers the cycle to a fresh bound job in the next ISO week; it does not count
+as one of the three paid candidate attempts. One proposal plus at most
+three candidate calls makes the configured maximum of four a hard structural cap.
+
+Recovery never edits the failed audit row or reuses its ambiguous job. A guarded,
+unique `recovery_of_cycle_id` child clones the exact stored evidence/hash once,
+binds it to a fresh proposal job and the current immutable source snapshot, and
+uses the current week's ordinary ledger. It never rewinds the global feedback
+cursor or resets inference usage. Separately, regression-backed issue cleanup is
+an exact compare-and-swap on fingerprint plus `last_issue_id`; a newer recurrence
+keeps the pattern open and immutable issue observations are never rewritten.
 
 **What's a note vs a conversation:** only **forwards** (channel/people content) and bare
 typed notes auto-ingest. One explicit-context exception exists: if a `reminder_partial`

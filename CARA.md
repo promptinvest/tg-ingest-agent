@@ -1,10 +1,15 @@
 # Cara — Capabilities, Features & Architecture
 
-> **Bounded Mentor v1 (shipped 2026-07-29):** Cara now has a separate weekly
+> **Bounded Mentor v2 reliability (2026-08-24; v1 shipped 2026-07-29):** Cara
+> has a separate weekly
 > reviewer that receives only redacted task feedback and unresolved issue
-> patterns — never the conversation database. It can write a proposal and, for
-> low/medium-risk behavior-only changes, a bounded candidate patch plus a
-> dedicated regression test. A second, networkless service applies that patch
+> patterns — never the conversation database. Proposal review and candidate
+> construction are separate jobs: Cara durably stores the proposal and its
+> immutable evidence before any optional candidate call. Transient candidate
+> transport/timeout/429/5xx failures get at most three bound attempts with
+> 1-hour then 6-hour backoff; malformed, forged, unsafe, source-changed, and
+> ambiguous results fail closed without retry. A second, networkless service
+> applies a validated bounded patch and its dedicated regression test
 > only inside a disposable source copy and runs the full discovery suite.
 > Passing candidates become review-ready artifacts; neither service can merge,
 > push, install, restart, deploy, or alter Cara's live source, prompts, policy,
@@ -1314,14 +1319,19 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   their slot done only **after a successful send** — a transient Telegram failure backs
   off 15 min and retries (up to 3 attempts, then a `sched_send_failed` issue), instead
   of silently skipping the week/day.
-- **Weekly Mentor review (2026‑07‑29):** on its own schedule (default Sunday
+- **Weekly Mentor review (2026‑07‑29; reliability state machine 2026‑08‑24):**
+  on its own schedule (default Sunday
   04:00 local), Cara packages explicit task feedback and unresolved issue-pattern
   snapshots into a bounded, redacted evidence envelope. Raw conversation rows,
   note contents, Telegram identity, deployment credentials, and the production DB
   never cross that boundary. The separate inference-only `cara-mentor` service
-  returns a source/build/evidence-bound proposal. High-risk, policy, tool, model,
-  infrastructure, and topology changes stop there as proposal-only. A low/medium
-  behavior fix may include a size-limited unified diff against an allowlist of
+  returns one source/build/evidence-bound proposal. Cara commits that proposal,
+  its exact cycle snapshot, proposal hash, cycle link, proposal-attempt telemetry,
+  and the monotonic feedback cursor in one transaction. Submission alone never
+  advances the cursor, and later issue-pattern cleanup cannot rewrite proposal
+  evidence. High-risk, policy, tool, model, infrastructure, and topology changes
+  stop there as proposal-only. A low/medium behavior fix may then request a
+  size-limited unified diff against an allowlist of
   behavioral modules plus `test_mentor_candidates.py`; added lines that touch
   filesystem, process, network, secrets, or dynamic execution are rejected.
   `cara-mentor-runner` has no network or inference/Telegram/deploy secrets: it
@@ -1330,9 +1340,24 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   `mentor/<cycle>` commit only when green, exports the patch/result, and deletes
   the scratch tree. A passing candidate is merely **ready for owner review**.
   Accepting it records workflow approval; it still cannot merge, push, install,
-  restart, or deploy. Each weekly review is capped at four reserved inference
-  calls, and a crash after reservation is treated as ambiguous rather than
-  blindly replayed.
+  restart, or deploy. The durable states are `submitted`, `proposal_only`,
+  `candidate_deferred`, `candidate_pending`, `testing`, and the terminal
+  `ready`/`candidate_failed`/`failed`; one non-reused `mentor_attempts` row records phase,
+  attempt number, bound request hash, content-free outcome/error class, and
+  latency. Only classified candidate timeout/transport/HTTP 408/425/429/5xx
+  errors retry, after 1 hour and then 6 hours, with a fresh job each time.
+  Proposal plus at most three candidate calls fits the hard four-call weekly
+  ledger; the ledger fails closed if unreadable and is reserved durably before
+  inference. Before that call, the service fsyncs both the inflight marker and
+  its directory; Cara likewise fsyncs the request directory before recording a
+  completed acknowledgement. A post-reservation crash is therefore preserved
+  as ambiguous and never blindly replayed, while an acknowledged request cannot
+  reappear after a host crash.
+  Recovery preserves a failed cycle as history and creates at most one linked
+  child with the exact stored evidence, a fresh job, and current immutable source;
+  it never deletes the parent, rewinds the evidence cursor, or resets call usage.
+  Reviewed issue cleanup uses fingerprint + last-observation compare-and-swap, so
+  a fresh recurrence remains open rather than being bulk-closed as stale.
 - **Weekly DB backup (cadence changed 2026‑08‑21; hardened 2026‑07‑10):** when the
   last successful UTC backup date is at least `BACKUP_INTERVAL_DAYS` old (default 7), a
   durable job (`maintenance`/`db_backup`) snapshots `ingest.db` consistently (sqlite3
@@ -2205,7 +2230,8 @@ Bounded Mentor: `IMPROVEMENT_WEEKDAY=6` / `IMPROVEMENT_HOUR=4` ·
 `MENTOR_TEST_TIMEOUT_SECONDS=600`. Only the inference key and these Mentor
 inference settings are copied to root-owned `/etc/cara-mentor.env`; the
 networkless runner receives only its test timeout in
-`/etc/cara-mentor-runner.env`.
+`/etc/cara-mentor-runner.env`. The maximum of four is structural: one proposal
+call plus no more than three separately recorded candidate attempts.
 
 **The complete catalogue is `tg-ingest-agent.env.example`, and it is now enforced
 (2026‑07‑26).** That file both documents every knob and *is* `/etc/tg-ingest-agent.env`

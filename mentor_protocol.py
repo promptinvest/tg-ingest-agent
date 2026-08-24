@@ -10,9 +10,14 @@ import stat
 from pathlib import Path
 
 
+# Runner v1 remains wire-compatible across this reliability release; proposal
+# and candidate inference use the independently versioned v2 envelopes.
 PROTOCOL_VERSION = 1
+INFERENCE_PROTOCOL_VERSION = 2
 MAX_REVIEW_REQUEST_BYTES = 48 * 1024
 MAX_REVIEW_RESULT_BYTES = 96 * 1024
+MAX_CANDIDATE_REQUEST_BYTES = 64 * 1024
+MAX_CANDIDATE_RESULT_BYTES = 64 * 1024
 MAX_RUNNER_REQUEST_BYTES = 64 * 1024
 MAX_RUNNER_RESULT_BYTES = 16 * 1024
 MAX_PATCH_BYTES = 40 * 1024
@@ -48,6 +53,14 @@ PATCHABLE_FILES = PATCHABLE_CODE_FILES | PATCHABLE_TEST_FILES
 
 PROPOSAL_KINDS = frozenset({"prompt", "routing", "tool", "bug", "policy", "model"})
 PROPOSAL_RISKS = frozenset({"low", "medium", "high"})
+INFERENCE_ERROR_CODES = frozenset({
+    "usage_corrupt", "weekly_cap", "http_transient", "http_permanent",
+    "timeout", "transport", "response_too_large", "malformed_response",
+    "ambiguous", "validation", "internal",
+})
+RETRYABLE_INFERENCE_ERROR_CODES = frozenset({
+    "weekly_cap", "http_transient", "timeout", "transport",
+})
 
 
 class MentorProtocolError(RuntimeError):
@@ -79,7 +92,7 @@ def safe_text(value, maximum, *, allow_empty=False):
 
 
 def new_job_id(prefix):
-    if prefix not in {"review", "runner"}:
+    if prefix not in {"review", "candidate", "runner"}:
         raise ValueError("invalid mentor job prefix")
     return f"{prefix}_{secrets.token_hex(16)}"
 

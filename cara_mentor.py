@@ -3,9 +3,9 @@
 
 The service can read a root-owned source snapshot and redacted review requests.
 It cannot read Cara's database, Telegram credentials, media, backup key, git
-deploy key, or writable production tree. It emits proposals and, for bounded
-low/medium-risk behavior changes, a unified-diff candidate for the separate
-networkless runner.
+deploy key, or writable production tree. Proposal review and candidate
+construction are separate, durably reconciled jobs; candidates still go only
+to the separate networkless runner.
 """
 import json
 import os
@@ -32,6 +32,16 @@ MAX_SOURCE_FILE_BYTES = 64 * 1024
 MAX_SOURCE_TOTAL_BYTES = 140 * 1024
 MAX_PENDING_FILES = 20
 MAX_PENDING_BYTES = 2 * 1024 * 1024
+
+
+class InferenceFailure(RuntimeError):
+    """Closed, content-free failure classification for scheduler decisions."""
+
+    def __init__(self, code, message, *, retryable=False, duration_seconds=0.0):
+        super().__init__(message)
+        self.code = str(code)
+        self.retryable = bool(retryable)
+        self.duration_seconds = max(0.0, float(duration_seconds or 0.0))
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -63,7 +73,7 @@ def _config():
         "timeout": max(10, min(
             int(os.environ.get("MENTOR_LLM_TIMEOUT_SECONDS") or "90"), 180)),
         "max_calls_per_week": max(1, min(
-            int(os.environ.get("MENTOR_MAX_CALLS_PER_WEEK") or "4"), 12)),
+            int(os.environ.get("MENTOR_MAX_CALLS_PER_WEEK") or "4"), 4)),
         "spool": Path(
             os.environ.get("MENTOR_REVIEW_SPOOL")
             or "/var/lib/cara-mentor/spool"),
@@ -157,11 +167,23 @@ def _reserve_call(cfg):
     path = cfg["state"] / "usage" / "usage.json"
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        value = {}
-    count = int(value.get("count") or 0) if value.get("period") == period else 0
+    except FileNotFoundError:
+        value = {"period": period, "count": 0}
+    except (OSError, ValueError, TypeError) as exc:
+        raise InferenceFailure(
+            "usage_corrupt", "Mentor inference usage ledger is unreadable") from exc
+    if (not isinstance(value, dict) or set(value) != {"period", "count"}
+            or not isinstance(value.get("period"), str)
+            or not re.fullmatch(r"\d{4}-W\d{2}", value["period"])
+            or isinstance(value.get("count"), bool)
+            or not isinstance(value.get("count"), int)
+            or value["count"] < 0):
+        raise InferenceFailure(
+            "usage_corrupt", "Mentor inference usage ledger is invalid")
+    count = value["count"] if value["period"] == period else 0
     if count >= cfg["max_calls_per_week"]:
-        raise RuntimeError("Mentor weekly inference-call cap reached")
+        raise InferenceFailure(
+            "weekly_cap", "Mentor weekly inference-call cap reached", retryable=True)
     value = {"period": period, "count": count + 1}
     temp = path.parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(5)}.tmp"
     fd = os.open(
@@ -177,9 +199,11 @@ def _reserve_call(cfg):
     finally:
         os.close(fd)
     os.replace(temp, path)
+    protocol.fsync_dir(path.parent)
 
 
 def _chat(cfg, system, user, max_tokens):
+    started = time.monotonic()
     _reserve_call(cfg)
     payload = {
         "model": cfg["model"],
@@ -207,19 +231,33 @@ def _chat(cfg, system, user, max_tokens):
         with opener.open(request, timeout=cfg["timeout"]) as response:
             raw = response.read(2 * 1024 * 1024 + 1)
     except HTTPError as exc:
-        raise RuntimeError(f"Mentor inference HTTP {exc.code}") from exc
+        retryable = exc.code in {408, 425, 429} or 500 <= exc.code < 600
+        raise InferenceFailure(
+            "http_transient" if retryable else "http_permanent",
+            f"Mentor inference HTTP {exc.code}", retryable=retryable,
+            duration_seconds=time.monotonic() - started,
+        ) from exc
     except (URLError, OSError) as exc:
-        raise RuntimeError(
-            f"Mentor inference transport failed: {type(exc).__name__}") from exc
+        code = "timeout" if isinstance(exc, TimeoutError) else "transport"
+        raise InferenceFailure(
+            code, f"Mentor inference transport failed: {type(exc).__name__}",
+            retryable=True, duration_seconds=time.monotonic() - started,
+        ) from exc
     if len(raw) > 2 * 1024 * 1024:
-        raise RuntimeError("Mentor inference response is too large")
+        raise InferenceFailure(
+            "response_too_large", "Mentor inference response is too large",
+            duration_seconds=time.monotonic() - started,
+        )
     try:
         response = json.loads(raw.decode("utf-8"))
         choices = response.get("choices") or []
         content = (choices[0].get("message") or {}).get("content") if choices else ""
-        return _parse_json_object(content)
+        return _parse_json_object(content), time.monotonic() - started
     except (UnicodeDecodeError, ValueError, TypeError, IndexError) as exc:
-        raise RuntimeError("Mentor inference response is malformed") from exc
+        raise InferenceFailure(
+            "malformed_response", "Mentor inference response is malformed",
+            duration_seconds=time.monotonic() - started,
+        ) from exc
 
 
 def _read_source(root, name):
@@ -257,52 +295,68 @@ def _review(cfg, request):
         "recipients, network destinations, or production data.\nALLOWLIST:\n"
         + "\n".join(allowed)
     )
-    proposal = protocol.validate_proposal(_chat(
+    value, duration = _chat(
         cfg, system,
         "<EVIDENCE>\n" + evidence.replace("<", "‹").replace(">", "›")
         + "\n</EVIDENCE>",
         900,
-    ))
-    candidate = None
-    if proposal["target_files"]:
-        sources = {}
-        total = 0
-        for name in proposal["target_files"]:
-            text = _read_source(cfg["source"], name)
-            total += len(text.encode("utf-8"))
-            if total > MAX_SOURCE_TOTAL_BYTES:
-                raise ValueError("selected source exceeds Mentor context limit")
-            sources[name] = text
-        patch_system = (
-            "You produce a quarantined candidate patch for an accepted Mentor "
-            "analysis. Return exactly {\"patch\":\"...\"} containing a standard "
-            "git unified diff. Modify every bound target exactly once, no other "
-            "path. Preserve behavior outside the hypothesis. Add a focused "
-            "adversarial regression test in test_mentor_candidates.py. Do not add, "
-            "delete, rename, chmod, import network/shell/process APIs, weaken a "
-            "permission, suppress an error, edit secrets, or claim tests passed. "
-            "The patch is untrusted and will run only in a networkless sandbox."
-        )
-        patch_input = protocol.canonical({
-            "proposal": proposal,
-            "source_build": request["source_build"],
-            "source_hash": request["source_hash"],
-            "files": sources,
-        })
-        patch_value = _chat(cfg, patch_system, patch_input, 3000)
+    )
+    try:
+        return protocol.validate_proposal(value), duration
+    except (ValueError, protocol.MentorProtocolError) as exc:
+        raise InferenceFailure(
+            "validation", "Mentor proposal response failed validation",
+            duration_seconds=duration,
+        ) from exc
+
+
+def _candidate(cfg, request):
+    proposal = protocol.validate_proposal(request["proposal"])
+    if not proposal["target_files"]:
+        raise ValueError("proposal-only analysis cannot request a candidate")
+    sources = {}
+    total = 0
+    for name in proposal["target_files"]:
+        text = _read_source(cfg["source"], name)
+        total += len(text.encode("utf-8"))
+        if total > MAX_SOURCE_TOTAL_BYTES:
+            raise ValueError("selected source exceeds Mentor context limit")
+        sources[name] = text
+    patch_system = (
+        "You produce a quarantined candidate patch for an accepted Mentor "
+        "analysis. Return exactly {\"patch\":\"...\"} containing a standard "
+        "git unified diff. Modify every bound target exactly once, no other "
+        "path. Preserve behavior outside the hypothesis. Add a focused "
+        "adversarial regression test in test_mentor_candidates.py. Do not add, "
+        "delete, rename, chmod, import network/shell/process APIs, weaken a "
+        "permission, suppress an error, edit secrets, or claim tests passed. "
+        "The patch is untrusted and will run only in a networkless sandbox."
+    )
+    patch_input = protocol.canonical({
+        "proposal": proposal,
+        "source_build": request["source_build"],
+        "source_hash": request["source_hash"],
+        "files": sources,
+    })
+    patch_value, duration = _chat(cfg, patch_system, patch_input, 3000)
+    try:
         if set(patch_value) != {"patch"}:
             raise ValueError("Mentor patch response schema is invalid")
         patch = protocol.validate_patch(
             patch_value["patch"], proposal["target_files"])
-        candidate = {
-            "patch": patch,
-            "patch_hash": protocol.digest(patch),
-            "target_files": proposal["target_files"],
-        }
-    return proposal, candidate
+    except (ValueError, protocol.MentorProtocolError) as exc:
+        raise InferenceFailure(
+            "validation", "Mentor patch response failed validation",
+            duration_seconds=duration,
+        ) from exc
+    return {
+        "patch": patch,
+        "patch_hash": protocol.digest(patch),
+        "target_files": proposal["target_files"],
+    }, duration
 
 
-def _load_request(path):
+def _load_review_request(path):
     value = protocol.read_regular_json(path, protocol.MAX_REVIEW_REQUEST_BYTES)
     required = {
         "version", "job_id", "nonce", "evidence", "evidence_hash",
@@ -310,7 +364,7 @@ def _load_request(path):
     }
     if not isinstance(value, dict) or set(value) != required:
         raise ValueError("review request schema is invalid")
-    if (value["version"] != protocol.PROTOCOL_VERSION
+    if (value["version"] != protocol.INFERENCE_PROTOCOL_VERSION
             or not protocol.valid_job_id(value["job_id"], "review")
             or value["nonce"] != value["job_id"][7:]):
         raise ValueError("review request identity is invalid")
@@ -321,12 +375,43 @@ def _load_request(path):
     return value
 
 
-def _result(request, *, status, proposal=None, candidate=None, error=None):
+def _load_candidate_request(path):
+    value = protocol.read_regular_json(path, protocol.MAX_CANDIDATE_REQUEST_BYTES)
+    required = {
+        "version", "job_id", "nonce", "cycle_uid", "attempt_no",
+        "proposal", "proposal_hash", "evidence_hash", "source_build",
+        "source_hash",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise ValueError("candidate request schema is invalid")
+    if (value["version"] != protocol.INFERENCE_PROTOCOL_VERSION
+            or not protocol.valid_job_id(value["job_id"], "candidate")
+            or value["nonce"] != value["job_id"][10:]
+            or not isinstance(value["attempt_no"], int)
+            or not 1 <= value["attempt_no"] <= 1000):
+        raise ValueError("candidate request identity is invalid")
+    proposal = protocol.validate_proposal(value["proposal"])
+    if not proposal["target_files"]:
+        raise ValueError("candidate request has no patch targets")
+    if protocol.digest(proposal) != value["proposal_hash"]:
+        raise ValueError("candidate proposal hash mismatch")
+    protocol.safe_text(value["cycle_uid"], 80)
+    protocol.safe_text(value["evidence_hash"], 64)
+    protocol.safe_text(value["source_build"], 100)
+    protocol.safe_text(value["source_hash"], 64)
+    value["proposal"] = proposal
+    return value
+
+
+def _review_result(request, *, status, proposal=None, retryable=False,
+                   error_code=None, error=None, duration_seconds=0.0):
     payload = {
         "status": status,
         "proposal": proposal,
-        "candidate": candidate,
+        "retryable": bool(retryable),
+        "error_code": error_code,
         "error": error,
+        "duration_seconds": round(max(0.0, float(duration_seconds)), 3),
     }
     value = {
         key: request[key]
@@ -339,10 +424,35 @@ def _result(request, *, status, proposal=None, candidate=None, error=None):
     return value
 
 
+def _candidate_result(request, *, status, candidate=None, retryable=False,
+                      error_code=None, error=None, duration_seconds=0.0):
+    payload = {
+        "status": status,
+        "candidate": candidate,
+        "retryable": bool(retryable),
+        "error_code": error_code,
+        "error": error,
+        "duration_seconds": round(max(0.0, float(duration_seconds)), 3),
+    }
+    value = {
+        key: request[key]
+        for key in (
+            "version", "job_id", "nonce", "cycle_uid", "attempt_no",
+            "proposal_hash", "evidence_hash", "source_build", "source_hash",
+        )
+    }
+    value.update(payload, result_hash=protocol.digest(payload))
+    return value
+
+
 def process_one(cfg, request_path, results, inflight):
     request = None
+    phase = "candidate" if request_path.name.startswith("candidate_") else "review"
     try:
-        request = _load_request(request_path)
+        request = (
+            _load_candidate_request(request_path)
+            if phase == "candidate" else _load_review_request(request_path)
+        )
         if ((cfg["source"] / "VERSION").read_text(encoding="utf-8").strip()
                 != request["source_build"]):
             raise ValueError("Mentor source build changed")
@@ -358,22 +468,49 @@ def process_one(cfg, request_path, results, inflight):
                 0o600,
             )
         except FileExistsError:
-            result = _result(
-                request, status="error",
-                error="ambiguous: Mentor restarted during an inference request")
+            make_result = (
+                _candidate_result if phase == "candidate" else _review_result)
+            result = make_result(
+                request, status="error", retryable=False,
+                error_code="ambiguous",
+                error="Mentor restarted during an inference request")
         else:
-            os.close(fd)
-            proposal, candidate = _review(cfg, request)
-            result = _result(
-                request, status="ok", proposal=proposal, candidate=candidate)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            protocol.fsync_dir(inflight)
+            if phase == "candidate":
+                candidate, duration = _candidate(cfg, request)
+                result = _candidate_result(
+                    request, status="ok", candidate=candidate,
+                    duration_seconds=duration)
+            else:
+                proposal, duration = _review(cfg, request)
+                result = _review_result(
+                    request, status="ok", proposal=proposal,
+                    duration_seconds=duration)
     except Exception as exc:  # one malformed request cannot stop the service
         if request is None:
             print(f"cara-mentor rejected {request_path.name}: {exc}", flush=True)
             return False
-        result = _result(
-            request, status="error",
+        if isinstance(exc, InferenceFailure):
+            code = exc.code
+            retryable = exc.retryable
+            duration = exc.duration_seconds
+        else:
+            code = "validation" if isinstance(
+                exc, (ValueError, protocol.MentorProtocolError)) else "internal"
+            retryable = False
+            duration = 0.0
+        make_result = (
+            _candidate_result if phase == "candidate" else _review_result)
+        result = make_result(
+            request, status="error", retryable=retryable,
+            error_code=code,
             error=protocol.safe_text(
-                f"{type(exc).__name__}: {exc}"[:300], 300))
+                f"{type(exc).__name__}: {exc}"[:300], 300),
+            duration_seconds=duration)
     protocol.atomic_publish(results, request_path.name, result)
     return True
 
@@ -387,7 +524,8 @@ def run(once=False):
         path.mkdir(parents=True, exist_ok=True)
     while True:
         now = time.time()
-        for result in results.glob("review_*.json"):
+        for result in list(results.glob("review_*.json")) + list(
+                results.glob("candidate_*.json")):
             request = requests / result.name
             try:
                 if not request.exists() and now - result.stat().st_mtime > 1:
@@ -395,7 +533,9 @@ def run(once=False):
                     (inflight / result.stem).unlink(missing_ok=True)
             except OSError:
                 pass
-        pending = sorted(requests.glob("review_*.json"))
+        pending = sorted(
+            list(requests.glob("review_*.json"))
+            + list(requests.glob("candidate_*.json")))
         try:
             size = sum(item.stat().st_size for item in pending)
         except OSError:
