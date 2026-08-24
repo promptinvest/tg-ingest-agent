@@ -284,6 +284,13 @@ publishing a new runner request. The
 networkless runner independently revalidates the envelope, applies the patch to
 a disposable copy of `/opt/cara-mentor-source`, compiles, runs full discovery,
 and returns only bounded status/digest/summary plus a scratch-local commit id.
+The full-suite timeout defaults to 900 seconds and is hard-capped at 1200. The
+runner CPU safety cap is derived as that wall maximum plus 60 seconds, so it
+cannot kill a valid run before the wall limit. The deployment canary waits
+through the wall maximum plus 120 seconds of handoff overhead and surfaces the
+runner's bounded sanitized error on failure. This keeps the observed 688–728-
+second production suite inside the isolation boundary without making a wedged
+candidate unbounded.
 Cara marks a candidate ready only when all hashes, nonce, source/build, test
 summary and commit shape match. High-risk/tool/policy/model/infrastructure
 suggestions remain proposal-only; owner acceptance changes proposal state but

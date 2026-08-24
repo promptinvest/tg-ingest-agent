@@ -1338,7 +1338,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   applies a bound candidate to a disposable copy of the exact immutable source
   snapshot, compiles it, runs the full discovery suite, makes a scratch-local
   `mentor/<cycle>` commit only when green, exports the patch/result, and deletes
-  the scratch tree. A passing candidate is merely **ready for owner review**.
+  the scratch tree. Its full-suite timeout defaults to 900 seconds (hard maximum
+  1200); the CPU safety cap is derived as that maximum plus 60 seconds, so it
+  cannot undercut the wall budget. Deployment waits through the wall maximum
+  plus bounded handoff overhead;
+  a failed canary includes the runner's already-sanitized error instead of only
+  the generic result label. A passing candidate is merely **ready for owner review**.
   Accepting it records workflow approval; it still cannot merge, push, install,
   restart, or deploy. The durable states are `submitted`, `proposal_only`,
   `candidate_deferred`, `candidate_pending`, `testing`, and the terminal
@@ -2227,7 +2232,7 @@ Bounded Mentor: `IMPROVEMENT_WEEKDAY=6` / `IMPROVEMENT_HOUR=4` ·
 `MENTOR_RUNNER_SPOOL=/var/lib/cara-mentor-runner/spool` ·
 `MENTOR_RESULT_TIMEOUT_HOURS=48` · `MENTOR_MODEL` (= Cara's current chat model) ·
 `MENTOR_LLM_TIMEOUT_SECONDS=90` · `MENTOR_MAX_CALLS_PER_WEEK=4` ·
-`MENTOR_TEST_TIMEOUT_SECONDS=600`. Only the inference key and these Mentor
+`MENTOR_TEST_TIMEOUT_SECONDS=900`. Only the inference key and these Mentor
 inference settings are copied to root-owned `/etc/cara-mentor.env`; the
 networkless runner receives only its test timeout in
 `/etc/cara-mentor-runner.env`. The maximum of four is structural: one proposal

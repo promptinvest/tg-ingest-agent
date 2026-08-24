@@ -55,7 +55,8 @@ class MentorDeploymentCanaryTests(unittest.TestCase):
         source_hash=source_hash,
         proposed_change_hash=change_hash,
     )
-    deadline = time.monotonic() + 720
+    deadline = (
+        time.monotonic() + protocol.MAX_RUNNER_TEST_TIMEOUT_SECONDS + 120)
     result = None
     try:
         while time.monotonic() < deadline:
@@ -78,9 +79,10 @@ class MentorDeploymentCanaryTests(unittest.TestCase):
                 or "Ran " not in result["tests_summary"]
                 or "OK" not in result["tests_summary"]
                 or not result["branch"].startswith("mentor/deploy-canary-")):
-            raise RuntimeError(
-                "Mentor runner canary failed: "
-                + str(result["tests_summary"])[:300])
+            detail = str(result["tests_summary"])[:300]
+            if result.get("error"):
+                detail += "; " + str(result["error"])[:300]
+            raise RuntimeError("Mentor runner canary failed: " + detail)
         print("mentor-runner-canary: " + result["tests_summary"])
         return 0
     finally:

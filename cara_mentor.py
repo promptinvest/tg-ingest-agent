@@ -144,9 +144,11 @@ def write_inference_env(source, target):
 def write_runner_env(source, target):
     allowed = ("MENTOR_TEST_TIMEOUT_SECONDS",)
     values = _read_selected_env(source, allowed)
-    values.setdefault("MENTOR_TEST_TIMEOUT_SECONDS", "600")
+    values.setdefault(
+        "MENTOR_TEST_TIMEOUT_SECONDS",
+        str(protocol.DEFAULT_RUNNER_TEST_TIMEOUT_SECONDS))
     timeout = int(values["MENTOR_TEST_TIMEOUT_SECONDS"])
-    if not 120 <= timeout <= 1200:
+    if not 120 <= timeout <= protocol.MAX_RUNNER_TEST_TIMEOUT_SECONDS:
         raise RuntimeError("MENTOR_TEST_TIMEOUT_SECONDS is outside 120..1200")
     return _write_selected_env(target, allowed, values)
 

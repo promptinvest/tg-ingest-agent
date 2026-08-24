@@ -5,6 +5,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import mentor_protocol as mentor_protocol
+
 
 def log(message):
     print(f"{datetime.now(timezone.utc).isoformat()} {message}", flush=True)
@@ -567,7 +569,10 @@ def load_config(env=None):
     cfg.mentor_max_calls_per_week = max(
         1, min(int(env.get("MENTOR_MAX_CALLS_PER_WEEK") or "4"), 4))
     cfg.mentor_test_timeout = max(
-        120, min(int(env.get("MENTOR_TEST_TIMEOUT_SECONDS") or "600"), 1200))
+        120, min(
+            int(env.get("MENTOR_TEST_TIMEOUT_SECONDS")
+                or str(mentor_protocol.DEFAULT_RUNNER_TEST_TIMEOUT_SECONDS)),
+            mentor_protocol.MAX_RUNNER_TEST_TIMEOUT_SECONDS))
     # Model-health monitor: how often to check Cara's models are reachable and
     # alert the boss the moment one becomes inaccessible (0 disables).
     cfg.model_health_interval = int(env.get("MODEL_HEALTH_INTERVAL_SECONDS") or "1800")

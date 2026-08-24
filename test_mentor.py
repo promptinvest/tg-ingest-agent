@@ -91,6 +91,35 @@ class MentorProtocolTests(unittest.TestCase):
 
 
 class MentorBoundaryTests(unittest.TestCase):
+    def test_runner_timeout_budget_covers_the_full_live_suite(self):
+        self.assertEqual(protocol.DEFAULT_RUNNER_TEST_TIMEOUT_SECONDS, 900)
+        self.assertEqual(protocol.MAX_RUNNER_TEST_TIMEOUT_SECONDS, 1200)
+        self.assertEqual(
+            protocol.RUNNER_CPU_LIMIT_SECONDS,
+            protocol.MAX_RUNNER_TEST_TIMEOUT_SECONDS + 60,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "cara.env"
+            target = Path(tmp) / "runner.env"
+            source.write_text("", encoding="utf-8")
+            cara_mentor.write_runner_env(source, target)
+            self.assertEqual(
+                target.read_text(encoding="utf-8"),
+                'MENTOR_TEST_TIMEOUT_SECONDS="900"\n')
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(mentor_runner._config()["timeout"], 900)
+        with mock.patch.object(
+                mentor_runner.resource, "setrlimit") as setrlimit:
+            mentor_runner._limits()
+        setrlimit.assert_any_call(
+            mentor_runner.resource.RLIMIT_CPU,
+            (protocol.RUNNER_CPU_LIMIT_SECONDS,) * 2,
+        )
+        verifier = (Path(__file__).resolve().parent
+                    / "verify_mentor_runtime.py").read_text(encoding="utf-8")
+        self.assertIn("protocol.MAX_RUNNER_TEST_TIMEOUT_SECONDS + 120", verifier)
+        self.assertIn('result.get("error")', verifier)
+
     def test_acknowledge_is_durable_before_database_ack(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

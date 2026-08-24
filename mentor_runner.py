@@ -39,7 +39,9 @@ def _config():
             os.environ.get("MENTOR_SOURCE_DIR")
             or "/opt/cara-mentor-source"),
         "timeout": max(120, min(
-            int(os.environ.get("MENTOR_TEST_TIMEOUT_SECONDS") or "600"), 1200)),
+            int(os.environ.get("MENTOR_TEST_TIMEOUT_SECONDS")
+                or str(protocol.DEFAULT_RUNNER_TEST_TIMEOUT_SECONDS)),
+            protocol.MAX_RUNNER_TEST_TIMEOUT_SECONDS)),
     }
 
 
@@ -104,7 +106,10 @@ def _safe_env(root):
 
 
 def _limits():
-    resource.setrlimit(resource.RLIMIT_CPU, (540, 540))
+    resource.setrlimit(
+        resource.RLIMIT_CPU,
+        (protocol.RUNNER_CPU_LIMIT_SECONDS,) * 2,
+    )
     resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
     resource.setrlimit(resource.RLIMIT_FSIZE, (32 * 1024 * 1024,) * 2)
     resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))

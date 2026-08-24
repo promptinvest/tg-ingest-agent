@@ -23,6 +23,9 @@ MAX_RUNNER_RESULT_BYTES = 16 * 1024
 MAX_PATCH_BYTES = 40 * 1024
 MAX_PATCH_LINES = 600
 MAX_TARGET_FILES = 4
+DEFAULT_RUNNER_TEST_TIMEOUT_SECONDS = 900
+MAX_RUNNER_TEST_TIMEOUT_SECONDS = 1200
+RUNNER_CPU_LIMIT_SECONDS = MAX_RUNNER_TEST_TIMEOUT_SECONDS + 60
 
 # Mentor may suggest changes anywhere, but automatic candidate construction is
 # deliberately limited to behavior modules and their tests. Policy, storage,
