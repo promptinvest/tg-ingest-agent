@@ -388,6 +388,118 @@ def find_by_query(rows, params):
     return None
 
 
+# -- dates in his own words (ADR-0013: journal recall by day / range) -------------
+
+_MONTHS = {
+    "январ": 1, "феврал": 2, "март": 3, "апрел": 4, "мая": 5, "мае": 5, "май": 5,
+    "июн": 6, "июл": 7, "август": 8, "сентябр": 9, "октябр": 10, "ноябр": 11,
+    "декабр": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8,
+    "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_MONTH_RE = "|".join(sorted(_MONTHS, key=len, reverse=True))
+
+
+def _month_no(word):
+    w = str(word or "").casefold()
+    for stem, n in _MONTHS.items():
+        if w.startswith(stem):
+            return n
+    return None
+
+
+def parse_day_phrase(text, offset_hours, now=None):
+    """A calendar day named the way he writes it — «17 июня», «17.06», «17-го»,
+    «June 17», «вчера», «позавчера», «сегодня» — as a local date, or None. A
+    day/month with no year that lies in the future is read as last year's."""
+    t = " ".join(str(text or "").casefold().replace("ё", "е").split())
+    if not t:
+        return None
+    now = now or datetime.now(timezone.utc)
+    today = (now + timedelta(hours=offset_hours)).date()
+    if t in ("сегодня", "today"):
+        return today
+    if t in ("вчера", "yesterday"):
+        return today - timedelta(days=1)
+    if t in ("позавчера", "day before yesterday", "the day before yesterday"):
+        return today - timedelta(days=2)
+    year = None
+    m = re.fullmatch(r"(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?", t)
+    if m:
+        day, month = int(m.group(1)), int(m.group(2))
+        if m.group(3):
+            year = int(m.group(3))
+            year = year + 2000 if year < 100 else year
+    else:
+        m = re.fullmatch(rf"(\d{{1,2}})(?:-?го|-?е)?\s+({_MONTH_RE})\w*(?:\s+(\d{{4}})(?:\s*г\.?|\s*года)?)?",
+                         t)
+        if m:
+            day, month = int(m.group(1)), _month_no(m.group(2))
+            year = int(m.group(3)) if m.group(3) else None
+        else:
+            m = re.fullmatch(rf"({_MONTH_RE})\w*\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(\d{{4}}))?", t)
+            if m:
+                day, month = int(m.group(2)), _month_no(m.group(1))
+                year = int(m.group(3)) if m.group(3) else None
+            else:
+                m = re.fullmatch(r"(\d{1,2})(?:-?го|-?е)", t)
+                if not m:
+                    return None
+                # A bare «17-го»: this month's 17th, or last month's when it is ahead.
+                day = int(m.group(1))
+                prev = (today.replace(day=1) - timedelta(days=1))
+                candidates = [(today.year, today.month), (prev.year, prev.month)]
+                for cy, cm in candidates:
+                    try:
+                        d = datetime(cy, cm, day).date()
+                    except ValueError:
+                        continue
+                    if d <= today:
+                        return d
+                return None
+    if not month:
+        return None
+    for candidate_year in ([year] if year else [today.year, today.year - 1]):
+        try:
+            d = datetime(candidate_year, month, day).date()
+        except ValueError:
+            continue
+        if year or d <= today:
+            return d
+    return None
+
+
+def journal_window(params, offset_hours, now=None, lang="ru"):
+    """(since_iso, until_iso, label) for `date` / `since` / `until` params — a day
+    is [00:00, 24:00) local; a range is inclusive of both ends; None when nothing
+    parsed."""
+    now = now or datetime.now(timezone.utc)
+    ru = lang == "ru"
+
+    def _start(d):
+        return (datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+                - timedelta(hours=offset_hours)).isoformat()
+
+    day = parse_day_phrase(params.get("date"), offset_hours, now) if params.get("date") else None
+    if day is not None:
+        label = (f"за {day:%d.%m}" if ru else f"for {day:%d.%m}")
+        return _start(day), _start(day + timedelta(days=1)), label
+    since_d = parse_day_phrase(params.get("since"), offset_hours, now) if params.get("since") else None
+    until_d = parse_day_phrase(params.get("until"), offset_hours, now) if params.get("until") else None
+    if since_d is None and until_d is None:
+        return None
+    since_iso = _start(since_d) if since_d else None
+    until_iso = _start(until_d + timedelta(days=1)) if until_d else None
+    if since_d and until_d:
+        label = (f"с {since_d:%d.%m} по {until_d:%d.%m}" if ru
+                 else f"from {since_d:%d.%m} to {until_d:%d.%m}")
+    elif since_d:
+        label = (f"с {since_d:%d.%m}" if ru else f"since {since_d:%d.%m}")
+    else:
+        label = (f"по {until_d:%d.%m}" if ru else f"until {until_d:%d.%m}")
+    return since_iso, until_iso, label
+
+
 # -- human time, keyboards and callback grammar (Phase A, ADR-0001/0002/0004) --
 
 # Part-of-day words → default local hour when a snooze names no clock time

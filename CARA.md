@@ -136,6 +136,15 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   her last line ended with a question mark, in which case it is the answer and routes.
   The action‑truth repair now sees the last four turns and her real reminder list, so it
   can say «это уже стоит — #2» instead of denying a save she made.
+  **Post‑window follow‑ups and output hygiene (2026‑09‑07, ADR‑0011):** a bare
+  «через час» / «готово» arriving after the 30‑min window binds to the **last fired
+  one‑shot** through the deterministic parser (subject guard kept) — never to the model
+  router with nothing pending, where converse once invented «напомню снова в 16:11»;
+  unusable router output (non‑JSON, an unknown action, a pending‑only action with nothing
+  pending) is filed as `router_invalid_output` with its reason on the trace, not as you
+  being unclear; and a converse reply under two words or in the wrong script for your
+  language is retried once and then replaced by the honest failure line, filed as
+  `converse_degenerate` (a 4‑token «article\nYes» once reached you unlogged).
 - **When unsure, she talks** — a low‑confidence read (and the `clarify` route) drops to
   warm `converse` where she answers or asks naturally in «ты», never a cold formal template.
 - **Two sides of one person, switched smoothly 24/7 — no commands, no clock gate**
@@ -189,11 +198,22 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Never fakes an action (truthful boundary)** — in a `converse` turn she does NOT perform
   state changes, so she may never reply with a made‑up «готово / поменяла / поставила /
   перенесла / закрыла». Real saves/reminders/renames/reschedules are done by the skills and
-  report the **actual** outcome; if a request lands in chat she says she's on it (so it routes
-  to a real action) or, if it's something she genuinely can't do, says so plainly — never a
+  report the **actual** outcome; if a request lands in chat she does **not** say she's on it
+  or promise it (a promise is the same lie one step earlier) — she tells you exactly what to
+  say so it really happens («скажи «напомни завтра в 10 позвонить Ире»») and asks if that's
+  what you want, or, if it's something she genuinely can't do, says so plainly — never a
   fabricated confirmation. This is enforced in code as well as the prompt: a free-form reply
   that claims a current close/move/save/delete or says a queue is clean is blocked, logged as
   `converse_action_claim`, and replaced with an honest no-state-changed response.
+  **Guard v3 (2026‑09‑07, ADR‑0010):** an honest offer in the subjunctive («Я бы добавила её в
+  Movies — хочешь?», «добавила бы отдельной записью») now passes — it is the reply the rule
+  asks for, and blocking it locked memory learning out for a whole curation window; a
+  day‑part word excuses a claim only when it stands before the verb or in the same clause
+  («Сохранила #51 в Movies, утром проверишь» is blocked, «я сохранила его вчера под #51»
+  survives); «убрала #58», «настроила напоминание» and the present‑tense «я теперь не
+  спрашиваю / больше не показываю» shapes are caught; her own‑life carve‑out is limited to a
+  sentence naming her friend Майя or «в плейлист»; the blocked‑claim replies are written in
+  her voice; and the «обним…» relational cue works (it was misspelt with Latin letters).
   **The contract, in his terms: she never reports an action she did not perform, and when
   she cannot do something she says so and names the route that can.**
   **Rebuilt 2026‑07‑28** after four fabricated confirmations reached the boss in one
@@ -1020,6 +1040,21 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 - **Ask (KB Q&A)** (`ask`): "когда мой рейс?", "что по плану на сегодня?" → semantic
   retrieval (BGE‑M3) over *your own stored notes*, then a grounded answer in the
   question's language citing `(#id)`; refuses if it isn't in your notes.
+  **Dated, fused and honest about use (2026‑09‑07, ADR‑0013):** every note in the
+  answer's context carries its date («[#41 — Trip · Plan · 2026‑06‑17]»), so a question
+  about *when* is answerable; the keyword search always runs beside the vector search and
+  the two lists are fused by rank, so an embedder outage degrades the answer instead of
+  failing it; the vector hits pass a relative gate (nothing more than 0.15 below the best
+  hit) and a per‑note cap of two chunks, with the top‑k scores logged on the trace; and
+  only a note whose `#N` the delivered answer actually names counts as *used* — ranking
+  alone never did, but it was being counted. A **photo with a question** is answered by
+  the conversational path (which sees the photo read and is grounded on your notes) —
+  `ask` never saw the image.
+- **A journal by day** (`journal_show` with `date` / `since` / `until`): «за что я был
+  благодарен 17 июня?», «что я записал в благодарности вчера?», «покажи благодарности с
+  1 по 15 июня» show exactly those days' entries (RU/EN day names, «17.06», «17‑го»,
+  «June 17», «вчера/позавчера»; a day with no year that lies ahead reads as last year's).
+  These questions used to route to `ask`, which could not see dates at all.
 - **Fetch a link** (`fetch`): "прочитай https://…" → reads a public page (SSRF‑guarded)
   and ingests its text.
 
@@ -1630,6 +1665,18 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   The same reply is also made self‑consistent before it can touch anything: an id another
   group is keeping is never dropped (`{keep:5,drop:[6]}` + `{keep:6,drop:[7]}` used to
   fold 6 while 7 was being folded into it — i.e. every richer copy gone at once).
+- **Consolidation folds only like into like (2026‑09‑07, ADR‑0012).** The 2026‑08‑24 run
+  merged nine distinct standing rules and the contradiction pass demoted five more with no
+  keeper — 11 of your 30 corrections silently stopped being followed. Now a rule you taught
+  by correcting her folds only into another correction or a confirmed fact; the
+  contradiction pass never touches standing rules (tone/workflow/avoidance/quality) and
+  demotes a fact only when it shares words with the confirmed fact it contradicts; every
+  folded row records its keeper (`merged_into`) and the log line prints the keep→drop
+  pairs; a correction you repeat bumps its recurrence and confidence instead of being
+  discarded; the standing‑guidance block is ordered by confidence, recurrence, recency
+  with two slots held for tone rules; a live «без эмодзи» rule removes the persona's
+  emoji‑reaction invitation; and the weekly pass is a durable job that stamps the week only
+  when it succeeds. The 11 demoted rows were flipped back on deploy (a guarded one‑off).
   **Rotating batches (2026‑07‑26):** that pass groups in 40‑item batches (the fast model
   misses duplicates in a 120‑item wall), and the cuts used to fall on the same indexes
   every run — so a duplicate pair either side of a boundary was re‑separated week after

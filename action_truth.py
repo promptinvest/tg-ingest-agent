@@ -152,10 +152,13 @@ _RU_SOFT_VERBS = (
     "назначила|назначено|назначена|назначен|"
     "отметила|отмечено|отмечена|отмечен|"
     "отправила|отправлено|отправлена|отправлен|"
-    "выгрузила|выгружено|выгружена"
+    "выгрузила|выгружено|выгружена|"
+    # ADR-0010 (2026-09-07): «Убрала #58…» and «настроила напоминание» walked through.
+    "убрала|убрано|убрана|убран|"
+    "настроила|настроено|настроена|настроен"
 )
 _EN_SOFT_VERBS = ("closed|moved|updated|fixed|marked|linked|assigned|sent|"
-                  "made|entered|logged|placed|put")
+                  "made|entered|logged|placed|put|removed|configured")
 
 _DATA_VERBS = f"{_RU_DATA_VERBS}|{_EN_DATA_VERBS}"
 _DONE_VERBS = f"{_DATA_VERBS}|{_RU_SOFT_VERBS}|{_EN_SOFT_VERBS}"
@@ -290,6 +293,22 @@ _CLAIM_PATTERNS = (
         r"saturday|sunday|this\s+(?:morning|afternoon|evening|night))\b|"
         r"\bat\s+\d)",
         re.IGNORECASE | re.MULTILINE),
+    # 11) A PRESENT-TENSE claim to have changed her own standing behaviour — «Я
+    # теперь не спрашиваю, а сразу записываю», «Больше не показываю тебе эти
+    # сообщения» (ADR-0010). A preference change is a state change like any
+    # other; only the deterministic proactive_prefs/style paths perform one.
+    # The «не» is INSIDE the verb group on purpose: «не спрашиваю» is the claimed
+    # new behaviour, not a denial, so the negation carve-out must not see it.
+    re.compile(
+        r"(?:^|[.!?]\s*)\s*(?:(?:хорошо|ладно|поняла|ок(?:ей)?|договорились)"
+        r"[,!:— -]*)?(?:я\s+)?(?:теперь|больше)\s+(?:уже\s+)?"
+        r"(?P<verb>(?:не\s+)?(?:спрашиваю|показываю|присылаю|пишу|кидаю|напоминаю|"
+        r"отправляю|записываю|сохраняю|уточняю|предлагаю|переспрашиваю))\b",
+        re.IGNORECASE | re.MULTILINE),
+    re.compile(
+        r"(?:^|[.!?]\s*)\s*(?:i\s+)?(?P<verb>(?:now|no\s+longer)\s+(?:just\s+)?"
+        r"(?:ask|show|send|remind|save|record|suggest|check))\b",
+        re.IGNORECASE | re.MULTILINE),
 )
 
 # A completed verb behind a NEGATION is an honest denial, not a claim («я её не
@@ -312,10 +331,51 @@ _NEGATION_WINDOW = 40
 # front of the verb turns it back into one (review 2026-07-28, added with the
 # create/place family).
 _OFFER_TAIL_RE = re.compile(
-    r"\b(?:can|could|will|'ll|shall|should|would|may|might|must|"
+    r"\b(?:can|could|will|'ll|'d|shall|should|would|may|might|must|"
     r"let\s+me|want\s+me\s+to|going\s+to|gonna|to)\s+"
     r"(?:just\s+|also\s+|then\s+|now\s+)?$",
     re.IGNORECASE)
+
+# The Russian SUBJUNCTIVE is an offer, never a report (ADR-0010): «Я бы добавила
+# её в Movies — хочешь?», «я бы с радостью сохранила», «добавила бы отдельной
+# записью». The persona and the repair prompt ask for exactly that shape, and the
+# guard was blocking it — which locked memory learning out for a whole curation
+# window every time she answered honestly. Pre-verb: «(я )?бы» with at most two
+# words between; post-verb: «бы» right after. Disabled on a line that carries a
+# «Готово/done» header — that is a report whatever mood the verb is in.
+_SUBJUNCTIVE_PRE_RE = re.compile(
+    r"(?:^|[^\w])(?:я\s+)?бы\s+(?:\w+\s+){0,2}$", re.IGNORECASE)
+_SUBJUNCTIVE_POST_RE = re.compile(r"^\s+бы\b", re.IGNORECASE)
+
+# Her own life is not his data. A sentence that names her friend or her playlist
+# is a story about HER day, and a narrative-capable verb in it is not a claim —
+# the ONLY two her-life shapes the guard excuses (ADR-0010 narrowed it to these).
+_HER_LIFE_RE = re.compile(r"\bМай[яеию]\b|\bв\s+плейлист", re.IGNORECASE)
+_SOFT_VERB_RE = re.compile(rf"^(?:{_RU_SOFT_VERBS}|{_EN_SOFT_VERBS})$", re.IGNORECASE)
+
+
+def _subjunctive(value, start, end):
+    """True when the verb at [start, end) is in the subjunctive («бы»), unless the
+    line also carries a completion header."""
+    if _COMPLETION_HEAD_RE.search(_line_around(value, start, end)):
+        return False
+    before = value[max(0, start - 40):start]
+    return bool(_SUBJUNCTIVE_PRE_RE.search(before)
+                or _SUBJUNCTIVE_POST_RE.match(value[end:]))
+
+
+def _her_life(value, start, end, verb):
+    """A NARRATIVE-capable verb in a sentence about her own life (her named friend,
+    her playlist) — never a data verb, never under a completion header."""
+    if not verb or not _SOFT_VERB_RE.match(verb):
+        return False
+    left = max((m.end() for m in _SENTENCE_BOUNDARY_RE.finditer(value, 0, start)),
+               default=0)
+    right_m = _SENTENCE_BOUNDARY_RE.search(value, end)
+    sentence = value[left:right_m.start() if right_m else len(value)]
+    if _COMPLETION_HEAD_RE.search(sentence):
+        return False
+    return bool(_HER_LIFE_RE.search(sentence))
 
 # Explicit references to an EARLIER exchange. Discussion of a real past save —
 # «Да, я сохранила его вчера в Movies под #51» — is truthful and must survive, or
@@ -400,7 +460,21 @@ def _past_reference(value, start, end):
         return bool(_PAST_MARKER_RE.search(value[line_start:start]))
     if _COMPLETION_HEAD_RE.search(line):
         return False
-    return bool(_PAST_MARKER_RE.search(line))
+    # A day-part/past word BEFORE the verb places the action in the past
+    # («вчера сохранила», «утром я её добавила»). AFTER the verb it counts only
+    # while no clause boundary separates it from the verb: «Сохранила #51 в
+    # Movies, утром проверишь» is a report plus a plan, not a memory (ADR-0010
+    # — «any day-part word on the line» used to excuse the whole line).
+    # …"before the verb" includes the matched span itself: a verb-less shape
+    # («уже сохранила утром, это #51») carries its marker inside the match.
+    if _PAST_MARKER_RE.search(value[line_start:end]):
+        return True
+    line_end = line_start + len(line)
+    after = value[end:line_end]
+    m = _PAST_MARKER_RE.search(after)
+    if not m:
+        return False
+    return not _CLAUSE_BOUNDARY_RE.search(after[:m.start()])
 
 
 def _inside_question(value, start, end):
@@ -550,9 +624,13 @@ def action_claim_match(text):
             if m is None:
                 break
             pos = m.start("verb") if "verb" in pattern.groupindex else m.start()
+            verb = m.group("verb") if "verb" in pattern.groupindex else ""
+            verb_end = m.end("verb") if "verb" in pattern.groupindex else m.end()
             if _negated(value, pos) or _offered(value, pos) \
                     or _inside_question(value, pos, m.end()) \
-                    or _past_reference(value, pos, m.end()):
+                    or _past_reference(value, pos, m.end()) \
+                    or _subjunctive(value, pos, verb_end) \
+                    or _her_life(value, pos, verb_end, verb):
                 # pos >= m.start() >= cursor for every pattern, so this always
                 # advances — the loop cannot stall on a rejected match.
                 cursor = pos + 1

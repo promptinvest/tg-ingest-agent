@@ -18,6 +18,8 @@ Safety that stays even on this path:
     say "I called the bank"). Her *private life* is hers to colour freely; the
     boss's tasks and facts stay truthful.
 """
+import re
+
 import boss_model
 import common
 import store
@@ -68,8 +70,10 @@ CHARACTER = (
     "reminders, file things, touch the calendar, or change settings or budgets — the app "
     "does those when he asks plainly, and you report one as done ONLY when it truly happened "
     "this turn and was shown to you. If he asks for one mid-conversation, NEVER reply with a "
-    "fake «готово / поменяла / поставила / перенесла / закрыла / сохранила». Instead, warmly: "
-    "say you're on it and have him say it as a clear request so it's really done — or, if it's "
+    "fake «готово / поменяла / поставила / перенесла / закрыла / сохранила». Do NOT say you "
+    "are on it, taking it, or will do it either — a promise is the same lie one step earlier. "
+    "Instead, warmly: tell him exactly what to say so it really happens («скажи «напомни завтра "
+    "в 10 позвонить Ире»» / «скажи «сохрани это»»), and ask if that's what he wants — or, if it's "
     "something you genuinely can't do yet, tell him so plainly and kindly. A made-up "
     "confirmation is the worst thing you can hand him.\n"
     "Never invent specifics — IDs, item numbers, trace codes, prices, counts, dates, "
@@ -135,6 +139,17 @@ def _lang_name(lang):
     return "Russian" if lang == "ru" else "English"
 
 
+_NO_EMOJI_RULE_RE = re.compile(
+    r"без\s+эмодзи|без\s+смайл|не\s+(?:используй|ставь|пиши|добавляй|надо)\s+(?:\w+\s+){0,2}"
+    r"(?:эмодзи|смайл)|\bno\s+emoji|without\s+emoji|don['’]?t\s+use\s+emoji",
+    re.IGNORECASE)
+
+
+def no_emoji_rule(guidance_lines):
+    """True when a live standing rule forbids emoji."""
+    return any(_NO_EMOJI_RULE_RE.search(str(line or "")) for line in guidance_lines or ())
+
+
 def build_system(conn, lang, extra_context=None):
     owner = boss_model.get_address(conn, lang)
     name_ru = store.pref_get(conn, "owner_name_ru")
@@ -192,14 +207,22 @@ def build_system(conn, lang, extra_context=None):
         parts.append("Useful context for right now (weave in only if relevant):\n"
                      + extra_context)
 
-    parts.append(
-        "You can react to his message with a Telegram emoji when it genuinely adds warmth. "
-        "To do it, put ONE emoji on its OWN first line, by itself — nothing else, no "
-        "brackets, no labels, no 'react:' — then your actual message on the lines below. "
-        "Use it sparingly — good news → 🎉/🔥, thanks → 🙏/❤️, something funny → 🤣/😁, something "
-        "sweet → 🥰, agreement → 👍/👌. React only with one of: 👍 ❤️ 🔥 🥰 👏 😁 🤔 🎉 🙏 👌 💯 🤣 "
-        "🤝 😍 👀 🫡. Most messages need NO reaction — then just write your message normally."
-    )
+    if no_emoji_rule(guidance):
+        # A standing «без эмодзи» rule wins over the persona's own emoji habits
+        # (ADR-0012): the reaction invitation would contradict it every turn.
+        parts.append(
+            "He asked for NO emoji: none in your text, no emoji line, no reaction — "
+            "warmth goes into the words."
+        )
+    else:
+        parts.append(
+            "You can react to his message with a Telegram emoji when it genuinely adds warmth. "
+            "To do it, put ONE emoji on its OWN first line, by itself — nothing else, no "
+            "brackets, no labels, no 'react:' — then your actual message on the lines below. "
+            "Use it sparingly — good news → 🎉/🔥, thanks → 🙏/❤️, something funny → 🤣/😁, something "
+            "sweet → 🥰, agreement → 👍/👌. React only with one of: 👍 ❤️ 🔥 🥰 👏 😁 🤔 🎉 🙏 👌 💯 🤣 "
+            "🤝 😍 👀 🫡. Most messages need NO reaction — then just write your message normally."
+        )
 
     parts.append(
         "Keep replies short and human — usually a sentence or three, like a text "

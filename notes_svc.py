@@ -144,20 +144,32 @@ class NotesMixin:
             period = "month"
         person = str(params.get("person") or "").strip() or None
         tag = str(params.get("tag") or "").strip() or None
+        # A day or a range in his own words («17 июня», «вчера», «с 1 по 15 июня»)
+        # — ADR-0013: the documented «за что я был благодарен 17 июня?» could not be
+        # answered because nothing carried a date.
+        since = until = label = None
+        if any(params.get(k) for k in ("date", "since", "until")):
+            import reminders
+            window = reminders.journal_window(params, self.tz_offset(), lang=lang)
+            if window is None:
+                self.reply(chat_id, T(lang, "journal_date_unclear"))
+                return
+            since, until, label = window
         if params.get("stats"):
             self.reply(chat_id, self._journal_stats_text(lang, canonical, period))
             return
         rows, total = self._journal_rows(canonical, period, person, tag,
-                                         0, self.JOURNAL_PAGE_SIZE)
+                                         0, self.JOURNAL_PAGE_SIZE, since=since, until=until)
         if not total:
-            self.reply(chat_id, T(lang, "journal_empty", category=canonical))
+            self.reply(chat_id, T(lang, "journal_empty", category=canonical)
+                       + (f" ({label})" if label else ""))
             return
         store.list_views_prune(self.conn,
                                (datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
         token = store.list_view_add(
             self.conn, chat_id,
             {"view": "journal", "category": canonical, "period": period,
-             "person": person, "tag": tag},
+             "person": person, "tag": tag, "since": since, "until": until, "label": label},
         )
         # Hand the page we already hold to the renderer. Opening a journal used
         # to run `_journal_rows` TWICE — once for this emptiness check, once
@@ -166,18 +178,22 @@ class NotesMixin:
         # same offset, same filters: fetching it a second time bought nothing.
         text, keyboard, _ = self._journal_page(lang, canonical, period, 0, token,
                                                person=person, tag=tag,
-                                               prefetched=(rows, total))
+                                               prefetched=(rows, total),
+                                               since=since, until=until, label=label)
         self.reply(chat_id, text, reply_markup=keyboard)
 
-    def _journal_rows(self, canonical, period, person, tag, offset, limit):
+    def _journal_rows(self, canonical, period, person, tag, offset, limit,
+                      since=None, until=None):
         """One page of a journal + the filtered total. A structured journal
         reads from journal_entries (occurred_at order, payload filters); a
         plain journal category keeps the message-based page. Rows come back as
-        (message-like row, payload dict)."""
-        since = self._journal_since(period)
+        (message-like row, payload dict). An explicit `since`/`until` window
+        (a named day or range) replaces the period."""
+        if since is None and until is None:
+            since = self._journal_since(period)
         gdef = store.journal_def_by_category(self.conn, canonical, active_only=False)
         if gdef is not None:
-            rows = store.journal_entries_for(self.conn, gdef["id"], since)
+            rows = store.journal_entries_for(self.conn, gdef["id"], since, until)
             if person or tag:
                 p = (person or "").casefold()
                 t = (tag or "").casefold()
@@ -197,11 +213,12 @@ class NotesMixin:
             page = rows[start:start + max(1, int(limit or 5))]
             return [(r, store.journal_entry_payload(r)) for r in page], len(rows)
         page, total = store.journal_entries_page(self.conn, canonical, since,
-                                                 offset, limit)
+                                                 offset, limit, until_iso=until)
         return [(r, {}) for r in page], total
 
     def _journal_page(self, lang, canonical, period, offset, token,
-                      person=None, tag=None, prefetched=None):
+                      person=None, tag=None, prefetched=None,
+                      since=None, until=None, label=None):
         """Render one oldest-first journal page with a stable filter. Entries of
         a structured journal carry the J#-prefixed stable number (§5.6 — the
         linked message's lazy note number, never a second counter).
@@ -213,10 +230,11 @@ class NotesMixin:
         gdef = store.journal_def_by_category(self.conn, canonical, active_only=False)
         prefix = "J#" if gdef is not None else "#"
         entries, total = prefetched if prefetched is not None else self._journal_rows(
-            canonical, period, person, tag, offset, self.JOURNAL_PAGE_SIZE)
-        plabel = {"day": ("за сегодня", "today"), "week": ("за неделю", "this week"),
-                  "month": ("за месяц", "this month"),
-                  "all": ("за всё время", "all time")}[period][0 if ru else 1]
+            canonical, period, person, tag, offset, self.JOURNAL_PAGE_SIZE,
+            since=since, until=until)
+        plabel = label or {"day": ("за сегодня", "today"), "week": ("за неделю", "this week"),
+                           "month": ("за месяц", "this month"),
+                           "all": ("за всё время", "all time")}[period][0 if ru else 1]
         if person:
             plabel += (f", про {person}" if ru else f", about {person}")
         if tag:

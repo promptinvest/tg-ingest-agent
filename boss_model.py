@@ -131,12 +131,28 @@ def _dedup(values, thresh=0.7):
     return out
 
 
+def find_similar(conn, text, thresh=0.7):
+    """The active (confirmed/inferred) profile row a near-identical fact already
+    lives in, or None — the row a repeated correction BUMPS (ADR-0012)."""
+    for status in ("confirmed", "inferred"):
+        for row in store.boss_items(conn, status, limit=60):
+            if _similar(text, row["value"], thresh):
+                return row
+    return None
+
+
 def is_duplicate(conn, text, thresh=0.7):
     """True if a near-identical fact is already in the profile (so the curator
     doesn't pile up reworded copies)."""
-    existing = [r["value"] for r in store.boss_items(conn, "confirmed", limit=60)] \
-        + [r["value"] for r in store.boss_items(conn, "inferred", limit=60)]
-    return any(_similar(text, e, thresh) for e in existing)
+    return find_similar(conn, text, thresh) is not None
+
+
+def topical_overlap(a, b, low=0.2):
+    """Deterministic 'same topic' test — the gate a model's contradiction verdict
+    must pass before an inferred fact is demoted (ADR-0012). Low on purpose:
+    «пьёт кофе по утрам» vs «пьёт чай без сахара» share one word in four and ARE
+    the contradiction the pass exists for; a verdict with no shared word is noise."""
+    return _similar(a, b, low)
 
 
 # Provenance: when asked "откуда ты это знаешь?", Cara cites how she learned it —
@@ -312,21 +328,35 @@ def standing_guidance(conn, max_items=8, max_chars=600):
     flattened to one '- ' line each so a value carrying a newline cannot forge
     an extra rule under 'FOLLOW these every time'.
     """
-    out, used, seen = [], 0, set()
+    # ADR-0012: one ordering across both statuses — confidence, then how often
+    # he repeated it, then recency (the "newest 8" tie-break used to decide
+    # everything, since every correction sits at 0.8) — and TWO slots are held
+    # for tone rules so a run of workflow corrections cannot push «без эмодзи»
+    # out of the prompt.
+    rows = []
     for status in ("confirmed", "inferred"):
-        for row in store.boss_items(conn, status, sensitivities=("normal",), limit=20,
-                                    kinds=GUIDANCE_KINDS):
-            value = common.neutralize_untrusted(row["value"])
-            if not value or value in seen:
-                continue
-            line = f"- {value}"
-            if used + len(line) > max_chars:
-                common.log(f"standing_guidance: skipped a {len(line)}-char profile "
-                           f"item over the {max_chars - used}-char budget left")
-                continue
-            out.append(line)
-            used += len(line)
-            seen.add(value)
-            if len(out) >= max_items:
-                return out
+        rows += store.boss_items(conn, status, sensitivities=("normal",), limit=40,
+                                 kinds=GUIDANCE_KINDS)
+    rows.sort(key=lambda r: (-(r["confidence"] or 0.0), -(r["recurrence_count"] or 1),
+                             str(r["last_seen_at"] or "")), reverse=False)
+    tone = [r for r in rows if r["kind"] == "tone"]
+    ordered = tone[:TONE_SLOTS] + [r for r in rows if r not in tone[:TONE_SLOTS]]
+    out, used, seen = [], 0, set()
+    for row in ordered:
+        value = common.neutralize_untrusted(row["value"])
+        if not value or value in seen:
+            continue
+        line = f"- {value}"
+        if used + len(line) > max_chars:
+            common.log(f"standing_guidance: skipped a {len(line)}-char profile "
+                       f"item over the {max_chars - used}-char budget left")
+            continue
+        out.append(line)
+        used += len(line)
+        seen.add(value)
+        if len(out) >= max_items:
+            return out
     return out
+
+
+TONE_SLOTS = 2

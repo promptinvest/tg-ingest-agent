@@ -15828,9 +15828,23 @@ class ConsolidationBatchRotationTests(unittest.TestCase):
         self.assertNotEqual(first[0][0], seen[0][0])   # a different first item -> different cuts
 
     def test_the_weekly_tick_hands_its_run_date_to_the_curator(self):
+        # ADR-0012: the tick ENQUEUES a durable job carrying its run date; the job
+        # body hands that date to the curator and stamps the week only on success.
         with mock.patch.object(memory_curator, "consolidate", return_value=0) as c:
             self.agent.check_memory_consolidation()
+            self.assertFalse(c.called)                              # queued, not run inline
+            self.assertTrue(jobs.has_pending(self.conn, "memory_curator", "consolidate"))
+            self.assertIsNone(store.kv_get(self.conn, "memory_consolidate_at"))
+            runtime.drain(self.conn, self.agent)
         self.assertIsNotNone(c.call_args.kwargs.get("now"))
+        self.assertIsNotNone(store.kv_get(self.conn, "memory_consolidate_at"))  # stamped after
+        # …and a failed run leaves the week unstamped (the runner retries it).
+        store.kv_set(self.conn, "memory_consolidate_at", "")
+        store.kv_set(self.conn, "memory_consolidate_enqueued_at", "")
+        with mock.patch.object(memory_curator, "consolidate", side_effect=RuntimeError("llm")):
+            self.agent.check_memory_consolidation()
+            runtime.drain(self.conn, self.agent)
+        self.assertFalse(store.kv_get(self.conn, "memory_consolidate_at"))
 
     def test_the_on_demand_cleanup_reuses_todays_cuts_by_design(self):
         # «почисти память» passes NO run date, so the rotation falls back to today:
@@ -26547,6 +26561,397 @@ class PhaseA20260907Tests(unittest.TestCase):
         self.assertIn("📔 Благодарности:", text)
         self.assertIn("— тёплый вечер с семьёй", text)                 # his own words
         self.assertNotIn("Как я работала", text)
+
+
+class PhaseB20260907Tests(unittest.TestCase):
+    """Phase B of the 2026-09-07 review (docs/adr/ADR-0010…0013): the action-truth
+    guard v3, deterministic post-window follow-ups plus router/converse output
+    hygiene, memory consolidation that folds only like into like, and dated,
+    photo-aware recall."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "b.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+        store.pref_set(self.conn, "quiet_start", "0")
+        store.pref_set(self.conn, "quiet_end", "0")
+        store.pref_set(self.conn, "timezone_offset", "0")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    # -- ADR-0010: action-truth guard v3 ----------------------------------------
+
+    def test_every_probed_sentence_of_the_review(self):
+        blocked = (
+            "Сохранила #51 в Movies, утром проверишь.",          # day-part after a clause boundary
+            "Убрала #58 из списка.",
+            "Настроила напоминание на 9 утра.",
+            "Я теперь не спрашиваю, а сразу записываю.",
+            "Больше не показываю тебе эти сообщения.",
+            "I no longer ask, I just save it.",
+            "Готово — я бы уже добавила её в Movies",           # a «Готово» head beats the mood
+            "Беру в работу.",
+            "Обновила список покупок.",                            # a data cue, no her-life marker
+        )
+        for line in blocked:
+            with self.subTest(blocked=line):
+                self.assertTrue(action_truth.freeform_claims_action(line), line)
+        allowed = (
+            "Я бы добавила её в Movies — хочешь?",                 # the honest offer shape
+            "Я бы с радостью сохранила это отдельной записью, скажи только.",
+            "Добавила бы её в Movies, если скажешь.",
+            "I'd add it to Movies — want me to?",
+            "Да, я сохранила его вчера в Movies под #51.",         # a real earlier save
+            "Утром я её добавила, помнишь?",
+            "Закинула в плейлист пару треков и отметила для себя список на выходные.",   # her own life
+            "Рассказала Майе про твой проект, она в восторге.",
+            texts.T("ru", "action_not_done"), texts.T("en", "action_not_done"),
+            texts.T("ru", "artifact_not_sent"), texts.T("en", "artifact_not_sent"),
+        )
+        for line in allowed:
+            with self.subTest(allowed=line):
+                self.assertFalse(action_truth.freeform_claims_action(line), line)
+        for line in (texts.T("ru", "artifact_not_sent"), texts.T("en", "artifact_not_sent")):
+            self.assertFalse(action_truth.freeform_claims_artifact(line))
+
+    def test_persona_names_the_request_instead_of_promising(self):
+        self.assertNotIn("say you're on it", converse.CHARACTER)
+        self.assertIn("tell him exactly what to say", converse.CHARACTER)
+        self.assertIn("Do NOT say you are on it", converse.CHARACTER)
+        self.assertTrue(self.agent._is_relational_message("обними меня"))   # the «обнim» cue
+
+    def test_a_no_emoji_rule_drops_the_reaction_invitation(self):
+        self.assertIn("React only with one of", converse.build_system(self.conn, "ru"))
+        store.boss_add(self.conn, "tone", "Не используй эмодзи в ответах.",
+                       status="confirmed", confidence=1.0)
+        sysm = converse.build_system(self.conn, "ru")
+        self.assertNotIn("React only with one of", sysm)
+        self.assertIn("NO emoji", sysm)
+
+    # -- ADR-0011: post-window follow-ups and output hygiene --------------------
+
+    def test_a_post_window_snooze_binds_to_the_last_fired_one_shot(self):
+        now = datetime.now(timezone.utc)
+        rid = store.reminder_add(self.conn, 1, "созвон", (now - timedelta(hours=2)).isoformat())
+        store.reminder_touch_fired(self.conn, rid, (now - timedelta(minutes=116)).isoformat())
+        other = store.reminder_add(self.conn, 1, "отчёт", (now + timedelta(days=1)).isoformat())
+        store.kv_set(self.conn, "last_reminder_id", str(other))     # points at an UNFIRED one
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {"message_id": 1}, "через час")
+        route.assert_not_called()                                    # never the router
+        due = reminders.parse_iso_utc(store.reminder_get(self.conn, rid)["due_utc"])
+        self.assertLess(abs((due - now).total_seconds() - 3600), 120)
+        self.assertIn("созвон", r.call_args.args[1])
+        self.assertEqual(store.reminder_get(self.conn, other)["due_utc"],
+                         (now + timedelta(days=1)).isoformat())      # untouched
+
+    def test_unusable_router_output_is_filed_as_a_model_defect(self):
+        self.assertEqual(router.validate_route_reason(None, False)[1], "non_json")
+        self.assertEqual(router.validate_route_reason({"action": "chat"}, False)[1],
+                         "invalid_action:chat")
+        self.assertEqual(router.validate_route_reason({"action": "confirm"}, False)[1],
+                         "pending_only_without_pending")
+        with mock.patch.object(llm, "chat_profile", return_value="article Yes"), \
+                mock.patch.object(self.agent, "do_converse") as dc:
+            self.agent.dispatch(1, {"message_id": 2}, "а что там с рейсом в среду вечером")
+        dc.assert_called_once()
+        kinds = {r["kind"] for r in store.issues_recent(self.conn, "2000-01-01")}
+        self.assertIn("router_invalid_output", kinds)
+        self.assertNotIn("unclear_request", kinds)
+
+    def test_a_degenerate_converse_reply_is_retried_then_refused(self):
+        route = {"action": "converse", "params": {}, "confidence": 0.9}
+        replies = iter(["article\nYes", "Про рейс в среду посмотрю по заметкам 🙂"])
+        with mock.patch.object(router, "route", return_value=route), \
+                mock.patch.object(llm, "chat_profile", side_effect=lambda *a, **k: next(replies)), \
+                mock.patch.object(self.agent, "maybe_curate_conversation"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {"message_id": 3}, "что там с рейсом?")
+        self.assertIn("рейс", r.call_args.args[1])                   # the retry shipped
+        replies = iter(["Sure thing boss, all good here", "Конечно, босс, посмотрю 🙂"])
+        with mock.patch.object(router, "route", return_value=route), \
+                mock.patch.object(llm, "chat_profile", side_effect=lambda *a, **k: next(replies)), \
+                mock.patch.object(self.agent, "maybe_curate_conversation"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {"message_id": 4}, "что там с рейсом?")
+        self.assertIn("Конечно", r.call_args.args[1])                # wrong script → retried
+        replies = iter(["Yes", "ok"])
+        with mock.patch.object(router, "route", return_value=route), \
+                mock.patch.object(llm, "chat_profile", side_effect=lambda *a, **k: next(replies)), \
+                mock.patch.object(self.agent, "maybe_curate_conversation"), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {"message_id": 5}, "что там с рейсом?")
+        self.assertEqual(r.call_args.args[1], texts.T("ru", "llm_error"))
+        self.assertIn("converse_degenerate",
+                      {x["kind"] for x in store.issues_recent(self.conn, "2000-01-01")})
+
+    # -- ADR-0012: consolidation folds only like into like ----------------------
+
+    @staticmethod
+    def _grouping(groups, marker):
+        """A grouping model that answers ONLY the boss-profile batch (the one
+        carrying `marker` text) — her seeded life facts share small ids with the
+        profile rows, so an id match alone would fold a life beat by accident."""
+        def fake(cfg, conn, skill, messages, **kw):
+            content = messages[1]["content"]
+            if "CANDIDATES:" in content:
+                return json.dumps({"contradicts": [], "duplicates": []})
+            if "INFERRED:" in content:
+                return json.dumps({"contradicts": []})
+            if marker in content:
+                return json.dumps({"groups": groups})
+            return json.dumps({"groups": []})
+        return fake
+
+    def test_a_correction_folds_only_into_a_correction_or_a_confirmed_fact(self):
+        c = self.conn
+        corr = store.boss_add(c, "workflow", "Отвечай короче и без списков.",
+                              status="inferred", confidence=0.8, source_table="correction")
+        para = store.boss_add(c, "workflow", "Любит короткие ответы без списков и лишних слов.",
+                              status="inferred", confidence=0.7, source_table="conversation")
+        conf = boss_model.remember_explicit(c, "Отвечай коротко.", "workflow")
+        for i in range(6):
+            store.boss_add(c, "project", f"Проект №{i} в работе.", status="inferred",
+                           confidence=0.6, source_table="conversation")
+        report = {}
+        with mock.patch.object(llm, "chat_profile", side_effect=self._grouping(
+                [{"keep": para, "drop": [corr]}], "Отвечай короче")):
+            n = memory_curator.consolidate(c, self.cfg, report=report)
+        self.assertEqual(n, 0)                                       # an inferred paraphrase may not eat a rule
+        self.assertEqual(store.boss_get(c, corr)["status"], "inferred")
+        with mock.patch.object(llm, "chat_profile", side_effect=self._grouping(
+                [{"keep": conf, "drop": [corr]}], "Отвечай короче")):
+            n = memory_curator.consolidate(c, self.cfg, report=report)
+        self.assertEqual(n, 1)
+        row = store.boss_get(c, corr)
+        self.assertEqual((row["status"], row["merged_into"]), ("merged", conf))
+        self.assertEqual(report["pairs"], [(conf, corr)])
+
+    def test_tidy_inferred_skips_standing_rules_and_needs_topical_overlap(self):
+        c = self.conn
+        conf = boss_model.remember_explicit(c, "Пьёт чай без сахара.", "personal_fact")
+        rule = store.boss_add(c, "avoidance", "Не используй эмодзи в ответах.",
+                              status="inferred", confidence=0.8, source_table="correction")
+        unrelated = store.boss_add(c, "personal_fact", "Бегает по утрам в парке.",
+                                   status="inferred", confidence=0.7)
+        coffee = store.boss_add(c, "personal_fact", "Пьёт кофе по утрам.",
+                                status="inferred", confidence=0.7)
+        captured = {}
+
+        def fake(cfg, conn, skill, messages, **kw):
+            captured["content"] = messages[1]["content"]
+            return json.dumps({"contradicts": [rule, unrelated, coffee]})
+        with mock.patch.object(llm, "chat_profile", side_effect=fake):
+            memory_curator._tidy_inferred(c, self.cfg)
+        self.assertNotIn(f"{rule}:", captured["content"])            # never a candidate
+        self.assertEqual(store.boss_get(c, rule)["status"], "inferred")
+        self.assertEqual(store.boss_get(c, unrelated)["status"], "inferred")   # no shared word
+        row = store.boss_get(c, coffee)
+        self.assertEqual((row["status"], row["merged_into"]), ("merged", conf))
+
+    def test_a_repeated_correction_bumps_recurrence_instead_of_being_discarded(self):
+        c = self.conn
+        text = "Отвечай на том языке, на котором он пишет."
+        existing = store.boss_add(c, "tone", text, status="inferred", confidence=0.8,
+                                  source_table="correction")
+        store.convo_add(c, 1, "user", "Отвечай на том языке, на котором я пишу!")
+        store.convo_add(c, 1, "bot", "Поняла.")
+        reply = json.dumps({"cara_life": [], "boss_facts": [], "corrections": [
+            {"kind": "tone", "text": text,
+             "evidence": "Отвечай на том языке, на котором я пишу!"}]})
+        with mock.patch.object(llm, "chat_profile", return_value=reply):
+            result = memory_curator.curate_conversation(c, self.cfg, 1, correction_mode=True)
+        row = store.boss_get(c, existing)
+        self.assertEqual(row["recurrence_count"], 2)
+        self.assertAlmostEqual(row["confidence"], 0.85)
+        self.assertEqual(c.execute("SELECT COUNT(*) FROM boss_profile_items WHERE value=?",
+                                   (text,)).fetchone()[0], 1)      # not a second row
+        self.assertIn(text, result["unresolved"])
+
+    def test_standing_guidance_prefers_repeated_rules_and_keeps_tone_slots(self):
+        c = self.conn
+        once = store.boss_add(c, "workflow", "Правило один.", status="inferred", confidence=0.8)
+        thrice = store.boss_add(c, "workflow", "Правило два.", status="inferred", confidence=0.8)
+        store.boss_bump(c, thrice)
+        store.boss_bump(c, thrice)
+        self.assertEqual(boss_model.standing_guidance(c, max_items=1), ["- Правило два."])
+        for i in range(8):
+            store.boss_add(c, "workflow", f"Уверенное правило {i}.", status="confirmed",
+                           confidence=1.0)
+        store.boss_add(c, "tone", "Без эмодзи.", status="inferred", confidence=0.8)
+        guidance = boss_model.standing_guidance(c)
+        self.assertEqual(len(guidance), 8)
+        self.assertIn("- Без эмодзи.", guidance)                    # a reserved tone slot
+        self.assertEqual(once, once)
+
+    def test_the_repair_flips_only_the_named_rows_on_a_production_sized_profile(self):
+        c = self.conn
+        now = store._now()
+
+        def raw(iid, kind, status, source, seen=now):
+            c.execute(
+                "INSERT INTO boss_profile_items (id, kind, value, status, confidence, sensitivity,"
+                " source_table, recurrence_count, first_seen_at, last_seen_at, created_at,"
+                " updated_at) VALUES (?, ?, ?, ?, 0.8, 'normal', ?, 1, ?, ?, ?, ?)",
+                (iid, kind, f"row {iid}", status, source, now, seen, now, now))
+        raw(24, "workflow", "merged", "correction")
+        raw(85, "workflow", "merged", "conversation")           # wrong pre-state: must stay
+        raw(137, "personal_fact", "merged", "memory_candidate")
+        raw(182, "project", "merged", "conversation", seen="2026-08-01T00:00:00+00:00")
+        raw(183, "project", "merged", "conversation", seen="2026-08-10T00:00:00+00:00")
+        raw(184, "project", "merged", "conversation")
+        c.commit()
+        store._repair_consolidation_2026_09_07(c)                  # < 100 rows: a no-op
+        c.commit()
+        self.assertEqual(store.boss_get(c, 24)["status"], "merged")
+        self.assertIsNone(store.kv_get(c, "repair_consolidation_2026_09_07"))
+        for i in range(100):
+            store.boss_add(c, "project", f"Проект №{i}.", status="inferred", confidence=0.6)
+        store._repair_consolidation_2026_09_07(c)
+        c.commit()
+        self.assertEqual(store.boss_get(c, 24)["status"], "inferred")
+        self.assertEqual(store.boss_get(c, 85)["status"], "merged")
+        self.assertEqual(store.boss_get(c, 137)["status"], "confirmed")
+        self.assertEqual(store.boss_get(c, 184)["status"], "inferred")
+        self.assertEqual(store.boss_get(c, 183)["status"], "inferred")   # the later-seen one
+        self.assertEqual(store.boss_get(c, 182)["status"], "merged")
+        self.assertEqual(store.kv_get(c, "repair_consolidation_2026_09_07"), "done")
+        store.boss_set_status(c, 24, "merged")
+        store._repair_consolidation_2026_09_07(c)                  # once only
+        c.commit()
+        self.assertEqual(store.boss_get(c, 24)["status"], "merged")
+
+    # -- ADR-0013: dated recall and photo-aware answers -------------------------
+
+    def test_parse_day_phrase_forms(self):
+        from datetime import date
+        now = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+        f = lambda s: reminders.parse_day_phrase(s, 0, now)   # noqa: E731
+        self.assertEqual(f("вчера"), date(2026, 9, 7))
+        self.assertEqual(f("позавчера"), date(2026, 9, 6))
+        self.assertEqual(f("17 июня"), date(2026, 6, 17))
+        self.assertEqual(f("17-го июня"), date(2026, 6, 17))
+        self.assertEqual(f("17.06"), date(2026, 6, 17))
+        self.assertEqual(f("17.06.2025"), date(2025, 6, 17))
+        self.assertEqual(f("June 17"), date(2026, 6, 17))
+        self.assertEqual(f("17 декабря"), date(2025, 12, 17))       # ahead → last year's
+        self.assertEqual(f("17-го"), date(2026, 8, 17))              # ahead → last month's
+        self.assertEqual(f("5-го"), date(2026, 9, 5))
+        self.assertIsNone(f("когда-то"))
+        window = reminders.journal_window({"since": "1 июня", "until": "15 июня"}, 0, now)
+        self.assertEqual(window[0][:10], "2026-06-01")
+        self.assertEqual(window[1][:10], "2026-06-16")               # inclusive end
+        self.assertEqual(window[2], "с 01.06 по 15.06")
+
+    def _journal_entry(self, tg_id, text, received_at):
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": tg_id,
+                                               "received_at": received_at, "raw_text": text})
+        store.set_suggestion(self.conn, mid, "Благодарности", "", "m")
+        store.confirm_category(self.conn, mid, "Благодарности")
+        return mid
+
+    def test_journal_show_by_day_and_range(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        self._journal_entry(1, "тёплый вечер с семьёй", "2026-06-17T18:00:00+00:00")
+        self._journal_entry(2, "звонок от Веры", "2026-06-18T18:00:00+00:00")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_journal_show(1, "ru", {"category": "Благодарности",
+                                                 "date": "17 июня 2026"})
+        text = r.call_args.args[1]
+        self.assertIn("за 17.06", text)
+        self.assertIn("тёплый вечер", text)
+        self.assertNotIn("звонок от Веры", text)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_journal_show(1, "ru", {"category": "Благодарности",
+                                                 "since": "17.06.2026", "until": "18.06.2026"})
+        text = r.call_args.args[1]
+        self.assertIn("тёплый вечер", text)
+        self.assertIn("звонок от Веры", text)
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_journal_show(1, "ru", {"category": "Благодарности",
+                                                 "date": "когда-то"})
+        self.assertEqual(r.call_args.args[1], texts.T("ru", "journal_date_unclear"))
+
+    def test_ask_carries_dates_fuses_keyword_hits_and_marks_only_cited_notes(self):
+        a = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 10,
+                                             "received_at": "2026-06-17T10:00:00+00:00",
+                                             "raw_text": "Рейс 14 июня 10:05"})
+        store.set_suggestion(self.conn, a, "Travel", "рейс", "m")
+        store.confirm_category(self.conn, a, "Travel")
+        store.set_chunks(self.conn, a, [("Рейс 14 июня 10:05", [1.0, 0.0])])
+        b = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 11,
+                                             "received_at": "2026-06-18T10:00:00+00:00",
+                                             "raw_text": "Отель Hilton, заезд 14 июня"})
+        store.set_suggestion(self.conn, b, "Travel", "отель", "m")
+        store.confirm_category(self.conn, b, "Travel")
+        no_a = store.ensure_note_no(self.conn, a)
+        captured = {}
+
+        def fake_chat(cfg, conn, skill, messages, **kw):
+            captured["data"] = messages[1]["content"]
+            return f"Рейс 14 июня в 10:05 (#{no_a})"
+        with mock.patch.object(llm, "embed", return_value=[[1.0, 0.0]]), \
+                mock.patch.object(llm, "chat_profile", side_effect=fake_chat), \
+                mock.patch.object(self.agent, "reply", return_value=True):
+            self.agent.do_ask(1, "ru", {"question": "когда рейс и отель?"}, "когда рейс и отель?")
+        self.assertIn("· 2026-06-17]", captured["data"])              # the date in the head
+        self.assertIn("Отель Hilton", captured["data"])               # a keyword hit, fused in
+        self.assertEqual(store.get_message(self.conn, a)["use_count"], 1)   # cited
+        self.assertEqual(store.get_message(self.conn, b)["use_count"], 0)   # ranked only
+        # an embedder outage degrades to keyword search instead of failing
+        with mock.patch.object(llm, "embed", side_effect=llm.LLMError("embedder down")), \
+                mock.patch.object(llm, "chat_profile", side_effect=fake_chat), \
+                mock.patch.object(self.agent, "reply", return_value=True) as r:
+            self.agent.do_ask(1, "ru", {"question": "когда рейс?"}, "когда рейс?")
+        self.assertIn("Рейс 14 июня", captured["data"])
+        self.assertIn("10:05", r.call_args.args[1])
+
+    def test_rank_chunks_relative_gate_and_per_note_cap(self):
+        rows = [
+            {"message_id": 1, "text": "a1", "embedding": json.dumps([1.0, 0.0]),
+             "category": "x", "suggested_category": None, "title": None},
+            {"message_id": 1, "text": "a2", "embedding": json.dumps([0.99, 0.14]),
+             "category": "x", "suggested_category": None, "title": None},
+            {"message_id": 1, "text": "a3", "embedding": json.dumps([0.97, 0.24]),
+             "category": "x", "suggested_category": None, "title": None},
+            {"message_id": 3, "text": "c1", "embedding": json.dumps([0.9, 0.436]),
+             "category": "x", "suggested_category": None, "title": None},
+            {"message_id": 2, "text": "b1", "embedding": json.dumps([0.5, 0.87]),
+             "category": "x", "suggested_category": None, "title": None},
+        ]
+        picked = knowledge.rank_chunks([1.0, 0.0], rows, top_k=6, context_chars=6000,
+                                       min_score=0.25)
+        self.assertEqual([p["message_id"] for p in picked], [1, 1, 3])   # cap 2, gate drops 0.5
+        self.assertEqual(knowledge.cited_note_ids(
+            "Рейс (#41) и запись J#7, но не #4",
+            [{"message_id": 1, "note_no": 41}, {"message_id": 2, "note_no": 7},
+             {"message_id": 3, "note_no": 4}, {"message_id": 4, "note_no": 410}]), {1, 2, 3})
+        fused = knowledge.fuse_contexts(
+            [{"message_id": 1}, {"message_id": 2}], [{"message_id": 2}, {"message_id": 9}], 3)
+        self.assertEqual([f["message_id"] for f in fused], [1, 2, 9])
+
+    def test_a_photo_question_routed_to_ask_falls_through_to_converse(self):
+        self.agent._own_photo_turn = True
+        self.agent.turn_extra = ["He showed you a photo: a red bicycle by a canal."]
+        try:
+            with mock.patch.object(router, "route", return_value={
+                    "action": "ask", "params": {"question": "такой я сохранял?"},
+                    "confidence": 0.9}), \
+                    mock.patch.object(self.agent, "do_ask") as ask, \
+                    mock.patch.object(self.agent, "do_converse") as conv:
+                self.agent.dispatch(1, {"message_id": 9}, "такой велосипед я сохранял?")
+        finally:
+            self.agent._own_photo_turn = False
+            self.agent.turn_extra = []
+        ask.assert_not_called()
+        conv.assert_called_once()
 
 
 if __name__ == "__main__":

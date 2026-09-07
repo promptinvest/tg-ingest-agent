@@ -22,6 +22,7 @@ RETRY_DELAY_SECONDS = 600
 # deliberately NOT a job — it stays synchronous (P0.4 background-only).
 JOB_KINDS = (
     ("memory_curator", "run_memory_curator"),  # daily memory curation
+    ("memory_curator", "consolidate"),         # weekly duplicate folding (ADR-0012)
     ("maintenance", "retry_sweep"),            # reprocess pending ingests
     ("maintenance", "media_cleanup"),          # prune orphan media / old exports
     ("maintenance", "pending_expire"),         # drop abandoned pending actions

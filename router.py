@@ -62,7 +62,7 @@ ACTIONS = {
     "improvement_decide",  # params: id, accept(bool); workflow status only
     "improvement_export",  # params: id
     "set_journal",       # params: category, on(bool) — mark a category long-term journal / one-time
-    "journal_show",      # params: category, period(day|week|month|all), person, tag, stats(bool) — recall a journal as a dated series
+    "journal_show",      # params: category, period(day|week|month|all), date / since / until (a day or range in his own words: «17 июня», «вчера», «с 1 по 15 июня»), person, tag, stats(bool) — recall a journal as a dated series
     "journal_prompt",    # params: category, on(bool), time — enable/disable the opt-in daily journal invitation
     "memory",            # list remembered preferences
     "remember",          # params: key (optional: language|timezone_offset), value
@@ -147,7 +147,9 @@ NOTE: reminder_rename changes a REMINDER's TITLE — put the NEW name in new_tit
 "покажи дневник благодарности" / "благодарности за неделю" / "мой журнал благодарностей за месяц" / "show my gratitude journal" -> {"action": "journal_show", "params": {"category": "Благодарности", "period": "month"}, "confidence": 0.9}
 "покажи благодарности" / "покажи мои благодарности" / "зачитай благодарности" / "мои благодарности" / "show my gratitudes" / "read out my gratitude" -> {"action": "journal_show", "params": {"category": "Благодарности"}, "confidence": 0.9}
 NOTE: a bare "покажи / зачитай / мои <journal-category>" (e.g. "покажи благодарности") is journal_show for that category — NEVER converse and NEVER clarify. Listing the boss's saved journal/notes is ALWAYS a deterministic action (journal_show / list_items); the model must never free-text such a list itself.
-"за что я был благодарен 17 июня?" / "what was I grateful for on June 17?" / "что я записал в благодарности вчера?" -> {"action": "ask", "params": {"question": "за что я был благодарен 17 июня?"}, "confidence": 0.85}
+"за что я был благодарен 17 июня?" / "what was I grateful for on June 17?" (a journal question about ONE DAY — show that day's entries, do not summarise) -> {"action": "journal_show", "params": {"category": "Благодарности", "date": "17 июня"}, "confidence": 0.9}
+"что я записал в благодарности вчера?" / "what did I write in gratitude yesterday?" -> {"action": "journal_show", "params": {"category": "Благодарности", "date": "вчера"}, "confidence": 0.9}
+"покажи благодарности с 1 по 15 июня" / "gratitude entries from June 1 to June 15" -> {"action": "journal_show", "params": {"category": "Благодарности", "since": "1 июня", "until": "15 июня"}, "confidence": 0.9}
 "запиши в благодарности: Вера помогла с презентацией" / "я благодарен Вере за помощь с презентацией" / "add to gratitude: Vera helped with the deck" (an explicit ENTRY — content to save) -> {"action": "ingest", "params": {}, "confidence": 0.9}
 NOTE: a gratitude STATEMENT with content («я благодарен X за Y», «запиши в благодарности …») is ingest — the entry flow shows a confirm card. But a casual «спасибо»/"thank you" addressed to CARA (no journal intent) is smalltalk/converse and must NEVER be saved as an entry.
 "покажи благодарности про Веру" / "записи с тегом работа за месяц" -> {"action": "journal_show", "params": {"category": "Благодарности", "person": "Вера", "period": "month"}, "confidence": 0.88}
@@ -407,13 +409,21 @@ def build_system_prompt(cfg, pending, now_utc=None):
 
 def validate_route(parsed, has_pending):
     """Validate/normalize router output; None when unusable."""
+    return validate_route_reason(parsed, has_pending)[0]
+
+
+def validate_route_reason(parsed, has_pending):
+    """(validated_route, '') or (None, reason) — the reason names the model-output
+    defect (ADR-0011): `non_json`, `invalid_action:<name>`,
+    `pending_only_without_pending`. It rides on the trace and the issue row so a
+    router defect is never filed as the boss being unclear."""
     if not isinstance(parsed, dict):
-        return None
+        return None, "non_json"
     action = str(parsed.get("action") or "").strip()
     if action not in ACTIONS:
-        return None
+        return None, f"invalid_action:{action[:40] or '?'}"
     if action in PENDING_ONLY and not has_pending:
-        return None
+        return None, "pending_only_without_pending"
     params = parsed.get("params")
     if not isinstance(params, dict):
         params = {}
@@ -422,7 +432,7 @@ def validate_route(parsed, has_pending):
     except (TypeError, ValueError):
         confidence = 0.5
     confidence = min(max(confidence, 0.0), 1.0)
-    return {"action": action, "params": params, "confidence": confidence}
+    return {"action": action, "params": params, "confidence": confidence}, ""
 
 
 def route(cfg, conn, chat_id, text, pending, extra_context=None):
@@ -540,9 +550,14 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
         {"role": "user", "content": user_content},
     ]
     reply = llm.chat_profile(cfg, conn, "router", messages, profile="router_fast")
-    validated = validate_route(llm.parse_llm_json(reply), pending is not None)
+    validated, reason = validate_route_reason(llm.parse_llm_json(reply), pending is not None)
     if validated is None:
-        return {"action": "clarify", "params": {}, "confidence": 0.0}
+        common.log(f"router invalid output ({reason}): {str(reply)[:120]!r}")
+        if common.current_trace():
+            store.trace_event(conn, common.current_trace(), "router.invalid_output", reason,
+                              level="warn", skill="router",
+                              data={"reason": reason, "raw": str(reply)[:200]})
+        return {"action": "clarify", "params": {}, "confidence": 0.0, "invalid": reason}
     # When unsure, talk — don't interrogate. A low-confidence read drops to warm
     # free-form chat (where Cara can answer or ask naturally) rather than the cold
     # "уточни, пожалуйста" template. converse changes no state, so this never acts

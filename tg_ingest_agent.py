@@ -202,6 +202,11 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         # it builds candidates the boss pulls via memory_review.
         runtime.register("memory_curator", "run_memory_curator",
                          lambda ctx, conn, payload, job: {"created": memory_curator.run_daily(conn)})
+        # Weekly consolidation is a durable job too (ADR-0012): its own trace, the
+        # runner's retry, and the weekly stamp written only on success.
+        runtime.register("memory_curator", "consolidate",
+                         lambda ctx, conn, payload, job: ctx.run_memory_consolidation(
+                             conn, payload))
         # Background maintenance now runs through the durable job runner (P0.4,
         # background-only): each runs under its own trace, retries on failure,
         # and survives restart. The live request path stays synchronous.
@@ -1555,6 +1560,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         self.turn_reply_reminder_id = None
         self.turn_reply_reminder_ids = []
         self.turn_reply_suggestion_id = None
+        self._turn_route_invalid = None
         self._own_photo_turn = False
         self._own_media_parts = None
         # True for the one turn where his message names a work the OPEN card does
@@ -2138,7 +2144,16 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 for row in recent if store.convo_row_source(row) != "forward"
             ]
         }
-        store.issue_add(self.conn, chat_id, "unclear_request", text[:200], context=context)
+        invalid = getattr(self, "_turn_route_invalid", None)
+        if invalid:
+            # The MODEL produced unusable output (non-JSON, an unknown action, a
+            # pending-only action with nothing pending): a router defect, filed
+            # apart from genuinely ambiguous requests (ADR-0011).
+            context["reason"] = invalid
+            store.issue_add(self.conn, chat_id, "router_invalid_output", text[:200],
+                            context=context)
+        else:
+            store.issue_add(self.conn, chat_id, "unclear_request", text[:200], context=context)
         # Never snap into a formal templated menu mid-conversation (it broke an
         # intimate chat into cold «вы»). Stay in Cara's warm voice — she has the
         # recent dialogue, so she asks (or just answers) naturally, in "ты".
@@ -2318,6 +2333,13 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             self.reply(chat_id, T(lang, "llm_error"))
             return
         action, params = decision["action"], decision["params"]
+        self._turn_route_invalid = decision.get("invalid")
+        if action == "ask" and self._own_photo_turn:
+            # A photo with a question (ADR-0013): `ask` never sees the vision read,
+            # so it falls through to converse, which grounds on his notes AND has
+            # the photo description in this turn's context.
+            log("photo turn routed to ask -> converse (photo-aware, note-grounded)")
+            action, params = "converse", {}
         # Mobilize the companion register when he's doing real work, so her resting tone
         # turns businesslike and eases back once tasks stop (off-hours -> playful again).
         if action in self.BUSINESS_REGISTER_ACTIONS:
@@ -2999,7 +3021,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
     _RELATIONAL_CUES = (
         "отношени", "чувству", "что ты ко мне", "как ты ко мне", "любишь", "люблю",
         "скучаеш", "скучаю", "ты меня", "про нас", "о нас", "между нами", "близ",
-        "обнim", "тоскуеш", "веришь мне", "relationship", "feel about", "do you love",
+        # «обним» — the cue was «обнim» with Latin «im» and never matched (ADR-0010).
+        "обним", "тоскуеш", "веришь мне", "relationship", "feel about", "do you love",
         "do you miss", "about us", "between us", "do you like me", "how do you feel",
     )
 
@@ -3255,9 +3278,13 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         # Instrument retrieval cost so the decision to upgrade the index later is
         # data-driven (corpus size + grounding latency on this turn).
         ms = (time.perf_counter() - t0) * 1000
+        # The top-k scores ride on the trace (ADR-0013) so the 0.25 floor and the
+        # relative gate can be judged from real turns, not guessed.
         trace.event(self.conn, current_trace(), "grounding.ranked",
                     f"grounded over {len(rows)} note chunks in {ms:.0f}ms",
-                    data={"note_chunks": len(rows), "ms": round(ms, 1)})
+                    data={"note_chunks": len(rows), "ms": round(ms, 1),
+                          "scores": [round(c.get("score") or 0.0, 3) for c in ctx],
+                          "floor": self.cfg.ask_min_score})
         return "\n\n".join(blocks)
 
     # Note numbers named in HER reply use the same normalized extractor as the
@@ -3313,6 +3340,24 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         text = re.sub(r"\n{3,}", "\n\n", self.PHOTO_PLACEHOLDER_RE.sub("", text)).strip()
         return (reaction or tag_reaction), text
 
+    @staticmethod
+    def _degenerate_reply(text, lang):
+        """A converse output that must not ship (ADR-0011): fewer than two words, or
+        written in the wrong script for the language he wrote in (a Latin-only
+        answer to a Russian message, a Cyrillic-only one to an English message)."""
+        words = re.findall(r"[A-Za-zЀ-ӿ]{2,}", str(text or ""))
+        if len(words) < 2:
+            return True
+        cyr = sum(1 for w in words if any("Ѐ" <= c <= "ӿ" for c in w))
+        lat = len(words) - cyr
+        # A Russian turn answered with no Cyrillic word at all (the 'article\nYes'
+        # fragment), or an English one with no Latin word, is the wrong script.
+        if lang == "ru" and cyr == 0:
+            return True
+        if lang == "en" and lat == 0:
+            return True
+        return False
+
     def do_converse(self, chat_id, lang, text, message_id=None):
         """Reply in Cara's own voice — warm, human, language-matched. May open with
         an optional [[react:emoji]] tag, which becomes a Telegram reaction on his
@@ -3337,6 +3382,22 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             self.reply(chat_id, T(lang, "llm_error"))
             return
         reaction, reply = self._clean_converse_output(reply)
+        if reply and self._degenerate_reply(reply, lang):
+            # ADR-0011: a 4-token 'article\nYes' once reached the owner with no
+            # issue row. One retry; then an honest failure, never the fragment.
+            log(f"degenerate converse reply, retrying once: {reply[:60]!r}")
+            try:
+                second = llm.chat_profile(self.cfg, self.conn, "converse", messages,
+                                          profile="converse_warm")
+            except (llm.BudgetExceeded, llm.LLMError):
+                second = ""
+            reaction2, reply2 = self._clean_converse_output(second)
+            if not reply2 or self._degenerate_reply(reply2, lang):
+                store.issue_add(self.conn, chat_id, "converse_degenerate", reply[:300],
+                                context={"retry": (reply2 or "")[:200], "lang": lang})
+                self.reply(chat_id, T(lang, "llm_error"))
+                return
+            reaction, reply = reaction2 or reaction, reply2
         if reply and action_truth.freeform_claims_artifact(reply):
             # Converse cannot create/upload files. Fail closed instead of letting an LLM
             # render a local-looking name or claim an attachment that Telegram never saw.
@@ -4206,10 +4267,16 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         store.kv_set(conn, "backup_verify_retry_at", "")
         return result
 
+    # A failed consolidation job must not be re-queued on every tick; the weekly
+    # stamp is written only by a SUCCESSFUL run (ADR-0012), this one by the enqueue.
+    CONSOLIDATE_ENQUEUE_COOLDOWN_HOURS = 24
+
     def check_memory_consolidation(self):
-        """Weekly: fold duplicate boss-memory items (the curator accumulates near-dupes
-        over time) so her self-knowledge stays clean. The first run (no timestamp yet)
-        fires right away to clear existing bloat. One cheap LLM pass; best-effort."""
+        """Weekly: ENQUEUE the consolidation as a durable job (ADR-0012) — it runs
+        under its own trace with the job runner's retry, and `memory_consolidate_at`
+        is stamped only when the run SUCCEEDS (the tick used to stamp the week before
+        running and swallow every LLM/budget failure, so a failed week was simply
+        skipped). The first run (no stamp yet) is queued right away."""
         now = datetime.now(timezone.utc)
         last = store.kv_get(self.conn, "memory_consolidate_at")
         if last:
@@ -4218,16 +4285,38 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                     return
             except ValueError:
                 pass
-        store.kv_set(self.conn, "memory_consolidate_at", now.isoformat())
+        queued = store.kv_get(self.conn, "memory_consolidate_enqueued_at")
+        if queued:
+            try:
+                if now - datetime.fromisoformat(queued) < timedelta(
+                        hours=self.CONSOLIDATE_ENQUEUE_COOLDOWN_HOURS):
+                    return
+            except ValueError:
+                pass
+        if jobs.has_pending(self.conn, "memory_curator", "consolidate"):
+            return
+        # The enqueue time seeds the batch rotation (see memory_curator._batches):
+        # consecutive weekly runs cut the item list in different places.
+        jobs.add_job(self.conn, "memory_curator", "consolidate",
+                     payload={"run_day": now.isoformat()})
+        store.kv_set(self.conn, "memory_consolidate_enqueued_at", now.isoformat())
+
+    def run_memory_consolidation(self, conn, payload):
+        """The consolidation JOB body: fold duplicates, print every keep→drop pair
+        in the log line, and stamp the week only now that it succeeded. A raise
+        leaves the stamp alone so the runner retries and the week is not skipped."""
+        run_day = None
         try:
-            # `now` also seeds the batch rotation: consecutive weekly runs cut the
-            # item list in different places, so a duplicate pair a boundary split
-            # this week is inside one batch the next.
-            n = memory_curator.consolidate(self.conn, self.cfg, now=now)
-            if n:
-                log(f"memory consolidation: merged {n} duplicate item(s)")
-        except Exception as exc:
-            log(f"memory consolidation failed: {exc}")
+            run_day = datetime.fromisoformat(str((payload or {}).get("run_day") or ""))
+        except ValueError:
+            run_day = None
+        report = {}
+        n = memory_curator.consolidate(conn, self.cfg, now=run_day, report=report)
+        pairs = report.get("pairs") or []
+        log("memory consolidation: merged %d item(s)%s" % (
+            n, ("; " + ", ".join(f"{keep}→{drop}" for keep, drop in pairs)) if pairs else ""))
+        store.kv_set(conn, "memory_consolidate_at", datetime.now(timezone.utc).isoformat())
+        return {"merged": n, "pairs": pairs}
 
     def do_memory_cleanup(self, chat_id, lang):
         """On-demand: 'почисти память' — fold duplicate remembered items now.
@@ -4994,7 +5083,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         if is_journal:
             text, keyboard, total = self._journal_page(
                 lang, filt.get("category"), filt.get("period") or "month", offset, token,
-                person=filt.get("person"), tag=filt.get("tag"))
+                person=filt.get("person"), tag=filt.get("tag"),
+                since=filt.get("since"), until=filt.get("until"), label=filt.get("label"))
         else:
             text, keyboard, total, rows = self._notes_page(
                 lang, filt.get("category"), filt.get("query"), offset, token,
@@ -5004,7 +5094,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             if is_journal:
                 text, keyboard, total = self._journal_page(
                     lang, filt.get("category"), filt.get("period") or "month", offset, token,
-                    person=filt.get("person"), tag=filt.get("tag"))
+                    person=filt.get("person"), tag=filt.get("tag"),
+                    since=filt.get("since"), until=filt.get("until"), label=filt.get("label"))
             else:
                 text, keyboard, total, rows = self._notes_page(
                     lang, filt.get("category"), filt.get("query"), offset, token,

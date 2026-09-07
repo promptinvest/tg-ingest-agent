@@ -949,6 +949,19 @@ TEXTS = {
         "ru": "заблокированные несуществующие номера заметок",
         "en": "blocked note numbers that don't exist",
     },
+    # ADR-0011: model OUTPUT defects, separated from genuine ambiguity.
+    "issue_kind_router_invalid_output": {
+        "ru": "нечитаемые ответы маршрутизатора",
+        "en": "unusable router output",
+    },
+    "issue_kind_converse_degenerate": {
+        "ru": "пустые или не на том языке ответы модели",
+        "en": "empty or wrong-language model replies",
+    },
+    "journal_date_unclear": {
+        "ru": "Не поняла, за какой день — скажи, например, «17 июня» или «вчера».",
+        "en": "I didn't catch the day — say e.g. \"June 17\" or \"yesterday\".",
+    },
     "review_weekly_intro": {
         "ru": "📊 {name}, моя еженедельная сводка — как я поработала:",
         "en": "📊 {name}, my weekly check-in — how I did:",
@@ -957,17 +970,21 @@ TEXTS = {
         "ru": "Отчёт готов, босс — можно отдать его в VS Code 📎",
         "en": "Report ready, boss — feed it to VS Code 📎",
     },
+    # Rewritten in her voice 2026-09-07 (ADR-0010): a blocked fabrication is answered
+    # like a person who caught herself, not like a system notice.
     "artifact_not_sent": {
-        "ru": ("Не буду делать вид, что файл прикреплён: в этом ответе его нет. "
-               "Скажи «сделай отчёт файлом» — пришлю настоящий .md."),
-        "en": ("I won't pretend a file is attached when it isn't. "
-               "Say “export the review as md” and I'll send the real .md."),
+        "ru": ("Файла тут нет — не буду делать вид, что прикрепила. "
+               "Скажи «сделай отчёт файлом», и пришлю настоящий .md 🙂"),
+        "en": ("There's no file here — I won't pretend I attached one. "
+               "Say \"export the review as md\" and I'll send the real .md 🙂"),
     },
     "action_not_done": {
-        "ru": ("Я не выполнила это действие: тот ответ был только текстом, состояние "
-               "не изменено. Повтори команду конкретно — обработаю её через нужный раздел."),
-        "en": ("I didn't perform that action: the previous reply was only text, and no "
-               "state changed. Repeat the specific command and I'll route it correctly."),
+        "ru": ("Стоп, это я не сделала — в разговоре я только говорю, ничего не меняется. "
+               "Скажи прямо, что нужно — «напомни завтра в 10 позвонить Ире», "
+               "«сохрани это», «закрой #2» — и я проведу это по-настоящему."),
+        "en": ("Wait — I didn't actually do that; in chat I only talk, nothing changes. "
+               "Tell me plainly what you need — \"remind me tomorrow at 10 to call Ira\", "
+               "\"save this\", \"close #2\" — and I'll run it for real."),
     },
     "reminder_snooze_past": {
         "ru": ("{time} сегодня уже прошло. Скажи «отложи на завтра в {time}» "

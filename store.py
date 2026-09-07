@@ -1109,9 +1109,12 @@ def boss_items(conn, status, sensitivities=None, limit=30, kinds=None):
         where.append("kind IN (%s)" % ",".join("?" for _ in kinds))
         args += list(kinds)
     args.append(limit)
+    # Confidence, then how often he has said it, then recency (ADR-0012): every
+    # correction sits at 0.8, so recurrence is what separates a rule he repeats
+    # from one he mentioned once.
     return conn.execute(
         "SELECT * FROM boss_profile_items WHERE " + " AND ".join(where)
-        + " ORDER BY confidence DESC, last_seen_at DESC LIMIT ?",
+        + " ORDER BY confidence DESC, recurrence_count DESC, last_seen_at DESC LIMIT ?",
         tuple(args),
     ).fetchall()
 
@@ -1124,6 +1127,31 @@ def boss_set_status(conn, item_id, status):
     cur = conn.execute(
         "UPDATE boss_profile_items SET status=?, updated_at=? WHERE id=?",
         (status, _now(), item_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def boss_merge_into(conn, item_id, keeper_id):
+    """Fold `item_id` into `keeper_id` (status 'merged', `merged_into` set) — the
+    pair is what the consolidation journal line prints (ADR-0012)."""
+    cur = conn.execute(
+        "UPDATE boss_profile_items SET status='merged', merged_into=?, updated_at=?"
+        " WHERE id=? AND status != 'merged'",
+        (keeper_id, _now(), item_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def boss_bump(conn, item_id, confidence_step=0.05):
+    """The boss said it AGAIN: a repeated correction bumps recurrence and
+    confidence instead of being discarded as a duplicate (ADR-0012)."""
+    now = _now()
+    cur = conn.execute(
+        "UPDATE boss_profile_items SET recurrence_count = recurrence_count + 1,"
+        " confidence = MIN(1.0, confidence + ?), last_seen_at=?, updated_at=? WHERE id=?",
+        (float(confidence_step), now, now, item_id),
     )
     conn.commit()
     return cur.rowcount > 0
@@ -1822,6 +1850,54 @@ def _migrate_steps(conn):
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_mentor_cycles_one_recovery"
         " ON mentor_cycles(recovery_of_cycle_id)"
         " WHERE recovery_of_cycle_id IS NOT NULL")
+    # ADR-0012 (2026-09-07): a folded profile item remembers its keeper.
+    boss_columns = {row["name"] for row in conn.execute("PRAGMA table_info(boss_profile_items)")}
+    if "merged_into" not in boss_columns:
+        conn.execute("ALTER TABLE boss_profile_items ADD COLUMN merged_into INTEGER")
+    _repair_consolidation_2026_09_07(conn)
+
+
+# The 2026-08-24 consolidation run merged nine distinct standing rules and
+# `_tidy_inferred` demoted five more with no keeper — 11 of the owner's 30
+# corrections silently stopped being followed. The one-off repair below flips
+# the rows the 2026-09-07 review identified (ADR-0012) back to active. It is
+# guarded three ways: a kv marker (runs once), the exact pre-state of every row
+# (status/kind/source_table as found on the production DB), and a profile size
+# that no test database reaches — so on any other database it is a no-op.
+_REPAIR_2026_09_07_CORRECTIONS = (24, 85, 94, 96, 106, 108, 132, 157, 177, 180)
+_REPAIR_2026_09_07_MIN_ROWS = 100
+
+
+def _repair_consolidation_2026_09_07(conn):
+    if conn.execute("SELECT 1 FROM kv WHERE key='repair_consolidation_2026_09_07'").fetchone():
+        return
+    total = conn.execute("SELECT COUNT(*) FROM boss_profile_items").fetchone()[0]
+    if total < _REPAIR_2026_09_07_MIN_ROWS:
+        return
+    now = _now()
+    ids = ",".join(str(i) for i in _REPAIR_2026_09_07_CORRECTIONS)
+    conn.execute(
+        f"UPDATE boss_profile_items SET status='inferred', merged_into=NULL, updated_at=?"
+        f" WHERE id IN ({ids}) AND status='merged' AND source_table='correction'"
+        f" AND kind IN ('tone','workflow','avoidance','quality_bar')", (now,))
+    conn.execute(
+        "UPDATE boss_profile_items SET status='confirmed', merged_into=NULL, updated_at=?"
+        " WHERE id=137 AND status='merged' AND source_table='memory_candidate'", (now,))
+    conn.execute(
+        "UPDATE boss_profile_items SET status='inferred', merged_into=NULL, updated_at=?"
+        " WHERE id=184 AND status='merged' AND source_table='conversation'", (now,))
+    # «one of 182/183»: the one he mentioned last (ties → the later row).
+    pick = conn.execute(
+        "SELECT id FROM boss_profile_items WHERE id IN (182, 183) AND status='merged'"
+        " AND source_table='conversation' ORDER BY last_seen_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if pick is not None:
+        conn.execute(
+            "UPDATE boss_profile_items SET status='inferred', merged_into=NULL, updated_at=?"
+            " WHERE id=?", (now, pick["id"]))
+    # No commit: _migrate is one transaction, so the flips and the marker land together.
+    conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES"
+                 " ('repair_consolidation_2026_09_07', 'done')")
 
 
 NOTE_OUTCOME_MIRROR_KINDS = (
@@ -2718,7 +2794,7 @@ def notes_lifecycle_counts(conn):
 # shape as the retired `display_ids` deleted below.
 
 
-def journal_entries_page(conn, category, since_iso=None, offset=0, limit=5):
+def journal_entries_page(conn, category, since_iso=None, offset=0, limit=5, until_iso=None):
     """Return one stable oldest-first journal page and its filtered total.
 
     The one reader of a plain journal category's rows. Still a Python scan of
@@ -2735,6 +2811,8 @@ def journal_entries_page(conn, category, since_iso=None, offset=0, limit=5):
         if row["category"].casefold() != target:
             continue
         if since_iso and (row["received_at"] or "") < since_iso:
+            continue
+        if until_iso and (row["received_at"] or "") >= until_iso:
             continue
         matched.append(row)
     start = max(0, int(offset or 0))

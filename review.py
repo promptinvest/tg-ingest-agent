@@ -149,7 +149,8 @@ def collect(conn, period):
     actionable = ("unclear_request", "out_of_scope", "stt_failed", "ingest_failed",
                   "converse_artifact_claim", "converse_action_claim",
                   "converse_action_claim_retry", "converse_action_repair_failed",
-                  "converse_ungrounded_number", "correction_unresolved")
+                  "converse_ungrounded_number", "correction_unresolved",
+                  "router_invalid_output", "converse_degenerate")
     data["open_issue_patterns"] = store.issue_open_patterns(conn, actionable, limit=20)
     data["resolved_issue_patterns"] = store.issues_resolved(conn, since, limit=20)
     data["spend_by_skill"] = conn.execute(
@@ -617,7 +618,8 @@ def had_owner_turns(conn, period="week"):
 # a request she could not take): only these earn the one health line in chat.
 FAILURE_ISSUE_KINDS = ("llm_error", "ingest_failed", "stt_failed", "sched_send_failed",
                        "budget_stop", "db_stalled", "backup_failed", "dead_letter",
-                       "converse_action_repair_failed")
+                       "converse_action_repair_failed", "converse_degenerate",
+                       "router_invalid_output")
 
 
 def _fmt_day(iso, tz_offset=0):

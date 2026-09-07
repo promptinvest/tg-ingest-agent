@@ -8,6 +8,7 @@ Pure-stdlib vector math — fine for a personal KB (hundreds of chunks).
 import json
 import math
 import re
+from itertools import zip_longest
 
 import common
 import hermes
@@ -59,7 +60,15 @@ def cosine(a, b):
     return dot / (na * nb)
 
 
-def rank_chunks(query_vec, rows, top_k, context_chars, min_score=0.0):
+# ADR-0013: on top of the absolute floor (ASK_MIN_SCORE, 0.25 — kept), a RELATIVE
+# gate drops chunks that trail the best hit by more than this, and a per-note cap
+# stops one long document from filling every slot with its own chunks.
+RELATIVE_GAP = 0.15
+PER_NOTE_CAP = 2
+
+
+def rank_chunks(query_vec, rows, top_k, context_chars, min_score=0.0,
+                relative_gap=RELATIVE_GAP, per_note_cap=PER_NOTE_CAP):
     """rows: store.all_embedded_chunks() output. Returns the top-K most
     similar chunks (parsed) within the character budget, best first."""
     scored = []
@@ -73,10 +82,18 @@ def rank_chunks(query_vec, rows, top_k, context_chars, min_score=0.0):
             continue
         scored.append((cosine(query_vec, vec), row))
     scored.sort(key=lambda s: s[0], reverse=True)
+    floor = min_score
+    if scored and relative_gap is not None and scored[0][0] >= min_score:
+        floor = max(min_score, scored[0][0] - float(relative_gap))
     picked = []
     used = 0
-    for score, row in scored[:top_k]:
-        if score < min_score:
+    per_note = {}
+    for score, row in scored:
+        if len(picked) >= top_k:
+            break
+        if score < floor:
+            break                      # sorted: nothing below can qualify
+        if per_note_cap and per_note.get(row["message_id"], 0) >= per_note_cap:
             continue
         remaining = max(0, context_chars - used)
         if remaining <= 0:
@@ -97,8 +114,40 @@ def rank_chunks(query_vec, rows, top_k, context_chars, min_score=0.0):
             "date": (row["received_at"] or "")[:10] if "received_at" in row.keys() else "",
             "score": score,
         })
+        per_note[row["message_id"]] = per_note.get(row["message_id"], 0) + 1
         used += len(text)
     return picked
+
+
+def fuse_contexts(semantic, keyword, top_k):
+    """Interleave the semantic and keyword hits by rank (best of each first),
+    de-duplicated by note, capped at top_k — so a dead embedder still yields an
+    answer and a keyword hit the vectors missed still reaches the prompt."""
+    out, seen = [], set()
+    for pair in zip_longest(semantic, keyword):
+        for item in pair:
+            if item is None or item.get("message_id") in seen:
+                continue
+            seen.add(item.get("message_id"))
+            out.append(item)
+            if len(out) >= top_k:
+                return out
+    return out
+
+
+def cited_note_ids(answer, context):
+    """The message ids of context notes whose display number the delivered answer
+    actually names (as «#N» / «J#N», word-bounded) — the only ones that count as
+    used (ADR-0013)."""
+    text = str(answer or "")
+    cited = set()
+    for item in context:
+        no = item.get("note_no") or item.get("message_id")
+        if no is None:
+            continue
+        if re.search(rf"(?<![\w#])J?#\s*{int(no)}(?!\d)", text):
+            cited.add(item.get("message_id"))
+    return cited
 
 
 # The notes block's structure is in-band: blocks are separated by a line of
@@ -143,7 +192,13 @@ def build_ask_messages(question, context_items, preference_hint=""):
             head = f"[#{display_no}"
             if item.get("title"):
                 head += f" — {common.neutralize_untrusted(item['title'])}"
-            head += f" · {item['category']}]"
+            head += f" · {item['category']}"
+            # The note's date rides in the head (ADR-0013): 48 of 70 notes are
+            # dated journal entries, and «за что я был благодарен 17 июня?» is
+            # unanswerable when the context hides when each note was written.
+            if item.get("date"):
+                head += f" · {str(item['date'])[:10]}"
+            head += "]"
             blocks.append(f"{head}\n{_note_body(item['text'])}")
         context = "\n\n---\n\n".join(blocks)
     else:

@@ -30,7 +30,8 @@ import reminders
 import relationship
 import review
 import store
-from common import log
+import trace
+from common import current_trace, log
 from texts import T
 from tg_api import TelegramError, tg_send_document
 # NOTE: `knowledge` and `persona` are imported LOCALLY inside do_ask/_keyword_context —
@@ -148,13 +149,28 @@ class HermesMixin:
             self.reply(chat_id, T(lang, "clarify"))
             return
         try:
-            qvec = llm.embed(self.cfg, self.conn, "ask", [question])[0]
-            rows = store.all_embedded_chunks(self.conn)
-            context = knowledge.rank_chunks(qvec, rows, self.cfg.ask_top_k,
-                                            self.cfg.ask_context_chars,
-                                            self.cfg.ask_min_score)
-            if not context:  # nothing indexed/matched -> keyword fallback
-                context = self._keyword_context(question)
+            # ADR-0013: the embedding runs in its OWN try — keyword search needs no
+            # model, so an embedder outage degrades the answer instead of failing it —
+            # and the keyword pass ALWAYS runs; the two lists are fused by rank.
+            semantic = []
+            try:
+                qvec = llm.embed(self.cfg, self.conn, "ask", [question])[0]
+                rows = store.all_embedded_chunks(self.conn)
+                semantic = knowledge.rank_chunks(qvec, rows, self.cfg.ask_top_k,
+                                                 self.cfg.ask_context_chars,
+                                                 self.cfg.ask_min_score)
+            except llm.BudgetExceeded:
+                raise
+            except llm.LLMError as exc:
+                log(f"ask: embedding failed, keyword search only: {exc}")
+                store.issue_add(self.conn, chat_id, "llm_error", f"ask embed: {exc}")
+            keyword = self._keyword_context(question)
+            context = knowledge.fuse_contexts(semantic, keyword, self.cfg.ask_top_k)
+            trace.event(self.conn, current_trace(), "grounding.ranked",
+                        f"ask: {len(semantic)} semantic + {len(keyword)} keyword"
+                        f" -> {len(context)} notes",
+                        data={"scores": [round(c.get("score") or 0.0, 3) for c in semantic],
+                              "keyword": len(keyword), "floor": self.cfg.ask_min_score})
             hint = persona.boss_preference_hint(self.conn)
             answer = llm.chat_profile(self.cfg, self.conn, "ask",
                                       knowledge.build_ask_messages(question, context, hint),
@@ -173,10 +189,13 @@ class HermesMixin:
             store.issue_add(self.conn, chat_id, "ask_no_context", question[:200])
         delivered = self.reply(chat_id, answer.strip()[:4000])
         if delivered:
-            # Citation in a DELIVERED grounded answer is a real use of the note
-            # (ranking alone never counts).
+            # Citation in a DELIVERED grounded answer is a real use of the note —
+            # and only a note whose #N the answer actually names counts (ADR-0013:
+            # marking every ranked note used counted retrieval as use).
+            cited = knowledge.cited_note_ids(answer, context)
             for item in context:
-                if store.note_mark_used(self.conn, item.get("message_id")):
+                if item.get("message_id") in cited \
+                        and store.note_mark_used(self.conn, item.get("message_id")):
                     events.record_done(self.conn, "note_cited", chat_id=chat_id,
                                        payload={"message_id": item.get("message_id")})
             self._suggest_related_note(chat_id, lang, context, answer)
@@ -219,7 +238,9 @@ class HermesMixin:
                                   "note_no": self.note_no(row["id"]),
                                   "text": (row["raw_text"] or row["summary"] or "")[:1500],
                                   "category": row["category"] or row["suggested_category"] or "?",
-                                  "title": row["forward_origin_title"]})
+                                  "title": row["forward_origin_title"],
+                                  "date": (row["received_at"] or "")[:10],
+                                  "score": None})
             if len(items) >= self.cfg.ask_top_k:
                 break
         return items[:self.cfg.ask_top_k]

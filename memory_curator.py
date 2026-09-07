@@ -246,10 +246,14 @@ def curate_conversation(conn, cfg, chat_id, limit=CONVO_WINDOW, correction_mode=
             kind = "workflow"
         if not text:
             continue
-        if boss_model.is_duplicate(conn, text):
-            # already learned, yet he's correcting it again -> auto-apply isn't
-            # enough; flag for a code fix. Only when he actively corrected this
-            # turn (not on background re-processing of an old window).
+        existing = boss_model.find_similar(conn, text)
+        if existing is not None:
+            # Already learned, yet he says it again: the rule gains recurrence and
+            # confidence instead of being discarded (ADR-0012) — repetition is how
+            # a rule earns its place in the prompt — and, when he actively
+            # corrected this turn, it is also flagged for a code fix (auto-apply
+            # was not enough).
+            store.boss_bump(conn, existing["id"])
             if correction_mode:
                 store.issue_add(conn, chat_id, "correction_unresolved", text)
                 unresolved.append(text)
@@ -435,7 +439,7 @@ def _batches(seq, run_day=None, size=BATCH_SIZE):
         yield rotated[i:i + size]
 
 
-def consolidate(conn, cfg, max_items=120, now=None):
+def consolidate(conn, cfg, max_items=120, now=None, report=None):
     """De-duplicate Cara's memory: an LLM groups genuine duplicate items and we KEEP the
     richest — except that a CONFIRMED boss fact always outranks an inferred paraphrase and
     is never the one folded. Boss facts: the rest are marked 'merged' (reversible). Her
@@ -447,8 +451,10 @@ def consolidate(conn, cfg, max_items=120, now=None):
     truth (the кофе-vs-confirmed-чай case). Returns total folded.
 
     `now` is the run date the batch rotation is derived from (see `_batches`); it
-    defaults to the current UTC time."""
+    defaults to the current UTC time. `report`, when a dict is passed, receives
+    the keep→drop pairs (`pairs`) for the journal line."""
     merged = 0
+    pairs = []
     # 1) boss profile items -> demote duplicates to 'merged' (reversible)
     items, seen, status_of = [], set(), {}
     for status in ("confirmed", "inferred"):
@@ -459,17 +465,27 @@ def consolidate(conn, cfg, max_items=120, now=None):
             val = (row["value"] or "").strip()
             if val:
                 items.append((row["id"], val))
-                status_of[row["id"]] = (status, row["confidence"])
+                status_of[row["id"]] = (status, row["confidence"], row["source_table"])
     for batch in _batches(items, now):
         for _keep, drops in _merge_groups(conn, cfg, batch, status_of=status_of):
+            keeper = status_of.get(_keep, ("", 0, None))
             for d in drops:
+                dropped = status_of.get(d, ("", 0, None))
                 # Belt and braces for the hard rule: whatever the model said, a
                 # CONFIRMED fact is never folded into an unconfirmed keeper.
-                if status_of.get(d, ("", 0))[0] == "confirmed" \
-                        and status_of.get(_keep, ("", 0))[0] != "confirmed":
+                if dropped[0] == "confirmed" and keeper[0] != "confirmed":
                     continue
-                if store.boss_set_status(conn, d, "merged"):
+                # ADR-0012: a standing rule he taught by CORRECTING her folds only
+                # into another correction or a confirmed fact — the 2026-08-24 run
+                # merged nine distinct rules into unrelated inferred paraphrases.
+                if dropped[2] == "correction" and not (
+                        keeper[2] == "correction" or keeper[0] == "confirmed"):
+                    continue
+                if store.boss_merge_into(conn, d, _keep):
                     merged += 1
+                    pairs.append((_keep, d))
+    if report is not None:
+        report["pairs"] = pairs
     # 2) Cara's life flavour -> demote redundant duplicates, keep the richest of each
     life = [(r["id"], r["text"]) for r in store.life_all(conn) if (r["text"] or "").strip()]
     for batch in _batches(life, now):
@@ -571,10 +587,14 @@ def _tidy_inferred(conn, cfg, max_items=120):
     Conservative: only direct contradictions with a CONFIRMED fact (confirmed wins). 0 on
     nothing-to-do or failure."""
     import llm
+    # Standing rules (tone/workflow/avoidance/quality_bar) are never candidates
+    # here (ADR-0012): a rule about HOW she behaves cannot contradict a fact
+    # about HIM, and five of his corrections were demoted this way with no keeper.
     inferred = [(r["id"], r["value"]) for r in store.boss_items(conn, "inferred", limit=max_items)
-                if (r["value"] or "").strip()]
-    confirmed = [r["value"] for r in store.boss_items(conn, "confirmed", limit=80)
-                 if (r["value"] or "").strip()]
+                if (r["value"] or "").strip() and r["kind"] not in GUIDANCE_KINDS]
+    confirmed_rows = [r for r in store.boss_items(conn, "confirmed", limit=80)
+                      if (r["value"] or "").strip()]
+    confirmed = [r["value"] for r in confirmed_rows]
     if not inferred or not confirmed:
         return 0
     # Same one-row-per-line contract as _tidy_candidates: flatten both listings.
@@ -589,13 +609,24 @@ def _tidy_inferred(conn, cfg, max_items=120):
     except (llm.BudgetExceeded, llm.LLMError):
         return 0
     parsed = llm.parse_llm_json(reply) or {}
-    valid = {i for i, _ in inferred}
+    valid = {i: v for i, v in inferred}
     folded = 0
     for x in (parsed.get("contradicts") or []):
         try:
             i = int(x)
         except (TypeError, ValueError):
             continue
-        if i in valid and store.boss_set_status(conn, i, "merged"):
+        if i not in valid:
+            continue
+        # The model's verdict must pass a deterministic TOPIC gate (ADR-0012): the
+        # inferred fact has to share words with some confirmed fact, and that fact
+        # becomes its recorded keeper. A verdict with no topical overlap is ignored.
+        keeper = next((r for r in confirmed_rows
+                       if boss_model.topical_overlap(valid[i], r["value"])), None)
+        if keeper is None:
+            common.log(f"_tidy_inferred: ignored contradiction verdict for #{i} — "
+                       "no topical overlap with any confirmed fact")
+            continue
+        if store.boss_merge_into(conn, i, keeper["id"]):
             folded += 1
     return folded

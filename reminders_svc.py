@@ -572,13 +572,25 @@ class ReminderMixin:
                 row = store.reminder_get(self.conn, int(last_id)) if last_id is not None else None
             except (TypeError, ValueError):
                 row = None
-            if (row is None or row["status"] != "active" or row["last_fired_at"] is None):
+            if row is not None and (row["status"] != "active" or row["last_fired_at"] is None):
+                row = None
+            if row is not None and row["recurrence"] != "none":
+                fired = reminders.parse_iso_utc(row["last_fired_at"])
+                if fired is None or (datetime.now(timezone.utc) - fired
+                                     > self.RECURRING_FOLLOWUP_WINDOW):
+                    row = None
+            if row is None:
+                # ADR-0011: after the pending window a bare snooze/ack still belongs
+                # to the last FIRED one-shot (open until «готово»), never to the LLM
+                # router with pending=None — «Через час» 116 min after a fire went
+                # there and converse invented a time.
+                open_fired = store.reminders_fired_unacked(self.conn, chat_id)
+                row = open_fired[-1] if open_fired else None
+            if row is None:
                 return False
             fired = reminders.parse_iso_utc(row["last_fired_at"])
             stale = (fired is None or (datetime.now(timezone.utc) - fired
                                        > self.RECURRING_FOLLOWUP_WINDOW))
-            if row["recurrence"] != "none" and stale:
-                return False
             # A subject-less CREATE («напомни завтра в 10») hours after a one-shot
             # fired is a new reminder in the making, not a snooze of the stale
             # one (ADR-0004): let it open a partial. Explicit close/skip/snooze
