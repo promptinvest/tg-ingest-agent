@@ -31,14 +31,15 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 | [ADR-0018](ADR-0018-backup-posture-daily-local-weekly-off-box.md) | Backup posture: daily local, weekly off-box, verified before rotation | Phase C | owner confirms the 2026-08-21 weekly decision concerned the off-box post, not local disk | Proposed |
 | [ADR-0019](ADR-0019-telemetry-is-written-only-when-there-is.md) | Telemetry is written only when there is something to say | Phase C | nothing | Proposed |
 | [ADR-0020](ADR-0020-compound-commands-one-at-a-time-then-splitter.md) | Compound commands go back to «давай по одному», then to a deterministic splitter | Phase D | ADR-0024 for step 1 | Proposed |
-| [ADR-0021](ADR-0021-the-mentor-is-proposal-only-until-the-evidence.md) | The Mentor is proposal-only until the evidence and the model earn a candidate phase | Phase D | owner decision | Proposed |
+| [ADR-0021](ADR-0021-the-mentor-is-proposal-only-until-the-evidence.md) | The Mentor is proposal-only until the evidence and the model earn a candidate phase | Phase D | owner decision | Superseded by ADR-0029 |
 | [ADR-0022](ADR-0022-the-worker-is-dormant-until-it-has-a-real-tool.md) | The worker is dormant until it has a real tool; research is either real or absent | Phase D | owner decision on the Brave key | Proposed |
-| [ADR-0023](ADR-0023-voice-transcription-leaves-the-poll-thread-with.md) | Voice transcription leaves the poll thread, with the DB staying on it | Phase D | ADR-0007 first; owner decision | Proposed |
+| [ADR-0023](ADR-0023-voice-transcription-leaves-the-poll-thread-with.md) | Voice transcription leaves the poll thread, with the DB staying on it | Phase D | ADR-0007 first; owner decision | Accepted 2026-09-07 (deferred) |
 | [ADR-0024](ADR-0024-pre-router-precedence-is-a-table-pinned-by-a.md) | Pre-router precedence is a table pinned by a matrix test; every immediate action has an inverse | Phase E | nothing | Proposed |
 | [ADR-0025](ADR-0025-the-router-prompt-pays-for-the-gist-of-history.md) | The router prompt pays for the gist of history, not its bytes | Phase E | nothing | Proposed |
 | [ADR-0026](ADR-0026-the-test-suite-gets-a-fast-path-a-fixture.md) | The test suite gets a fast path, a fixture library and a measured gate | Phase E | nothing | Proposed |
 | [ADR-0027](ADR-0027-documentation-contract-present-tense-guarded.md) | Documentation contract: present tense, guarded maps, one runbook | Phase E | nothing | Proposed |
 | [ADR-0028](ADR-0028-the-entry-point-is-decomposed-only-after.md) | The entry point is decomposed only after behaviour work settles | Phase E | everything above | Proposed |
+| [ADR-0029](ADR-0029-cara-records-her-issues-and-reminds-the-owner-monthly.md) | Cara records her issues and reminds the owner of them once a month (first digest 2026-10-07); supersedes the Mentor | Phase D | nothing (deferred by owner: do not start now) | Accepted 2026-09-07 (deferred) |
 
 ## Phases
 

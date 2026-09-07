@@ -1,6 +1,6 @@
 # ADR-0021: The Mentor is proposal-only until the evidence and the model earn a candidate phase
 
-- Status: Proposed
+- Status: Superseded by ADR-0029
 - Date: 2026-09-07
 - Phase: Phase D — decisions the owner must make
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ owner decision
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: superseded by ADR-0029 (owner decision): the Mentor is retired from the schedule rather than repaired; Cara keeps recording issues and will remind the owner of them once a month, starting 2026-10-07. Not implemented; do not start now.

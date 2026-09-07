@@ -28,3 +28,4 @@ owner decision on the Brave key
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: owner decision — web search will NOT be implemented (no Brave key); the ADR is postponed as a whole (worker stays as deployed until it is picked up).

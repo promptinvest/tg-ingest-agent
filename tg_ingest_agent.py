@@ -122,8 +122,9 @@ _DISPATCH = {
     "set_journal":         lambda s, c: s.do_set_journal(c.chat_id, c.lang, c.params),
     "journal_show":        lambda s, c: s.do_journal_show(c.chat_id, c.lang, c.params),
     "journal_prompt":      lambda s, c: s.do_journal_prompt(c.chat_id, c.lang, c.params),
-    "multi_action":        lambda s, c: s.do_task_start(
-        c.chat_id, c.lang, c.text, c.msg_id),
+    # ADR-0020 step 0: the documented «давай по одному» — never the task planner,
+    # which has no close/reschedule tool and answered with a paid refusal.
+    "multi_action":        lambda s, c: s.reply(c.chat_id, T(c.lang, "one_at_a_time")),
     "task_start":          lambda s, c: s.do_task_start(
         c.chat_id, c.lang, c.text, c.msg_id),
     "task_list":           lambda s, c: s.do_task_list(c.chat_id, c.lang, c.params),
@@ -1584,6 +1585,9 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         callback = update.get("callback_query")
         if callback:
             self.handle_callback(callback)
+            cb_chat = ((callback.get("message") or {}).get("chat") or {}).get("id")
+            if cb_chat is not None:
+                self._resume_compound(cb_chat)   # a button may have answered the paused card
             return
         reaction = update.get("message_reaction")
         if reaction:
@@ -1745,6 +1749,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             return
 
         self.dispatch(chat_id, msg, text)
+        self._resume_compound(chat_id)   # this turn may have answered a paused sequence's card
 
     def buffer_album_part(self, group_id, msg, store_note):
         """Hold one album part until the settle window closes, and DEFER its inbox
@@ -2275,6 +2280,15 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             self._deterministic_capture(chat_id, lang, msg, category,
                                         source="gratitude_prefix", body=body)
             return
+        # A simple command SEQUENCE («закрой первое, потом перенеси второе на 14»)
+        # is split deterministically and run fragment by fragment (ADR-0020 step 1);
+        # it pauses at the first fragment that opens a card and resumes once that
+        # card is answered. Only with a free slot, and never inside a fragment.
+        if pending is None and not getattr(self, "_in_compound", False):
+            fragments = router.split_compound(text)
+            if fragments:
+                self._run_compound(chat_id, lang, msg, fragments)
+                return
         # Basic #N deletion is a closed-world state command, not a language-
         # model judgment. Keep it before proactive/smalltalk/router handling so
         # identical word orders cannot randomly alternate between real deletion
@@ -2521,6 +2535,64 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             self.reply(chat_id, T(lang, "gratitude_autosave_off"))
             return True
         return False
+
+    # -- compound commands (ADR-0020 step 1) ---------------------------------------
+
+    COMPOUND_QUEUE_TTL_SECONDS = 600
+
+    def _run_compound(self, chat_id, lang, msg, fragments):
+        """Run the fragments of a split sequence in order, each through the whole
+        dispatcher (its own deterministic shortcuts and router call, with the
+        shared history as context). The first fragment that leaves a card in the
+        single pending slot pauses the sequence: the rest waits in a kv queue and
+        resumes when that card is answered — nothing is ever clobbered."""
+        log(f"compound chat={chat_id}: {len(fragments)} fragment(s)")
+        trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED,
+                    f"action=multi_action source=split_compound n={len(fragments)}",
+                    skill="multi_action", data={"confidence": 1.0, "risk": "read_only",
+                                                "source": "split_compound",
+                                                "fragments": len(fragments)})
+        self._in_compound = True
+        try:
+            for i, fragment in enumerate(fragments):
+                self.dispatch(chat_id, msg, fragment)
+                rest = fragments[i + 1:]
+                if rest and store.pending_get(self.conn, chat_id) is not None:
+                    store.kv_set(self.conn, f"compound_queue:{chat_id}", json.dumps({
+                        "fragments": rest, "msg_id": msg.get("message_id"),
+                        "ts": datetime.now(timezone.utc).isoformat()}, ensure_ascii=False))
+                    self.reply(chat_id, T(lang, "compound_paused", n=len(rest)), record=False)
+                    return
+        finally:
+            self._in_compound = False
+
+    def _resume_compound(self, chat_id):
+        """After a turn (a message or a button) that may have answered the card a
+        sequence paused on: continue with the queued fragments once the slot is free.
+        A queue older than COMPOUND_QUEUE_TTL_SECONDS is dropped — the card was
+        abandoned, and a stale sequence must not fire out of the blue."""
+        if getattr(self, "_in_compound", False):
+            return
+        raw = store.kv_get(self.conn, f"compound_queue:{chat_id}")
+        if not raw:
+            return
+        if store.pending_get(self.conn, chat_id) is not None:
+            return
+        store.kv_set(self.conn, f"compound_queue:{chat_id}", "")
+        try:
+            data = json.loads(raw)
+            fragments = [str(f) for f in data.get("fragments") or [] if str(f).strip()]
+            queued_at = datetime.fromisoformat(data.get("ts"))
+        except (TypeError, ValueError, AttributeError):
+            return
+        if (datetime.now(timezone.utc) - queued_at).total_seconds() > self.COMPOUND_QUEUE_TTL_SECONDS:
+            log(f"compound chat={chat_id}: queue expired, {len(fragments)} fragment(s) dropped")
+            return
+        if not fragments:
+            return
+        self.turn_lang = None
+        self._run_compound(chat_id, self.lang(),
+                           {"message_id": data.get("msg_id"), "chat": {"id": chat_id}}, fragments)
 
     def handle_command(self, chat_id, name):
         lang = self.lang()

@@ -18,7 +18,10 @@ delivery gates, and production evidence for the shipped release.
   supplied sources and Cara's own knowledge, durable tasks, drafts, and
   follow-through before Gmail/Outlook/Drive/Notion integrations.
 - Existing direct skills remain the fast path for one-step requests. Compound
-  requests stop returning “one at a time” and instead become a durable plan.
+  requests do NOT become a durable plan (corrected 2026-09-07, ADR-0020): the
+  planner has no close/reschedule tool. A simple «…, потом …» sequence is split
+  and run fragment by fragment by the dispatcher; other bundles get “one at a
+  time”. `task_start` is for research work only.
 - Risk-tiered permissions:
   - local/external reads and draft preparation may run automatically;
   - every task-broker domain-state change and external write requires a
@@ -46,8 +49,9 @@ delivery gates, and production evidence for the shipped release.
 ```text
 Telegram update
   -> existing owner gate + durable inbox + closed router
-      -> existing direct skill (single-step)
-      -> task_start (compound/open-ended work)
+      -> existing direct skill (single-step; a simple command SEQUENCE is split
+         and run fragment by fragment — ADR-0020)
+      -> task_start (open-ended research work only)
            -> planner: strict TaskPlan JSON
            -> plan validator + permission manifest
            -> assistant_tasks / task_steps

@@ -1251,9 +1251,18 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   a stdlib regex fallback; **scanned / no-ToUnicode (glyph-coded) PDFs still yield no
   text** (would need OCR, out of scope) — they're stored and re-sendable.
   Image-as-document files are kept metadata-only as images.
-- **Compound commands** (two+ distinct actions in one message) are recognised and
-  declined gracefully ("one at a time"), not executed as a batch — a deliberate limit
-  of the single-action router.
+- **Compound commands** (two+ distinct actions in one message): since 2026-09-07
+  (ADR-0020) a simple SEQUENCE is split deterministically (`router.split_compound`:
+  separators «, потом / и потом / ; / newline / , а / then», ≤4 fragments, every later
+  fragment opening with a command verb, no shared pronoun referent) and run fragment by
+  fragment (`Agent._run_compound`, each through the full dispatcher), pausing at the first
+  card and resuming from `compound_queue:<chat>` when that card is answered
+  (`_resume_compound` after every message/button turn; 10-minute TTL). Everything else
+  is declined honestly ("one at a time") — the `multi_action` route is a reply, not a
+  plan. The planner (`task_start`) is research-only; it never had a close/reschedule tool,
+  and the old wiring returned a paid refusal in planner prose. The splitter shipped
+  before ADR-0024's pinned precedence table: the pause-at-card rule is what keeps the
+  single pending slot from being clobbered meanwhile.
 - **Journals — SHIPPED, no longer deferred (corrected 2026-07-26).** This list still
   named the optional daily "record today's entry?" nudge and the per-journal markdown
   export as future work; both landed with the structured-journals batch on 2026-07-17.

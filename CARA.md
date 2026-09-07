@@ -112,8 +112,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
              ┌──────────────────────────┼───────────────────────────────────┐
              ▼                          ▼                                     ▼
         a direct skill           converse (warm free-form Cara)        task_start
-        (single-step)            ← low-confidence falls here, not      (compound work)
-                                   a cold "уточни"                           │
+        (single-step)            ← low-confidence falls here, not      (research only;
+        ↑ a simple «…, потом …»    a cold "уточни"                      other compound
+          sequence is split                                             bundles get
+          BEFORE routing and                                            «давай по
+          run fragment by                                               одному»)
+          fragment (ADR-0020)                                                 │
                                                                   bounded plan → broker
                                                                   → receipts/approval
                                                                   │
@@ -2542,8 +2546,20 @@ is documented twice. The lists above stay as the short tour; they are not the ca
   silently; and Telegram itself
   only delivers edits within its own edit window, so a very old message cannot be
   corrected at all.
-- **Compound commands** (two+ distinct actions in one message) are recognised but not
-  executed as a batch — she asks to take them one at a time.
+- **Compound commands (2026‑09‑07, ADR‑0020):** a simple **sequence** — «закрой первое,
+  потом перенеси второе на 14», «…; потом покажи напоминания», one command per line,
+  «…, а второе перенеси…», "close #1, then move #2" — is split deterministically (at most
+  four fragments; each later fragment must open with a command verb or an ordinal/number
+  and one) and run fragment by fragment through the normal dispatcher. If a fragment
+  opens a card (a reminder draft, a suggestion), the sequence **pauses** («Сначала вот
+  это — остальное (N) сделаю сразу после») and resumes the moment that card is answered
+  (by text or button); a queue left unanswered for 10 minutes is dropped. Fragments that
+  lean on each other through a pronoun («закрой первое и перенеси **его** на завтра») and
+  any other bundle of distinct commands are **not** executed as a batch — she asks to take
+  them one at a time («Давай по одному, босс — что сделать первым?»). Before this the
+  `multi_action` route was wired to the task planner, which has no close/reschedule tool
+  and answered with a paid refusal in planner prose; `task_start` remains for research
+  only.
 - A Telegram bot can't read arbitrary chat history or private‑channel links by URL —
   **forwarding** remains the path; bot file downloads are capped at **~20 MB**.
 - Reminders are daily/weekly; remote fetch is HTML/text + public t.me only.

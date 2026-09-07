@@ -1837,14 +1837,16 @@ class ConversationDispatchTests(unittest.TestCase):
                           "until_utc": "2020-01-02T00:00:00+00:00"}, "что было?")
         self.assertEqual(r.call_args[0][1], T("ru", "recall_conversation_empty"))
 
-    def test_multi_action_enters_the_durable_task_engine(self):
+    def test_multi_action_answers_one_at_a_time_not_the_task_engine(self):
+        # ADR-0020 step 0: the planner has no close/reschedule tool and used to
+        # answer with a paid refusal; the documented «давай по одному» is back.
         with mock.patch.object(router, "route",
                                return_value={"action": "multi_action", "params": {}, "confidence": 0.85}), \
-                mock.patch.object(self.agent, "do_task_start") as start:
-            self.agent.dispatch(1, {}, "первое закрой, второе - напомни в 14:00")
-        start.assert_called_once_with(
-            1, self.agent.lang(),
-            "первое закрой, второе - напомни в 14:00", None)
+                mock.patch.object(self.agent, "do_task_start") as start, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {}, "закрой первое и перенеси его на завтра")
+        start.assert_not_called()
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "one_at_a_time"))
         self.assertTrue(skill_manifest.known("multi_action"))
 
     def test_report_problem_logs_boss_reported_issue(self):
@@ -26952,6 +26954,108 @@ class PhaseB20260907Tests(unittest.TestCase):
             self.agent.turn_extra = []
         ask.assert_not_called()
         conv.assert_called_once()
+
+
+class CompoundCommands20260907Tests(unittest.TestCase):
+    """ADR-0020: a simple command sequence is split deterministically and run
+    fragment by fragment, pausing at the first card and resuming once it is
+    answered; anything else gets the honest «давай по одному», never the planner."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "c.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+        store.pref_set(self.conn, "quiet_start", "0")
+        store.pref_set(self.conn, "quiet_end", "0")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_split_compound_grammar(self):
+        split = router.split_compound
+        self.assertEqual(split("закрой первое, потом перенеси второе на 14"),
+                         ["закрой первое", "перенеси второе на 14"])
+        self.assertEqual(split("напомни завтра в 10 позвонить Ире; потом покажи напоминания"),
+                         ["напомни завтра в 10 позвонить Ире", "покажи напоминания"])
+        self.assertEqual(split("close #1, then move #2 to tomorrow"),
+                         ["close #1", "move #2 to tomorrow"])
+        self.assertEqual(split("покажи заметки\nпокажи напоминания"),
+                         ["покажи заметки", "покажи напоминания"])
+        self.assertEqual(split("первое закрой, а второе перенеси на 14"),
+                         ["первое закрой", "второе перенеси на 14"])
+        self.assertIsNone(split("закрой первое и перенеси его на завтра"))   # shared referent
+        self.assertIsNone(split("сохрани это, а то забуду"))                 # not a command
+        self.assertIsNone(split("напомни купить хлеб и молоко"))            # one action, a list
+        self.assertIsNone(split("/start"))
+        self.assertIsNone(split("а; б; в; г; д"))                            # too many / no verbs
+
+    def test_a_sequence_runs_fragment_by_fragment_in_order(self):
+        now = datetime.now(timezone.utc)
+        store.reminder_add(self.conn, 1, "аренда", (now + timedelta(hours=1)).isoformat())
+        store.reminder_add(self.conn, 1, "молоко", (now + timedelta(hours=2)).isoformat())
+        routed = []
+
+        def fake_route(cfg, conn, chat_id, text, pending, extra_context=None):
+            routed.append(text)
+            if text.startswith("закрой"):
+                return {"action": "reminder_cancel", "params": {"id": 1}, "confidence": 0.9}
+            return {"action": "reminder_list", "params": {}, "confidence": 0.9}
+        with mock.patch.object(router, "route", side_effect=fake_route), \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {"message_id": 1}, "закрой первое, потом покажи напоминания")
+        self.assertEqual(routed, ["закрой первое", "покажи напоминания"])
+        self.assertEqual([x["title"] for x in store.reminders_active(self.conn, 1)], ["молоко"])
+        self.assertEqual(r.call_count, 2)                                   # each fragment replied
+        self.assertIsNone(store.kv_get(self.conn, "compound_queue:1"))
+
+    def test_a_sequence_pauses_at_a_card_and_resumes_when_it_is_answered(self):
+        due = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+
+        def fake_route(cfg, conn, chat_id, text, pending, extra_context=None):
+            if text.startswith("напомни"):
+                return {"action": "reminder_create",
+                        "params": {"title": "позвонить Ире", "due_utc": due,
+                                   "recurrence": "none"}, "confidence": 0.9}
+            return {"action": "reminder_list", "params": {}, "confidence": 0.9}
+        sent = []
+        with mock.patch.object(router, "route", side_effect=fake_route) as route, \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, text, *a, **k:
+                                  sent.append(text) or {"message_id": 5}):
+            self.agent.handle_update({"update_id": 1, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 1,
+                "text": "напомни завтра в 10 позвонить Ире; потом покажи напоминания"}})
+        self.assertEqual(route.call_count, 1)                               # paused at the card
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "reminder")
+        self.assertTrue(any("остальное (1)" in t for t in sent))
+        self.assertTrue(store.kv_get(self.conn, "compound_queue:1"))
+        sent.clear()
+        with mock.patch.object(router, "route", side_effect=fake_route) as route, \
+                mock.patch.object(self.agent, "reply",
+                                  side_effect=lambda cid, text, *a, **k:
+                                  sent.append(text) or {"message_id": 6}):
+            self.agent.handle_update({"update_id": 2, "message": {
+                "chat": {"id": 1}, "from": {"id": 1}, "message_id": 2, "text": "да"}})
+        self.assertEqual([x["title"] for x in store.reminders_active(self.conn, 1)],
+                         ["позвонить Ире"])                                 # the card was confirmed
+        self.assertEqual(route.call_count, 1)                               # …then the rest ran
+        self.assertTrue(any("Твои напоминания" in t for t in sent))
+        self.assertFalse(store.kv_get(self.conn, "compound_queue:1"))
+
+    def test_a_stale_queue_is_dropped_not_fired(self):
+        store.kv_set(self.conn, "compound_queue:1", json.dumps({
+            "fragments": ["покажи напоминания"], "msg_id": 1,
+            "ts": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()}))
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent._resume_compound(1)
+        route.assert_not_called()
+        r.assert_not_called()
+        self.assertFalse(store.kv_get(self.conn, "compound_queue:1"))
 
 
 if __name__ == "__main__":

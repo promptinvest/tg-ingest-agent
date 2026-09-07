@@ -148,9 +148,10 @@ SKILLS = {
     "issues_report": {"risk": "read_only", "title": {"en": "Issues report", "ru": "Отчёт о проблемах"}},
     "report_problem": {"risk": "state_write", "writes_state": True,
                        "title": {"en": "Report a problem", "ru": "Записать проблему"}},
-    "multi_action": {"risk": "draft_write", "uses_llm": True, "writes_state": True,
-                     "persona_context": True,
-                     "title": {"en": "Compound tasks", "ru": "Составные задачи"}},
+    # ADR-0020: the route itself only ANSWERS («давай по одному»); a simple
+    # sequence is split before routing and each fragment carries its own policy.
+    "multi_action": {"risk": "read_only",
+                     "title": {"en": "Compound commands", "ru": "Составные команды"}},
     "task_start": {"risk": "draft_write", "uses_llm": True, "writes_state": True,
                    "persona_context": True,
                    "title": {"en": "Plan and execute tasks",

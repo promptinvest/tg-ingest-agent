@@ -1,6 +1,6 @@
 # ADR-0023: Voice transcription leaves the poll thread, with the DB staying on it
 
-- Status: Proposed
+- Status: Accepted (owner 2026-09-07; implementation deferred)
 - Date: 2026-09-07
 - Phase: Phase D — decisions the owner must make
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ ADR-0007 first; owner decision
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: ACCEPTED by the owner («it's OK» — the trade-off that a text sent during a transcription is answered before the voice turn is acceptable). Implementation deferred to the backlog by owner instruction; not started.

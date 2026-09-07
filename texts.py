@@ -1224,6 +1224,11 @@ TEXTS = {
         "ru": "Давай по одному, босс — что сделать первым?",
         "en": "Let's do one at a time, boss — which first?",
     },
+    # A split sequence paused at a card (ADR-0020): the rest waits for his answer.
+    "compound_paused": {
+        "ru": "Сначала вот это — остальное ({n}) сделаю сразу после.",
+        "en": "This one first — the rest ({n}) right after.",
+    },
     "reminder_need_title": {
         "ru": "Про что напомнить, босс?",
         "en": "What should I remind you about, boss?",
