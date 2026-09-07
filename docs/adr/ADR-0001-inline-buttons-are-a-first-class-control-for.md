@@ -1,6 +1,6 @@
 # ADR-0001: Inline buttons are a first-class control for reminder state changes
 
-- Status: Proposed
+- Status: Implemented 0a2639a
 - Date: 2026-09-07
 - Phase: Phase A — the daily loop
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `0a2639a` (Phase A batch) — buttons on fired/batch/draft cards (`reminders.*_keyboard`, `handle_reminder_callback`); «День…» offers the six days after tomorrow at 09:00; third snooze of a day escalates.

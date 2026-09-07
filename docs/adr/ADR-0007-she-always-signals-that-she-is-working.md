@@ -1,6 +1,6 @@
 # ADR-0007: She always signals that she is working
 
-- Status: Proposed
+- Status: Implemented 0a2639a
 - Date: 2026-09-07
 - Phase: Phase A — the daily loop
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `0a2639a` (Phase A batch) — typing at the top of `dispatch` and `suggest_row`; «🎤 Слушаю (~N с)…» + a state-free typing keepalive thread for voice notes > 15 s; STT itself still synchronous (ADR-0023).

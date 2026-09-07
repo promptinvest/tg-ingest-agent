@@ -1,6 +1,6 @@
 # ADR-0006: Bare acknowledgements never reach the LLM
 
-- Status: Proposed
+- Status: Implemented 0a2639a
 - Date: 2026-09-07
 - Phase: Phase A — the daily loop
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ ADR-0001 for buttons
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `0a2639a` (Phase A batch) — `resolve_reminder_draft_text` (yes/no/bare time on a draft or partial) before the router; да/давай/ага/угу/+ join the silent-ack set with a 👍 reaction, routed only when her last line ended in «?»; proactive follow-up accepts ок/окей/хорошо/ладно; the action-truth repair sees the last four turns and the active-reminders block.

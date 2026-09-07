@@ -1,6 +1,6 @@
 # ADR-0008: Alerts reach the owner only when he is affected
 
-- Status: Proposed
+- Status: Implemented 0a2639a
 - Date: 2026-09-07
 - Phase: Phase A — the daily loop
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `0a2639a` (Phase A batch) — chain-based: fallbacks probed in the same sweep, the boss is told only when a whole chain (primary + fallbacks) is dead or speech is down with no on-disk whisper-cli; one message per transition listing the primaries; flaps a fallback absorbs go to the fleet chat (`_notify_fleet`) and to `events(kind='model_health')` for the markdown «Model health» section.

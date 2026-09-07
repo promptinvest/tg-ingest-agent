@@ -1,6 +1,6 @@
 # ADR-0003: «Overdue» means fired but unacknowledged; expiry is announced and reversible
 
-- Status: Proposed
+- Status: Implemented 0a2639a
 - Date: 2026-09-07
 - Phase: Phase A — the daily loop
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `0a2639a` (Phase A batch) — `store.reminders_overdue` via `proactive.overdue_rows` (fired one-shot unacked > 2 h, or unfired past the defer valve) shared by heartbeat, review, brief and working history; one re-ping at the next local 09:00; expiry announced with a «Вернуть» button / typed «верни» (`store.reminder_reopen`, re-armed at the next local 09:00); `reminder_expiry_notice` pref.

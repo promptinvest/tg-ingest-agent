@@ -1,6 +1,6 @@
 # ADR-0005: The gratitude ritual is journal-aware and deterministic
 
-- Status: Proposed
+- Status: Implemented 0a2639a
 - Date: 2026-09-07
 - Phase: Phase A — the daily loop
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `0a2639a` (Phase A batch) — journal variant of the fired card; «готово» there = skip today; plain text under the card and the «В благодарности —» prefix go to `_deterministic_capture` (no router, no summary call; the prefix is stripped from the stored note text only); the imperative guard was widened; opt-in `gratitude_autosave` pref with the «убери J#N» hint; `_META_SUMMARY_RE` widened.

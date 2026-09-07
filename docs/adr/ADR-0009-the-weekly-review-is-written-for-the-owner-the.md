@@ -1,6 +1,6 @@
 # ADR-0009: The weekly review is written for the owner; the ops dump moves to the export
 
-- Status: Proposed
+- Status: Implemented 0a2639a
 - Date: 2026-09-07
 - Phase: Phase A — the daily loop
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `0a2639a` (Phase A batch) — `review.chat_text` rewritten (reminder outcomes + most-snoozed, journal entries in his words when ≤7, what she learned, one health line only on failure, pending memory, new proposals); `review.had_owner_turns` skips the scheduled send; the ops tail, saved-to-used outcomes and the similar-categories hint live in the markdown export.

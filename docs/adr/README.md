@@ -11,15 +11,15 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 
 | ADR | Title | Phase | Depends on | Status |
 |---|---|---|---|---|
-| [ADR-0001](ADR-0001-inline-buttons-are-a-first-class-control-for.md) | Inline buttons are a first-class control for reminder state changes | Phase A | nothing | Proposed |
-| [ADR-0002](ADR-0002-simultaneous-fires-are-delivered-as-one-numbered.md) | Simultaneous fires are delivered as one numbered card with batch close | Phase A | ADR-0001 | Proposed |
-| [ADR-0003](ADR-0003-overdue-means-fired-but-unacknowledged.md) | «Overdue» means fired but unacknowledged; expiry is announced and reversible | Phase A | nothing | Proposed |
-| [ADR-0004](ADR-0004-every-reminder-reply-names-its-target-and-shows.md) | Every reminder reply names its target and shows human time; lists never go stale | Phase A | nothing | Proposed |
-| [ADR-0005](ADR-0005-the-gratitude-ritual-is-journal-aware-and.md) | The gratitude ritual is journal-aware and deterministic | Phase A | nothing | Proposed |
-| [ADR-0006](ADR-0006-bare-acknowledgements-never-reach-the-llm.md) | Bare acknowledgements never reach the LLM | Phase A | ADR-0001 for buttons | Proposed |
-| [ADR-0007](ADR-0007-she-always-signals-that-she-is-working.md) | She always signals that she is working | Phase A | nothing | Proposed |
-| [ADR-0008](ADR-0008-alerts-reach-the-owner-only-when-he-is-affected.md) | Alerts reach the owner only when he is affected | Phase A | nothing | Proposed |
-| [ADR-0009](ADR-0009-the-weekly-review-is-written-for-the-owner-the.md) | The weekly review is written for the owner; the ops dump moves to the export | Phase A | nothing | Proposed |
+| [ADR-0001](ADR-0001-inline-buttons-are-a-first-class-control-for.md) | Inline buttons are a first-class control for reminder state changes | Phase A | nothing | Implemented 0a2639a |
+| [ADR-0002](ADR-0002-simultaneous-fires-are-delivered-as-one-numbered.md) | Simultaneous fires are delivered as one numbered card with batch close | Phase A | ADR-0001 | Implemented 0a2639a |
+| [ADR-0003](ADR-0003-overdue-means-fired-but-unacknowledged.md) | «Overdue» means fired but unacknowledged; expiry is announced and reversible | Phase A | nothing | Implemented 0a2639a |
+| [ADR-0004](ADR-0004-every-reminder-reply-names-its-target-and-shows.md) | Every reminder reply names its target and shows human time; lists never go stale | Phase A | nothing | Implemented 0a2639a |
+| [ADR-0005](ADR-0005-the-gratitude-ritual-is-journal-aware-and.md) | The gratitude ritual is journal-aware and deterministic | Phase A | nothing | Implemented 0a2639a |
+| [ADR-0006](ADR-0006-bare-acknowledgements-never-reach-the-llm.md) | Bare acknowledgements never reach the LLM | Phase A | ADR-0001 for buttons | Implemented 0a2639a |
+| [ADR-0007](ADR-0007-she-always-signals-that-she-is-working.md) | She always signals that she is working | Phase A | nothing | Implemented 0a2639a |
+| [ADR-0008](ADR-0008-alerts-reach-the-owner-only-when-he-is-affected.md) | Alerts reach the owner only when he is affected | Phase A | nothing | Implemented 0a2639a |
+| [ADR-0009](ADR-0009-the-weekly-review-is-written-for-the-owner-the.md) | The weekly review is written for the owner; the ops dump moves to the export | Phase A | nothing | Implemented 0a2639a |
 | [ADR-0010](ADR-0010-action-truth-guard-v3-tighten-the-bypass-carve.md) | Action-truth guard v3: tighten the bypass, carve out honest offers, align the prompt | Phase B | nothing | Proposed |
 | [ADR-0011](ADR-0011-post-window-follow-ups-bind-deterministically.md) | Post-window follow-ups bind deterministically; degenerate replies never ship | Phase B | ADR-0024 for the precedence table, but can ship as a guard first | Proposed |
 | [ADR-0012](ADR-0012-memory-consolidation-may-fold-only-like-into.md) | Memory consolidation may fold only like into like, and it is a durable job | Phase B | nothing | Proposed |

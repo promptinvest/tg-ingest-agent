@@ -1,6 +1,6 @@
 # ADR-0004: Every reminder reply names its target and shows human time; lists never go stale
 
-- Status: Proposed
+- Status: Implemented 0a2639a
 - Date: 2026-09-07
 - Phase: Phase A — the daily loop
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `0a2639a` (Phase A batch) — replies name title + display number; `reminders.fmt_relative`; create/reschedule/rename re-render the list; part-of-day defaults 09/13/19/22 — a bare «завтра» deliberately keeps the documented 09:00; twin offer with a «Перенести существующее» button; a subject-less create after a >3 h stale one-shot opens a partial.
