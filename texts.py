@@ -465,18 +465,105 @@ TEXTS = {
         "ru": "Поставила! #{rid}: {title} — {when_local} 👌",
         "en": "Set! #{rid}: {title} — {when_local} 👌",
     },
+    # Fired cards carry inline buttons (ADR-0001); text follow-ups still work.
     "reminder_fired": {
-        "ru": "⏰ {name}, напоминаю: {title}\nОтветь «готово» — или «через 30 минут», если отложить.",
-        "en": "⏰ {name}, reminder: {title}\nReply \"done\" — or \"in 30 minutes\" to snooze.",
+        "ru": "⏰ {name}, напоминаю: {title}\nГотово — или отложить? Кнопки ниже, или напиши «через 30 минут».",
+        "en": "⏰ {name}, reminder: {title}\nDone — or snooze? Buttons below, or reply \"in 30 minutes\".",
     },
-    "reminder_done": {"ru": "Отлично, закрыла ✅", "en": "Great, closed ✅"},
+    # A fired reminder whose title IS an active journal invites the entry itself
+    # (ADR-0005); a bare «готово» there means «today without an entry».
+    "reminder_fired_journal": {
+        "ru": "📔 {name}, {title} — за что сегодня? Напиши строкой, запишу. Или «готово», если сегодня без записи.",
+        "en": "📔 {name}, {title} — what's today's entry? Write it as a line and I'll record it. Or \"done\" to skip today.",
+    },
+    # Two or more reminders due in one sweep arrive as ONE numbered card (ADR-0002).
+    "reminder_fired_batch": {
+        "ru": "⏰ {name}, сейчас:\n{items}\nКнопки ниже — по одному, или «Все готово».",
+        "en": "⏰ {name}, right now:\n{items}\nButtons below — one by one, or \"All done\".",
+    },
+    "reminder_done": {
+        "ru": "Закрыла «{title}» (#{rid}) ✅",
+        "en": "Closed «{title}» (#{rid}) ✅",
+    },
+    "reminder_done_multi": {
+        "ru": "Закрыла: {items} ✅",
+        "en": "Closed: {items} ✅",
+    },
     "reminder_skipped": {
-        "ru": "Хорошо, на сегодня пропускаем 👌",
-        "en": "Okay, skipping it for today 👌",
+        "ru": "«{title}» — на сегодня пропускаем 👌",
+        "en": "«{title}» — skipping it for today 👌",
     },
     "reminder_snoozed": {
-        "ru": "Хорошо, напомню снова в {when_local} 😉",
-        "en": "Okay, I'll nudge you again at {when_local} 😉",
+        "ru": "«{title}» — напомню {when_rel} 😉",
+        "en": "«{title}» — I'll nudge you again {when_rel} 😉",
+    },
+    "reminder_snoozed_multi": {
+        "ru": "Напомню {when_rel}: {items} 😉",
+        "en": "I'll nudge you again {when_rel}: {items} 😉",
+    },
+    # Third snooze of the same reminder in one day: the card escalates (ADR-0001).
+    "reminder_snooze_escalate": {
+        "ru": "Уже третий раз откладываем «{title}» — перенести на другой день или закрыть?",
+        "en": "That's the third snooze of «{title}» today — move it to another day, or close it?",
+    },
+    "journal_skipped_today": {
+        "ru": "Хорошо, сегодня без записи в «{category}» 👌",
+        "en": "Okay, no «{category}» entry today 👌",
+    },
+    # Short outcome lines appended to a card when its button is pressed.
+    "card_done": {"ru": "✅ закрыла", "en": "✅ closed"},
+    "card_all_done": {"ru": "✅ все закрыты", "en": "✅ all closed"},
+    "card_skipped": {"ru": "👌 сегодня пропускаем", "en": "👌 skipped for today"},
+    "card_snoozed": {"ru": "⏰ напомню {when_rel}", "en": "⏰ again {when_rel}"},
+    "card_set": {"ru": "✅ поставила", "en": "✅ set"},
+    "card_cancelled": {"ru": "✖️ не ставлю", "en": "✖️ not setting it"},
+    "card_reopened": {"ru": "↩️ вернула", "en": "↩️ reopened"},
+    "card_expired": {"ru": "— уже закрыто", "en": "— already closed"},
+    # One re-ping at the next local 09:00 for a fired one-shot still unacked (ADR-0003).
+    "reminder_repinged": {
+        "ru": "⏰ {name}, это ещё висит: «{title}» (сработало {fired_rel}). Готово, +1 ч или на завтра?",
+        "en": "⏰ {name}, still open: «{title}» (fired {fired_rel}). Done, +1 h, or tomorrow?",
+    },
+    "reminders_expired_notice": {
+        "ru": "Закрыла как просроченные: {items} — вернуть?",
+        "en": "Closed as overdue: {items} — bring them back?",
+    },
+    "reminders_reopened": {
+        "ru": "Вернула: {items} — напомню {when_rel} ↩️",
+        "en": "Reopened: {items} — I'll remind you {when_rel} ↩️",
+    },
+    "reminder_expiry_notice_off": {
+        "ru": "Хорошо — больше не сообщаю, когда закрываю просроченные напоминания.",
+        "en": "Okay — I'll stop telling you when I close overdue reminders.",
+    },
+    "reminder_expiry_notice_on": {
+        "ru": "Хорошо — буду сообщать, когда закрываю просроченные напоминания.",
+        "en": "Okay — I'll tell you when I close overdue reminders.",
+    },
+    # A create whose title matches an active reminder offers the move instead (ADR-0004).
+    "reminder_twin": {
+        "ru": "Уже есть #{rid} «{title}» на {when_rel} — перенести его вместо нового?",
+        "en": "There's already #{rid} «{title}» at {when_rel} — move that one instead?",
+    },
+    "gratitude_autosave_on": {
+        "ru": "Хорошо — благодарности пишу в дневник сразу, без карточки. «Убери J#N» отменит запись.",
+        "en": "Okay — gratitude goes straight into the journal, no card. \"Remove J#N\" undoes an entry.",
+    },
+    "gratitude_autosave_off": {
+        "ru": "Хорошо — снова показываю карточку перед записью.",
+        "en": "Okay — I'll show the card before recording again.",
+    },
+    "journal_autosaved_hint": {
+        "ru": "Если не то — «убери J#{n}».",
+        "en": "If that's wrong — \"remove J#{n}\".",
+    },
+    "reminder_cancelled_multi": {
+        "ru": "Отменила: {items}.",
+        "en": "Cancelled: {items}.",
+    },
+    "voice_listening": {
+        "ru": "🎤 Слушаю (~{seconds} с)…",
+        "en": "🎤 Listening (~{seconds}s)…",
     },
     "reminder_list_empty": {
         "ru": "Активных напоминаний нет — всё спокойно 🌿",
@@ -901,8 +988,8 @@ TEXTS = {
     # became the note-review invitation (nudge_note_review); untriaged items
     # surface there as one of the deterministic review reasons.
     "nudge_overdue": {
-        "ru": "Просрочено напоминаний: {n}. Перенести их или отметить выполненными?",
-        "en": "{n} reminder(s) are overdue. Reschedule them, or mark them done?",
+        "ru": "Ждут решения ({n}): {items}. Перенести или закрыть?",
+        "en": "Waiting on you ({n}): {items}. Reschedule, or close?",
     },
     # Correction handling (auto-applied, but she tells him).
     "correction_learned": {
@@ -1015,17 +1102,34 @@ TEXTS = {
         "en": ("📔 Want to add something to «{category}» for today? "
                "If not now — just skip it."),
     },
+    # Sent to the boss ONLY when he is affected: no fallback exists for the model, or
+    # the fallback is down too (ADR-0008). Routine flaps absorbed by a fallback go to
+    # the fleet ops chat instead. {models} lists every model of the transition.
     "model_down": {
-        "ru": "⚠️ Босс, модель «{model}» сейчас недоступна ({reason}). Держусь на запасной, но загляни в доступ к моделям, когда сможешь.",
-        "en": "⚠️ Boss, the «{model}» model just became unavailable ({reason}). I'm holding on a backup, but check the model access when you can.",
+        "ru": "⚠️ Босс, без запасной модели сейчас: {models} ({reason}) — часть ответов не пройдёт. Загляни в доступ к моделям, когда сможешь.",
+        "en": "⚠️ Boss, no working model for: {models} ({reason}) — some replies won't go through. Check the model access when you can.",
     },
     "model_down_transient": {
-        "ru": "⚠️ Босс, у провайдера модели «{model}» затянулась временная перегрузка ({reason}). Пока держусь на запасной; ничего проверять не нужно.",
-        "en": "⚠️ Boss, the provider for «{model}» has a sustained temporary overload ({reason}). I'm using a backup; you don't need to check anything yet.",
+        "ru": "⚠️ Босс, у провайдера затянулась временная перегрузка, а запасной модели нет: {models} ({reason}). Могу отвечать с перебоями; проверять пока ничего не нужно.",
+        "en": "⚠️ Boss, a sustained temporary provider overload with no backup model: {models} ({reason}). Replies may stutter; nothing to check yet.",
     },
     "model_back": {
-        "ru": "✓ Модель «{model}» снова на связи, босс.",
-        "en": "✓ The «{model}» model is reachable again, boss.",
+        "ru": "✓ Снова на связи: {models}, босс.",
+        "en": "✓ Reachable again: {models}, boss.",
+    },
+    "fleet_models_down": {
+        "ru": "{label}: model(s) down: {models} ({reason}); fallback holding, owner not notified.",
+        "en": "{label}: model(s) down: {models} ({reason}); fallback holding, owner not notified.",
+    },
+    "fleet_models_back": {
+        "ru": "{label}: model(s) back: {models}.",
+        "en": "{label}: model(s) back: {models}.",
+    },
+    # Speech down WITH the cold whisper-cli on disk: the boss still gets his voice
+    # notes (slower), so only the ops chat hears it — with the remedy.
+    "fleet_speech_down": {
+        "ru": "{label}: {model} is not answering ({reason}); voice notes run on the cold whisper-cli backup (slower). Remedy: systemctl restart whisper-server. Owner not notified.",
+        "en": "{label}: {model} is not answering ({reason}); voice notes run on the cold whisper-cli backup (slower). Remedy: systemctl restart whisper-server. Owner not notified.",
     },
     # The speech backend is an ON-BOX systemd unit, not a provider: the remedy is
     # `systemctl restart whisper-server`, not a look at the model access. Two

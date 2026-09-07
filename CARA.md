@@ -129,6 +129,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   other chat (e.g. a group), are ignored.
 - **State changes are confirmed** conversationally ("да", "нет, лучше крипта",
   "через полчаса") or via inline buttons. Bulk **purge** needs an exact typed phrase.
+  **Acknowledgements never reach the model (2026‑09‑07, ADR‑0006):** while a reminder
+  draft or partial is pending, «да»/«нет»/«не надо»/«через 20 минут»/«в 18:30»/«завтра
+  вечером» are parsed deterministically; with nothing pending a bare
+  «да/давай/ага/угу/ок/+» is silence between humans (it earns a 👍 reaction) — unless
+  her last line ended with a question mark, in which case it is the answer and routes.
+  The action‑truth repair now sees the last four turns and her real reminder list, so it
+  can say «это уже стоит — #2» instead of denying a save she made.
 - **When unsure, she talks** — a low‑confidence read (and the `clarify` route) drops to
   warm `converse` where she answers or asks naturally in «ты», never a cold formal template.
 - **Two sides of one person, switched smoothly 24/7 — no commands, no clock gate**
@@ -1126,8 +1133,51 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     immediately lists what's left with fresh #1..#N — so a rapid "удали #1", "удали #2" always
     reads off the *current* numbering, never a stale screenshot. (Reminder numbers are positions,
     not IDs: the list compacts when something leaves, so a captured #N goes stale instantly.)
-  - **The "ждёт готово" list self‑clears.** A fired one‑shot left unacked **auto‑closes** after
-    `reminder_fired_expire_days` so the list never piles up.
+  - **Buttons, batch cards and named replies (2026‑09‑07, Phase A — ADR‑0001…0004):**
+    a fired card carries **✅ Готово · +1 ч · Завтра 09:00 · День…** (the last opens a
+    week of day buttons); a draft card carries **Ставлю · Другое время · Не надо**. Buttons
+    are deterministic (no model call), edit the card in place to show the outcome and drop
+    their dead keyboard; typed follow‑ups keep working exactly as before. The **third snooze
+    of one reminder in a day** escalates the card to «перенести на другой день или
+    закрыть?». **Two or more reminders due in the same sweep arrive as ONE numbered card**
+    («⏰ Сейчас: 1) … 2) …») with per‑member buttons and «Все готово»; «готово» closes the
+    set, «готово 2» / «закрой второе» one member (the rest stay open on the slot), a Reply
+    to the card names its whole id set, and «закрой #1 и #3» / «закрой все три» reach
+    `reminder_cancel` with `ids`/`all` like reschedule does. **Every reply names its
+    target** («Закрыла «ФНС» (#2) ✅», ««Аренда» — напомню завтра 09:00»), times read as
+    «сегодня 18:00 / завтра 09:00 / ср 14:00», and **create, reschedule and rename re‑show
+    the numbered list** exactly as cancel does, so a captured #N never goes stale.
+    Part‑of‑day snoozes map to defaults (утром 09:00 · днём 13:00 · вечером 19:00 · ночью
+    22:00; a bare «завтра» keeps 09:00; «сегодня вечером» already past asks instead of
+    rolling). A create whose title matches an active reminder shows «уже есть #N … —
+    перенести его?» with a «Перенести существующее» button (moves that one, creates
+    nothing), and a subject‑less «напомни завтра в 10» typed hours after a one‑shot fired
+    opens a **new** partial instead of snoozing the stale one (an explicit
+    «отложи/закрой» still binds to it).
+  - **«Overdue» means fired but unacknowledged (2026‑09‑07, ADR‑0003).** One definition,
+    shared by the heartbeat, the morning brief, the working history and the review: a
+    fired one‑shot still unacked **2 hours** after it fired, or an unfired reminder held
+    past the `REMINDER_MAX_DEFER_HOURS` valve. The overdue nudge is live again (it names
+    the titles), bypasses the daily cap as designed, and «покажи их» still opens the real
+    list. Before expiry Cara sends **one re‑ping at the next local 09:00** («это ещё
+    висит: «ФНС» (сработало вчера 18:00) — готово, +1 ч или на завтра?», same buttons).
+    Past `reminder_fired_expire_days` the auto‑close is **announced and reversible**:
+    «Закрыла как просроченные: «…» — вернуть?» with a «Вернуть» button (or a typed
+    «верни»/«да» while that question is open) re‑arms them at the next local 09:00.
+    «Не сообщай о просроченных» turns the notice off (`reminder_expiry_notice`),
+    «сообщай о просроченных» back on; the close itself still happens.
+  - **The gratitude ritual is journal‑aware (2026‑09‑07, ADR‑0005).** A fired reminder
+    whose title IS an active structured journal («благодарности») renders the journal
+    variant — «за что сегодня? Напиши строкой, запишу. Или «готово», если сегодня без
+    записи» with «Сегодня без записи · +1 ч» — and a bare «готово» there means *skip
+    today* («сегодня без записи в «Благодарность»»), never a false «закрыла». Plain text
+    under that card, and a message starting with **«В благодарности — …»** /
+    «благодарность: …» at any time, goes **straight to the journal capture card with no
+    router call and no summary call** (the card shows his words verbatim, the routing
+    prefix stripped; the extracted fields still appear); commands, questions, forwards
+    and media route normally. Opt‑in **auto‑save** («записывай благодарности сразу»)
+    commits the entry without the card and names the undo («убери J#N»); «спрашивай
+    перед записью» restores the card.
   - **Plain-language commands land, whatever the word order.** A close verb naming one
     reminder — "**Азербайджан закрой**" as well as "закрой Азербайджан", "первое закрой",
     "убери третье" — closes it; "**передвинь**/сдвинь" reads the same as "перенеси"; "покажи
@@ -1262,13 +1312,20 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   wedging the schedule forever.
 - **Weekly performance review:** runs on a fixed schedule (default **Monday 10:00
   local**); "когда следующий review?" tells you the date; "как ты поработала?" runs it
-  on demand. **Saved‑to‑used outcomes lead (2026‑07‑17, MET‑001):** the user‑facing
-  review opens with what the saved material actually DID — saved · actually used
+  on demand. **Written for the owner (2026‑09‑07, ADR‑0009):** the chat text is a
+  handful of lines about HIS week — reminder outcomes with the most‑snoozed title, his
+  journal entries in his own words (when ≤7; a count otherwise), what she learned, one
+  health line **only when something failed**, memory suggestions waiting, new improvement
+  proposals — every block gated on non‑zero data, and **no send at all in a week he never
+  wrote in**. The saved‑to‑used outcomes, spend, latency, task‑runtime counters,
+  first‑guess accuracy and similar‑category hints all live in the Markdown export, which
+  also gained a **«Model health»** section.
+  **Saved‑to‑used outcomes (2026‑07‑17, MET‑001) — export‑side since 2026‑09‑07:** the
+  Markdown opens with what the saved material actually DID — saved · actually used
   (opened/cited) · turned into reminders · archived/restored · awaiting triage ·
-  review‑due · upcoming reviews/temporary expiring — plus the **📔 Дневники**
-  journal‑activity rollup; operational metrics (issues, spend, model fallbacks,
-  first‑guess accuracy, memory counts) move to the **«⚙️ Как я работала» Cara‑health
-  tail**. The engineering Markdown adds a **"Notes outcomes"** section with the KPI
+  review‑due · upcoming reviews/temporary expiring — plus the journal‑activity rollup
+  and the operational metrics (issues, spend, model fallbacks, first‑guess accuracy,
+  memory counts). It carries a **"Notes outcomes"** section with the KPI
   `capture_to_use_rate` (distinct notes used / distinct notes confirmed — never
   optimized toward more saves/nudges/entries), median capture→first‑use
   (durable all‑time milestones; an upgrade with no retained first-use event is
@@ -1450,8 +1507,10 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   which opens the exact snapshotted ≤3‑item review batch (untriaged items surface there
   as one of the deterministic review reasons); chat can never answer about an unrelated
   item or falsely say the queue is clean.
-  A one-shot that already fired and is waiting for “готово” is not overdue and cannot
-  generate another urgent overdue nudge.
+  Since 2026‑09‑07 (ADR‑0003) «overdue» has ONE definition everywhere: a fired one‑shot
+  still unacknowledged two hours after it fired, or an unfired reminder held past the
+  defer valve — so the urgent nudge (naming the titles) is live again; a one‑shot fired
+  minutes ago is «awaiting «готово»», not overdue.
 - **Tune her proactivity** (`proactive_prefs`): "пиши только по выходным", "не беспокой
   до 10", "отключи напоминания", "можно почаще", "не предлагай сохранёнки" → stored
   overrides (on/off, days, quiet window, frequency, saved-note review) the heartbeat honors.
@@ -1482,9 +1541,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   box's root-only `/etc/codex-auto-update/telegram.env`, since the `tg-ingest` user can't
   read that file).
 - **Model‑health monitor:** every `MODEL_HEALTH_INTERVAL_SECONDS` (default 30 min) she
-  checks her models (chat, conversation, vision) are reachable and **messages the boss the
-  moment one becomes inaccessible** (e.g. a provider/tier 403) — and again when it
-  recovers. **Debounced:** hard access failures use `MODEL_HEALTH_CONFIRM_CHECKS` (default 2),
+  checks her models (chat, conversation, vision) **and their fallbacks** are reachable.
+  **Alerts reach the boss only when he is affected (2026‑09‑07, ADR‑0008):** a chain (a
+  primary plus its fallbacks) is announced dead only when no member answers and every
+  down member passed the debounce — one message per transition, listing the affected
+  primaries — and «back» follows only a «down» he was told about. A flap a fallback
+  absorbs goes to the **fleet ops chat** (`FLEET_NOTIFY_*`) and the weekly Markdown
+  «Model health» section instead, never to him. Speech (`whisper-server`) reaches him only
+  when the cold `whisper-cli` backup is not on disk. **Debounced:** hard access failures use `MODEL_HEALTH_CONFIRM_CHECKS` (default 2),
   while transient 429/overload/timeout failures require
   `MODEL_HEALTH_TRANSIENT_CONFIRM_CHECKS` (default 4). Provider response bodies never reach
   Telegram; reasons are reduced to bounded labels such as `temporary provider overload
@@ -1740,6 +1804,12 @@ weekly redacted evidence
   the box env; the code defaults are `remote` / `auto`.) a non‑speech
   hallucination filter ("[Subscribe]", "[Music]", "Спасибо за просмотр"…) and a
   too‑big (>20 MB) message keep garbage out of dispatch.
+- **She always signals that she is working (2026‑09‑07, ADR‑0007):** a typing indicator
+  is sent at the top of every dispatch and at the start of every ingest suggestion (a
+  forward used to sit silent for 9–23 s). A voice note longer than 15 s gets «🎤 Слушаю
+  (~N с)…» (not recorded in the history) and a state‑free keepalive thread re‑sends
+  «typing» every 4 s while whisper blocks the loop — the thread touches no database and
+  no shared state; the transcription itself is still synchronous (ADR‑0023).
 - **STT_MODE is validated at startup (2026‑07‑25)**: only `local` / `local_server` /
   `remote`: an unknown value used to fall through to `remote`, so a typo would have
   shipped the boss's private voice audio to an off‑box endpoint. **Outage resilience:**

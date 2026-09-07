@@ -90,15 +90,36 @@ def _wrong_day(conn, cfg, now, days):
 
 # -- checks: each returns (key, text, urgent) or None -------------------------
 
+# ONE definition of «overdue» (ADR-0003), shared with the review, the morning
+# brief and the working history: a fired one-shot still unacked after this grace
+# window, plus an unfired reminder held past the delivery defer valve.
+OVERDUE_FIRED_GRACE_HOURS = 2
+DEFAULT_DEFER_HOURS = 2
+
+
+def overdue_rows(conn, cfg, now, chat_id=None):
+    defer = DEFAULT_DEFER_HOURS
+    if cfg is not None:
+        try:
+            defer = float(getattr(cfg, "reminder_max_defer_hours", DEFAULT_DEFER_HOURS))
+        except (TypeError, ValueError):
+            defer = DEFAULT_DEFER_HOURS
+    if defer <= 0:
+        defer = 0.0
+    return store.reminders_overdue(
+        conn, chat_id,
+        (now - timedelta(hours=OVERDUE_FIRED_GRACE_HOURS)).isoformat(),
+        (now - timedelta(hours=defer)).isoformat())
+
+
 def _overdue_reminders(conn, cfg, lang, now, chat_id=None):
-    n = conn.execute(
-        "SELECT COUNT(*) AS n FROM reminders WHERE status='active' AND due_utc<?"
-        + (" AND chat_id=?" if chat_id is not None else "")
-        + " AND (last_fired_at IS NULL OR last_fired_at<due_utc)",
-        ((now.isoformat(), int(chat_id)) if chat_id is not None
-         else (now.isoformat(),)),
-    ).fetchone()["n"]
-    return ("overdue", T(lang, "nudge_overdue", n=n), True) if n else None
+    rows = overdue_rows(conn, cfg, now, chat_id=chat_id)
+    if not rows:
+        return None
+    items = ", ".join(f"«{r['title']}»" for r in rows[:3])
+    if len(rows) > 3:
+        items += " …"
+    return "overdue", T(lang, "nudge_overdue", n=len(rows), items=items), True
 
 
 def _memory_candidates(conn, cfg, lang, now):

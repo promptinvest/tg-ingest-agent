@@ -386,3 +386,208 @@ def find_by_query(rows, params):
         if query in row["title"].casefold():
             return row
     return None
+
+
+# -- human time, keyboards and callback grammar (Phase A, ADR-0001/0002/0004) --
+
+# Part-of-day words → default local hour when a snooze names no clock time
+# («завтра вечером» used to re-arm at 09:00 — the wrong half of the day).
+PART_OF_DAY_HOURS = (
+    (("утр", "morning"), 9),
+    (("обед", "днём", "днем", "дня", "afternoon", "noon"), 13),
+    (("вечер", "evening", "tonight"), 19),
+    (("ноч", "night"), 22),
+)
+DEFAULT_SNOOZE_HOUR = 9   # «завтра» with no time at all keeps the documented 09:00
+
+
+def part_of_day_hour(text):
+    """The default hour a part-of-day word in `text` maps to, or None."""
+    t = str(text or "").casefold()
+    for stems, hour in PART_OF_DAY_HOURS:
+        if any(s in t for s in stems):
+            return hour
+    return None
+
+
+def local_day_at(offset_hours, days_ahead, hour, minute=0, now=None):
+    """UTC ISO for `days_ahead` days from the boss's local today at HH:MM local."""
+    now = now or datetime.now(timezone.utc)
+    local_now = now + timedelta(hours=offset_hours)
+    local_due = datetime.combine(local_now.date() + timedelta(days=days_ahead),
+                                 datetime.min.time(), tzinfo=timezone.utc)
+    local_due = local_due.replace(hour=max(0, min(23, hour)), minute=max(0, min(59, minute)))
+    return (local_due - timedelta(hours=offset_hours)).isoformat()
+
+
+_WEEKDAYS = {"ru": ["пн", "вт", "ср", "чт", "пт", "сб", "вс"],
+             "en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]}
+
+
+def fmt_relative(due_iso, offset_hours, lang, now=None):
+    """Human time relative to the boss's local day: «сегодня 18:00», «завтра 09:00»,
+    «ср 14:00» (within the week), else the full local stamp. Yesterday reads the
+    same way («вчера 18:00»)."""
+    due = parse_iso_utc(due_iso)
+    if due is None:
+        return str(due_iso or "")
+    now = now or datetime.now(timezone.utc)
+    ru = lang == "ru"
+    local = due + timedelta(hours=offset_hours)
+    today = (now + timedelta(hours=offset_hours)).date()
+    delta = (local.date() - today).days
+    clock = local.strftime("%H:%M")
+    if delta == 0:
+        return ("сегодня " if ru else "today ") + clock
+    if delta == 1:
+        return ("завтра " if ru else "tomorrow ") + clock
+    if delta == -1:
+        return ("вчера " if ru else "yesterday ") + clock
+    if 1 < delta <= 6:
+        return _WEEKDAYS["ru" if ru else "en"][local.weekday()] + " " + clock
+    return fmt_local(due_iso, offset_hours)
+
+
+def find_twin(rows, title):
+    """An active reminder whose title is the same subject as `title` (either
+    contains the other, casefold, ≥4 chars) — a create that repeats it should be
+    offered as a move (the boss cancelled and re-created 12 twin pairs)."""
+    t = str(title or "").strip().casefold()
+    if len(t) < 2:
+        return None
+    for row in rows:
+        r = str(row["title"] or "").strip().casefold()
+        if r == t:
+            return row                      # «Рим» twice is a twin at any length
+        if len(t) >= 4 and len(r) >= 4 and (t in r or r in t):
+            return row
+    return None
+
+
+# Callback grammar (≤ 64 bytes): "rm|<op>|<rid>[|<arg>]" for fired cards,
+# "dr|<op>[|<rid>]" for the draft card (its payload lives in the pending slot).
+def fired_keyboard(rid, lang):
+    ru = lang == "ru"
+    return {"inline_keyboard": [
+        [{"text": "✅ Готово" if ru else "✅ Done", "callback_data": f"rm|done|{rid}"},
+         {"text": "+1 ч" if ru else "+1 h", "callback_data": f"rm|h1|{rid}"}],
+        [{"text": "Завтра 09:00" if ru else "Tomorrow 09:00", "callback_data": f"rm|tmw|{rid}"},
+         {"text": "День…" if ru else "Day…", "callback_data": f"rm|days|{rid}"}],
+    ]}
+
+
+def journal_fired_keyboard(rid, lang):
+    ru = lang == "ru"
+    return {"inline_keyboard": [
+        [{"text": "Сегодня без записи" if ru else "Skip today",
+          "callback_data": f"rm|skip|{rid}"},
+         {"text": "+1 ч" if ru else "+1 h", "callback_data": f"rm|h1|{rid}"}],
+    ]}
+
+
+def escalate_keyboard(rid, lang):
+    ru = lang == "ru"
+    return {"inline_keyboard": [
+        [{"text": "Завтра 09:00" if ru else "Tomorrow 09:00", "callback_data": f"rm|tmw|{rid}"},
+         {"text": "День…" if ru else "Day…", "callback_data": f"rm|days|{rid}"},
+         {"text": "Закрыть" if ru else "Close", "callback_data": f"rm|done|{rid}"}],
+    ]}
+
+
+def batch_keyboard(ids, lang):
+    """One row per member (✅ · +1ч · завтра, numbered) plus «Все готово»."""
+    ru = lang == "ru"
+    rows = []
+    for i, rid in enumerate(ids, start=1):
+        rows.append([
+            {"text": f"✅ {i}", "callback_data": f"rm|done|{rid}"},
+            {"text": f"+1ч {i}" if ru else f"+1h {i}", "callback_data": f"rm|h1|{rid}"},
+            {"text": f"Завтра {i}" if ru else f"Tmrw {i}", "callback_data": f"rm|tmw|{rid}"},
+        ])
+    joined = ",".join(str(int(r)) for r in ids)
+    if len(f"rm|alld|{joined}".encode("utf-8")) <= 64:
+        rows.append([{"text": "Все готово" if ru else "All done",
+                      "callback_data": f"rm|alld|{joined}"}])
+    return {"inline_keyboard": rows}
+
+
+def days_keyboard(rid, lang, offset_hours, now=None):
+    """The next six days (from the day after tomorrow) at 09:00 local, plus «Назад»."""
+    ru = lang == "ru"
+    now = now or datetime.now(timezone.utc)
+    local_today = (now + timedelta(hours=offset_hours)).date()
+    buttons = []
+    for n in range(2, 8):
+        day = local_today + timedelta(days=n)
+        buttons.append({"text": _WEEKDAYS["ru" if ru else "en"][day.weekday()]
+                        + f" {day.day:02d}.{day.month:02d}",
+                        "callback_data": f"rm|day|{rid}|{n}"})
+    return {"inline_keyboard": [buttons[:3], buttons[3:],
+                                [{"text": "← Назад" if ru else "← Back",
+                                  "callback_data": f"rm|back|{rid}"}]]}
+
+
+def reopen_keyboard(ids, lang):
+    ru = lang == "ru"
+    joined = ",".join(str(int(r)) for r in ids)
+    if len(f"rm|reopen|{joined}".encode("utf-8")) > 64:
+        return None
+    return {"inline_keyboard": [[{"text": "↩️ Вернуть" if ru else "↩️ Bring back",
+                                  "callback_data": f"rm|reopen|{joined}"}]]}
+
+
+def draft_keyboard(lang, twin_id=None):
+    ru = lang == "ru"
+    rows = [[{"text": "✅ Ставлю" if ru else "✅ Set it", "callback_data": "dr|set"},
+             {"text": "🕒 Другое время" if ru else "🕒 Another time", "callback_data": "dr|time"}],
+            [{"text": "✖️ Не надо" if ru else "✖️ Never mind", "callback_data": "dr|no"}]]
+    if twin_id is not None:
+        rows[1].insert(0, {"text": ("↪️ Перенести существующее" if ru
+                                    else "↪️ Move the existing one"),
+                           "callback_data": f"dr|move|{int(twin_id)}"})
+    return {"inline_keyboard": rows}
+
+
+def parse_callback(data):
+    """('rm', op, rid | [ids], arg) for fired/expiry cards, ('dr', op, rid, None)
+    for the draft card, or None when malformed."""
+    parts = str(data or "").split("|")
+    if len(parts) < 2 or parts[0] not in ("rm", "dr"):
+        return None
+    kind, op = parts[0], parts[1]
+    if kind == "rm":
+        if op in ("alld", "reopen"):
+            if len(parts) != 3:
+                return None
+            try:
+                ids = [int(x) for x in parts[2].split(",") if x]
+            except ValueError:
+                return None
+            return (kind, op, ids, None) if ids else None
+        if op not in ("done", "skip", "h1", "tmw", "days", "day", "back"):
+            return None
+        if len(parts) < 3:
+            return None
+        try:
+            rid = int(parts[2])
+        except ValueError:
+            return None
+        if op == "day":
+            if len(parts) != 4:
+                return None
+            try:
+                arg = int(parts[3])
+            except ValueError:
+                return None
+            return (kind, op, rid, arg) if 1 <= arg <= 14 else None
+        return (kind, op, rid, None) if len(parts) == 3 else None
+    if op not in ("set", "time", "no", "move"):
+        return None
+    if op == "move":
+        if len(parts) != 3:
+            return None
+        try:
+            return kind, op, int(parts[2]), None
+        except ValueError:
+            return None
+    return (kind, op, None, None) if len(parts) == 2 else None

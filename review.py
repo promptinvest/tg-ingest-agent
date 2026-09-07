@@ -14,6 +14,7 @@ import re
 import statistics
 
 import llm
+import proactive
 import store
 from common import scrub_secrets
 from texts import TEXTS
@@ -218,11 +219,37 @@ def collect(conn, period):
         "SELECT COUNT(*) AS n FROM reminders WHERE status='active' AND recurrence='none'"
         " AND last_fired_at IS NOT NULL",
     ).fetchone()["n"]
-    data["reminders_overdue"] = conn.execute(
-        "SELECT COUNT(*) AS n FROM reminders WHERE status='active' AND due_utc<?"
-        " AND (last_fired_at IS NULL OR last_fired_at<due_utc)",
-        (data["now"],),
+    # ONE definition of overdue (ADR-0003): the heartbeat's predicate.
+    data["reminders_overdue"] = len(proactive.overdue_rows(conn, None, now))
+    data["most_snoozed"] = [
+        (r["title"], r["n"]) for r in store.reminders_most_snoozed(conn, since, limit=1)]
+    # Journal entries of the period in his own words (ADR-0009): per journal,
+    # the source text of each entry (the card shows raw text; so does the review).
+    data["journal_entry_texts"] = []
+    for d in store.journal_defs(conn, active_only=True):
+        entries = store.journal_entries_for(conn, d["id"], since_iso=since)
+        if entries:
+            data["journal_entry_texts"].append((
+                d["category"] or d["display_name"],
+                [(e["occurred_at"], (e["raw_text"] or e["summary"] or "").strip())
+                 for e in entries]))
+    data["owner_turns"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM conversation WHERE ts >= ? AND role = 'user'"
+        " AND COALESCE(source, 'boss') = 'boss'", (since,),
     ).fetchone()["n"]
+    data["new_proposals"] = conn.execute(
+        "SELECT id, kind, hypothesis, status FROM improvement_proposals"
+        " WHERE created_at >= ? ORDER BY id", (since,),
+    ).fetchall()
+    data["health_transitions"] = []
+    for row in conn.execute(
+            "SELECT created_at, payload FROM events WHERE kind = 'model_health'"
+            " AND created_at >= ? ORDER BY id", (since,)).fetchall():
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except ValueError:
+            payload = {}
+        data["health_transitions"].append((row["created_at"], payload))
     # model fallback incidents (logged to trace_events by the llm gateway)
     data["fallback_count"] = conn.execute(
         "SELECT COUNT(*) AS n FROM trace_events WHERE stage = 'llm.fallback' AND ts >= ?",
@@ -455,11 +482,13 @@ def morning_brief(conn, cfg, lang, tz_offset, owner, chat_id=None):
     import relationship
     ru = lang == "ru"
     now = datetime.now(timezone.utc)
-    now_naive = now.replace(tzinfo=None)
     today_local = (now + timedelta(hours=tz_offset)).date()
     overdue, fired_unacked, today = [], [], []
+    # The same «overdue» the heartbeat and the review use (ADR-0003); a fired
+    # one-shot inside the grace window is «awaiting acknowledgement», not overdue.
+    overdue_ids = {r["id"] for r in proactive.overdue_rows(conn, cfg, now, chat_id=chat_id)}
     for r in conn.execute(
-            "SELECT title, due_utc, recurrence, last_fired_at FROM reminders"
+            "SELECT id, title, due_utc, recurrence, last_fired_at FROM reminders"
             " WHERE status = 'active'"
             + (" AND chat_id = ?" if chat_id is not None else "")
             + " ORDER BY due_utc LIMIT 50",
@@ -470,10 +499,10 @@ def morning_brief(conn, cfg, lang, tz_offset, owner, chat_id=None):
             continue
         if due.tzinfo is not None:
             due = due.astimezone(timezone.utc).replace(tzinfo=None)
-        if r["recurrence"] == "none" and r["last_fired_at"]:
-            fired_unacked.append(r["title"])
-        elif due < now_naive:
+        if r["id"] in overdue_ids:
             overdue.append(r["title"])
+        elif r["recurrence"] == "none" and r["last_fired_at"]:
+            fired_unacked.append(r["title"])
         elif (due + timedelta(hours=tz_offset)).date() == today_local:
             today.append(((due + timedelta(hours=tz_offset)).strftime("%H:%M"), r["title"]))
     # The morning brief must not become a second route for the disabled recurring
@@ -573,65 +602,83 @@ def _issue_label(kind, lang):
     return (entry.get(lang) or entry["en"]) if entry else kind
 
 
+def had_owner_turns(conn, period="week"):
+    """Whether the boss wrote anything in the period — a week without him has
+    nothing to review, and the scheduled send is skipped (ADR-0009)."""
+    period = normalize_period(period)
+    since = (datetime.now(timezone.utc) - timedelta(days=PERIOD_DAYS[period])).isoformat()
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM conversation WHERE ts >= ? AND role = 'user'"
+        " AND COALESCE(source, 'boss') = 'boss'", (since,),
+    ).fetchone()["n"] > 0
+
+
+# Issue kinds that mean something FAILED (as opposed to a guard doing its job or
+# a request she could not take): only these earn the one health line in chat.
+FAILURE_ISSUE_KINDS = ("llm_error", "ingest_failed", "stt_failed", "sched_send_failed",
+                       "budget_stop", "db_stalled", "backup_failed", "dead_letter",
+                       "converse_action_repair_failed")
+
+
+def _fmt_day(iso, tz_offset=0):
+    try:
+        dt = datetime.fromisoformat(str(iso))
+    except (TypeError, ValueError):
+        return "?"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (dt + timedelta(hours=tz_offset)).strftime("%d.%m")
+
+
 def chat_text(conn, cfg, lang, period="week"):
+    """The review as the boss reads it (ADR-0009): a handful of lines about HIS
+    week — reminders, his own journal words, what she learned — every block
+    gated on non-zero data, health only when something failed. The full ops
+    dump lives in the markdown export (`markdown`)."""
     data = collect(conn, period)
     ru = lang == "ru"
+    try:
+        tz_offset = int(store.pref_get(conn, "timezone_offset", cfg.timezone_offset))
+    except (TypeError, ValueError, AttributeError):
+        tz_offset = 0
     period_label = {"day": ("за сегодня", "today"), "week": ("за неделю", "this week"),
                     "month": ("за месяц", "this month")}[data["period"]][0 if ru else 1]
     lines = [("Мой отчёт " if ru else "My review ") + period_label + ":"]
-    # Outcomes first (MET-001): what the saved material actually DID — used,
-    # turned into reminders, triaged — never a bare pile-size number.
-    ev = data["note_events"]
-    saved_line = (f"📥 Сохранено: {data['notes_saved']}"
-                  f" · пригодилось (открыты/процитированы): {data['notes_used_period']}"
-                  if ru else
-                  f"📥 Saved: {data['notes_saved']}"
-                  f" · actually used (opened/cited): {data['notes_used_period']}")
-    if ev.get("note_reminder_created"):
-        saved_line += (f" · в напоминания: {ev['note_reminder_created']}" if ru
-                       else f" · turned into reminders: {ev['note_reminder_created']}")
-    lines.append(saved_line)
-    counts = data["lifecycle_counts"]
-    triage = (f"🗂 В архив: {ev.get('note_archived', 0)}"
-              f" · восстановлено: {ev.get('note_restored', 0)}"
-              f" · ждут разбора: {counts.get('inbox', 0)}"
-              f" · на пересмотр: {counts.get('review_due', 0)}"
-              if ru else
-              f"🗂 Archived: {ev.get('note_archived', 0)}"
-              f" · restored: {ev.get('note_restored', 0)}"
-              f" · awaiting triage: {counts.get('inbox', 0)}"
-              f" · review due: {counts.get('review_due', 0)}")
-    deleted = ev.get("deleted_used", 0) + ev.get("deleted_unused", 0)
-    if deleted:
-        triage += (f" · удалено: {deleted}"
-                   f" (использовано {ev.get('deleted_used', 0)})" if ru else
-                   f" · deleted: {deleted}"
-                   f" (used {ev.get('deleted_used', 0)})")
-    lines.append(triage)
-    if data["reviews_upcoming"] or data["temp_expiring"]:
-        lines.append((f"🔜 Пересмотр на неделе: {data['reviews_upcoming']}"
-                      f" · временных истекает: {data['temp_expiring']}" if ru else
-                      f"🔜 Reviews this week: {data['reviews_upcoming']}"
-                      f" · temporary expiring: {data['temp_expiring']}"))
-    rem = (f"⏰ Напоминаний поставлено: {data['reminders_set']}" if ru
-           else f"⏰ Reminders set: {data['reminders_set']}")
+    # 1. Reminder outcomes, with the most-snoozed title.
     closures = data["reminder_closure_counts"]
+    parts = []
+    if data["reminders_set"]:
+        parts.append((f"поставлено {data['reminders_set']}" if ru
+                      else f"set {data['reminders_set']}"))
     lifecycle = (("выполнено", "completed", closures.get("done", 0)),
                  ("отменено", "cancelled", closures.get("cancelled", 0)),
                  ("пропущено", "skipped", closures.get("skipped", 0)),
-                 ("истекло", "expired", closures.get("expired", 0)),
+                 ("закрыто как просроченные", "closed as overdue", closures.get("expired", 0)),
                  ("отложено", "snoozed", data["reminder_event_counts"].get("snoozed", 0)))
     for ru_label, en_label, count in lifecycle:
         if count:
-            rem += f" · {ru_label if ru else en_label}: {count}"
-    lines.append(rem)
-    lines.append((f"  Сейчас: просрочено {data['reminders_overdue']} · "
-                  f"сработало, ждёт подтверждения {data['reminders_fired_unacked']}" if ru else
-                  f"  Now: overdue {data['reminders_overdue']} · "
-                  f"fired, awaiting acknowledgement {data['reminders_fired_unacked']}"))
-    if data["ask_count"]:
-        lines.append((f"❓ Ответила по базе: {data['ask_count']}" if ru
-                      else f"❓ Answered from your KB: {data['ask_count']}"))
+            parts.append(f"{ru_label if ru else en_label} {count}")
+    if parts:
+        rem = ("⏰ Напоминания: " if ru else "⏰ Reminders: ") + " · ".join(parts)
+        if data["most_snoozed"]:
+            title, n = data["most_snoozed"][0]
+            if n >= 2:
+                rem += (f"; чаще всего откладывал «{title}» (×{n})" if ru
+                        else f"; most snoozed: «{title}» (×{n})")
+        lines.append(rem)
+    # 2. Journal entries in his own words when few; a count otherwise.
+    for name, entries in data["journal_entry_texts"]:
+        if len(entries) <= 7:
+            lines.append(f"📔 {name}:")
+            for occurred_at, text in entries:
+                snippet = " ".join(text.split())
+                if len(snippet) > 90:
+                    snippet = snippet[:89].rstrip() + "…"
+                lines.append(f"  • {_fmt_day(occurred_at, tz_offset)} — {snippet}")
+        else:
+            lines.append((f"📔 {name} — {len(entries)} записей" if ru
+                          else f"📔 {name} — {len(entries)} entries"))
+    # 3. What she learned — only when there is something.
     learned = []
     if data["new_categories"]:
         learned.append(("новые категории: " if ru else "new categories: ")
@@ -645,103 +692,31 @@ def chat_text(conn, cfg, lang, period="week"):
     if data["new_prefs"]:
         learned.append((f"новое в памяти: {len(data['new_prefs'])}" if ru
                         else f"new memory entries: {len(data['new_prefs'])}"))
-    lines.append("🧠 " + (("Чему я научилась: " if ru else "What I learned: ")
-                          + ("; ".join(learned) if learned else ("пока ничему новому" if ru else "nothing new yet"))))
-    digest = journal_digest(conn, lang, days=PERIOD_DAYS.get(data["period"], 7))
-    if digest:
-        lines.append(digest)
-    dupes = similar_categories(conn)
-    if dupes:
-        pretty = "; ".join(f"«{a}» ↔ «{b}»" for a, b in dupes[:3])
-        lines.append(("🗂 Похожие категории: " + pretty
-                      + " — скажи «объедини X в Y», и я их сложу." if ru else
-                      "🗂 Similar categories: " + pretty
-                      + " — say \"merge X into Y\" and I'll fold them."))
-    # Operational metrics live in the Cara-health tail (plan v1.1 §16) — the
-    # outcome block above is about HIS knowledge, this part is about HER.
-    lines.append("⚙️ " + ("Как я работала:" if ru else "Cara health:"))
-    turns = sum(r["n"] for r in data["conversation_turns"])
-    lines.append((f"  Реплик в диалоге: {turns}" if ru
-                  else f"  Conversation turns: {turns}"))
-    task_counts = data["task_status_counts"]
-    avg_seconds = data["task_avg_completion_seconds"]
-    avg_text = (
-        f"{avg_seconds / 60:.1f}m" if avg_seconds is not None else "—")
-    lines.append(
-        (f"  🧭 Задачи: {data['task_total']} · выполнено "
-         f"{task_counts.get('completed', 0)} · заблокировано "
-         f"{task_counts.get('blocked', 0)} · отменено "
-         f"{task_counts.get('cancelled', 0)} · среднее {avg_text}"
-         f" · завершено за период {data['task_completed_period']}"
-         if ru else
-         f"  🧭 Tasks: {data['task_total']} · completed "
-         f"{task_counts.get('completed', 0)} · blocked "
-         f"{task_counts.get('blocked', 0)} · cancelled "
-         f"{task_counts.get('cancelled', 0)} · avg {avg_text}"
-         f" · completed this period {data['task_completed_period']}"))
-    lines.append(
-        (f"  🔧 Попытки: {data['task_attempts']} · повторы "
-         f"{data['task_retries']} · квитанции {data['task_receipts']} · "
-         f"доставлено {data['task_delivered']} · использовано заметок "
-         f"{data['task_note_uses']}"
-         if ru else
-         f"  🔧 Attempts: {data['task_attempts']} · retries "
-         f"{data['task_retries']} · receipts {data['task_receipts']} · "
-         f"delivered {data['task_delivered']} · task-mediated note uses "
-         f"{data['task_note_uses']}"))
-    if data["issue_counts"]:
-        issues = ", ".join(f"{_issue_label(r['kind'], lang)}: {r['n']}" for r in data["issue_counts"])
-        lines.append(("  ⚠️ Проблемы: " if ru else "  ⚠️ Issues: ") + issues)
-    else:
-        lines.append("  ✅ " + ("Проблем не было" if ru else "No issues"))
-    if data["open_issue_patterns"]:
-        lines.append((f"  🧩 Открытых паттернов: {len(data['open_issue_patterns'])}" if ru
-                      else f"  🧩 Open issue patterns: {len(data['open_issue_patterns'])}"))
-    spend = sum(r["cost"] for r in data["spend_by_skill"])
-    lines.append((f"  💸 Расходы AI: ${spend:.3f} · рабочих вызовов: "
-                  f"{data['functional_calls']} · проверок моделей: "
-                  f"{data['healthcheck_calls']} (${data['healthcheck_cost']:.3f})" if ru else
-                  f"  💸 AI spend: ${spend:.3f} · work calls: {data['functional_calls']} · "
-                  f"model-health probes: {data['healthcheck_calls']} "
-                  f"(${data['healthcheck_cost']:.3f})"))
-    latency = data["functional_latency"]
-    if latency["calls"]:
-        lines.append((f"  ⏱ Задержка рабочих AI-вызовов: "
-                      f"p50 {latency['p50']:.2f}с · p95 {latency['p95']:.2f}с "
-                      f"({latency['calls']})" if ru else
-                      f"  ⏱ Work-call latency: p50 {latency['p50']:.2f}s · "
-                      f"p95 {latency['p95']:.2f}s ({latency['calls']})"))
-    if data["failover_served_count"]:
-        lines.append((f"  🔁 Резервная модель успешно ответила: {data['failover_served_count']}" if ru
-                      else f"  🔁 Backup model successfully served: {data['failover_served_count']}×"))
-    if data["failover_failed_count"]:
-        lines.append((f"  ⚠️ Цепочек моделей не справилось: {data['failover_failed_count']}" if ru
-                      else f"  ⚠️ Model chains failed: {data['failover_failed_count']}×"))
-    if data["fallback_legacy_trace_count"]:
-        lines.append((f"  🔁 Старых переключений без подтверждённого исхода: "
-                      f"{data['fallback_legacy_trace_count']}" if ru else
-                      f"  🔁 Legacy failovers with unknown outcome: "
-                      f"{data['fallback_legacy_trace_count']}"))
-    if data["corrections_learned"] or data["corrections_unresolved"]:
-        c = (f"  📝 Корректировки: применяю {len(data['corrections_learned'])}" if ru
-             else f"  📝 Corrections: applying {len(data['corrections_learned'])}")
-        if data["corrections_unresolved"]:
-            c += (f", нужен код-фикс {len(data['corrections_unresolved'])}" if ru
-                  else f", need a code fix {len(data['corrections_unresolved'])}")
-        lines.append(c)
-    lines.append((f"  📊 Память: {data['mem_confirmed']} подтверждено, "
-                  f"{data['mem_inferred']} наблюдений; категорий с первого раза: "
-                  f"{data['first_guess_kept']}/{data['confirmed_count']}"
-                  if ru else
-                  f"  📊 Memory: {data['mem_confirmed']} confirmed, {data['mem_inferred']} sensed; "
-                  f"first-guess categories: "
-                  f"{data['first_guess_kept']}/{data['confirmed_count']}"))
+    if learned:
+        lines.append("🧠 " + ("Чему я научилась: " if ru else "What I learned: ")
+                     + "; ".join(learned))
+    # 4. One health line, only when something actually failed.
+    failures = [(r["kind"], r["n"]) for r in data["issue_counts"]
+                if r["kind"] in FAILURE_ISSUE_KINDS]
+    if failures or data["failover_failed_count"]:
+        bits = [f"{_issue_label(kind, lang)}: {n}" for kind, n in failures]
+        if data["failover_failed_count"]:
+            bits.append((f"цепочек моделей не справилось: {data['failover_failed_count']}" if ru
+                         else f"model chains failed: {data['failover_failed_count']}"))
+        lines.append(("⚠️ Сбои: " if ru else "⚠️ Failures: ") + "; ".join(bits))
+    # 5. Memory suggestions waiting for him.
     if data["pending_candidates"]:
         n = len(data["pending_candidates"])
         lines.append((f"📋 Хочу уточнить ({n}) — скажи «обзор памяти»" if ru
                       else f"📋 I'd like to confirm {n} — say \"memory review\""))
-    lines.append(("Скажи «сделай отчёт файлом» — пришлю .md для VS Code." if ru
-                  else "Say \"export the review as md\" and I'll send a .md for VS Code."))
+    # 6. New improvement proposals, if any.
+    if data["new_proposals"]:
+        n = len(data["new_proposals"])
+        lines.append((f"💡 Новых предложений по улучшению: {n} — «покажи предложения»" if ru
+                      else f"💡 New improvement proposals: {n} — \"show proposals\""))
+    if len(lines) == 1:
+        lines.append(("Тихая неделя — рассказать нечего 🌿" if ru
+                      else "A quiet week — nothing to report 🌿"))
     return "\n".join(lines)
 
 
@@ -795,7 +770,10 @@ def markdown(conn, cfg, period="week"):
     lines.append(f"- facts extracted from saved items: {data['facts_extracted']}")
     lines.append(f"- reminders: {data['reminders_set']} created · {data['reminders_done']} completed · "
                  f"{data['reminders_fired_unacked']} fired/awaiting acknowledgement · "
-                 f"{data['reminders_overdue']} overdue/unfired")
+                 f"{data['reminders_overdue']} overdue (fired >2h unacked, or unfired past the valve)")
+    if data["most_snoozed"]:
+        title, n = data["most_snoozed"][0]
+        lines.append(f"- most snoozed: «{title}» ×{n}")
     for row in data["reminder_closures"]:
         if row["reason"] != "done":
             lines.append(f"  - closed as {row['reason']}: {row['n']}")
@@ -843,6 +821,11 @@ def markdown(conn, cfg, period="week"):
         lines.append("- preferences added/updated this period:")
         for row in data["new_prefs"]:
             lines.append(f"  - {row['key']}: {row['value']}")
+    dupes = similar_categories(conn)
+    if dupes:
+        # Moved here from the chat review (ADR-0009): a housekeeping hint, not his week.
+        lines.append("- similar categories (say «объедини X в Y» to fold them): "
+                     + "; ".join(f"\"{a}\" ↔ \"{b}\"" for a, b in dupes[:5]))
     lines.append("")
     lines.append("## Communication incidents observed this period")
     if data["issue_counts"]:
@@ -873,6 +856,18 @@ def markdown(conn, cfg, period="week"):
     if health_latency["calls"]:
         lines.append(f"- model-health latency: p50 {health_latency['p50']:.2f}s · "
                      f"p95 {health_latency['p95']:.2f}s ({health_latency['calls']} probes)")
+    lines.append("")
+    # Routine model flaps the boss was spared (ADR-0008) still show up here.
+    lines.append("")
+    lines.append("## Model health")
+    if data["health_transitions"]:
+        for ts, payload in data["health_transitions"]:
+            who = "owner notified" if payload.get("user_affecting") else "fleet only"
+            reason = f" — {payload.get('reason')}" if payload.get("reason") else ""
+            lines.append(f"- {str(ts)[:16]}Z {payload.get('model', '?')}: "
+                         f"{payload.get('state', '?')}{reason} ({who})")
+    else:
+        lines.append("- no announced transitions this period")
     lines.append("")
     lines.append("## Improvement backlog (open patterns)")
     if data["open_issue_patterns"]:

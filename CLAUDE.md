@@ -74,7 +74,9 @@ KB for SSH/deploy/model details.
   recategorize/merge, purge — typed-confirmation bulk delete, never touches
   llm_usage/preferences; conversation history only on scope `all`, disclosed in
   the preview — journals, problem log), `reminders_svc.py` (reminder handlers,
-  partial drafts, fired follow-ups, fire/expiry sweeps). `converse.py` holds
+  partial drafts, fired follow-ups, fire/expiry sweeps; since 2026-09-07 the
+  fired/batch/draft card buttons, one shared `resolve_fired_action`, the 09:00
+  re-ping and the announced, reversible expiry). `converse.py` holds
   free-form warm Cara; `action_truth.py` guards "done/saved" wording;
   `backup.py` runs the weekly-by-default encrypted off-box DB backup. Own PHOTOS are never
   stored (retired 2026-07-16) — own text/PDF docs still save via caption.

@@ -31,17 +31,13 @@ def ongoing_threads(conn, lang, chat_id=None, include_suggested=True):
     cands = len(store.candidates_pending(conn, limit=20))
     if cands:
         out.append(f"{cands} предложений в память" if ru else f"{cands} memory suggestions")
-    now = datetime.now(timezone.utc).isoformat()
-    # "Overdue" has ONE definition (spec §: a fired one-shot awaiting «готово» is
-    # not overdue). Without the last_fired_at predicate this line counted every
-    # fired-but-unacked alarm, so the morning brief contradicted the heartbeat's
-    # own «просроченных: 0» about the same reminders.
-    overdue = conn.execute(
-        "SELECT COUNT(*) AS n FROM reminders WHERE status = 'active' AND due_utc < ?"
-        + (" AND chat_id = ?" if chat_id is not None else "")
-        + " AND (last_fired_at IS NULL OR last_fired_at < due_utc)",
-        (now, int(chat_id)) if chat_id is not None else (now,),
-    ).fetchone()["n"]
+    # "Overdue" has ONE definition (ADR-0003, proactive.overdue_rows): a fired
+    # one-shot unacked past the grace window, or an unfired one past the defer
+    # valve. The morning brief and the heartbeat read the very same predicate, so
+    # this line can never contradict them about the same reminders.
+    import proactive
+    overdue = len(proactive.overdue_rows(conn, None, datetime.now(timezone.utc),
+                                         chat_id=chat_id))
     if overdue:
         out.append(f"{overdue} просроченных напоминаний" if ru
                    else f"{overdue} overdue reminders")

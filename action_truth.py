@@ -479,6 +479,9 @@ TEMPLATE_STATES = {
     # saved; the EDIT itself is explicitly not applied yet, which is what the
     # question in the same sentence asks about.
     "note_edit_offer": "confirmed",
+    # Appended to a reminder draft card only AFTER the reminder row was created
+    # by the «Ставлю» button (the same boundary as reminder_set).
+    "card_set": "done",
 }
 
 

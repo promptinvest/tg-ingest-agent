@@ -5761,22 +5761,93 @@ def reminders_active(conn, chat_id):
 
 def reminders_expire_stale(conn, cutoff_iso):
     """Auto-close one-shot reminders that fired but were never acked and whose fire time is
-    older than the cutoff — so the 'ждёт готово' list doesn't grow forever. Returns count."""
+    older than the cutoff — so the 'ждёт готово' list doesn't grow forever. Returns the
+    closed rows (id/chat_id/title) so the sweep can SAY what it closed (ADR-0003)."""
     now = _now()
-    ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM reminders WHERE status='active' AND recurrence='none'"
-        " AND last_fired_at IS NOT NULL AND last_fired_at<?", (cutoff_iso,)
-    )]
-    cur = conn.execute(
+    rows = conn.execute(
+        "SELECT id, chat_id, title FROM reminders WHERE status='active' AND recurrence='none'"
+        " AND last_fired_at IS NOT NULL AND last_fired_at<? ORDER BY due_utc, id",
+        (cutoff_iso,)
+    ).fetchall()
+    conn.execute(
         "UPDATE reminders SET status = 'expired', closed_at=?, close_reason='expired'"
         " WHERE status = 'active'"
         " AND recurrence = 'none' AND last_fired_at IS NOT NULL AND last_fired_at < ?",
         (now, cutoff_iso),
     )
-    for rid in ids:
-        reminder_event(conn, rid, "closed", "expired", commit=False)
+    for row in rows:
+        reminder_event(conn, row["id"], "closed", "expired", commit=False)
     conn.commit()
-    return cur.rowcount
+    return rows
+
+
+def reminder_reopen(conn, rid, due_utc):
+    """Bring a closed/expired one-shot back (ADR-0003): active again, re-armed at
+    `due_utc`, fire history kept, close fields cleared. False when already active."""
+    cur = conn.execute(
+        "UPDATE reminders SET status = 'active', closed_at = NULL, close_reason = NULL,"
+        " prev_due_utc = due_utc, due_utc = ?, last_fired_at = NULL"
+        " WHERE id = ? AND status != 'active'",
+        (due_utc, rid),
+    )
+    if cur.rowcount:
+        reminder_event(conn, rid, "reopened", due_utc, commit=False)
+    conn.commit()
+    return bool(cur.rowcount)
+
+
+def reminders_overdue(conn, chat_id, fired_before_iso, due_before_iso):
+    """ONE definition of «overdue» (ADR-0003), shared by the heartbeat, the review,
+    the morning brief and the working history: a fired one-shot still unacked past
+    the grace window, or an unfired reminder held past the defer valve."""
+    return conn.execute(
+        "SELECT * FROM reminders WHERE status = 'active'"
+        + (" AND chat_id = ?" if chat_id is not None else "")
+        + " AND ((recurrence = 'none' AND last_fired_at IS NOT NULL AND last_fired_at < ?)"
+        "  OR (due_utc < ? AND (last_fired_at IS NULL OR last_fired_at < due_utc)))"
+        " ORDER BY due_utc, id",
+        ((int(chat_id),) if chat_id is not None else ()) + (fired_before_iso, due_before_iso),
+    ).fetchall()
+
+
+def reminders_fired_unacked(conn, chat_id=None, fired_before_iso=None):
+    """Fired one-shots still awaiting «готово» (optionally only those fired before
+    `fired_before_iso`), oldest fire first."""
+    sql = ("SELECT * FROM reminders WHERE status = 'active' AND recurrence = 'none'"
+           " AND last_fired_at IS NOT NULL")
+    args = []
+    if chat_id is not None:
+        sql += " AND chat_id = ?"
+        args.append(int(chat_id))
+    if fired_before_iso:
+        sql += " AND last_fired_at < ?"
+        args.append(fired_before_iso)
+    return conn.execute(sql + " ORDER BY last_fired_at, id", tuple(args)).fetchall()
+
+
+def reminder_snoozes_since(conn, rid, since_iso):
+    """How many times `rid` was snoozed since `since_iso` (the escalation counter)."""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM reminder_events WHERE reminder_id = ?"
+        " AND event = 'snoozed' AND ts >= ?", (rid, since_iso),
+    ).fetchone()["n"]
+
+
+def reminder_has_event(conn, rid, event):
+    return conn.execute(
+        "SELECT 1 FROM reminder_events WHERE reminder_id = ? AND event = ? LIMIT 1",
+        (rid, event),
+    ).fetchone() is not None
+
+
+def reminders_most_snoozed(conn, since_iso, limit=1):
+    """(title, n) rows for the reminders snoozed most often since `since_iso`."""
+    return conn.execute(
+        "SELECT r.title AS title, COUNT(*) AS n FROM reminder_events e"
+        " JOIN reminders r ON r.id = e.reminder_id"
+        " WHERE e.event = 'snoozed' AND e.ts >= ? GROUP BY e.reminder_id"
+        " ORDER BY n DESC, r.id LIMIT ?", (since_iso, int(limit)),
+    ).fetchall()
 
 
 def reminder_display_no(conn, chat_id, rid):

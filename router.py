@@ -133,6 +133,8 @@ NOTE: a move verb + a time is ALWAYS reminder_reschedule, even when the reminder
 "покажи напоминания" / "мои напоминания" / "покажи просроченные" / "какие у меня напоминания?" / "show my reminders" / "list reminders" -> {"action": "reminder_list", "params": {}, "confidence": 0.92}
 "закрой напоминание про Рим" / "Азербайджан закрой" / "убери напоминание Азербайджан" / "close the Rome reminder" (close ONE reminder named by TITLE, in any word order) -> {"action": "reminder_cancel", "params": {"title_query": "Рим"}, "confidence": 0.9}
 "первое закрой" / "закрой второе" / "удали первое напоминание" / "убери третье" / "close the first reminder" (a LONE close naming ONE reminder by ordinal position) -> {"action": "reminder_cancel", "params": {"id": 1}, "confidence": 0.88}
+"закрой первое и третье" / "закрой #1 и #3" / "close #1 and #3" (the SAME close on several named reminders) -> {"action": "reminder_cancel", "params": {"ids": [1, 3]}, "confidence": 0.88}
+"закрой оба" / "закрой все три" / "закрой их все" / "close them all" (close EVERY listed reminder — a bounded close, NOT purge) -> {"action": "reminder_cancel", "params": {"all": true}, "confidence": 0.85}
 NOTE: a close verb ("закрой"/"удали"/"убери"/"close"/"delete") naming ONE reminder — by title OR by ordinal, in ANY word order ("Азербайджан закрой" == "закрой Азербайджан") — is reminder_cancel, NEVER clarify/converse. Only a message bundling two+ DIFFERENT commands ("закрой первое, второе перенеси") is multi_action.
 "верни предыдущее время напоминания #9" / "отмени перенос" / "верни как было" / "undo the reschedule" -> {"action": "reminder_undo", "params": {"id": 9}, "confidence": 0.9}
 "поменяй название этого напоминания на «Иван Доронин»" / "переименуй напоминание 2 в «Иван Доронин»" / "rename reminder #2 to «Ivan»" -> {"action": "reminder_rename", "params": {"id": 2, "new_title": "Иван Доронин"}, "confidence": 0.9}
@@ -294,7 +296,12 @@ _SMALLTALK_EXACT = {
     "thanks": {"спасибо", "спасибо!", "благодарю", "thanks", "thank you", "thx", "спс"},
     "how_are_you": {"как дела", "как дела?", "как ты", "как ты?", "how are you",
                     "how are you?"},
-    "ack": {"ок", "okay", "ok", "понятно", "ясно", "хорошо", "👍", "👌"},
+    # «да/давай/ага/угу/+» joined 2026-09-07 (ADR-0006): with nothing pending they
+    # used to reach the router and then converse, where a history-less repair
+    # could deny an action she had just performed. The dispatcher still routes
+    # them when her last line was a question.
+    "ack": {"ок", "okay", "ok", "понятно", "ясно", "хорошо", "👍", "👌",
+            "да", "давай", "ага", "угу", "+"},
     "who_are_you": {"кто ты", "кто ты?", "ты кто", "ты кто?", "ты человек?", "ты бот?",
                     "расскажи о себе", "who are you", "who are you?", "are you human?",
                     "are you a bot?", "tell me about yourself"},
@@ -308,6 +315,14 @@ def detect_smalltalk(text):
         if normalized in variants:
             return kind
     return None
+
+
+_AGREEMENT_ACKS = {"да", "давай", "ага", "угу", "+"}
+
+
+def is_agreement_ack(text):
+    """A bare agreement word (the ones that earn a 👍 reaction when dropped)."""
+    return str(text or "").strip().casefold().rstrip("!.") in _AGREEMENT_ACKS
 
 
 def build_system_prompt(cfg, pending, now_utc=None):

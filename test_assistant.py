@@ -49,6 +49,27 @@ import tg_api
 import trace as tracing
 
 
+_TYPING_PATCH = None
+
+
+def setUpModule():
+    """Phase A (ADR-0007) sends a typing indicator at the top of every dispatch
+    and of every suggest_row. In this offline suite that would be one real HTTPS
+    call per dispatch, so it is neutralised ONCE here; tests that care about the
+    indicator re-patch it on their own agent instance."""
+    global _TYPING_PATCH
+    import tg_ingest_agent
+    _TYPING_PATCH = mock.patch.object(
+        tg_ingest_agent.Agent, "send_chat_action",
+        lambda self, chat_id, action="typing": None)
+    _TYPING_PATCH.start()
+
+
+def tearDownModule():
+    if _TYPING_PATCH is not None:
+        _TYPING_PATCH.stop()
+
+
 def make_config(**overrides):
     runtime_root = Path(
         os.environ.get("CARA_TEST_RUNTIME_ROOT")
@@ -719,15 +740,18 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(review.normalize_period("garbage"), "week")
 
     def test_chat_text_bilingual(self):
+        # ADR-0009: the chat review is written for the boss — reminders, his
+        # journal words, what she learned; spend and the ops tail live in the export.
         ru = review.chat_text(self.conn, self.cfg, "ru", "week")
-        self.assertIn("Сохранено: 1", ru)          # outcome line (MET-001)
-        self.assertIn("пригодилось", ru)
-        self.assertIn("крипта", ru)
-        self.assertIn("$0.002", ru)
+        self.assertIn("Напоминания: поставлено 1", ru)
+        self.assertIn("крипта", ru)                 # his correction, in «чему я научилась»
+        self.assertNotIn("$0.002", ru)
+        self.assertNotIn("Как я работала", ru)
         en = review.chat_text(self.conn, self.cfg, "en", "week")
-        self.assertIn("Saved: 1", en)
-        self.assertIn("actually used", en)
-        self.assertIn("Reminders set: 1", en)
+        self.assertIn("Reminders: set 1", en)
+        self.assertIn("What I learned", en)
+        md = review.markdown(self.conn, self.cfg, "week")
+        self.assertIn("$0.002", md)                 # the ops dump keeps the spend
 
     def test_markdown_sections_and_backlog(self):
         md = review.markdown(self.conn, self.cfg, "week")
@@ -801,7 +825,8 @@ class ReviewTests(unittest.TestCase):
         fired = store.reminder_add(
             self.conn, 1, "fired", (now - timedelta(hours=2)).isoformat())
         store.reminder_touch_fired(self.conn, fired, (now - timedelta(hours=1)).isoformat())
-        store.reminder_add(self.conn, 1, "truly overdue", (now - timedelta(hours=1)).isoformat())
+        # Unfired PAST the 2h defer valve — the ADR-0003 definition of overdue.
+        store.reminder_add(self.conn, 1, "truly overdue", (now - timedelta(hours=3)).isoformat())
         data = review.collect(self.conn, "week")
         self.assertEqual(data["reminders_fired_unacked"], 1)
         self.assertEqual(data["reminders_overdue"], 1)
@@ -4166,11 +4191,23 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
                          reminders.parse_iso_utc(target))
 
     def test_fired_reminder_done_no_snooze(self):
+        # The payload names a reminder that no longer exists: honest not-found,
+        # never «закрыла» about a row that isn't there (and nothing is snoozed).
         pending = {"kind": "reminder_fired", "payload": {"title": "x", "reminder_id": 3}}
         with mock.patch.object(self.agent, "reply") as r:
             self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
-        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_done"))
+        self.assertEqual(r.call_args[0][1], texts.T("ru", "reminder_not_found"))
         self.assertEqual(len(store.reminders_active(self.conn, 1)), 0)  # not snoozed
+        rid = store.reminder_add(self.conn, 1, "позвонить",
+                                 (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat())
+        store.reminder_touch_fired(self.conn, rid)
+        pending = {"kind": "reminder_fired", "payload": {"title": "позвонить", "reminder_id": rid}}
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.resolve_pending(1, "confirm", {}, pending, "ru")
+        # ADR-0004: the reply names its target and display number.
+        self.assertEqual(r.call_args[0][1],
+                         texts.T("ru", "reminder_done", title="позвонить", rid=1))
+        self.assertEqual(store.reminder_get(self.conn, rid)["status"], "done")
 
     def test_resolve_item_by_inflected_note_reference(self):
         # "покажи заметку N" (inflected, no #) must resolve note N by id, not
@@ -6246,6 +6283,7 @@ class ReviewBatch2026_07_06Tests(unittest.TestCase):
 
     def test_weekly_review_advances_schedule_only_after_delivery(self):
         conn = self.agent.conn
+        store.convo_add(conn, 1, "user", "привет")   # a week he wrote in (ADR-0009 gate)
         due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
         store.kv_set(conn, "next_review_utc", due)
         with mock.patch.object(review, "chat_text", return_value="report"), \
@@ -7407,8 +7445,10 @@ class NotesHandlingTests(unittest.TestCase):
         pairs = [set(p) for p in review.similar_categories(self.conn)]
         self.assertIn({"AI tools", "AI Tools & Resources"}, pairs)
         self.assertNotIn({"AI tools", "Фильмы"}, pairs)
-        text = review.chat_text(self.conn, self.agent.cfg, "ru")
-        self.assertIn("Похожие категории", text)
+        # ADR-0009: the hint moved from the boss's chat review to the export.
+        md = review.markdown(self.conn, self.agent.cfg)
+        self.assertIn("similar categories", md)
+        self.assertIn("AI Tools & Resources", md)
 
     def test_list_cosmetics(self):
         # word-boundary preview, no mid-word cuts
@@ -7616,7 +7656,8 @@ class CorrectionPlan20260715Tests(unittest.TestCase):
         route.assert_not_called()
         row = store.reminder_get(self.conn, rid)
         self.assertEqual((row["status"], row["close_reason"]), ("done", "done"))
-        self.assertEqual(reply.call_args[0][1], texts.T("ru", "reminder_done"))
+        self.assertEqual(reply.call_args[0][1],
+                         texts.T("ru", "reminder_done", title="ФНС", rid=1))
 
     def test_skip_today_on_fired_recurring_reminder_is_recorded(self):
         rid = self._fired("Благодарность", "daily")
@@ -7631,7 +7672,8 @@ class CorrectionPlan20260715Tests(unittest.TestCase):
             (rid,),
         ).fetchone()
         self.assertEqual((event["event"], event["detail"]), ("acknowledged", "skipped"))
-        self.assertEqual(reply.call_args[0][1], texts.T("ru", "reminder_skipped"))
+        self.assertEqual(reply.call_args[0][1],
+                         texts.T("ru", "reminder_skipped", title="Благодарность"))
 
     def test_converse_cannot_claim_that_it_closed_state(self):
         self.assertTrue(action_truth.freeform_claims_action("Готово, #1 закрыто"))
@@ -8030,11 +8072,11 @@ class Phase0Fixes20260717Tests(unittest.TestCase):
         # used to drive the metric negative («категорий с первого раза: -8/2»).
         for i in range(10):
             store.feedback_add(self.conn, "ingest", f"old{i}", "A", "B")
-        text = review.chat_text(self.conn, self.cfg, "ru", "week")
-        self.assertIn("категорий с первого раза: 1/2", text)
-        self.assertNotIn("первого раза: -", text)  # never negative again
+        data = review.collect(self.conn, "week")
+        self.assertEqual((data["first_guess_kept"], data["confirmed_count"]), (1, 2))
         md = review.markdown(self.conn, self.cfg, "week")
         self.assertIn("(1 kept as suggested, 1 corrected)", md)
+        self.assertNotIn("first-guess: -", md)  # never negative again
 
     # -- P0-3: forwarded-album durability ---------------------------------------
 
@@ -9295,19 +9337,19 @@ class NoteOutcomeMetricsTests(unittest.TestCase):
         self.assertEqual(data["journal_entries_period"],
                          [("Благодарности", 1)])               # reported per journal
 
-    def test_chat_review_leads_with_outcomes_and_health_tail(self):
+    def test_chat_review_is_for_the_boss_and_the_ops_dump_is_the_export(self):
+        # ADR-0009: the chat text is a handful of lines about HIS week; the
+        # saved-to-used outcomes and every operational metric stay in the markdown.
         used = self._note(1, "полезная")
         store.note_mark_used(self.conn, used)
         text = review.chat_text(self.conn, self.cfg, "ru", "week")
-        self.assertIn("Сохранено: ", text)
-        self.assertIn("пригодилось", text)
-        self.assertIn("ждут разбора", text)
-        self.assertIn("Как я работала:", text)                 # ops metrics in the tail
-        self.assertNotIn("Сохранено материалов", text)         # pile-size line replaced
-        health_at = text.index("Как я работала:")
-        self.assertLess(text.index("пригодилось"), health_at)  # outcomes first
-        self.assertGreater(text.index("Расходы AI"), health_at)
-        self.assertGreater(text.index("первого раза"), health_at)
+        self.assertNotIn("Как я работала:", text)
+        self.assertNotIn("Расходы AI", text)
+        self.assertNotIn("первого раза", text)
+        self.assertLessEqual(len(text.splitlines()), 7)
+        md = review.markdown(self.conn, self.cfg, "week")
+        self.assertIn("Notes outcomes (saved-to-used, MET-001)", md)
+        self.assertIn("## AI spend", md)
 
     def test_markdown_reports_capture_to_use_kpi(self):
         used = self._note(1, "полезная")
@@ -9464,9 +9506,9 @@ class ReportAndDirectCommandAccuracy20260720Tests(unittest.TestCase):
                         cost_usd=0.002)
         data = review.collect(self.conn, "week")
         self.assertEqual((data["functional_calls"], data["healthcheck_calls"]), (1, 1))
-        text = review.chat_text(self.conn, self.cfg, "ru", "week")
-        self.assertIn("рабочих вызовов: 1", text)
-        self.assertIn("проверок моделей: 1 ($0.002)", text)
+        md = review.markdown(self.conn, self.cfg, "week")
+        self.assertIn("1 work call(s) + 1 health probe(s)", md)
+        self.assertNotIn("проверок моделей", review.chat_text(self.conn, self.cfg, "ru", "week"))
 
     def test_report_surfaces_complete_reminder_lifecycle(self):
         now = datetime.now(timezone.utc)
@@ -9477,10 +9519,13 @@ class ReportAndDirectCommandAccuracy20260720Tests(unittest.TestCase):
         snoozed = store.reminder_add(
             self.conn, 1, "snoozed", (now + timedelta(hours=8)).isoformat())
         store.reminder_event(self.conn, snoozed, "snoozed", "later")
+        store.reminder_event(self.conn, snoozed, "snoozed", "later again")
         text = review.chat_text(self.conn, self.cfg, "ru", "week")
-        for fragment in ("выполнено: 1", "отменено: 1", "пропущено: 1",
-                         "истекло: 1", "отложено: 1", "Сейчас: просрочено 0"):
+        for fragment in ("выполнено 1", "отменено 1", "пропущено 1",
+                         "закрыто как просроченные 1", "отложено 2",
+                         "чаще всего откладывал «snoozed» (×2)"):
             self.assertIn(fragment, text)
+        self.assertNotIn("Сейчас: просрочено", text)          # the snapshot is export-only
 
     def test_report_distinguishes_served_failed_and_legacy_failovers(self):
         self._trace_event("legacy", "llm.fallback", "primary failed")
@@ -9498,17 +9543,26 @@ class ReportAndDirectCommandAccuracy20260720Tests(unittest.TestCase):
         self.assertEqual(data["failover_served_count"], 1)
         self.assertEqual(data["failover_failed_count"], 1)
         text = review.chat_text(self.conn, self.cfg, "ru", "week")
-        self.assertIn("Резервная модель успешно ответила: 1", text)
-        self.assertIn("Цепочек моделей не справилось: 1", text)
+        # ADR-0009: one health line, only because something FAILED; a backup that
+        # served is not a failure and stays in the export.
+        self.assertIn("цепочек моделей не справилось: 1", text)
+        self.assertNotIn("Резервная модель", text)
         self.assertNotIn("Запасная модель выручала", text)
+        md = review.markdown(self.conn, self.cfg, "week")
+        self.assertIn("1 successfully served by backup", md)
 
     def test_report_translates_correction_and_action_claim_issue_kinds(self):
         store.issue_add(self.conn, 1, "correction", "x")
         store.issue_add(self.conn, 1, "converse_action_claim", "y")
+        store.issue_add(self.conn, 1, "ingest_failed", "z")
         text = review.chat_text(self.conn, self.cfg, "ru", "week")
-        self.assertIn("замечания, по которым я скорректировалась", text)
-        self.assertIn("безопасно заблокированные ложные подтверждения действий", text)
+        # ADR-0009: only a FAILURE earns the health line — a guard doing its job
+        # and a correction she absorbed are not failures; the failure is rendered
+        # as a human label, never a raw internal key.
+        self.assertIn("сообщения, которые не разобрала: 1", text)
+        self.assertNotIn("ingest_failed", text)
         self.assertNotIn("converse_action_claim", text)
+        self.assertNotIn("замечания, по которым я скорректировалась", text)
 
     def test_chat_profile_records_successful_and_failed_chain_outcomes(self):
         tid = tracing.start(self.conn, "telegram_message", 1)
@@ -9677,8 +9731,7 @@ class DurableNoteOutcomesAndLatency20260720Tests(unittest.TestCase):
         self.assertAlmostEqual(data["functional_latency"]["p50"], 3.0)
         self.assertAlmostEqual(data["functional_latency"]["p95"], 4.8)
         self.assertEqual(data["healthcheck_latency"]["calls"], 1)
-        text = review.chat_text(self.conn, self.cfg, "ru", "week")
-        self.assertIn("p50 3.00с · p95 4.80с (3)", text)
+        self.assertNotIn("p50", review.chat_text(self.conn, self.cfg, "ru", "week"))
         md = review.markdown(self.conn, self.cfg, "week")
         self.assertIn("functional chat/embed latency: p50 3.00s · p95 4.80s", md)
         self.assertIn("model-health latency: p50 10.00s", md)
@@ -13328,7 +13381,11 @@ class LlmStackBudgetAvailability20260725Tests(unittest.TestCase):
 
     def test_the_health_sweep_watches_the_speech_server_too(self):
         self._arm_speech_health()
+        # No cold whisper-cli on disk → the boss IS affected and hears it (ADR-0008);
+        # pinned explicitly so the box's real /opt/whisper.cpp install cannot flip
+        # this test between the workstation and the VPS.
         with mock.patch.object(llm, "model_ok", return_value=(True, "")), \
+                mock.patch.object(self.agent, "_whisper_cli_available", return_value=False), \
                 mock.patch.object(llm, "whisper_server_ok",
                                   return_value=(False, "speech server unreachable")) as probe, \
                 mock.patch.object(self.agent, "reply") as reply:
@@ -13352,12 +13409,17 @@ class LlmStackBudgetAvailability20260725Tests(unittest.TestCase):
         paths = self._cli_paths()
         self.agent.cfg.whisper_bin = paths["WHISPER_BIN"]
         self.agent.cfg.whisper_model = paths["WHISPER_MODEL"]
+        # With the CLI backup on disk the boss still gets his voice notes (slower):
+        # ADR-0008 sends that outage to the fleet ops chat — with the real remedy —
+        # and NOT to him.
         with mock.patch.object(llm, "model_ok", return_value=(True, "")), \
                 mock.patch.object(llm, "whisper_server_ok",
                                   return_value=(False, "speech server unreachable (refused)")), \
+                mock.patch.object(self.agent, "_notify_fleet") as fleet, \
                 mock.patch.object(self.agent, "reply") as reply:
             self.agent.check_model_health()
-        text = reply.call_args[0][1]
+        reply.assert_not_called()
+        text = fleet.call_args[0][0]
         self.assertIn("systemctl restart whisper-server", text)
         self.assertNotIn("доступ к моделям", text)
         self.assertIn("whisper-cli", text)                 # the backup really is on disk
@@ -13393,13 +13455,14 @@ class LlmStackBudgetAvailability20260725Tests(unittest.TestCase):
         store.usage_add(self.conn, "x", "chat", "deepseek-4-flash", 1, 1, cost_usd=5.0)
         self.assertEqual(llm.budget_state(self.agent.cfg, self.conn)[0], "stop")
         with mock.patch.object(llm, "model_ok") as paid, \
+                mock.patch.object(self.agent, "_whisper_cli_available", return_value=False), \
                 mock.patch.object(llm, "whisper_server_ok",
                                   return_value=(False, "speech server unreachable")) as probe, \
                 mock.patch.object(self.agent, "reply") as reply:
             self.agent.check_model_health()
         self.assertFalse(paid.called)          # paid probes still skipped
         self.assertTrue(probe.called)
-        self.assertIn("whisper-server", reply.call_args[0][1])
+        self.assertIn("whisper-server", reply.call_args[0][1])   # no backup → he hears it
         # …and with remote STT there is nothing free to probe, so it still returns early
         self.agent.cfg.stt_mode = "remote"
         self.agent.last_model_health = 0
@@ -16051,7 +16114,9 @@ class MemoryTruthfulness20260726Tests(unittest.TestCase):
 
     def test_a_fired_reminder_awaiting_an_ack_is_not_called_overdue(self):
         import proactive
-        past = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        # 3h back: an UNFIRED reminder is overdue only past the 2h defer valve
+        # (ADR-0003 — one definition for every renderer).
+        past = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
         rid = store.reminder_add(self.conn, 1, "позвонить Ване", past)
         store.reminder_touch_fired(self.conn, rid)      # fired, awaiting «готово»
         self.assertFalse(
@@ -25687,11 +25752,12 @@ class August2026ConversationIncidentTests(unittest.TestCase):
                          "message_id": first_id, "text": "Заправился бензином"}
                 second = {"chat": {"id": 1}, "from": {"id": 1},
                           "message_id": first_id + 1, "text": confirmation}
+                # ADR-0005: the entry itself never reaches the router (deterministic
+                # capture); only the card answer («Да»/«Готово») is routed.
                 decisions = [
-                    {"action": "converse", "params": {}, "confidence": 0.9},
                     {"action": "confirm", "params": {}, "confidence": 0.9},
                 ]
-                with mock.patch.object(router, "route", side_effect=decisions), \
+                with mock.patch.object(router, "route", side_effect=decisions) as routed, \
                         mock.patch.object(ingest, "suggest") as categorize, \
                         mock.patch.object(journals, "extract",
                                           return_value=({}, "complete")), \
@@ -25716,7 +25782,9 @@ class August2026ConversationIncidentTests(unittest.TestCase):
                         == "fired_gratitude"
                         for call in traced.call_args_list))
 
+                    routed.assert_not_called()
                     self.agent.dispatch(1, second, second["text"])
+                    self.assertEqual(routed.call_count, 1)
 
                 row = store.get_message(self.conn, row["id"])
                 self.assertEqual(row["status"], "confirmed")
@@ -25770,8 +25838,10 @@ class August2026ConversationIncidentTests(unittest.TestCase):
         store.set_category_kind(self.conn, "Благодарности", "journal")
         payload = {"reminder_id": 99, "title": "Благодарности"}
         store.pending_set(self.conn, 1, "reminder_fired", payload)
+        # A question is NOT captured (ADR-0005 keeps the question guard), so it
+        # reaches the router — and a router failure must hand the card back.
         msg = {"chat": {"id": 1}, "from": {"id": 1},
-               "message_id": 40, "text": "Заправился бензином"}
+               "message_id": 40, "text": "Что там с бензином?"}
         with mock.patch.object(router, "route",
                                side_effect=llm.LLMError("temporary failure")), \
                 mock.patch.object(self.agent, "reply"):
@@ -25866,6 +25936,617 @@ class OtherWorkNarrowing20260728Tests(unittest.TestCase):
         self.assertTrue(media.flip_kind(entry, "movie"))
         self.assertNotIn("assumed_kind", entry)
         self.assertEqual(entry["year_src"], media.BOSS_SRC)   # his year survives both
+
+
+class PhaseA20260907Tests(unittest.TestCase):
+    """Phase A of the 2026-09-07 review (docs/adr/ADR-0001…0009): buttons on the
+    reminder cards, batch fires, ONE definition of overdue with an announced and
+    reversible expiry, replies that name their target, the journal-aware
+    gratitude ritual, LLM-free acknowledgements, «she is working» signals,
+    owner-only model alerts and a weekly review written for the boss."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "a.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+        store.pref_set(self.conn, "quiet_start", "0")
+        store.pref_set(self.conn, "quiet_end", "0")
+        store.pref_set(self.conn, "timezone_offset", "0")   # local == UTC in these tests
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _due(self, title, minutes_ago=1, recurrence="none"):
+        return store.reminder_add(
+            self.conn, 1, title,
+            (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat(),
+            recurrence)
+
+    @staticmethod
+    def _callback(data, message_id=777, text="card"):
+        return {"id": "cb", "from": {"id": 1},
+                "message": {"chat": {"id": 1}, "message_id": message_id, "text": text},
+                "data": data}
+
+    @staticmethod
+    def _datas(reply_markup):
+        return [b["callback_data"] for row in reply_markup["inline_keyboard"] for b in row]
+
+    # -- ADR-0001: inline buttons are a first-class control ---------------------
+
+    def test_fired_card_carries_buttons_and_the_done_button_closes_it(self):
+        rid = self._due("позвонить Ире")
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 777}) as r:
+            self.agent.fire_due_reminders()
+        self.assertEqual(self._datas(r.call_args.kwargs["reply_markup"]),
+                         [f"rm|done|{rid}", f"rm|h1|{rid}", f"rm|tmw|{rid}", f"rm|days|{rid}"])
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "answer_callback") as ans, \
+                mock.patch.object(self.agent, "edit_message") as edit, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.handle_callback(self._callback(f"rm|done|{rid}"))
+        route.assert_not_called()
+        self.assertEqual(store.reminder_get(self.conn, rid)["status"], "done")
+        self.assertIsNone(store.pending_get(self.conn, 1))          # the slot is freed
+        self.assertIn("закрыла", edit.call_args.args[2])             # the card shows the outcome
+        self.assertIsNone(edit.call_args.kwargs.get("reply_markup"))  # dead buttons dropped
+        ans.assert_called()
+
+    def test_plus_one_hour_button_snoozes_without_the_router(self):
+        rid = self._due("аренда")
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 778}):
+            self.agent.fire_due_reminders()
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "edit_message") as edit:
+            self.agent.handle_callback(self._callback(f"rm|h1|{rid}", message_id=778))
+        route.assert_not_called()
+        row = store.reminder_get(self.conn, rid)
+        self.assertIsNone(row["last_fired_at"])                       # re-armed (B4)
+        due = reminders.parse_iso_utc(row["due_utc"])
+        self.assertLess(abs((due - datetime.now(timezone.utc)).total_seconds() - 3600), 120)
+        self.assertIn("напомню", edit.call_args.args[2])
+
+    def test_third_snooze_of_the_day_escalates_to_a_day_or_close(self):
+        rid = self._due("отчёт")
+        pending = {"kind": "reminder_fired", "payload": {"reminder_id": rid, "title": "отчёт"}}
+        sent = []
+        with mock.patch.object(self.agent, "reply",
+                               side_effect=lambda cid, text, *a, **k:
+                               sent.append((text, k.get("reply_markup")))):
+            for _ in range(3):
+                self.agent.resolve_pending(1, "amend", {"snooze_minutes": 30}, pending, "ru")
+        self.assertIn("напомню", sent[0][0])
+        self.assertIsNone(sent[0][1])
+        self.assertIn("третий раз", sent[2][0].lower())
+        datas = self._datas(sent[2][1])
+        self.assertIn(f"rm|done|{rid}", datas)
+        self.assertIn(f"rm|days|{rid}", datas)
+
+    def test_draft_card_buttons_set_ask_another_time_and_cancel(self):
+        due = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 900}) as r:
+            self.agent.do_reminder_create(
+                1, "ru", {"title": "банк", "due_utc": due, "recurrence": "none"})
+        self.assertEqual(self._datas(r.call_args.kwargs["reply_markup"]),
+                         ["dr|set", "dr|time", "dr|no"])
+        with mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "edit_message"), \
+                mock.patch.object(self.agent, "reply") as r2:
+            self.agent.handle_callback(self._callback("dr|set", message_id=900))
+        self.assertEqual([x["title"] for x in store.reminders_active(self.conn, 1)], ["банк"])
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertIn("Поставила", r2.call_args.args[1])
+        self.assertIn("#1", r2.call_args.args[1])                     # the list is re-shown
+        # «Другое время» turns the draft into a partial that asks for the time
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 901}):
+            self.agent.do_reminder_create(
+                1, "ru", {"title": "врач", "due_utc": due, "recurrence": "none"})
+        with mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "edit_message"), \
+                mock.patch.object(self.agent, "reply") as r3:
+            self.agent.handle_callback(self._callback("dr|time", message_id=901))
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual((pending["kind"], pending["payload"]["need"], pending["payload"]["title"]),
+                         ("reminder_partial", "time", "врач"))
+        self.assertEqual(r3.call_args.args[1], texts.T("ru", "reminder_need_time"))
+        # «Не надо» drops the draft
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 902}):
+            self.agent.do_reminder_create(
+                1, "ru", {"title": "зубной", "due_utc": due, "recurrence": "none"})
+        with mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "edit_message") as edit:
+            self.agent.handle_callback(self._callback("dr|no", message_id=902))
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertIn("не ставлю", edit.call_args.args[2])
+
+    # -- ADR-0002: simultaneous fires are one numbered card ---------------------
+
+    def test_two_due_reminders_arrive_as_one_card_with_member_acks(self):
+        a = self._due("молоко", minutes_ago=3)
+        b = self._due("аренда", minutes_ago=2)
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 500}) as r:
+            self.agent.fire_due_reminders()
+        self.assertEqual(r.call_count, 1)
+        text = r.call_args.args[1]
+        self.assertIn("1) молоко", text)
+        self.assertIn("2) аренда", text)
+        datas = self._datas(r.call_args.kwargs["reply_markup"])
+        self.assertIn(f"rm|done|{a}", datas)
+        self.assertIn(f"rm|alld|{a},{b}", datas)
+        self.assertEqual(store.pending_get(self.conn, 1)["payload"]["reminder_ids"], [a, b])
+        self.assertEqual(self.agent.fired_reminders_for_message(500), [a, b])
+        # «готово 2» closes only the second member; the first stays on the slot
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as r2:
+            self.agent.dispatch(1, {"message_id": 501}, "готово 2")
+        route.assert_not_called()
+        self.assertEqual(store.reminder_get(self.conn, b)["status"], "done")
+        self.assertEqual(store.reminder_get(self.conn, a)["status"], "active")
+        self.assertEqual(store.pending_get(self.conn, 1)["payload"]["reminder_ids"], [a])
+        self.assertIn("аренда", r2.call_args.args[1])
+        # a bare «готово» now closes what is left
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 502}, "готово")
+        route.assert_not_called()
+        self.assertEqual(store.reminder_get(self.conn, a)["status"], "done")
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    def test_all_done_button_and_a_reply_to_the_card_close_every_member(self):
+        a = self._due("молоко", minutes_ago=3)
+        b = self._due("аренда", minutes_ago=2)
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 510}):
+            self.agent.fire_due_reminders()
+        store.pending_clear(self.conn, 1)     # the 30-min pending is gone; the reply still binds
+        self.agent.turn_reply_reminder_id = self.agent.fired_reminder_for_message(510)
+        self.agent.turn_reply_reminder_ids = self.agent.fired_reminders_for_message(510)
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {"message_id": 511}, "готово")
+        route.assert_not_called()
+        self.assertEqual({store.reminder_get(self.conn, i)["status"] for i in (a, b)}, {"done"})
+        self.assertIn("«молоко»", r.call_args.args[1])
+        self.assertIn("«аренда»", r.call_args.args[1])
+        c = self._due("хлеб", minutes_ago=2)
+        d = self._due("почта", minutes_ago=1)
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 520}):
+            self.agent.fire_due_reminders()
+        with mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "edit_message") as edit, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.handle_callback(self._callback(f"rm|alld|{c},{d}", message_id=520))
+        self.assertEqual({store.reminder_get(self.conn, i)["status"] for i in (c, d)}, {"done"})
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertIn("все закрыты", edit.call_args.args[2])
+
+    def test_reminder_cancel_accepts_ids_and_all(self):
+        now = datetime.now(timezone.utc)
+        for i, title in enumerate(("а", "б", "в"), start=1):
+            store.reminder_add(self.conn, 1, title, (now + timedelta(hours=i)).isoformat())
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_reminder_cancel(1, "ru", {"ids": [1, 3]})
+        self.assertEqual([x["title"] for x in store.reminders_active(self.conn, 1)], ["б"])
+        self.assertIn("Отменила: #1 «а», #3 «в»", r.call_args.args[1])
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.do_reminder_cancel(1, "ru", {"all": True})
+        self.assertEqual(store.reminders_active(self.conn, 1), [])
+
+    # -- ADR-0003: overdue means fired but unacknowledged -----------------------
+
+    def test_overdue_has_one_definition_across_every_renderer(self):
+        import proactive
+        now = datetime.now(timezone.utc)
+        fresh = store.reminder_add(self.conn, 1, "fresh", (now - timedelta(minutes=10)).isoformat())
+        store.reminder_touch_fired(self.conn, fresh, (now - timedelta(minutes=10)).isoformat())
+        stale = store.reminder_add(self.conn, 1, "stale", (now - timedelta(hours=5)).isoformat())
+        store.reminder_touch_fired(self.conn, stale, (now - timedelta(hours=3)).isoformat())
+        store.reminder_add(self.conn, 1, "held", (now - timedelta(hours=1)).isoformat())
+        past = store.reminder_add(self.conn, 1, "past", (now - timedelta(hours=3)).isoformat())
+        ids = {r["id"] for r in proactive.overdue_rows(self.conn, self.agent.cfg, now, chat_id=1)}
+        self.assertEqual(ids, {stale, past})
+        hit = proactive._overdue_reminders(self.conn, self.agent.cfg, "ru", now, chat_id=1)
+        self.assertEqual(hit[0], "overdue")
+        self.assertIn("«stale»", hit[1])
+        self.assertIn("«past»", hit[1])
+        self.assertEqual(review.collect(self.conn, "week")["reminders_overdue"], 2)
+        self.assertTrue(any("2 просроченных" in line
+                            for line in relationship.ongoing_threads(self.conn, "ru")))
+        brief = review.morning_brief(self.conn, self.agent.cfg, "ru", 0, "босс") or ""
+        self.assertIn("Просрочено: stale, past", brief)
+        self.assertIn("Ждёт подтверждения «готово»: fresh", brief)
+
+    def test_stale_fired_one_shot_is_repinged_once_at_nine(self):
+        now = datetime(2026, 9, 8, 10, 0, tzinfo=timezone.utc)
+        rid = store.reminder_add(self.conn, 1, "ФНС", "2026-09-07T18:00:00+00:00")
+        store.reminder_touch_fired(self.conn, rid, "2026-09-07T18:00:00+00:00")
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 610}) as r:
+            self.agent._reping_stale_fired(now)
+            self.agent._reping_stale_fired(now + timedelta(hours=1))   # never twice
+        self.assertEqual(r.call_count, 1)
+        self.assertIn("ФНС", r.call_args.args[1])
+        self.assertIn("вчера 18:00", r.call_args.args[1])
+        self.assertIn(f"rm|done|{rid}", self._datas(r.call_args.kwargs["reply_markup"]))
+        self.assertTrue(store.reminder_has_event(self.conn, rid, "repinged"))
+        self.assertEqual(self.agent.fired_reminder_for_message(610), rid)
+        other = store.reminder_add(self.conn, 1, "другое", "2026-09-08T18:00:00+00:00")
+        store.reminder_touch_fired(self.conn, other, "2026-09-08T18:00:00+00:00")
+        with mock.patch.object(self.agent, "reply") as r2:
+            self.agent._reping_stale_fired(datetime(2026, 9, 9, 7, 0, tzinfo=timezone.utc))
+        r2.assert_not_called()                                         # not before 09:00
+
+    def test_expiry_is_announced_and_reversible(self):
+        rid = store.reminder_add(self.conn, 1, "старое", "2026-06-20T10:00:00+00:00")
+        store.reminder_touch_fired(self.conn, rid, "2026-06-20T10:00:05+00:00")
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 700}) as r:
+            self.agent.check_reminder_expiry()
+        self.assertEqual(store.reminder_get(self.conn, rid)["status"], "expired")
+        self.assertIn("Закрыла как просроченные: «старое»", r.call_args.args[1])
+        self.assertEqual(self._datas(r.call_args.kwargs["reply_markup"]), [f"rm|reopen|{rid}"])
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "reminder_expired")
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as r2:
+            self.agent.dispatch(1, {"message_id": 701}, "верни")
+        route.assert_not_called()
+        row = store.reminder_get(self.conn, rid)
+        self.assertEqual(row["status"], "active")
+        self.assertIsNone(row["last_fired_at"])
+        self.assertGreater(reminders.parse_iso_utc(row["due_utc"]), datetime.now(timezone.utc))
+        self.assertIn("Вернула: «старое»", r2.call_args.args[1])
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    def test_expiry_notice_is_suppressible_in_plain_language(self):
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 1}, "не сообщай о просроченных")
+        route.assert_not_called()
+        self.assertEqual(store.pref_get(self.conn, "reminder_expiry_notice"), "off")
+        rid = store.reminder_add(self.conn, 1, "старое", "2026-06-20T10:00:00+00:00")
+        store.reminder_touch_fired(self.conn, rid, "2026-06-20T10:00:05+00:00")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.check_reminder_expiry()
+        self.assertEqual(store.reminder_get(self.conn, rid)["status"], "expired")
+        self.assertFalse(any("просроченные" in c.args[1] for c in r.call_args_list))
+
+    # -- ADR-0004: replies name their target, human time, fresh lists -----------
+
+    def test_fmt_relative_and_part_of_day_defaults(self):
+        now = datetime(2026, 9, 8, 10, 0, tzinfo=timezone.utc)
+        self.assertEqual(reminders.fmt_relative("2026-09-08T18:00:00+00:00", 0, "ru", now),
+                         "сегодня 18:00")
+        self.assertEqual(reminders.fmt_relative("2026-09-09T09:00:00+00:00", 0, "ru", now),
+                         "завтра 09:00")
+        self.assertEqual(reminders.fmt_relative("2026-09-10T14:00:00+00:00", 0, "ru", now),
+                         "чт 14:00")
+        self.assertEqual(reminders.fmt_relative("2026-10-01T14:00:00+00:00", 0, "en", now),
+                         "2026-10-01 14:00")
+        # «завтра вечером» → 19:00 (it used to re-arm at 09:00); a bare «завтра» keeps 09:00
+        self.assertEqual(reminders.parse_iso_utc(
+            self.agent._followup_day_due("завтра вечером", 1)).hour, 19)
+        self.assertEqual(reminders.parse_iso_utc(
+            self.agent._followup_day_due("завтра утром", 1)).hour, 9)
+        self.assertEqual(reminders.parse_iso_utc(
+            self.agent._followup_day_due("завтра", 1)).hour, 9)
+
+    def test_reschedule_re_renders_the_list_and_create_offers_the_twin(self):
+        now = datetime.now(timezone.utc)
+        a = store.reminder_add(self.conn, 1, "Азербайджан", (now + timedelta(hours=1)).isoformat())
+        b = store.reminder_add(self.conn, 1, "Рим", (now + timedelta(hours=2)).isoformat())
+        store.kv_set(self.conn, "last_reminder_id", str(a))
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.do_reschedule(1, "ru", {"due_utc": (now + timedelta(hours=5)).isoformat()},
+                                     "перенеси на 15:00")
+        text = r.call_args.args[1]
+        self.assertIn("перенесла «Азербайджан»", text)
+        self.assertIn("Твои напоминания:", text)
+        listing = text[text.index("Твои напоминания:"):]
+        self.assertLess(listing.index("Рим"), listing.index("Азербайджан"))   # re-numbered
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 950}) as r2:
+            self.agent.do_reminder_create(
+                1, "ru", {"title": "Рим", "due_utc": (now + timedelta(hours=8)).isoformat(),
+                          "recurrence": "none"})
+        self.assertIn("Уже есть", r2.call_args.args[1])
+        self.assertIn(f"dr|move|{b}", self._datas(r2.call_args.kwargs["reply_markup"]))
+        with mock.patch.object(self.agent, "answer_callback"), \
+                mock.patch.object(self.agent, "edit_message"), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.handle_callback(self._callback(f"dr|move|{b}", message_id=950))
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), 2)   # moved, not duplicated
+        self.assertEqual(reminders.parse_iso_utc(store.reminder_get(self.conn, b)["due_utc"]),
+                         reminders.parse_iso_utc((now + timedelta(hours=8)).isoformat()))
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    def test_subjectless_create_after_a_stale_one_shot_opens_a_partial(self):
+        now = datetime.now(timezone.utc)
+        rid = store.reminder_add(self.conn, 1, "ФНС", (now - timedelta(hours=5)).isoformat())
+        store.reminder_touch_fired(self.conn, rid, (now - timedelta(hours=4)).isoformat())
+        store.kv_set(self.conn, "last_reminder_id", str(rid))
+        original = store.reminder_get(self.conn, rid)["due_utc"]
+        tomorrow = (now + timedelta(days=1)).replace(hour=10, minute=0).isoformat()
+        with mock.patch.object(router, "route", return_value={
+                "action": "reminder_create", "params": {"due_utc": tomorrow},
+                "confidence": 0.9}) as route, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 5}, "напомни завтра в 10")
+        route.assert_called_once()
+        self.assertEqual(store.reminder_get(self.conn, rid)["due_utc"], original)  # not snoozed
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "reminder_partial")
+        store.pending_clear(self.conn, 1)
+        # an EXPLICIT snooze verb still binds to the stale one-shot
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 6}, "отложи на завтра в 10")
+        route.assert_not_called()
+        self.assertNotEqual(store.reminder_get(self.conn, rid)["due_utc"], original)
+
+    # -- ADR-0005: the gratitude ritual ------------------------------------------
+
+    def test_gratitude_reminder_invites_the_entry_and_done_means_skip(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        rid = self._due("благодарности", recurrence="daily")
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 800}) as r:
+            self.agent.fire_due_reminders()
+        self.assertIn("за что сегодня", r.call_args.args[1])
+        self.assertEqual(self._datas(r.call_args.kwargs["reply_markup"]),
+                         [f"rm|skip|{rid}", f"rm|h1|{rid}"])
+        self.assertEqual(store.pending_get(self.conn, 1)["payload"]["journal"], "Благодарности")
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as r2:
+            self.agent.dispatch(1, {"message_id": 801}, "готово")
+        route.assert_not_called()
+        self.assertEqual(r2.call_args.args[1],
+                         texts.T("ru", "journal_skipped_today", category="Благодарности"))
+        event = self.conn.execute(
+            "SELECT event, detail FROM reminder_events WHERE reminder_id=? ORDER BY id DESC",
+            (rid,)).fetchone()
+        self.assertEqual((event["event"], event["detail"]), ("acknowledged", "skipped"))
+
+    def _capture_mocks(self, message_id):
+        return (mock.patch.object(router, "route"),
+                mock.patch.object(ingest, "suggest"),
+                mock.patch.object(journals, "extract", return_value=({}, "complete")),
+                mock.patch.object(self.agent, "index_message"),
+                mock.patch.object(self.agent, "reply", return_value={"message_id": message_id}))
+
+    def test_gratitude_prefix_is_captured_without_the_router(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 12,
+               "text": "В благодарности - тёплый вечер с семьёй"}
+        route, suggest, extract, index, reply = self._capture_mocks(13)
+        with route as routed, suggest, extract, index, reply:
+            self.agent.dispatch(1, msg, msg["text"])
+        routed.assert_not_called()
+        row = self.conn.execute("SELECT * FROM messages WHERE tg_message_id=12").fetchone()
+        self.assertEqual(row["raw_text"], "тёплый вечер с семьёй")     # the prefix is routing, not text
+        self.assertEqual(row["suggested_category"], "Благодарности")
+        self.assertEqual(store.pending_get(self.conn, 1)["kind"], "category")
+
+    def test_gratitude_capture_makes_no_router_or_summary_call(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 14,
+               "text": "Благодарность: Вера помогла с презентацией"}
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(ingest, "suggest") as suggest, \
+                mock.patch.object(journals, "extract", return_value=({}, "complete")), \
+                mock.patch.object(self.agent, "index_message"), \
+                mock.patch.object(self.agent, "reply", return_value={"message_id": 15}) as reply:
+            self.agent.dispatch(1, msg, msg["text"])
+        route.assert_not_called()
+        suggest.assert_not_called()
+        self.assertIn("Вера помогла с презентацией", reply.call_args.args[1])   # verbatim on the card
+
+    def test_gratitude_autosave_is_opt_in_and_names_the_undo(self):
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        with mock.patch.object(router, "route") as route, mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 20}, "записывай благодарности сразу")
+        route.assert_not_called()
+        self.assertEqual(store.pref_get(self.conn, "gratitude_autosave"), "on")
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": 21,
+               "text": "В благодарности - Вера помогла"}
+        with mock.patch.object(router, "route"), \
+                mock.patch.object(ingest, "suggest"), \
+                mock.patch.object(journals, "extract", return_value=({}, "complete")), \
+                mock.patch.object(self.agent, "index_message"), \
+                mock.patch.object(self.agent, "edit_suggestion_message"), \
+                mock.patch.object(self.agent, "reply", return_value={"message_id": 22}) as reply:
+            self.agent.dispatch(1, msg, msg["text"])
+        row = self.conn.execute("SELECT * FROM messages WHERE tg_message_id=21").fetchone()
+        self.assertEqual(row["status"], "confirmed")
+        self.assertIsNotNone(store.journal_entry_get(self.conn, row["id"]))
+        self.assertIn("Записала в дневник", reply.call_args.args[1])
+        self.assertIn("убери J#", reply.call_args.args[1])
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    # -- ADR-0006: bare acknowledgements never reach the LLM ---------------------
+
+    def test_yes_no_and_a_bare_time_on_a_draft_skip_the_router(self):
+        due = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        store.pending_set(self.conn, 1, "reminder",
+                          {"title": "банк", "due_utc": due, "recurrence": "none"})
+        with mock.patch.object(router, "route") as route, mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 1}, "да")
+        route.assert_not_called()
+        self.assertEqual([x["title"] for x in store.reminders_active(self.conn, 1)], ["банк"])
+        store.pending_set(self.conn, 1, "reminder",
+                          {"title": "врач", "due_utc": due, "recurrence": "none"})
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as r:
+            self.agent.dispatch(1, {"message_id": 2}, "через 20 минут")
+        route.assert_not_called()
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "reminder")
+        moved = reminders.parse_iso_utc(pending["payload"]["due_utc"])
+        self.assertLess(abs((moved - datetime.now(timezone.utc)).total_seconds() - 1200), 120)
+        self.assertIn("врач", r.call_args.args[1])                     # the card is re-shown
+        with mock.patch.object(router, "route") as route, mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 3}, "не надо")
+        route.assert_not_called()
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        store.pending_set(self.conn, 1, "reminder_partial",
+                          {"title": "зубной", "recurrence": "none", "need": "time"})
+        with mock.patch.object(router, "route") as route, mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 4}, "в 18:30")
+        route.assert_not_called()
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual((pending["kind"], pending["payload"]["title"]), ("reminder", "зубной"))
+        local = reminders.parse_iso_utc(pending["payload"]["due_utc"])
+        self.assertEqual((local.hour, local.minute), (18, 30))
+
+    def test_bare_agreement_with_nothing_pending_is_silent_unless_she_asked(self):
+        with mock.patch.object(router, "route") as route, \
+                mock.patch.object(self.agent, "reply") as reply, \
+                mock.patch.object(self.agent, "react") as react:
+            self.agent.dispatch(1, {"message_id": 5}, "давай")
+        route.assert_not_called()
+        reply.assert_not_called()
+        react.assert_called_once_with(1, 5, "👍")
+        store.convo_add(self.conn, 1, "bot", "Перенести на завтра?")
+        with mock.patch.object(router, "route", return_value={
+                "action": "converse", "params": {}, "confidence": 0.9}) as route, \
+                mock.patch.object(self.agent, "do_converse"):
+            self.agent.dispatch(1, {"message_id": 6}, "да")
+        route.assert_called_once()                                     # an answer, not silence
+
+    def test_proactive_followup_accepts_ok_and_the_repair_sees_context(self):
+        store.kv_set(self.conn, "proactive_context", json.dumps(
+            {"kind": "overdue", "ids": [], "chat_id": 1,
+             "sent_at": datetime.now(timezone.utc).isoformat()}))
+        with mock.patch.object(self.agent, "reply"):
+            self.assertTrue(self.agent._resolve_proactive_followup(1, "ru", "ок"))
+        store.reminder_add(self.conn, 1, "позвонить Ире",
+                           (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+        store.convo_add(self.conn, 1, "user", "поставь напоминание позвонить Ире")
+        store.convo_add(self.conn, 1, "bot", "Поставила! #1: позвонить Ире")
+        captured = {}
+
+        def fake(cfg, conn, skill, messages, **kw):
+            captured["system"] = messages[0]["content"]
+            return "Напоминание про Иру стоит первым в списке 🙂"
+        with mock.patch.object(llm, "chat_profile", side_effect=fake):
+            self.agent._honest_action_reply(1, "ru", "поставь ещё раз", "Поставила!",
+                                            claim="поставила")
+        self.assertIn("позвонить Ире", captured["system"])
+        self.assertIn("The last turns", captured["system"])
+
+    # -- ADR-0007: she always signals that she is working ------------------------
+
+    def test_long_voice_note_says_listening_and_keeps_typing(self):
+        self.agent.TYPING_KEEPALIVE_SECONDS = 0.05
+        calls = []
+
+        def slow_transcribe(cfg, conn, skill, path, duration):
+            time.sleep(0.25)
+            return "купи молоко"
+        with mock.patch.object(self.agent, "download_file",
+                               return_value=str(Path(self.tmp.name) / "x.oga")), \
+                mock.patch.object(llm, "transcribe", side_effect=slow_transcribe), \
+                mock.patch.object(self.agent, "send_chat_action",
+                                  side_effect=lambda cid, action="typing": calls.append(action)), \
+                mock.patch.object(self.agent, "reply") as r:
+            out = self.agent.transcribe_voice(1, {"file_id": "f", "file_unique_id": "u",
+                                                  "duration": 40})
+        self.assertEqual(out, "купи молоко")
+        self.assertGreaterEqual(len(calls), 3)                         # initial + keepalives
+        self.assertEqual(r.call_args.args[1], texts.T("ru", "voice_listening", seconds=40))
+        self.assertFalse(r.call_args.kwargs.get("record", True))
+        time.sleep(0.15)
+        n = len(calls)
+        time.sleep(0.15)
+        self.assertEqual(len(calls), n)                                # the thread stopped
+        with mock.patch.object(self.agent, "download_file",
+                               return_value=str(Path(self.tmp.name) / "y.oga")), \
+                mock.patch.object(llm, "transcribe", return_value="привет"), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply") as r2:
+            self.agent.transcribe_voice(1, {"file_id": "g", "file_unique_id": "v", "duration": 9})
+        r2.assert_not_called()                                         # short note: no notice
+
+    def test_dispatch_and_suggest_row_signal_typing(self):
+        with mock.patch.object(self.agent, "send_chat_action") as typing, \
+                mock.patch.object(router, "route", return_value={
+                    "action": "converse", "params": {}, "confidence": 0.9}), \
+                mock.patch.object(self.agent, "do_converse"):
+            self.agent.dispatch(1, {"message_id": 1}, "как думаешь, стоит ли ехать?")
+        typing.assert_called_with(1, "typing")
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 2,
+                                               "received_at": store._now(),
+                                               "raw_text": "пост про бюджет"})
+        with mock.patch.object(self.agent, "send_chat_action") as typing, \
+                mock.patch.object(ingest, "suggest", return_value=("Разное", [], "s", [])), \
+                mock.patch.object(self.agent, "index_message"):
+            self.agent.suggest_row(store.get_message(self.conn, mid))
+        typing.assert_called_with(1, "typing")
+
+    # -- ADR-0008: alerts reach the owner only when he is affected ---------------
+
+    def test_model_down_reaches_the_owner_only_when_the_chain_is_dead(self):
+        cfg = self.agent.cfg
+        cfg.model_health_interval = 1
+        cfg.model_health_confirm = 1
+        cfg.do_model = "deepseek-4-flash"
+        cfg.vision_model = ""
+
+        def run(down):
+            self.agent.last_model_health = 0
+            with mock.patch.object(llm, "model_ok", side_effect=lambda c, conn, model, timeout=None: (
+                    model not in down,
+                    "model access denied (HTTP 403)" if model in down else "")), \
+                    mock.patch.object(self.agent, "reply") as r, \
+                    mock.patch.object(self.agent, "_notify_fleet") as fleet:
+                self.agent.check_model_health()
+            return r, fleet
+        r, fleet = run(set())                              # healthy baseline: silent
+        self.assertFalse(r.called)
+        self.assertFalse(fleet.called)
+        r, fleet = run({"deepseek-4-flash"})               # primary down, fallback answers
+        self.assertFalse(r.called)                         # → the boss is not bothered
+        self.assertTrue(fleet.called)
+        self.assertIn("deepseek-4-flash", fleet.call_args.args[0])
+        r, fleet = run({"deepseek-4-flash", "openai-gpt-oss-20b"})   # the chain is dead
+        self.assertTrue(r.called)
+        self.assertIn("deepseek-4-flash", r.call_args.args[1])
+        self.assertIn("без запасной", r.call_args.args[1])
+        r, fleet = run({"deepseek-4-flash"})               # the fallback is back → served again
+        self.assertTrue(r.called)
+        self.assertIn("Снова на связи: deepseek-4-flash", r.call_args.args[1])
+        r, fleet = run(set())                              # the primary recovers quietly
+        self.assertFalse(r.called)
+        self.assertTrue(fleet.called)
+        kinds = [json.loads(row["payload"])["state"] for row in self.conn.execute(
+            "SELECT payload FROM events WHERE kind='model_health' ORDER BY id")]
+        self.assertEqual(kinds.count("down"), 2)
+        self.assertEqual(kinds.count("back"), 2)
+        md = review.markdown(self.conn, cfg, "week")
+        self.assertIn("## Model health", md)
+        self.assertIn("fleet only", md)
+        self.assertIn("owner notified", md)
+
+    # -- ADR-0009: the weekly review is written for the owner ---------------------
+
+    def test_weekly_review_skips_a_week_without_him_and_quotes_his_journal(self):
+        self.assertFalse(review.had_owner_turns(self.conn, "week"))
+        store.kv_set(self.conn, "next_review_utc", "2000-01-01T00:00:00+00:00")
+        with mock.patch.object(self.agent, "reply") as r:
+            self.agent.check_weekly_review()
+        r.assert_not_called()
+        self.assertGreater(store.kv_get(self.conn, "next_review_utc"), "2026")   # slot advanced
+        store.convo_add(self.conn, 1, "user", "привет")
+        self.assertTrue(review.had_owner_turns(self.conn, "week"))
+        store.set_category_kind(self.conn, "Благодарности", "journal")
+        mid = store.insert_message(self.conn, {"chat_id": 1, "tg_message_id": 3,
+                                               "received_at": store._now(),
+                                               "raw_text": "тёплый вечер с семьёй"})
+        store.set_suggestion(self.conn, mid, "Благодарности", "", "m")
+        store.confirm_category(self.conn, mid, "Благодарности")
+        text = review.chat_text(self.conn, self.agent.cfg, "ru", "week")
+        self.assertIn("📔 Благодарности:", text)
+        self.assertIn("— тёплый вечер с семьёй", text)                 # his own words
+        self.assertNotIn("Как я работала", text)
 
 
 if __name__ == "__main__":
