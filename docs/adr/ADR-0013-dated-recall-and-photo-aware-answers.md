@@ -1,6 +1,6 @@
 # ADR-0013: Dated recall and photo-aware answers
 
-- Status: Proposed
+- Status: Implemented 501b5f9
 - Date: 2026-09-07
 - Phase: Phase B — honesty and memory
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `501b5f9` (Phase B batch) — «· YYYY-MM-DD» in the ask context head; `journal_show` gains `date`/`since`/`until` parsed by `reminders.parse_day_phrase` / `journal_window` (RU/EN month names, DD.MM, «17-го», вчера/позавчера; a future day with no year reads as last year's), threaded through the list-view token; the router examples moved to it; a picture-only turn routed to `ask` falls through to `converse`; only notes whose #N the delivered answer names are marked used (`knowledge.cited_note_ids`); the embedding runs in its own try, `_keyword_context` always runs, results fused by rank (`fuse_contexts`); `grounding.ranked` logs the top-k scores; `rank_chunks` adds a relative gate (0.15 under the best) and a per-note cap (2) on top of the kept 0.25 floor — the floor was NOT re-calibrated (the scores are now logged so it can be).

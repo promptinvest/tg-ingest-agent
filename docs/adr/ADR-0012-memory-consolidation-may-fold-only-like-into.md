@@ -1,6 +1,6 @@
 # ADR-0012: Memory consolidation may fold only like into like, and it is a durable job
 
-- Status: Proposed
+- Status: Implemented 501b5f9
 - Date: 2026-09-07
 - Phase: Phase B — honesty and memory
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `501b5f9` (Phase B batch) — correction rows fold only into a correction or a confirmed keeper; `_tidy_inferred` skips GUIDANCE_KINDS and requires `boss_model.topical_overlap` (0.2) with a confirmed fact, which becomes the keeper; `merged_into` column + `store.boss_merge_into`; keep→drop pairs in the job log line; a repeated correction `boss_bump`s recurrence/confidence; `standing_guidance` orders by confidence · recurrence · recency with `TONE_SLOTS`=2; `converse.no_emoji_rule` drops the reaction invitation; consolidation is a `JOB_KINDS` entry stamping `memory_consolidate_at` only on success (24 h enqueue cooldown); the one-off repair (`_repair_consolidation_2026_09_07`) flipped rows 24, 85, 94, 96, 106, 108, 132, 157, 177, 180 to inferred, 137 to confirmed, 184 and the later-seen of 182/183 to inferred — guarded by a kv marker, the exact pre-state and a ≥100-row profile.

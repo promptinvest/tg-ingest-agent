@@ -1,6 +1,6 @@
 # ADR-0010: Action-truth guard v3: tighten the bypass, carve out honest offers, align the prompt
 
-- Status: Proposed
+- Status: Implemented 501b5f9
 - Date: 2026-09-07
 - Phase: Phase B — honesty and memory
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-07: implemented in `501b5f9` (Phase B batch) — subjunctive carve-out (`_subjunctive`: pre-verb «(я )?бы …» with ≤2 words between, post-verb «бы», never under a «Готово/done» head); day-part words excuse a claim only before/inside the match or after it with no clause boundary; «убрала/настроила» added to the narrative-capable set; a present-tense pattern for «я теперь не спрашиваю…» / «больше не показываю» / "I no longer ask"; her-life carve-out limited to `_HER_LIFE_RE` (Майя, «в плейлист»), soft verbs only; `converse.CHARACTER` no longer says "say you're on it" — she names the plain request and asks (mirrored in CARA.md §4 and cara_persona.md); `action_not_done`/`artifact_not_sent` rewritten in her voice; the «обнim» relational cue fixed; every probed sentence is a regression test (`PhaseB20260907Tests`).

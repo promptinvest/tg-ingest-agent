@@ -20,10 +20,10 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 | [ADR-0007](ADR-0007-she-always-signals-that-she-is-working.md) | She always signals that she is working | Phase A | nothing | Implemented 0a2639a |
 | [ADR-0008](ADR-0008-alerts-reach-the-owner-only-when-he-is-affected.md) | Alerts reach the owner only when he is affected | Phase A | nothing | Implemented 0a2639a |
 | [ADR-0009](ADR-0009-the-weekly-review-is-written-for-the-owner-the.md) | The weekly review is written for the owner; the ops dump moves to the export | Phase A | nothing | Implemented 0a2639a |
-| [ADR-0010](ADR-0010-action-truth-guard-v3-tighten-the-bypass-carve.md) | Action-truth guard v3: tighten the bypass, carve out honest offers, align the prompt | Phase B | nothing | Proposed |
-| [ADR-0011](ADR-0011-post-window-follow-ups-bind-deterministically.md) | Post-window follow-ups bind deterministically; degenerate replies never ship | Phase B | ADR-0024 for the precedence table, but can ship as a guard first | Proposed |
-| [ADR-0012](ADR-0012-memory-consolidation-may-fold-only-like-into.md) | Memory consolidation may fold only like into like, and it is a durable job | Phase B | nothing | Proposed |
-| [ADR-0013](ADR-0013-dated-recall-and-photo-aware-answers.md) | Dated recall and photo-aware answers | Phase B | nothing | Proposed |
+| [ADR-0010](ADR-0010-action-truth-guard-v3-tighten-the-bypass-carve.md) | Action-truth guard v3: tighten the bypass, carve out honest offers, align the prompt | Phase B | nothing | Implemented 501b5f9 |
+| [ADR-0011](ADR-0011-post-window-follow-ups-bind-deterministically.md) | Post-window follow-ups bind deterministically; degenerate replies never ship | Phase B | ADR-0024 for the precedence table, but can ship as a guard first | Implemented 501b5f9 |
+| [ADR-0012](ADR-0012-memory-consolidation-may-fold-only-like-into.md) | Memory consolidation may fold only like into like, and it is a durable job | Phase B | nothing | Implemented 501b5f9 |
+| [ADR-0013](ADR-0013-dated-recall-and-photo-aware-answers.md) | Dated recall and photo-aware answers | Phase B | nothing | Implemented 501b5f9 |
 | [ADR-0014](ADR-0014-llm-failover-contract-every-model-of-a-profile.md) | LLM failover contract: every model of a profile must be able to answer in the profile's shape | Phase C | nothing | Proposed |
 | [ADR-0015](ADR-0015-startup-and-poll-failures-are-visible-failures.md) | Startup and poll failures are visible failures | Phase C | nothing | Proposed |
 | [ADR-0016](ADR-0016-owner-gate-before-persistence-and-sandbox-parity.md) | Owner gate before persistence, and sandbox parity for the main unit | Phase C | nothing | Proposed |
