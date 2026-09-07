@@ -30,7 +30,7 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 | [ADR-0017](ADR-0017-deploys-are-recoverable-and-honest-about-their.md) | Deploys are recoverable and honest about their outcome | Phase C | nothing | Proposed |
 | [ADR-0018](ADR-0018-backup-posture-daily-local-weekly-off-box.md) | Backup posture: daily local, weekly off-box, verified before rotation | Phase C | owner confirms the 2026-08-21 weekly decision concerned the off-box post, not local disk | Proposed |
 | [ADR-0019](ADR-0019-telemetry-is-written-only-when-there-is.md) | Telemetry is written only when there is something to say | Phase C | nothing | Proposed |
-| [ADR-0020](ADR-0020-compound-commands-one-at-a-time-then-splitter.md) | Compound commands go back to «давай по одному», then to a deterministic splitter | Phase D | ADR-0024 for step 1 | Proposed |
+| [ADR-0020](ADR-0020-compound-commands-one-at-a-time-then-splitter.md) | Compound commands go back to «давай по одному», then to a deterministic splitter | Phase D | ADR-0024 for step 1 | Implemented 04f69a7 |
 | [ADR-0021](ADR-0021-the-mentor-is-proposal-only-until-the-evidence.md) | The Mentor is proposal-only until the evidence and the model earn a candidate phase | Phase D | owner decision | Superseded by ADR-0029 |
 | [ADR-0022](ADR-0022-the-worker-is-dormant-until-it-has-a-real-tool.md) | The worker is dormant until it has a real tool; research is either real or absent | Phase D | owner decision on the Brave key | Proposed |
 | [ADR-0023](ADR-0023-voice-transcription-leaves-the-poll-thread-with.md) | Voice transcription leaves the poll thread, with the DB staying on it | Phase D | ADR-0007 first; owner decision | Accepted 2026-09-07 (deferred) |
