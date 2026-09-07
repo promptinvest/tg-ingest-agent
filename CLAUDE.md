@@ -10,6 +10,9 @@ knowledge bases live in that sibling Codex repo:
 - **Specs (source of truth — every change updates BOTH, same commit):**
   [`CARA.md`](CARA.md) (capabilities + architecture) and
   [`SOLUTION.md`](SOLUTION.md) (design rationale). In this folder.
+- **Improvement backlog:** [`docs/adr/README.md`](docs/adr/README.md) — proposed
+  ADRs from the 2026-09-07 review, status-tracked. Check it before proposing new
+  work; update the ADR status when you implement, reject or supersede one.
 - **PD-VPS knowledge base** — Cara's live deployment box `174.138.108.85`: SSH /
   deploy connection, the LLM/model situation, the status-dashboard command-key:
   `../Codex/VPS_174.138.108.85_knowledge_base.md`

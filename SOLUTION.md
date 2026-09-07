@@ -1202,6 +1202,11 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
 
 ## 12. Roadmap / known gaps
 
+> **Improvement backlog (2026-09-07 review):** the ordered backlog is the ADR index in
+> [`docs/adr/README.md`](docs/adr/README.md) (28 proposed decisions, status-tracked per
+> file). This section keeps the accepted limits and the closed items; an ADR that changes
+> a limit rewrites the sentence here when it is implemented.
+
 - Google Calendar sync dormant until a service-account key is provisioned (.ics
   export works now); DO Spaces dormant until configured (local storage works).
 - A Telegram bot cannot read arbitrary chat history or private-channel links by

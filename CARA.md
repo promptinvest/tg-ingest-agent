@@ -2331,6 +2331,13 @@ is documented twice. The lists above stay as the short tour; they are not the ca
 
 ## 10. Known limits & roadmap
 
+> **Improvement backlog (2026‑09‑07 review):** 28 proposed ADRs live in
+> [`docs/adr/`](docs/adr/README.md), ordered by phase — the daily reminder/journal loop
+> first, then honesty & memory, robustness/ops/security, owner decisions, and
+> maintainability/docs. An ADR is a proposal until its status says otherwise; the
+> limits below stay authoritative until an ADR that changes them is implemented, and
+> implementing one updates this file and `SOLUTION.md` in the same commit.
+
 - **PDF text** uses pdfminer.six (apt `python3-pdfminer`, kept current by the nightly
   updater) with a stdlib regex fallback. **Scanned / no‑ToUnicode (glyph‑coded) PDFs**
   still yield no text layer — reading them needs **OCR**, out of scope here; such files
