@@ -24,12 +24,12 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 | [ADR-0011](ADR-0011-post-window-follow-ups-bind-deterministically.md) | Post-window follow-ups bind deterministically; degenerate replies never ship | Phase B | ADR-0024 for the precedence table, but can ship as a guard first | Implemented 501b5f9 |
 | [ADR-0012](ADR-0012-memory-consolidation-may-fold-only-like-into.md) | Memory consolidation may fold only like into like, and it is a durable job | Phase B | nothing | Implemented 501b5f9 |
 | [ADR-0013](ADR-0013-dated-recall-and-photo-aware-answers.md) | Dated recall and photo-aware answers | Phase B | nothing | Implemented 501b5f9 |
-| [ADR-0014](ADR-0014-llm-failover-contract-every-model-of-a-profile.md) | LLM failover contract: every model of a profile must be able to answer in the profile's shape | Phase C | nothing | Proposed |
-| [ADR-0015](ADR-0015-startup-and-poll-failures-are-visible-failures.md) | Startup and poll failures are visible failures | Phase C | nothing | Proposed |
-| [ADR-0016](ADR-0016-owner-gate-before-persistence-and-sandbox-parity.md) | Owner gate before persistence, and sandbox parity for the main unit | Phase C | nothing | Proposed |
-| [ADR-0017](ADR-0017-deploys-are-recoverable-and-honest-about-their.md) | Deploys are recoverable and honest about their outcome | Phase C | nothing | Proposed |
+| [ADR-0014](ADR-0014-llm-failover-contract-every-model-of-a-profile.md) | LLM failover contract: every model of a profile must be able to answer in the profile's shape | Phase C | nothing | Implemented 8e25b1c |
+| [ADR-0015](ADR-0015-startup-and-poll-failures-are-visible-failures.md) | Startup and poll failures are visible failures | Phase C | nothing | Implemented 8e25b1c |
+| [ADR-0016](ADR-0016-owner-gate-before-persistence-and-sandbox-parity.md) | Owner gate before persistence, and sandbox parity for the main unit | Phase C | nothing | Implemented 8e25b1c |
+| [ADR-0017](ADR-0017-deploys-are-recoverable-and-honest-about-their.md) | Deploys are recoverable and honest about their outcome | Phase C | nothing | Implemented 8e25b1c |
 | [ADR-0018](ADR-0018-backup-posture-daily-local-weekly-off-box.md) | Backup posture: daily local, weekly off-box, verified before rotation | Phase C | owner confirms the 2026-08-21 weekly decision concerned the off-box post, not local disk | Proposed |
-| [ADR-0019](ADR-0019-telemetry-is-written-only-when-there-is.md) | Telemetry is written only when there is something to say | Phase C | nothing | Proposed |
+| [ADR-0019](ADR-0019-telemetry-is-written-only-when-there-is.md) | Telemetry is written only when there is something to say | Phase C | nothing | Implemented 8e25b1c |
 | [ADR-0020](ADR-0020-compound-commands-one-at-a-time-then-splitter.md) | Compound commands go back to «давай по одному», then to a deterministic splitter | Phase D | ADR-0024 for step 1 | Implemented 04f69a7 |
 | [ADR-0021](ADR-0021-the-mentor-is-proposal-only-until-the-evidence.md) | The Mentor is proposal-only until the evidence and the model earn a candidate phase | Phase D | owner decision | Superseded by ADR-0029 |
 | [ADR-0022](ADR-0022-the-worker-is-dormant-until-it-has-a-real-tool.md) | The worker is dormant until it has a real tool; research is either real or absent | Phase D | owner decision on the Brave key | Proposed |

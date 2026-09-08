@@ -1,6 +1,6 @@
 # ADR-0017: Deploys are recoverable and honest about their outcome
 
-- Status: Proposed
+- Status: Implemented 8e25b1c
 - Date: 2026-09-07
 - Phase: Phase C — robustness, operations, security
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-08: implemented in `8e25b1c` — shipped: installer `sqlite3 .backup` → `ingest-pre-install.db` (0600) before any restart; `deploy.sh` wipes the stage payload before untar (dotfiles kept); `deployment_notice.py mark-failed` + an `ERR` trap in the remote deploy block (the manifest's `failed` status rides in `verification_summary`; the trap also restarts the agent so the ❌ receipt reaches the fleet chat at once — exercised for real on the 2026-09-08 second deploy run, when the Mentor runner's candidate suite failed on a unit file missing from its source snapshot); `--pull`/`--rollback` exit 2 with the `git checkout <sha> && bash deploy.sh` recipe while the box has no deploy key; README + CARA §9 document that recipe; CI prints the suite duration and runs shellcheck. Not done: the box still has no read-only deploy key (recipe printed instead) — an operator step.

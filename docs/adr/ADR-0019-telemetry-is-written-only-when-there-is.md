@@ -1,6 +1,6 @@
 # ADR-0019: Telemetry is written only when there is something to say
 
-- Status: Proposed
+- Status: Implemented 8e25b1c
 - Date: 2026-09-07
 - Phase: Phase C — robustness, operations, security
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-08: implemented in `8e25b1c` — shipped: `enqueue_maintenance_jobs` queues `retry_sweep` only with pending/unindexed rows, `pending_expire` only with an expired card (`store.pending_expired_exists`), `media_cleanup` hourly via `available_at`; `events.claim_next/complete/fail/reclaim_stale` and the startup reclaim deleted, `record_done` kept, eight unused trace constants removed; `router.completed` carries `action`, `source`, clipped params, `raw` (400 chars), `invalid`, `demoted_from`; `_trace_route` at every deterministic resolver and the callback entry; `route_corrected` issue within 600 s of a state-changing route; weekly markdown **Routing** block; `flush_albums` opens an `album_…` inbound trace.

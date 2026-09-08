@@ -1,6 +1,6 @@
 # ADR-0015: Startup and poll failures are visible failures
 
-- Status: Proposed
+- Status: Implemented 8e25b1c
 - Date: 2026-09-07
 - Phase: Phase C — robustness, operations, security
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-08: implemented in `8e25b1c` — shipped: `common.read_env_file`/`check_config` + `agent.py --check-config [env]` (exit 2 on a bad value; the installer runs it before any mutation); the unit gains `StartLimitIntervalSec=600`, `StartLimitBurst=5`, `OnFailure=cara-failed-notify@%N.service` (deviation from the ADR's `%n`: `%N` drops the .service suffix so the instance reads `cara-failed-notify@tg-ingest-agent`; new root one-shot → `deployment_notice.py unit-failed`, one fleet line from the fleet env keys only); `Agent._poll_trouble`/`_poll_recovered`: ten minutes of consecutive getUpdates failures, or a 409 at once, send `poll_stalled` by a bare API call + a `poll_stalled` issue, `poll_back` on recovery; `common.log(level=)` writes the `<3>`/`<4>` journald prefixes at the terminal sites (dead letter, db stall, dead chain, terminal job, failed album).

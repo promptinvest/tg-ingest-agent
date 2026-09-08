@@ -1,6 +1,6 @@
 # ADR-0014: LLM failover contract: every model of a profile must be able to answer in the profile's shape
 
-- Status: Proposed
+- Status: Implemented 8e25b1c
 - Date: 2026-09-07
 - Phase: Phase C — robustness, operations, security
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,4 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-09-08: implemented in `8e25b1c` — owner «go» for Phase C. Shipped: env `router_fast.fallbacks` = [deepseek-v4-pro, openai-gpt-oss-20b] on the box (env backed up first) and the same default in `llm.default_profiles` with `max_tokens` 400; per-profile `timeout` (router 30 / ingest 45 / memory, converse, ask 60 / task 90) passed from `chat_profile` to `chat`; all-benched → one model, one attempt + `llm.all_benched` trace; `chat(meta=)` reports `finish_reason`, and a `length` cut on a json_required profile retries the same model once at 2× the cap with no cooldown; `check_model_health` probes fallbacks on sweep 1, every 4th sweep and after a primary failed, and names a down fallback «(fallback)» in the fleet line. Deviation: «deterministic parsers before llm_error» needed no new code — every deterministic branch already runs ahead of the router call in `dispatch`, so a router outage cannot reach them; no offline parser was added.
