@@ -4160,6 +4160,13 @@ def pending_clear(conn, chat_id):
     conn.commit()
 
 
+def pending_expired_exists(conn):
+    """Whether the sweep in `pending_expire` would delete anything — the gate that
+    keeps the maintenance job from being queued every 300 s as a no-op (ADR-0019)."""
+    return conn.execute("SELECT 1 FROM pending_actions WHERE expires_at < ? LIMIT 1",
+                        (_now(),)).fetchone() is not None
+
+
 def pending_expire(conn):
     """Proactively drop pending actions past their expires_at (pending_get only
     expires the one chat it reads — this sweeps abandoned ones). Returns count."""

@@ -958,6 +958,24 @@ TEXTS = {
         "ru": "пустые или не на том языке ответы модели",
         "en": "empty or wrong-language model replies",
     },
+    # ADR-0015: a stalled poll is said out loud (sending still works while
+    # getUpdates does not), once, with a «back» when it recovers.
+    "poll_stalled": {
+        "ru": ("⚠️ Босс, я не получаю новых сообщений от Telegram уже {minutes} мин ({reason}). "
+               "Отправлять могу; как только приём вернётся — скажу."),
+        "en": ("⚠️ Boss, I haven't been receiving new messages from Telegram for {minutes} min "
+               "({reason}). I can still send; I'll say when it's back."),
+    },
+    "poll_back": {
+        "ru": "✓ Приём сообщений снова работает, босс.",
+        "en": "✓ Receiving messages again, boss.",
+    },
+    "issue_kind_poll_stalled": {"ru": "остановки приёма сообщений", "en": "message polling stalls"},
+    "issue_kind_stranger_traffic": {"ru": "сообщения от чужих", "en": "messages from strangers"},
+    "issue_kind_route_corrected": {
+        "ru": "поправки сразу после выполненной команды",
+        "en": "corrections right after an executed command",
+    },
     "journal_date_unclear": {
         "ru": "Не поняла, за какой день — скажи, например, «17 июня» или «вчера».",
         "en": "I didn't catch the day — say e.g. \"June 17\" or \"yesterday\".",

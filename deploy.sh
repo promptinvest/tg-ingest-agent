@@ -37,6 +37,16 @@ SSH_OPTS=(-i "$KEY" -p "$PORT" -o IdentitiesOnly=yes -o ConnectTimeout=25
           -o ServerAliveCountMax=12)
 
 git_env="export GIT_SSH_COMMAND='ssh -i $BOX_KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=/root/.ssh/known_hosts'"
+# ADR-0017: --pull/--rollback need the box's read-only deploy key. Without it they
+# used to fail deep inside git with no guidance; now they exit 2 BEFORE any
+# mutation and print the rollback that works today plus the key recipe.
+no_key_check="
+if [ ! -f '$BOX_KEY' ]; then
+  echo 'no read-only deploy key on the box ($BOX_KEY): --pull and --rollback are unavailable.' >&2
+  echo 'Rollback that works today (from the workstation): git checkout <sha> && bash deploy.sh   (deploys the working tree); then git checkout main.' >&2
+  echo 'To enable them: on the box  ssh-keygen -t ed25519 -N \"\" -f $BOX_KEY ; add $BOX_KEY.pub as a READ-ONLY deploy key on github.com/promptinvest/tg-ingest-agent ; then  ./deploy.sh --pull' >&2
+  exit 2
+fi"
 # NOTE: every remote script sets `-o pipefail` — without it the `| tail`
 # pipes here return tail's exit 0 and mask a FAILED test run or a mid-way
 # installer abort (deploy printed green while the box kept running old code).
@@ -89,6 +99,7 @@ case "$MODE" in
   --pull)
     ssh "${SSH_OPTS[@]}" "$HOST" "
 set -e -o pipefail
+$no_key_check
 $git_env
 if [ ! -d '$SRC/.git' ]; then echo '--- clone ---'; git clone '$REPO' '$SRC'; fi
 cd '$SRC'
@@ -111,6 +122,8 @@ $install_verify"
     fi
     ssh "${SSH_OPTS[@]}" "$HOST" "
 set -e -o pipefail
+$no_key_check
+[ -d '$SRC/.git' ] || { echo 'no clone at $SRC on the box — run ./deploy.sh --pull first (needs the deploy key)' >&2; exit 2; }
 $git_env
 cd '$SRC'
 git fetch --quiet origin
@@ -135,7 +148,7 @@ echo '(return to latest with: ./deploy.sh --pull)'"
            verify-cara-runtime.sh
            tg-ingest-agent.env.example tg-ingest-agent.service
            cara-worker.service cara-mentor.service
-           cara-mentor-runner.service)
+           cara-mentor-runner.service cara-failed-notify@.service)
     SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
     DIRTY=""; [ -n "$(git status --porcelain 2>/dev/null)" ] && DIRTY=" +local-changes"
     DIRTY_BOOL=false; [ -n "$DIRTY" ] && DIRTY_BOOL=true
@@ -143,22 +156,27 @@ echo '(return to latest with: ./deploy.sh --pull)'"
     remote_script="
 set -e -o pipefail
 mkdir -p '$STAGE'
+# ADR-0017: the payload is wiped before untar (dotfiles kept — apply_token.py
+# reads a staged .token.env here), so a file an OLDER payload shipped can never
+# ride into the install or the tests again.
+find '$STAGE' -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +
 tar xzf - -C '$STAGE'
 cd '$STAGE'
 sed -i 's/\r\$//' *.py *.sh tg-ingest-agent.service cara-worker.service \
-  cara-mentor.service cara-mentor-runner.service tg-ingest-agent.env.example
+  cara-mentor.service cara-mentor-runner.service cara-failed-notify@.service \
+  tg-ingest-agent.env.example
 echo '--- tests ---'
 python3 -m unittest discover -p 'test_*.py' 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | tail -60"
     if [ "$MODE" != "--test" ]; then
       remote_script+="
-# Stage-dir debris. The dir is only mkdir -p'd and untarred into, never wiped, so
-# anything an OLDER payload shipped stays there for good — and both destructive
-# one-shots reached it that way while FILES still globbed '*.sh'. Neither is in
-# the payload any more, so delete the copies by NAME (a glob could take a file
-# something still needs, and dotfiles must survive: apply_token.py reads a staged
-# .token.env from this directory). Real deploys only: --test refreshes the payload,
-# it must never delete anything.
-rm -f '$STAGE/split-cara-nikki.sh' '$STAGE/migrate-cara-to-pd.sh'
+# ADR-0017: a deploy that fails AFTER the install wrote a fresh manifest marks it
+# failed and prints it — the operator's terminal notice quotes the receipt, and
+# the agent posts the same ❌ receipt to the fleet chat on its next start. A
+# failure before the install leaves the previous verified manifest untouched
+# (mark-failed refuses anything but a fresh 'installed' one). The installer has
+# already restarted the agent by then, so it is restarted once more here: that is
+# what makes the ❌ receipt go out NOW rather than at some later restart.
+trap 'rc=\$?; echo \"--- deploy FAILED (exit \$rc) ---\"; if [ -f /opt/tg-ingest-agent/DEPLOYMENT.json ]; then python3 /opt/tg-ingest-agent/deployment_notice.py mark-failed --manifest /opt/tg-ingest-agent/DEPLOYMENT.json --error \"deploy step failed with exit \$rc\" || true; systemctl restart tg-ingest-agent.service || true; fi; exit \$rc' ERR
 echo '--- install ---'
 DEPLOY_SOURCE_REVISION='${SHA}' \
 DEPLOY_SOURCE_DIRTY='${DIRTY_BOOL}' \

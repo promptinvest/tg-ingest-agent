@@ -12,18 +12,14 @@ import time
 import store
 from common import set_current_trace
 
-# Stable stage names (see spec §28.6)
-INBOUND_PERSISTED = "inbound.persisted"
+# Stable stage names (see spec §28.6). Only the stages something EMITS are
+# named here (ADR-0019, 2026-09-08): eight constants that nothing ever wrote
+# were removed, so a reader of a trace no longer looks for stages that cannot
+# occur. Free-form stage strings ("llm.all_benched", "grounding.ranked", …) are
+# emitted directly by their call sites.
 ROUTER_COMPLETED = "router.completed"
-SKILL_STARTED = "skill.started"
-SKILL_COMPLETED = "skill.completed"
 LLM_FALLBACK = "llm.fallback"
-LLM_FAILED = "llm.failed"
-STATE_WRITE = "state.write"
-TELEGRAM_SEND = "telegram.send"
 ISSUE_LOGGED = "issue.logged"
-PROACTIVE_SUPPRESSED = "proactive.suppressed"
-FINISHED = "trace.finished"
 
 
 def new_trace_id(prefix="tr"):

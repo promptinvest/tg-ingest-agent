@@ -211,7 +211,7 @@ class GatewayTests(unittest.TestCase):
 
         fb = llm.default_profiles(cfg)["router_fast"]["fallbacks"][0]  # the default fallback slug
 
-        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None, temperature=0):
+        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None, temperature=0, **kw):
             calls.append(model)
             if model == cfg.router_model:
                 raise llm.LLMError("primary down")
@@ -288,7 +288,7 @@ class GatewayTests(unittest.TestCase):
         cfg = make_config()
         outs = iter(["not json at all", '{"ok": true}'])
 
-        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None, temperature=0):
+        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None, temperature=0, **kw):
             return next(outs)
         with mock.patch.object(llm, "chat", side_effect=fake_chat):
             out = llm.chat_profile(cfg, self.conn, "router", [], profile="router_fast")
@@ -3108,12 +3108,22 @@ class MaintenanceJobTests(unittest.TestCase):
             self.assertIn((skill, action), runtime._HANDLERS, f"no handler for {skill}/{action}")
 
     def test_enqueue_is_idempotent(self):
+        # ADR-0019 (2026-09-08): a job is queued only when there is work for it —
+        # a fresh database has none for retry_sweep/pending_expire, so only the
+        # hourly media_cleanup sits in the queue; a second call never doubles it.
         self.agent.enqueue_maintenance_jobs()
         self.agent.enqueue_maintenance_jobs()  # second call must not double-queue
+        rows = self.agent.conn.execute(
+            "SELECT action FROM jobs WHERE skill='maintenance' AND status='pending'"
+        ).fetchall()
+        self.assertEqual([r["action"] for r in rows], ["media_cleanup"])
+        store.pending_set(self.agent.conn, 1, "category", {"row_id": 1}, ttl_seconds=-10)
+        self.agent.enqueue_maintenance_jobs()
+        self.agent.enqueue_maintenance_jobs()
         n = self.agent.conn.execute(
             "SELECT COUNT(*) AS n FROM jobs WHERE skill='maintenance' AND status='pending'"
         ).fetchone()["n"]
-        self.assertEqual(n, 3)  # one per action, not six
+        self.assertEqual(n, 2)  # + pending_expire once, never twice
 
     def test_tick_isolates_failures_and_propagates_shutdown(self):
         # A scheduler tick that throws an UNEXPECTED error (e.g. sqlite3.OperationalError) must
@@ -3173,9 +3183,11 @@ class MaintenanceJobTests(unittest.TestCase):
         store.pending_set(self.agent.conn, 1, "category", {"row_id": 1}, ttl_seconds=-10)  # stale
         self.agent.enqueue_maintenance_jobs()
         runtime.drain(self.agent.conn, self.agent)
-        # every maintenance job completed durably
+        # every DUE maintenance job completed durably (media_cleanup is scheduled an
+        # hour out by ADR-0019 and stays pending until then)
         left = self.agent.conn.execute(
-            "SELECT COUNT(*) AS n FROM jobs WHERE status != 'done'").fetchone()["n"]
+            "SELECT COUNT(*) AS n FROM jobs WHERE status != 'done'"
+            " AND action != 'media_cleanup'").fetchone()["n"]
         self.assertEqual(left, 0)
         # the abandoned pending action was swept by the pending_expire job
         self.assertEqual(
@@ -4009,7 +4021,7 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         import llm
         calls = []
 
-        def fake_chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
+        def fake_chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0, **kw):
             calls.append(model)
             if len(calls) == 1:
                 raise llm.LLMError("inference request failed with HTTP 429: Platform overloaded")
@@ -4027,7 +4039,7 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         import llm
         calls = []
 
-        def fake_chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0):
+        def fake_chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0, **kw):
             calls.append(model)
             if len(calls) == 1:
                 raise llm.LLMError("inference request failed with HTTP 403: tier-locked")
@@ -5009,36 +5021,6 @@ class EventJobTests(unittest.TestCase):
         runtime._HANDLERS.update(self._saved_handlers)
         self.conn.close()
         self.tmp.cleanup()
-
-    def test_event_claim_once_and_complete(self):
-        events.add_event(self.conn, "proactive_tick")
-        first = events.claim_next(self.conn)
-        self.assertIsNotNone(first)
-        self.assertIsNone(events.claim_next(self.conn))  # not claimed twice
-        events.complete(self.conn, first["id"])
-        self.assertEqual(store.trace_get(self.conn, "x"), None)  # unrelated, sanity
-
-    def test_event_future_not_claimed(self):
-        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-        events.add_event(self.conn, "weekly_digest_due", available_at=future)
-        self.assertIsNone(events.claim_next(self.conn))
-
-    def test_event_retry_then_terminal(self):
-        eid = events.add_event(self.conn, "retry_failed_job", max_attempts=2)
-        c1 = events.claim_next(self.conn)
-        events.fail(self.conn, c1["id"])  # attempts=1 < 2 -> back to pending
-        # ...but not claimable again in the SAME pass: the retry moves
-        # available_at forward (jobs.py's lesson — one blip must not spend the
-        # whole retry budget in a second).
-        self.assertIsNone(events.claim_next(self.conn))
-        self.conn.execute("UPDATE events SET available_at = ? WHERE id = ?",
-                          (store._now(), eid))
-        c2 = events.claim_next(self.conn)
-        self.assertEqual(c2["id"], c1["id"])
-        events.fail(self.conn, c2["id"])  # attempts=2 == max -> terminal failed
-        self.assertIsNone(events.claim_next(self.conn))
-        row = self.conn.execute("SELECT status FROM events WHERE id = ?", (c1["id"],)).fetchone()
-        self.assertEqual(row["status"], "failed")
 
     def test_job_claim_complete_and_payload(self):
         jid = jobs.add_job(self.conn, "memory_curator", "run_memory_curator",
@@ -7576,7 +7558,10 @@ class ReviewFixes2026_07_10Tests(unittest.TestCase):
         self.assertEqual(len(flags), 1)
 
     def test_updates_retry_then_dead_letter_without_losing_payload(self):
-        update = {"update_id": 700, "message": {"chat": {"id": 1}, "text": "boom"}}
+        # `from` is the owner's account: since ADR-0016 the owner gate runs BEFORE
+        # the inbox, so an update with no sender is dropped, not retried.
+        update = {"update_id": 700, "message": {"chat": {"id": 1}, "from": {"id": 1},
+                                                "text": "boom"}}
         with mock.patch.object(self.agent, "handle_update", side_effect=RuntimeError("bad update")):
             self.assertIsNone(self.agent.process_update_batch([update]))
             self.assertIsNone(self.agent.process_update_batch([update]))
@@ -7587,7 +7572,8 @@ class ReviewFixes2026_07_10Tests(unittest.TestCase):
         self.assertIn("bad update", row["last_error"])
 
     def test_successful_update_is_not_dispatched_twice(self):
-        update = {"update_id": 701, "message": {"chat": {"id": 1}, "text": "ok"}}
+        update = {"update_id": 701, "message": {"chat": {"id": 1}, "from": {"id": 1},
+                                                "text": "ok"}}
         with mock.patch.object(self.agent, "handle_update") as handle:
             self.assertEqual(self.agent.process_update_batch([update]), 701)
             self.assertEqual(self.agent.process_update_batch([update]), 701)
@@ -9570,7 +9556,7 @@ class ReportAndDirectCommandAccuracy20260720Tests(unittest.TestCase):
         tid = tracing.start(self.conn, "telegram_message", 1)
 
         def fail_primary(cfg, conn, skill, messages, max_tokens=300,
-                         model=None, temperature=0):
+                         model=None, temperature=0, **kw):
             if model == cfg.router_model:
                 raise llm.LLMError("HTTP 403 primary unavailable")
             return '{"action":"spend","params":{},"confidence":0.9}'
@@ -10105,7 +10091,7 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
     @staticmethod
     def _update(update_id, text="привет"):
         return {"update_id": update_id,
-                "message": {"chat": {"id": 111}, "text": text}}
+                "message": {"chat": {"id": 111}, "from": {"id": 111}, "text": text}}
 
     @staticmethod
     def _disk_full(*_args, **_kwargs):
@@ -10622,23 +10608,28 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
         self.assertEqual(store.telegram_update_get(self.agent.conn, 950)["status"], "failed")
 
     def test_dead_letter_notice_is_not_sent_to_a_stranger(self):
-        # The owner gate lives inside handle_update, i.e. AFTER
-        # process_update_batch captured chat_id — so without an allowlist check
-        # here a stranger's update that raised before the gate got a reply in
-        # Cara's voice. Every other outbound path targets allowed_chat_ids.
+        # ADR-0016 (2026-09-08): the owner gate now runs in process_update_batch
+        # BEFORE the durable inbox, the trace and the handler — a stranger's
+        # update is never stored, never handled, can never dead-letter, and the
+        # offset still advances past it. (Before, the gate sat inside
+        # handle_update and a stranger's update that raised got a reply.)
         stranger = self._update(952)
         stranger["message"]["chat"]["id"] = 999999
         sent = []
         with mock.patch.object(self.agent, "handle_update",
-                               side_effect=RuntimeError("bad update")), \
+                               side_effect=RuntimeError("bad update")) as handled, \
                 mock.patch.object(self.agent, "reply",
                                   side_effect=lambda cid, text, *a, **k: sent.append((cid, text))):
             for _ in range(2):
                 self.agent.process_update_batch([stranger])
             self.assertEqual(self.agent.process_update_batch([stranger]), 952)
         self.assertEqual(sent, [])            # nothing leaked to the stranger
-        # ...but the update is still dead-lettered, exactly as before.
-        self.assertEqual(store.telegram_update_get(self.agent.conn, 952)["status"], "failed")
+        handled.assert_not_called()           # never reached the handler
+        self.assertIsNone(store.telegram_update_get(self.agent.conn, 952))  # never stored
+        self.assertEqual(store.kv_get(self.agent.conn, "stranger_updates"), "3")
+        rows = self.agent.conn.execute(
+            "SELECT COUNT(*) AS n FROM issues WHERE kind = 'stranger_traffic'").fetchone()
+        self.assertEqual(rows["n"], 1)        # one issue per day, not one per update
 
     def test_dead_letter_notice_failure_does_not_undo_the_dead_letter(self):
         with mock.patch.object(self.agent, "handle_update",
@@ -13498,7 +13489,7 @@ class LlmStackBudgetAvailability20260725Tests(unittest.TestCase):
         seen = []
 
         def flaky(c, conn, skill, messages, max_tokens=300, model=None, temperature=0,
-                  timeout=None):
+                  timeout=None, meta=None):
             seen.append(model)
             if len(seen) == 1:
                 raise llm.LLMError("inference response truncated/malformed: IncompleteRead(1)")
@@ -13693,7 +13684,7 @@ class LlmStackBudgetAvailability20260725Tests(unittest.TestCase):
         seen = {}
 
         def fake_chat(cfg, conn, skill, messages, max_tokens=300, model=None,
-                      temperature=0, timeout=None):
+                      temperature=0, timeout=None, meta=None):
             seen["timeout"] = timeout
             return "pong"
 
@@ -17132,12 +17123,14 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         self.assertNotIn("split-cara-nikki.sh", payload)
         self.assertNotIn("*.sh", payload, "a glob ships whatever one-shot is at the root")
         deploy = self.shipped("deploy.sh")
-        self.assertIn("rm -f '$STAGE/split-cara-nikki.sh' '$STAGE/migrate-cara-to-pd.sh'",
+        # ADR-0017 (2026-09-08): the by-name deletion of the two old one-shots was
+        # replaced by wiping the WHOLE stage payload before every untar (dotfiles
+        # kept), so nothing an older payload shipped can ride along — in --test too,
+        # which only ever refreshes the payload it is about to test.
+        self.assertIn("find '$STAGE' -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +",
                       deploy)
-        # …and that cleanup must live in the install-only branch: --test may not
-        # change anything on the box.
-        self.assertNotIn("rm -f '$STAGE/split-cara-nikki.sh'",
-                         deploy.split('if [ "$MODE" != "--test" ]; then', 1)[0])
+        self.assertLess(deploy.index("-exec rm -rf {} +"), deploy.index("tar xzf - -C '$STAGE'"))
+        self.assertNotIn("rm -f '$STAGE/split-cara-nikki.sh'", deploy)
         if not (self.REPO / ".git").exists():
             self.skipTest("stage dir: archive/ is not part of the deploy payload")
         self.assertFalse((self.REPO / "split-cara-nikki.sh").exists(),
@@ -17200,7 +17193,7 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
                                  "verify-cara-runtime.sh",
                                  "tg-ingest-agent.env.example", "tg-ingest-agent.service",
                                  "cara-worker.service", "cara-mentor.service",
-                                 "cara-mentor-runner.service"])
+                                 "cara-mentor-runner.service", "cara-failed-notify@.service"])
         # NAMED, not `*.sh`. WP10 archived one armed one-shot out of the repo root
         # precisely because a glob would tar it onto the live box; migrate-cara-to-pd.sh
         # stops the service, copies DBs and overwrites /etc/tg-ingest-agent.env, and
@@ -17209,7 +17202,8 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
         # CRLF from the Windows checkout would break both of those on the box.
         self.assertIn("sed -i 's/\\r\\$//' *.py *.sh tg-ingest-agent.service "
                       "cara-worker.service \\\n  cara-mentor.service "
-                      "cara-mentor-runner.service tg-ingest-agent.env.example", deploy)
+                      "cara-mentor-runner.service cara-failed-notify@.service \\\n"
+                      "  tg-ingest-agent.env.example", deploy)
 
     # --- T11.3 / T11.4 (review WP11) — two doc facts that keep rotting ------
     # The specs are not in deploy.sh's FILES, so these skip on the box and really
@@ -18584,88 +18578,7 @@ class PerfAndSmallCorrectness20260726Tests(unittest.TestCase):
         self.assertIn("502 Bad Gateway",
                       _fail_with(b"<html><body>502 Bad Gateway</body></html>"))
 
-    # -- T13.6 events.py parity with jobs.py -----------------------------------
-
-    def test_events_reclaim_stale_mirrors_jobs(self):
-        events.add_event(self.conn, "proactive_tick", max_attempts=2)
-        crashed = events.claim_next(self.conn)
-        self.assertIsNone(events.claim_next(self.conn))      # wedged: nobody owns it
-        self.assertEqual(events.reclaim_stale(self.conn), (1, 0))
-        again = events.claim_next(self.conn)
-        self.assertEqual(again["id"], crashed["id"])
-        self.assertEqual(events.reclaim_stale(self.conn), (0, 1))   # budget spent
-        row = self.conn.execute("SELECT status, error FROM events WHERE id = ?",
-                                (crashed["id"],)).fetchone()
-        self.assertEqual(row["status"], "failed")
-        self.assertIn("reclaimed", row["error"])
-        self.assertEqual(events.reclaim_stale(self.conn), (0, 0))   # idempotent
-
-    def _reclaimable_now(self, event_id):
-        """Undo the retry backoff so the next claim happens in this test."""
-        self.conn.execute("UPDATE events SET available_at = ? WHERE id = ?",
-                          (store._now(), event_id))
-        self.conn.commit()
-
-    def test_events_fail_records_the_reason(self):
-        eid = events.add_event(self.conn, "retry_failed_job", max_attempts=2)
-        events.claim_next(self.conn)
-        self.assertFalse(events.fail(self.conn, eid, "ConnectionResetError()"))
-        row = self.conn.execute("SELECT status, error FROM events WHERE id = ?",
-                                (eid,)).fetchone()
-        self.assertEqual(row["status"], "pending")
-        self.assertIn("ConnectionResetError", row["error"])
-        self._reclaimable_now(eid)
-        events.claim_next(self.conn)
-        self.assertTrue(events.fail(self.conn, eid, "boom, terminally"))
-        row = self.conn.execute("SELECT status, error, finished_at FROM events"
-                                " WHERE id = ?", (eid,)).fetchone()
-        self.assertEqual(row["status"], "failed")
-        self.assertIn("terminally", row["error"])
-        self.assertIsNotNone(row["finished_at"])
-
-    def test_an_event_retry_waits_instead_of_burning_both_attempts_at_once(self):
-        """jobs.py's most expensive lesson, mirrored: without moving
-        `available_at` the retry is claimable again in the SAME drain pass, so
-        one network blip spends the whole retry budget in a second. Landing the
-        twin without this would be a parity fix that skipped the costly half."""
-        eid = events.add_event(self.conn, "retry_failed_job", max_attempts=2)
-        events.claim_next(self.conn)
-        self.assertFalse(events.fail(self.conn, eid, "network blip"))
-        row = self.conn.execute("SELECT status, available_at FROM events WHERE id = ?",
-                                (eid,)).fetchone()
-        self.assertEqual(row["status"], "pending")
-        self.assertGreater(row["available_at"], datetime.now(timezone.utc).isoformat())
-        self.assertIsNone(events.claim_next(self.conn))     # not in this pass
-        self._reclaimable_now(eid)
-        self.assertEqual(events.claim_next(self.conn)["id"], eid)
-        self.assertEqual(events.RETRY_DELAY_SECONDS, jobs.RETRY_DELAY_SECONDS)
-
-    def test_a_reasonless_event_failure_keeps_the_first_reason(self):
-        """`error = COALESCE(?, error)`: a later failure that carries no reason
-        must PRESERVE the one already recorded, not blank it. That branch is
-        why `error` stays optional here while jobs.fail requires it."""
-        eid = events.add_event(self.conn, "retry_failed_job", max_attempts=3)
-        events.claim_next(self.conn)
-        events.fail(self.conn, eid, "ConnectionResetError('reset by peer')")
-        self._reclaimable_now(eid)
-        events.claim_next(self.conn)
-        events.fail(self.conn, eid)                         # no reason this time
-        row = self.conn.execute("SELECT status, error FROM events WHERE id = ?",
-                                (eid,)).fetchone()
-        self.assertEqual(row["status"], "pending")
-        self.assertIn("reset by peer", row["error"])
-
-    def test_a_claimed_event_row_describes_the_claim(self):
-        """The dict came from the SELECT that PRECEDED the claiming UPDATE, so
-        it reported 'pending' and the pre-increment attempt count."""
-        events.add_event(self.conn, "proactive_tick", max_attempts=3)
-        claimed = events.claim_next(self.conn)
-        self.assertEqual(claimed["status"], "claimed")
-        self.assertEqual(claimed["attempts"], 1)
-        self.assertIsNotNone(claimed["claimed_at"])
-        stored = self.conn.execute("SELECT status, attempts FROM events WHERE id = ?",
-                                   (claimed["id"],)).fetchone()
-        self.assertEqual((stored["status"], stored["attempts"]), ("claimed", 1))
+    # -- T13.6 jobs.py claim dict (the events twin was retired, ADR-0019) --
 
     def test_a_claimed_job_row_describes_the_claim_too(self):
         """Parity runs BOTH ways. The same off-by-one dict lived in the LIVE
@@ -18680,17 +18593,6 @@ class PerfAndSmallCorrectness20260726Tests(unittest.TestCase):
         stored = self.conn.execute("SELECT status, attempts FROM jobs WHERE id = ?",
                                    (claimed["id"],)).fetchone()
         self.assertEqual((stored["status"], stored["attempts"]), ("claimed", 1))
-
-    def test_startup_reclaims_stale_events(self):
-        events.add_event(self.conn, "proactive_tick", max_attempts=2)
-        events.claim_next(self.conn)                        # "crash" mid-run
-        self.conn.close()
-        agent = self.mod.Agent(self.cfg)                    # restart
-        try:
-            row = agent.conn.execute("SELECT status FROM events LIMIT 1").fetchone()
-            self.assertEqual(row["status"], "pending")
-        finally:
-            self.conn = agent.conn                          # tearDown closes it
 
     # -- T13.7 the Space is on the live message path ---------------------------
 
@@ -26506,6 +26408,9 @@ class PhaseA20260907Tests(unittest.TestCase):
         cfg.model_health_confirm = 1
         cfg.do_model = "deepseek-4-flash"
         cfg.vision_model = ""
+        # ADR-0014 widened the default router chain (deepseek-v4-pro joined it); this
+        # test is about CHAIN semantics, so pin a two-model chain explicitly.
+        cfg.llm_profiles_json = '{"router_fast": {"fallbacks": ["openai-gpt-oss-20b"]}}'
 
         def run(down):
             self.agent.last_model_health = 0
@@ -27060,3 +26965,555 @@ class CompoundCommands20260907Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhaseC20260908Tests(unittest.TestCase):
+    """Phase C of the 2026-09-07 review (ADR-0014 failover contract, ADR-0015
+    visible startup/poll failures, ADR-0016 owner gate before persistence +
+    sandbox parity, ADR-0017 recoverable deploys, ADR-0019 telemetry only when
+    there is something to say). Every artifact assertion reads a SHIPPED file."""
+
+    REPO = Path(__file__).resolve().parent
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "c.db"),
+                               MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(self.cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        common.set_current_trace(None)
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def shipped(self, name):
+        path = self.REPO / name
+        self.assertTrue(path.is_file(), f"{name} must ship to the stage dir")
+        return path.read_text(encoding="utf-8")
+
+    # -- ADR-0016: the owner gate runs before anything is written ---------------
+
+    def test_strangers_are_dropped_before_the_inbox_for_every_update_kind(self):
+        updates = [
+            {"update_id": 9001, "message": {"message_id": 1, "chat": {"id": 555},
+                                            "from": {"id": 555}, "text": "hi"}},
+            {"update_id": 9002, "callback_query": {"id": "cb", "from": {"id": 555},
+                                                   "message": {"chat": {"id": 1}},
+                                                   "data": "pg|1"}},
+            {"update_id": 9003, "message_reaction": {"chat": {"id": 1}, "user": {"id": 555},
+                                                     "new_reaction": [{"type": "emoji",
+                                                                       "emoji": "👍"}]}},
+            {"update_id": 9004, "edited_message": {"message_id": 2, "chat": {"id": 1},
+                                                   "from": {"id": 555}, "text": "x"}},
+            {"update_id": 9005, "message": {"message_id": 3, "chat": {"id": 1},
+                                            "from": {"id": 1}, "text": "own"}},
+        ]
+        with mock.patch.object(self.agent, "handle_update", return_value=None) as handled:
+            self.assertEqual(self.agent.process_update_batch(updates), 9005)
+        self.assertEqual(handled.call_count, 1)                       # only the owner's
+        self.assertEqual(handled.call_args[0][0]["update_id"], 9005)
+        for uid in (9001, 9002, 9003, 9004):
+            self.assertIsNone(store.telegram_update_get(self.conn, uid))  # never persisted
+        self.assertIsNotNone(store.telegram_update_get(self.conn, 9005))
+        self.assertEqual(store.kv_get(self.conn, "stranger_updates"), "4")
+        n = self.conn.execute("SELECT COUNT(*) AS n FROM issues WHERE kind = 'stranger_traffic'"
+                              ).fetchone()["n"]
+        self.assertEqual(n, 1)
+        self.assertIsNone(store.latest_trace(self.conn, 555, "inbound"))  # no trace either
+
+    def test_sender_id_is_taken_from_the_right_field_per_update_kind(self):
+        sid = self.mod.Agent._update_sender_id
+        self.assertEqual(sid({"message": {"from": {"id": 7}}}), 7)
+        self.assertEqual(sid({"edited_message": {"from": {"id": 8}}}), 8)
+        self.assertEqual(sid({"callback_query": {"from": {"id": 9},
+                                                 "message": {"from": {"id": 100}}}}), 9)
+        self.assertEqual(sid({"message_reaction": {"user": {"id": 10}}}), 10)
+        self.assertIsNone(sid({"message": {}}))
+
+    # -- ADR-0016: sandbox parity, fences, credentials, URLs ---------------------
+
+    def test_fence_look_alikes_are_neutralized_for_every_model_family(self):
+        for family, tags in llm.CHAT_TEMPLATE_DELIMITERS.items():
+            for tag in tags:
+                out = common.neutralize_fences(f"заметка {tag} продолжение")
+                self.assertNotIn(tag, out, f"{family}: {tag!r} survived")
+        # bar look-alikes: fullwidth, divides, latin bar, broken bar
+        for bar in ("|", "｜", "∣", "ǀ", "¦"):
+            self.assertNotIn(bar, common.neutralize_fences(f"a <{bar}im_start{bar}> b"))
+        self.assertNotIn("<start_of_turn>", common.neutralize_fences("x <start_of_turn> y"))
+
+    def test_credential_opener_refuses_redirects_and_environment_proxies(self):
+        from urllib.error import HTTPError
+        from urllib.request import HTTPRedirectHandler, ProxyHandler, Request
+        from urllib.request import build_opener
+        with mock.patch.dict(os.environ, {"HTTPS_PROXY": "http://proxy.example:3128",
+                                          "https_proxy": "http://proxy.example:3128"}):
+            opener = common.credential_opener()
+            # sanity: the DEFAULT opener would have picked the environment proxy up
+            self.assertTrue(any(getattr(h, "proxies", None) for h in build_opener().handlers))
+        redirect = [h for h in opener.handlers if isinstance(h, HTTPRedirectHandler)]
+        self.assertEqual(len(redirect), 1)
+        self.assertFalse(any(getattr(h, "proxies", None) for h in opener.handlers))
+        self.assertFalse(any(isinstance(h, ProxyHandler) and h.proxies for h in opener.handlers))
+        req = Request("https://api.example/v1", headers={"Authorization": "Bearer x"})
+        with self.assertRaises(HTTPError):
+            redirect[0].redirect_request(req, None, 302, "Found", {},
+                                         "https://evil.example/")
+        # every request llm.py makes leaves through it: the module's own `urlopen`
+        # is a wrapper over the credential opener (patchable by the suite), and the
+        # stdlib one is not imported at all
+        src = self.shipped("llm.py")
+        self.assertNotIn("from urllib.request import Request, urlopen", src)
+        self.assertIn("def urlopen(request, timeout=None):", src)
+        self.assertIn("return common.credential_open(request, timeout=timeout)", src)
+        self.assertIs(llm.urlopen.__module__, llm.__name__)
+
+    def test_validate_url_error_contract_is_total(self):
+        with self.assertRaises(fetch.FetchError) as caught:
+            fetch.validate_url("https://example.com:notaport/x")
+        self.assertEqual(caught.exception.reason, "fetch_blocked")
+
+    def test_urls_are_redacted_in_issues_and_logs(self):
+        self.assertEqual(common.redact_url("https://a.example/p/q?token=SECRET#f"),
+                         "https://a.example/…")
+        self.assertEqual(common.redact_url("garbage"), "<url>")
+        src = self.shipped("hermes.py")
+        self.assertIn('issue_add(self.conn, chat_id, "fetch_failed", f"{safe_url}: {exc}")', src)
+
+    def test_main_unit_has_the_siblings_sandbox_and_the_failure_hooks(self):
+        unit = self.shipped("tg-ingest-agent.service")
+        for directive in ("StartLimitIntervalSec=600", "StartLimitBurst=5",
+                          "OnFailure=cara-failed-notify@%N.service", "MemoryHigh=768M",
+                          "MemoryMax=1G", "TasksMax=64", "ProtectKernelLogs=yes",
+                          "ProtectClock=yes", "ProtectHostname=yes", "ProtectProc=invisible",
+                          "RestrictRealtime=yes", "RemoveIPC=yes"):
+            self.assertIn(directive, unit, directive)
+        self.assertNotIn("\nProcSubset=", unit)   # sysinfo reads /proc (comment only)
+        hook = self.shipped("cara-failed-notify@.service")
+        self.assertIn("Type=oneshot", hook)
+        self.assertIn("deployment_notice.py unit-failed --unit %i --env /etc/tg-ingest-agent.env",
+                      hook)
+        installer = self.shipped("install-tg-ingest-agent-pilot-remote.sh")
+        self.assertIn("FAILED_NOTIFY_UNIT_SRC=cara-failed-notify@.service", installer)
+        self.assertIn('/etc/systemd/system/$FAILED_NOTIFY_UNIT_SRC', installer)
+        # ...and the Mentor's immutable source snapshot carries it, or the runner's
+        # candidate suite (which runs THIS test) fails on a missing artifact.
+        self.assertIn('"$STAGE_DIR/cara-failed-notify@.service"; do', installer)
+        self.assertIn("cara-failed-notify@.service", self.shipped("deploy.sh"))
+
+    # -- ADR-0015: --check-config, poll stall, log priorities --------------------
+
+    def test_check_config_reads_the_env_like_systemd_and_rejects_bad_values(self):
+        env = Path(self.tmp.name) / "agent.env"
+        env.write_text("# comment\nTELEGRAM_BOT_TOKEN='123:abc'\nexport ALLOWED_CHAT_IDS=\"1\"\n"
+                       "DO_MODEL_ACCESS_KEY=k\nDB_PATH=" + str(Path(self.tmp.name) / "x.db")
+                       + "\nMEDIA_DIR=" + str(Path(self.tmp.name) / "mm") + "\n",
+                       encoding="utf-8")
+        parsed = common.read_env_file(env)
+        self.assertEqual(parsed["TELEGRAM_BOT_TOKEN"], "123:abc")   # one quote pair stripped
+        self.assertEqual(parsed["ALLOWED_CHAT_IDS"], "1")            # 'export ' accepted
+        ok, message = common.check_config(env)
+        self.assertTrue(ok, message)
+        self.assertTrue(message.startswith("config ok:"))
+        self.assertNotIn("123:abc", message)                         # never the token
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.mod.main(["--check-config", str(env)]), 0)
+        self.assertIn("config ok", out.getvalue())
+        env.write_text("TELEGRAM_BOT_TOKEN=123:abc\nALLOWED_CHAT_IDS=1\nDO_MODEL_ACCESS_KEY=k\n"
+                       "STT_MODE=bogus\n", encoding="utf-8")
+        ok, message = common.check_config(env)
+        self.assertFalse(ok)
+        self.assertIn("config check failed", message)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.mod.main(["--check-config", str(env)]), 2)
+        self.assertEqual(self.mod.main(["--check-config", str(env / "missing")]), 2)
+        installer = self.shipped("install-tg-ingest-agent-pilot-remote.sh")
+        self.assertIn('python3 "$STAGE_DIR/tg_ingest_agent.py" --check-config "$ENV_FILE"',
+                      installer)
+        # ...and it runs BEFORE the first mutation (the backup dir is the first write)
+        self.assertLess(installer.index("--check-config"), installer.index('mkdir -p "$BACKUP_DIR"'))
+
+    def test_poll_stall_alerts_once_after_ten_minutes_and_reports_recovery(self):
+        sent = []
+        with mock.patch.object(self.mod, "tg_call",
+                               side_effect=lambda tok, m, p, **k: sent.append((m, p))):
+            t0 = 1_000_000.0
+            self.agent._poll_trouble(t0, "URLError(timed out)")
+            self.agent._poll_trouble(t0 + 300, "URLError(timed out)")
+            self.assertEqual(sent, [])                                  # under the window
+            self.agent._poll_trouble(t0 + 601, "URLError(timed out)")
+            self.assertEqual(len(sent), 1)
+            self.assertIn("10 мин", sent[0][1]["text"])
+            self.assertEqual(sent[0][1]["chat_id"], 1)
+            self.agent._poll_trouble(t0 + 900, "URLError(timed out)")
+            self.assertEqual(len(sent), 1)                              # once per stall
+            n = self.conn.execute("SELECT COUNT(*) AS n FROM issues WHERE kind = 'poll_stalled'"
+                                  ).fetchone()["n"]
+            self.assertEqual(n, 1)
+            self.agent._poll_recovered()
+            self.assertEqual(len(sent), 2)
+            self.assertEqual(sent[1][1]["text"], texts.T("ru", "poll_back"))
+            self.agent._poll_recovered()                                # idempotent
+            self.assertEqual(len(sent), 2)
+            # a 409 conflict never clears itself: told at once
+            self.agent._poll_trouble(t0 + 2000, "conflict", immediate=True)
+            self.assertEqual(len(sent), 3)
+            self.assertIn("conflict", sent[2][1]["text"])
+
+    def test_terminal_failures_carry_journald_priorities(self):
+        import io
+        import contextlib
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+            common.log_err("boom")
+            common.log_warn("meh")
+            common.log("plain")
+        lines = err.getvalue().splitlines()
+        self.assertTrue(any(line.startswith("<3>") and "boom" in line for line in lines), lines)
+        self.assertTrue(any(line.startswith("<4>") and "meh" in line for line in lines), lines)
+        self.assertTrue(any("plain" in line and not line.startswith("<") for line in lines))
+        src = self.shipped("tg_ingest_agent.py")
+        self.assertIn('level="err" if terminal else "warning"', src)      # dead letter
+        self.assertIn('log_err(f"database still unusable', src)           # db stall
+        self.assertIn('log_err(f"model health: chain {p} dead', src)      # chain dead
+        self.assertIn('level="err" if terminal else "warning"', self.shipped("runtime.py"))
+
+    # -- ADR-0019: telemetry only when there is something to say -----------------
+
+    def test_maintenance_jobs_are_queued_only_when_there_is_work(self):
+        self.agent.enqueue_maintenance_jobs()
+        self.assertFalse(jobs.has_pending(self.conn, "maintenance", "retry_sweep"))
+        self.assertFalse(jobs.has_pending(self.conn, "maintenance", "pending_expire"))
+        self.assertTrue(jobs.has_pending(self.conn, "maintenance", "media_cleanup"))
+        row = self.conn.execute("SELECT available_at FROM jobs WHERE action = 'media_cleanup'"
+                                ).fetchone()
+        self.assertGreater(row["available_at"], datetime.now(timezone.utc).isoformat())
+        self.assertIsNone(jobs.claim_next(self.conn))                    # not due for an hour
+        self.conn.execute(
+            "INSERT INTO messages (chat_id, tg_message_id, received_at, raw_text, status,"
+            " llm_attempts) VALUES (1, 77, ?, 'pending note', 'pending', 0)",
+            (datetime.now(timezone.utc).isoformat(),))
+        self.conn.commit()
+        self.agent.enqueue_maintenance_jobs()
+        self.assertTrue(jobs.has_pending(self.conn, "maintenance", "retry_sweep"))
+        self.assertFalse(jobs.has_pending(self.conn, "maintenance", "pending_expire"))
+        store.pending_set(self.conn, 1, "category", {"x": 1}, ttl_seconds=-5)
+        self.assertTrue(store.pending_expired_exists(self.conn))
+        self.agent.enqueue_maintenance_jobs()
+        self.assertTrue(jobs.has_pending(self.conn, "maintenance", "pending_expire"))
+        # only one of each, ever
+        self.agent.enqueue_maintenance_jobs()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()["n"], 3)
+
+    def test_the_stage_c_event_queue_is_gone_and_record_done_stays(self):
+        for name in ("claim_next", "complete", "fail", "reclaim_stale", "RETRY_DELAY_SECONDS"):
+            self.assertFalse(hasattr(events, name), name)
+        self.assertTrue(callable(events.add_event))
+        self.assertTrue(callable(events.record_done))
+        self.assertNotIn("events.reclaim_stale", self.shipped("tg_ingest_agent.py"))
+        for gone in ("INBOUND_PERSISTED", "SKILL_STARTED", "STATE_WRITE", "TELEGRAM_SEND",
+                     "PROACTIVE_SUPPRESSED", "FINISHED"):
+            self.assertFalse(hasattr(tracing, gone), gone)
+
+    def _routing_records(self, chat_id=1):
+        row = store.latest_trace(self.conn, chat_id, "inbound")
+        self.assertIsNotNone(row)
+        return [(ev["message"], json.loads(ev["data"] or "{}"))
+                for ev in store.trace_events(self.conn, row["trace_id"])
+                if ev["stage"] == tracing.ROUTER_COMPLETED]
+
+    def test_router_completed_carries_params_raw_and_the_rejection_reason(self):
+        decision = {"action": "reminder_list", "params": {"scope": "x" * 200, "n": 3},
+                    "confidence": 0.9, "raw": '{"action": "reminder_list"}',
+                    "invalid": None, "demoted_from": None}
+        tid = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(router, "route", return_value=decision), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 5, "text": "покажи напоминания"},
+                                "покажи напоминания")
+        tracing.finish(self.conn, tid, "ok")
+        records = self._routing_records()
+        self.assertEqual(len(records), 1)
+        data = records[0][1]
+        self.assertEqual(data["source"], "router")
+        self.assertEqual(data["action"], "reminder_list")
+        self.assertEqual(data["raw"], '{"action": "reminder_list"}')
+        self.assertEqual(len(data["params"]["scope"]), 80)             # clipped
+        self.assertEqual(data["params"]["n"], 3)
+        self.assertIn("invalid", data)
+        # the router's own decision dict carries `raw` on the invalid path too
+        with mock.patch.object(llm, "chat_profile", return_value="not json at all"):
+            d = router.route(self.cfg, self.conn, 1, "хм", None)
+        self.assertEqual(d["raw"], "not json at all")
+        self.assertTrue(d.get("invalid"))
+
+    def test_a_correction_right_after_a_state_write_route_is_an_issue(self):
+        self.agent._remember_state_write_route("reminder_create", "state_write")
+        self.agent._note_route_correction(1, "ты ошиблась, не надо было")
+        rows = self.conn.execute("SELECT detail FROM issues WHERE kind = 'route_corrected'"
+                                 ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertIn("after reminder_create", rows[0]["detail"])
+        self.assertFalse(store.kv_get(self.conn, "last_state_write_route"))  # consumed
+        self.agent._note_route_correction(1, "ты ошиблась")                 # no route -> nothing
+        # a read-only route never arms it; a stale marker never fires
+        self.agent._remember_state_write_route("ask", "read_only")
+        self.assertFalse(store.kv_get(self.conn, "last_state_write_route"))
+        stale = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+        store.kv_set(self.conn, "last_state_write_route",
+                     json.dumps({"action": "ingest", "at": stale}))
+        self.agent._note_route_correction(1, "почему ты так сделала")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) AS n FROM issues WHERE kind = 'route_corrected'").fetchone()["n"], 1)
+        # and an ordinary message is never a correction
+        self.agent._remember_state_write_route("ingest", "state_write")
+        self.agent._note_route_correction(1, "спасибо, отлично")
+        self.assertTrue(store.kv_get(self.conn, "last_state_write_route"))
+
+    def test_deterministic_resolvers_and_callbacks_leave_a_routing_record(self):
+        store.pending_set(self.conn, 1, "purge", {"phrase": "УДАЛИТЬ ВСЁ"})
+        tid = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(self.agent, "resolve_purge") as purge, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 6, "text": "нет"}, "нет")
+        tracing.finish(self.conn, tid, "ok")
+        purge.assert_called_once()
+        self.assertEqual(self._routing_records()[0][1]["source"], "pending_purge_phrase")
+        tid = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(self.agent, "handle_page_callback") as page:
+            self.agent.handle_callback({"id": "c1", "from": {"id": 1},
+                                        "message": {"chat": {"id": 1}, "message_id": 9},
+                                        "data": "pg|1|2"})
+        tracing.finish(self.conn, tid, "ok")
+        page.assert_called_once()
+        message, data = self._routing_records()[0]
+        self.assertEqual((data["source"], data["button"]), ("callback", "pg"))
+        # smalltalk shortcut too (the mocked purge left its card: clear it)
+        store.pending_clear(self.conn, 1)
+        tid = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(self.agent, "do_converse") as conv, \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 7, "text": "привет!"}, "привет!")
+        tracing.finish(self.conn, tid, "ok")
+        conv.assert_called_once()
+        self.assertTrue(self._routing_records()[0][1]["source"].startswith("smalltalk_"))
+
+    def test_flush_albums_runs_each_album_under_an_inbound_trace(self):
+        self.agent.albums = {"g1": {"parts": [{"message_id": 1, "chat": {"id": 1}}],
+                                    "deadline": 0, "update_ids": [], "store": True}}
+        with mock.patch.object(self.agent, "finalize") as fin:
+            self.agent.flush_albums(time.time() + 10)
+        fin.assert_called_once()
+        row = store.latest_trace(self.conn, 1, "inbound")
+        self.assertIsNotNone(row)
+        self.assertTrue(row["trace_id"].startswith("album_"))
+        self.assertEqual(row["status"], "ok")
+        self.assertIsNone(common.current_trace())                        # released
+        self.agent.albums = {"g2": {"parts": [{"message_id": 2, "chat": {"id": 1}}],
+                                    "deadline": 0, "update_ids": [], "store": True}}
+        with mock.patch.object(self.agent, "finalize", side_effect=RuntimeError("x")), \
+                mock.patch.object(self.agent, "reply"):
+            self.agent.flush_albums(time.time() + 10)
+        row = store.latest_trace(self.conn, 1, "inbound")
+        self.assertEqual(row["status"], "failed")
+
+    def test_weekly_markdown_has_a_routing_block(self):
+        tid = tracing.start(self.conn, "inbound", 1)
+        tracing.event(self.conn, tid, tracing.ROUTER_COMPLETED, "action=ask", skill="ask",
+                      data={"action": "ask", "source": "router"})
+        tracing.finish(self.conn, tid, "ok")
+        tid = tracing.start(self.conn, "inbound", 1)
+        tracing.event(self.conn, tid, tracing.ROUTER_COMPLETED, "action=purge source=x",
+                      skill="purge", data={"action": "purge", "source": "pending_purge_phrase"})
+        tracing.finish(self.conn, tid, "ok")
+        store.issue_add(self.conn, 1, "route_corrected", "after ingest (12 s): не надо")
+        store.issue_add(self.conn, 1, "router_invalid_output", "non_json")
+        md = review.markdown(self.conn, self.cfg)
+        self.assertIn("## Routing", md)
+        self.assertIn("ask 1", md)
+        self.assertIn("purge 1", md)
+        self.assertIn("deterministic (pre-router) resolutions: 1", md)
+        self.assertIn("model-routed: 1", md)
+        self.assertIn("unusable router output: 1", md)
+        self.assertIn("corrections within 10 min of a state-write route: 1", md)
+
+    # -- ADR-0014: the failover contract --------------------------------------
+
+    def test_router_fallback_can_answer_json_and_every_profile_has_a_timeout(self):
+        profs = llm.default_profiles(self.cfg)
+        self.assertEqual(profs["router_fast"]["fallbacks"][0], "deepseek-v4-pro")
+        self.assertEqual(profs["router_fast"]["max_tokens"], 400)
+        expected = {"router_fast": 30, "ingest_balanced": 45, "memory_curator": 60,
+                    "memory_consolidate": 60, "converse_warm": 60, "ask_grounded": 60,
+                    "task_planner": 90, "task_synthesis": 90, "improvement_evaluator": 90}
+        for name, seconds in expected.items():
+            self.assertEqual(profs[name]["timeout"], seconds, name)
+        for slug in profs["router_fast"]["fallbacks"]:
+            self.assertIn(slug, llm.DEFAULT_PRICING)
+
+    def test_chat_profile_passes_the_profile_timeout_and_retries_a_length_cut_once(self):
+        calls = []
+
+        def fake_chat(c, conn, skill, messages, max_tokens=300, model=None, temperature=0,
+                      timeout=None, meta=None):
+            calls.append((model, max_tokens, timeout))
+            if len(calls) == 1:
+                meta["finish_reason"] = "length"
+                return '{"action": "spend", "par'          # cut mid-JSON
+            meta["finish_reason"] = "stop"
+            return '{"action": "spend", "params": {}, "confidence": 0.9}'
+        with mock.patch.object(llm, "chat", side_effect=fake_chat):
+            out = llm.chat_profile(self.cfg, self.conn, "router", [], profile="router_fast")
+        self.assertIn("spend", out)
+        self.assertEqual([m for m, _, _ in calls], [self.cfg.router_model] * 2)  # SAME model
+        self.assertEqual([mt for _, mt, _ in calls], [400, 800])                 # doubled cap
+        self.assertEqual({t for _, _, t in calls}, {30.0})                       # profile timeout
+        self.assertFalse(store.cooldown_active(self.conn, "router_fast", self.cfg.router_model))
+
+    def test_all_benched_means_one_model_one_attempt(self):
+        profs = llm.profiles(self.cfg)["router_fast"]
+        for m in [profs["primary"]] + list(profs["fallbacks"]):
+            store.cooldown_set(self.conn, "router_fast", m, 600, "test")
+        calls = []
+
+        def fake_chat(c, conn, skill, messages, **kw):
+            calls.append(kw.get("model"))
+            raise llm.LLMError("HTTP 503 overloaded")
+        tid = tracing.start(self.conn, "inbound", 1)
+        with mock.patch.object(llm, "chat", side_effect=fake_chat), \
+                mock.patch.object(time, "sleep"):
+            with self.assertRaises(llm.LLMError):
+                llm.chat_profile(self.cfg, self.conn, "router", [], profile="router_fast")
+        tracing.finish(self.conn, tid, "failed")
+        self.assertEqual(calls, [profs["primary"]])                      # not 2 × 3 attempts
+        stages = [ev["stage"] for ev in store.trace_events(self.conn, tid)]
+        self.assertIn("llm.all_benched", stages)
+
+    def test_health_probes_fallbacks_on_the_first_fourth_and_troubled_sweeps(self):
+        self.agent.cfg.model_health_interval = 1
+        self.agent.cfg.do_model = "deepseek-4-flash"
+        self.agent.cfg.vision_model = ""
+        self.agent.cfg.model_health_confirm = 2
+        primaries = {"deepseek-4-flash", (llm.profiles(self.cfg)["converse_warm"]["primary"])}
+        fallbacks = set()
+        for p in primaries:
+            fallbacks |= set(self.mod.Agent._fallbacks_for(p, llm.profiles(self.cfg)))
+        self.assertTrue(fallbacks)
+
+        def sweep(fail=()):
+            probed = []
+
+            def ok(cfg, conn, model, timeout=None):
+                probed.append(model)
+                return (model not in fail, "503" if model in fail else "")
+            self.agent.last_model_health = 0
+            with mock.patch.object(llm, "model_ok", side_effect=ok), \
+                    mock.patch.object(self.agent, "reply"), \
+                    mock.patch.object(self.agent, "_notify_fleet"):
+                self.agent.check_model_health()
+            return set(probed)
+        self.assertTrue(fallbacks <= sweep())                            # sweep 1: everything
+        self.assertFalse(fallbacks & sweep())                            # 2: primaries only
+        self.assertFalse(fallbacks & sweep())                            # 3
+        self.assertTrue(fallbacks <= sweep())                            # 4: everything again
+        self.assertFalse(fallbacks & sweep(fail={"deepseek-4-flash"}))   # 5: primary fails…
+        self.assertTrue(fallbacks <= sweep(fail={"deepseek-4-flash"}))   # 6: …so fallbacks now
+
+    def test_fleet_notice_names_a_down_fallback_as_one(self):
+        self.agent.cfg.model_health_interval = 1
+        self.agent.cfg.do_model = "deepseek-4-flash"
+        self.agent.cfg.vision_model = ""
+        self.agent.cfg.model_health_confirm = 1
+        fb = self.mod.Agent._fallbacks_for("deepseek-4-flash", llm.profiles(self.cfg))[0]
+        notices = []
+        for _ in range(2):
+            self.agent.last_model_health = 0
+            store.kv_set(self.conn, "mh_sweeps", "3")                    # next sweep probes all
+            with mock.patch.object(llm, "model_ok",
+                                   side_effect=lambda c, k, m, timeout=None:
+                                   (m != fb, "503" if m == fb else "")), \
+                    mock.patch.object(self.agent, "reply"), \
+                    mock.patch.object(self.agent, "_notify_fleet",
+                                      side_effect=lambda t: notices.append(t)):
+                self.agent.check_model_health()
+        self.assertTrue(any(f"{fb} (fallback)" in n for n in notices), notices)
+
+    # -- ADR-0017: recoverable, honest deploys ----------------------------------
+
+    def test_deploy_scripts_wipe_the_stage_snapshot_the_db_and_explain_rollback(self):
+        deploy = self.shipped("deploy.sh")
+        self.assertIn("find '$STAGE' -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +",
+                      deploy)
+        self.assertLess(deploy.index("-exec rm -rf {} +"), deploy.index("tar xzf - -C '$STAGE'"))
+        self.assertIn("mark-failed --manifest /opt/tg-ingest-agent/DEPLOYMENT.json", deploy)
+        self.assertIn("trap 'rc=\\$?", deploy)
+        self.assertIn("git checkout <sha> && bash deploy.sh", deploy)
+        self.assertIn("exit 2", deploy)
+        self.assertNotIn("rm -f '$STAGE/split-cara-nikki.sh'", deploy)  # the wipe replaces it
+        installer = self.shipped("install-tg-ingest-agent-pilot-remote.sh")
+        self.assertIn("\".backup '$BACKUP_DIR/ingest-pre-install.db'\"", installer)
+        self.assertIn('chmod 0600 "$BACKUP_DIR/ingest-pre-install.db"', installer)
+        self.assertLess(installer.index("ingest-pre-install.db"),
+                        installer.index("systemctl daemon-reload"))
+        if (self.REPO / ".git").exists() and (self.REPO / ".github/workflows/test.yml").is_file():
+            ci = (self.REPO / ".github/workflows/test.yml").read_text(encoding="utf-8")
+            self.assertIn("shellcheck", ci)
+            self.assertIn("suite duration", ci)
+            readme = (self.REPO / "README.md").read_text(encoding="utf-8")
+            self.assertIn("git checkout <sha>", readme)
+
+    def test_a_deploy_that_fails_after_install_leaves_a_failed_receipt(self):
+        import deployment_notice
+        if os.name == "nt":
+            self.skipTest("the manifest writer fsyncs its directory (POSIX only)")
+        path = Path(self.tmp.name) / "DEPLOYMENT.json"
+        deployment_notice.write_installed(path, build_version="abc123def456",
+                                          source_revision="0000000", source_dirty=False,
+                                          test_summary="t", backup_dir="/root/b")
+        self.assertTrue(deployment_notice.mark_failed(path, "deploy step failed with exit 1"))
+        manifest = deployment_notice.load_verified(path, "abc123def456")
+        self.assertIsNotNone(manifest)                                    # announced next start
+        self.assertEqual(manifest["status"], "failed")
+        text = deployment_notice.format_message("Cara", manifest)
+        self.assertIn("FAILED after install", text)
+        self.assertIn("exit 1", text)
+        self.assertFalse(deployment_notice.mark_failed(path, "again"))    # only a fresh install
+        deployment_notice.write_installed(path, build_version="fresh", source_revision="1",
+                                          source_dirty=False, test_summary="t",
+                                          backup_dir="/root/b")
+        deployment_notice.mark_verified(path, "ok")
+        self.assertFalse(deployment_notice.mark_failed(path, "late"))     # verified stays
+        self.assertEqual(deployment_notice.load_verified(path, "fresh")["status"], "verified")
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            deployment_notice.main(["mark-failed", "--manifest", str(path), "--error", "x"])
+        self.assertIn("untouched", out.getvalue())
+
+    def test_unit_failed_notice_reads_only_the_fleet_credentials(self):
+        import deployment_notice
+        env = Path(self.tmp.name) / "e.env"
+        env.write_text("TELEGRAM_BOT_TOKEN=999:secret\nFLEET_NOTIFY_BOT_TOKEN='42:fleet'\n"
+                       "FLEET_NOTIFY_CHAT_ID=-100\nFLEET_NOTIFY_LABEL=Cara\n", encoding="utf-8")
+        sent = []
+        rc = deployment_notice.unit_failed_notice(
+            "tg-ingest-agent.service", env,
+            opener=lambda token, method, payload: sent.append((token, method, payload)))
+        self.assertEqual(rc, 0)
+        self.assertEqual(sent[0][0], "42:fleet")
+        self.assertEqual(sent[0][2]["chat_id"], "-100")
+        self.assertIn("tg-ingest-agent.service FAILED", sent[0][2]["text"])
+        self.assertIn("--check-config", sent[0][2]["text"])
+        self.assertNotIn("999:secret", sent[0][2]["text"])
+        env.write_text("TELEGRAM_BOT_TOKEN=999:secret\n", encoding="utf-8")
+        self.assertEqual(deployment_notice.unit_failed_notice("u", env, opener=sent.append), 1)
+        self.assertEqual(deployment_notice.unit_failed_notice("u", env / "nope",
+                                                              opener=sent.append), 1)

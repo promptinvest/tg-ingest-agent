@@ -16,6 +16,7 @@ import re
 import shutil
 import signal
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -62,7 +63,8 @@ import texts
 import tool_broker
 import trace
 import improvement
-from common import Config, ShutdownInterrupt, current_trace, load_config, log  # noqa: F401
+from common import (Config, ShutdownInterrupt, current_trace, load_config, log,  # noqa: F401
+                    log_err, log_warn)
 from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
                     tg_send_document_file_id, tg_send_photo,
                     tg_set_reaction)
@@ -228,12 +230,6 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         requeued, dead = jobs.reclaim_stale(self.conn)
         if requeued or dead:
             log(f"reclaimed stale jobs after restart: {requeued} requeued, {dead} failed")
-        # Same for the event queue — inert while Stage A only records events, in
-        # place before Stage C moves live dispatch onto it.
-        ev_requeued, ev_dead = events.reclaim_stale(self.conn)
-        if ev_requeued or ev_dead:
-            log(f"reclaimed stale events after restart: {ev_requeued} requeued,"
-                f" {ev_dead} failed")
         task_requeued, task_blocked = store.assistant_task_reclaim_stale(self.conn)
         if task_requeued or task_blocked:
             log(f"reclaimed assistant tasks: {task_requeued} requeued,"
@@ -260,6 +256,10 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         self.stop = False
         self.last_sweep = 0.0
         self.last_model_health = 0.0  # check model reachability soon after start
+        # ADR-0015: when getUpdates started failing (monotonic), and whether the
+        # boss was already told about THIS stall (see _poll_trouble).
+        self._poll_fail_since = None
+        self._poll_stalled_alerted = False
         self.last_disk_check = 0.0    # and free disk space soon after start
         # Don't nudge the instant the service (re)starts — wait one interval.
         self.last_proactive = time.time()
@@ -315,6 +315,36 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                or (update.get("callback_query") or {}).get("message")
                or update.get("message_reaction") or {})
         return (msg.get("chat") or {}).get("id")
+
+    @staticmethod
+    def _update_sender_id(update):
+        """The ACCOUNT behind an update: message/edited_message `from`, a
+        callback's `from` (its message's `from` is the bot), a reaction's `user`."""
+        if update.get("callback_query"):
+            return ((update["callback_query"].get("from") or {}).get("id"))
+        if update.get("message_reaction"):
+            return ((update["message_reaction"].get("user") or {}).get("id"))
+        msg = update.get("message") or update.get("edited_message") or {}
+        return (msg.get("from") or {}).get("id")
+
+    def _note_stranger(self, update_id, chat_id, sender_id):
+        """ADR-0016: an update from anyone but the owner is dropped BEFORE the
+        durable inbox, the trace and the handler — its payload is never stored.
+        Counted in kv; one `stranger_traffic` issue per UTC day for the weekly
+        review (a burst from one account is one line, not a flood)."""
+        log(f"ignored update {update_id} from chat_id={chat_id} user_id={sender_id}"
+            " (not the owner; not stored)")
+        try:
+            n = int(store.kv_get(self.conn, "stranger_updates", "0") or 0) + 1
+            store.kv_set(self.conn, "stranger_updates", n)
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if store.kv_get(self.conn, "stranger_issue_day") != today:
+                store.kv_set(self.conn, "stranger_issue_day", today)
+                store.issue_add(self.conn, None, "stranger_traffic",
+                                f"non-owner update(s) dropped; total so far {n}; "
+                                f"latest chat_id={chat_id} user_id={sender_id}")
+        except sqlite3.Error as exc:
+            log(f"stranger bookkeeping skipped: {exc!r}")
 
     # -- preferences-backed settings
 
@@ -589,8 +619,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         if self._db_stall_streak < self.DB_STALL_ALERT_AFTER or self._db_stall_alerted:
             return
         self._db_stall_alerted = True  # latched until an update goes through again
-        log(f"database still unusable after {self._db_stall_streak} attempts"
-            f" ({exc!r}) — alerting the boss")
+        log_err(f"database still unusable after {self._db_stall_streak} attempts"
+                f" ({exc!r}) — alerting the boss")
         text = T(getattr(self.cfg, "language", "ru"), "db_stalled")
         for chat_id in self.cfg.allowed_chat_ids:
             try:
@@ -648,6 +678,13 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             try:
                 update_id = int(update["update_id"])
                 chat_id = self._update_chat_id(update)
+                if not self.is_owner(chat_id, self._update_sender_id(update)):
+                    # ADR-0016: strangers never reach the inbox, a trace or the
+                    # handler (the gates inside handle_update stay as the second
+                    # line). The offset still advances past them.
+                    self._note_stranger(update_id, chat_id, self._update_sender_id(update))
+                    processed_max = update_id
+                    continue
                 inbox = store.telegram_update_receive(self.conn, update, chat_id)
                 if inbox["status"] in ("done", "failed"):
                     processed_max = update_id
@@ -665,7 +702,9 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                     # Log BEFORE the ledger writes: journald needs no disk, and the
                     # writes below can fail on the very condition that caused `exc`.
                     log(f"error handling update {update_id} (attempt {attempts}/"
-                        f"{self.cfg.update_max_attempts}): {exc!r}")
+                        f"{self.cfg.update_max_attempts}): {exc!r}"
+                        + (" — dead-lettered" if terminal else ""),
+                        level="err" if terminal else "warning")
                     if isinstance(exc, sqlite3.Error) and "disk is full" in str(exc).lower():
                         # A full disk is not a poison update. Hand it to the
                         # containment guard instead of spending the retry budget:
@@ -964,6 +1003,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                     timeout=poll_timeout + 15,
                 )
                 errors = 0
+                self._poll_recovered()
             except TelegramError as exc:
                 # Every poll backoff goes through `self._sleep`, which waits in
                 # ≤1 s slices and checks `self.stop`. A bare `time.sleep(120)`
@@ -973,7 +1013,10 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 # morning brief) run once per backoff instead of waiting out the
                 # whole incident. Sending still works while getUpdates does not.
                 if exc.status == 409:
-                    log(f"getUpdates conflict (another poller or webhook active): {exc}")
+                    log_err(f"getUpdates conflict (another poller or webhook active): {exc}")
+                    # A second poller never clears itself: the boss hears at once.
+                    self._poll_trouble(time.time(), "conflict: another poller or a webhook"
+                                       " holds the bot", immediate=True)
                     self._sleep(self.POLL_CONFLICT_BACKOFF_SECONDS)
                     continue
                 if exc.retry_after:
@@ -982,7 +1025,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                     continue
                 errors += 1
                 delay = min(60, 5 * (2 ** min(errors - 1, 4)))
-                log(f"getUpdates failed ({exc}), retrying in {delay}s")
+                log_warn(f"getUpdates failed ({exc}), retrying in {delay}s")
+                self._poll_trouble(time.time(), str(exc)[:120])
                 self._sleep(delay)
                 continue
             processed_max = self.process_update_batch(updates)
@@ -997,6 +1041,62 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                     log(f"could not persist poll offset {offset}: {exc!r}")
         self.flush_albums(time.time(), force=True, shutdown=True)
         log("stopped")
+
+    POLL_STALL_ALERT_SECONDS = 600
+
+    def _direct_send_all(self, text):
+        """Send `text` to every allowed chat with a bare API call — no history
+        row, no preference read — for the alerts that must work while the
+        database or the poll loop is in trouble. True on the first delivery."""
+        ok = False
+        for chat_id in self.cfg.allowed_chat_ids:
+            try:
+                tg_call(self.cfg.token, "sendMessage", {"chat_id": chat_id, "text": text})
+                ok = True
+            except Exception as exc:  # noqa: BLE001 — an alert must never re-raise
+                log(f"direct alert to {chat_id} failed: {exc!r}")
+        return ok
+
+    def _poll_trouble(self, now, reason, immediate=False):
+        """ADR-0015: getUpdates has failed again. After ten minutes of continuous
+        failure (or at once on a 409, `immediate`) the boss is told ONCE that she
+        is not receiving — sending still works while receiving does not, which is
+        exactly why the silence was invisible before. An issue row keeps it for
+        the weekly review even when the alert itself cannot be delivered."""
+        if self._poll_fail_since is None:
+            self._poll_fail_since = now
+        if self._poll_stalled_alerted:
+            return
+        stalled_for = now - self._poll_fail_since
+        if not immediate and stalled_for < self.POLL_STALL_ALERT_SECONDS:
+            return
+        self._poll_stalled_alerted = True
+        minutes = max(1, int(stalled_for // 60))
+        log_err(f"poll stalled for {minutes} min: {reason} — alerting the boss")
+        try:
+            store.issue_add(self.conn, None, "poll_stalled", f"{minutes} min: {reason}")
+        except sqlite3.Error as exc:
+            log(f"poll-stall issue not recorded: {exc!r}")
+        try:
+            lang = self.lang()
+        except sqlite3.Error:
+            lang = getattr(self.cfg, "language", "ru")
+        self._direct_send_all(T(lang, "poll_stalled", minutes=minutes, reason=reason))
+
+    def _poll_recovered(self):
+        """A getUpdates call succeeded: close the stall, and say so only when the
+        boss was told it had started."""
+        if self._poll_fail_since is None:
+            return
+        self._poll_fail_since = None
+        if self._poll_stalled_alerted:
+            self._poll_stalled_alerted = False
+            log("getUpdates recovered — telling the boss")
+            try:
+                lang = self.lang()
+            except sqlite3.Error:
+                lang = getattr(self.cfg, "language", "ru")
+            self._direct_send_all(T(lang, "poll_back"))
 
     # -- Scheduler ticks
 
@@ -1889,12 +1989,27 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 log(f"housekeep pruned {pruned} telemetry row(s) older than {days:g}d")
         return removed
 
+    MEDIA_CLEANUP_INTERVAL_SECONDS = 3600
+
     def enqueue_maintenance_jobs(self):
-        """Queue the recurring background jobs (idempotent — skip if one is still
-        pending). runtime.drain runs them, durably and under their own traces."""
-        for action in ("retry_sweep", "media_cleanup", "pending_expire"):
-            if not jobs.has_pending(self.conn, "maintenance", action):
-                jobs.add_job(self.conn, "maintenance", action)
+        """Queue the recurring background jobs — only when there is work for them
+        (ADR-0019). All three used to be queued every 300 s unconditionally, so
+        the jobs table and the journal filled with no-op rows around the clock.
+        retry_sweep needs a pending note or an unindexed one; pending_expire needs
+        an expired card; media_cleanup runs hourly, scheduled via available_at.
+        runtime.drain runs them, durably and under their own traces."""
+        if (store.pending_messages(self.conn, self.cfg.llm_max_attempts, limit=1)
+                or store.messages_missing_chunks(self.conn, limit=1)):
+            if not jobs.has_pending(self.conn, "maintenance", "retry_sweep"):
+                jobs.add_job(self.conn, "maintenance", "retry_sweep")
+        if (store.pending_expired_exists(self.conn)
+                and not jobs.has_pending(self.conn, "maintenance", "pending_expire")):
+            jobs.add_job(self.conn, "maintenance", "pending_expire")
+        if not jobs.has_pending(self.conn, "maintenance", "media_cleanup"):
+            due = datetime.now(timezone.utc) + timedelta(
+                seconds=self.MEDIA_CLEANUP_INTERVAL_SECONDS)
+            jobs.add_job(self.conn, "maintenance", "media_cleanup",
+                         available_at=due.isoformat())
 
     # -- Router dispatch
 
@@ -1963,6 +2078,58 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             return False
         return recent and bool(store.reminders_active(self.conn, chat_id))
 
+    _STATE_CHANGING_RISKS = ("state_write", "draft_write", "destructive")
+    ROUTE_CORRECTION_WINDOW_SECONDS = 600
+
+    @staticmethod
+    def _clip_params(params):
+        """Router params for the trace: a few keys, short values, never a blob."""
+        out = {}
+        for k, v in list((params or {}).items())[:8]:
+            s = v if isinstance(v, (int, float, bool)) or v is None else str(v)
+            out[str(k)[:40]] = s[:80] if isinstance(s, str) else s
+        return out
+
+    def _trace_route(self, action, source, **extra):
+        """One router.completed record for a turn resolved WITHOUT the model
+        (ADR-0019): every turn leaves a routing record, deterministic or not, so
+        the weekly review can count where turns went."""
+        try:
+            risk = skill_manifest.get_policy(action)["risk"]
+        except skill_manifest.SkillPolicyError:
+            risk = "read_only"
+        data = {"confidence": 1.0, "risk": risk, "source": source, "action": action}
+        data.update(extra)
+        trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED,
+                    f"action={action} source={source}", skill=action, data=data)
+        self._remember_state_write_route(action, risk)
+
+    def _remember_state_write_route(self, action, risk):
+        if risk in self._STATE_CHANGING_RISKS:
+            store.kv_set(self.conn, "last_state_write_route", json.dumps(
+                {"action": action, "at": datetime.now(timezone.utc).isoformat()}))
+
+    def _note_route_correction(self, chat_id, text):
+        """A correction-shaped message within the window after a state-changing
+        route -> one `route_corrected` issue naming that route; the marker is
+        consumed so one route earns at most one issue."""
+        if not self.looks_like_correction(text):
+            return
+        raw = store.kv_get(self.conn, "last_state_write_route")
+        if not raw:
+            return
+        try:
+            last = json.loads(raw)
+            at = datetime.fromisoformat(last["at"])
+        except (ValueError, TypeError, KeyError):
+            store.kv_set(self.conn, "last_state_write_route", "")
+            return
+        age = (datetime.now(timezone.utc) - at).total_seconds()
+        store.kv_set(self.conn, "last_state_write_route", "")
+        if 0 <= age <= self.ROUTE_CORRECTION_WINDOW_SECONDS:
+            store.issue_add(self.conn, chat_id, "route_corrected",
+                            f"after {last.get('action')} ({int(age)} s): {text[:120]}")
+
     def _dispatch_numbered_delete(self, chat_id, lang, text):
         """Handle explicit #N deletion without an LLM, preserving the existing
         reminder-list disambiguation and note confirmation boundary."""
@@ -1980,7 +2147,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED,
                     f"action={action} deterministic", skill=action,
                     data={"confidence": 1.0, "risk": policy["risk"],
-                          "source": "explicit_numbered_delete"})
+                          "source": "explicit_numbered_delete", "action": action})
+        self._remember_state_write_route(action, policy["risk"])
         log(f"deterministic chat={chat_id} action={action} number={number}")
         return True
 
@@ -2174,16 +2342,22 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         store.kv_set(self.conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
         msg_id = msg.get("message_id")
         pending = store.pending_get(self.conn, chat_id)
+        # ADR-0019: a correction within ten minutes of a state-changing route is
+        # the cheapest evidence that the route was wrong — one issue row for the
+        # weekly review, never a behavior change by itself.
+        self._note_route_correction(chat_id, text)
         # A recurring saved-note opt-out is a preference command about Cara's
         # own proactive behavior, never the answer to whichever confirmation
         # card happens to occupy the single pending slot. Resolve it before
         # purge/journal-edit handlers can consume the words as their payload;
         # the exact destructive purge phrase cannot match this narrow parser.
         if self._disable_note_review_request(chat_id, lang, text):
+            self._trace_route("proactive_prefs", "note_review_pref")
             return
         # Same rule for the two Phase A preferences (expiry notices, gratitude
         # auto-save): narrow, anchored parsers that no card can swallow.
         if self._reminder_pref_request(chat_id, lang, text):
+            self._trace_route("proactive_prefs", "reminder_pref")
             return
         # A problem-report command is about the exchange that just failed, not
         # an answer to a purge, journal-edit, or category card. Keep it ahead of
@@ -2195,17 +2369,21 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED,
                         "action=report_problem source=explicit_problem_report",
                         skill="report_problem",
-                        data={"confidence": 1.0, "risk": problem_policy["risk"]})
+                        data={"confidence": 1.0, "risk": problem_policy["risk"],
+                              "source": "explicit_problem_report",
+                              "action": "report_problem"})
             self.do_report_problem(chat_id, lang, {"detail": problem_detail}, text)
             return
         # A pending purge is confirmed ONLY by typing the exact phrase —
         # handled deterministically (no LLM), so a stray "да" can't wipe data.
         if pending and pending["kind"] == "purge":
+            self._trace_route("purge", "pending_purge_phrase")
             self.resolve_purge(chat_id, lang, pending, text)
             return
         # «Изменить» on a journal capture card: his next message is the
         # correction for the pending entry DRAFT (deterministic, no router).
         if pending and pending["kind"] == "journal_edit":
+            self._trace_route("ingest", "pending_journal_edit")
             self.resolve_journal_edit(chat_id, lang, pending, text)
             return
         # A media confirmation card is open: corrections («№2 — фильм», «убери
@@ -2219,6 +2397,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 store.pending_clear(self.conn, chat_id)
                 pending = None
             elif self.resolve_media_correction(chat_id, lang, stash, text):
+                self._trace_route("ingest", "pending_media_correction")
                 return
         # Explicit category assignment while a suggestion is pending ("Категория -
         # Документы", "в категорию X", "set category to X") — resolve it
@@ -2227,17 +2406,20 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         if pending and pending["kind"] == "category":
             explicit = self.explicit_category(text)
             if explicit:
+                self._trace_route("recategorize", "explicit_category")
                 self.resolve_pending(chat_id, "amend", {"category": explicit}, pending, lang)
                 return
             if self.rejects_category_suggestion(text):
                 # Keep the suggestion pending, but never let generic negative
                 # feedback become an invented category through the LLM router.
+                self._trace_route("recategorize", "category_rejected")
                 self.reply(chat_id, T(lang, "category_correction_needed"))
                 return
         # A pending reminder disambiguation ('which reminder?'): his next pick
         # ('второе'/'#2'/'про банк') completes the remembered reschedule/rename (B2).
         if pending and pending["kind"] == "reminder_op":
             if self._resolve_reminder_op(chat_id, lang, pending, text):
+                self._trace_route("reminder_reschedule", "pending_reminder_pick")
                 return
             store.pending_clear(self.conn, chat_id)  # not a pick -> abandon, route normally
             pending = None
@@ -2245,13 +2427,16 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         # partial are answered deterministically: yes / no / a bare time never
         # cost a router call (ADR-0003, ADR-0006).
         if self.resolve_expired_reopen_text(chat_id, lang, pending, text):
+            self._trace_route("reminder_undo", "expired_reopen_text")
             return
         if self.resolve_reminder_draft_text(chat_id, lang, pending, text):
+            self._trace_route("reminder_create", "reminder_draft_text")
             return
         # Common fired-reminder replies are state transitions, not conversation.
         # Resolve them deterministically before the LLM router — including an
         # explicit close/skip/snooze after the short pending window expired.
         if self.resolve_fired_followup(chat_id, lang, text, pending):
+            self._trace_route("reminder_reschedule", "fired_followup")
             return
         # A fired reminder leaves a 30-min 'reminder_fired' pending so 'готово' / 'через
         # 30 минут' resolve it. But the boss often answers by DOING the task — a gratitude
@@ -2299,11 +2484,13 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         # A bare yes/no is accepted only when there is exactly one live task
         # approval and no legacy pending action competing for the same words.
         if self.resolve_task_approval_text(chat_id, text, msg, pending):
+            self._trace_route("task_start", "task_approval_text")
             return
         # A short reply to a proactive nudge belongs to the exact queue that was
         # offered. Do this before small-talk/router handling so «Давай» cannot
         # become an unrelated free-form promise.
         if pending is None and self._resolve_proactive_followup(chat_id, lang, text):
+            self._trace_route("proactive_heartbeat", "proactive_followup")
             return
         # Obvious greetings / "how are you" / identity pings go straight to warm
         # free-form Cara, skipping the router (one chat call, no template). A bare
@@ -2316,10 +2503,12 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 # last line asked a question: then it is the answer and must route
                 # (ADR-0006). An agreement word gets a 👍 so it never feels ignored.
                 if not self._last_bot_turn_asked(chat_id):
+                    self._trace_route("smalltalk", "smalltalk_ack")
                     if msg_id and router.is_agreement_ack(text):
                         self.react(chat_id, msg_id, "👍")
                     return
             elif kind:
+                self._trace_route("converse", f"smalltalk_{kind}")
                 self.do_converse(chat_id, lang, text, msg_id)
                 return
         try:
@@ -2371,7 +2560,13 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             self.conn, current_trace(), trace.ROUTER_COMPLETED,
             f"action={action}",
             skill=action, data={"confidence": decision["confidence"],
-                                "risk": policy["risk"]})
+                                "risk": policy["risk"], "source": "router",
+                                "action": action,
+                                "params": self._clip_params(params),
+                                "raw": str(decision.get("raw") or "")[:400],
+                                "invalid": decision.get("invalid"),
+                                "demoted_from": decision.get("demoted_from")})
+        self._remember_state_write_route(action, policy["risk"])
 
         # Completing a half-specified reminder ("напомни в 17:00" -> "про что?"
         # -> "Лящук"): stitch the answer into the partial draft. Returns False
@@ -2478,7 +2673,9 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         policy = skill_manifest.get_policy("ingest")
         trace.event(self.conn, current_trace(), trace.ROUTER_COMPLETED,
                     f"action=ingest source={source}", skill="ingest",
-                    data={"confidence": 1.0, "risk": policy["risk"], "source": source})
+                    data={"confidence": 1.0, "risk": policy["risk"], "source": source,
+                          "action": "ingest"})
+        self._remember_state_write_route("ingest", policy["risk"])
         store.kv_set(self.conn, "last_business_at", datetime.now(timezone.utc).isoformat())
         log(f"deterministic chat={chat_id} action=ingest source={source} category={category}")
         if body is not None and body != (msg.get("text") or ""):
@@ -2551,6 +2748,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                     f"action=multi_action source=split_compound n={len(fragments)}",
                     skill="multi_action", data={"confidence": 1.0, "risk": "read_only",
                                                 "source": "split_compound",
+                                                "action": "multi_action",
                                                 "fragments": len(fragments)})
         self._in_compound = True
         try:
@@ -4293,7 +4491,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         elif self._sched_send_gave_up("backup_notice"):
             store.kv_set(self.conn, "backup_failed_day", today)  # dead Telegram: stop trying today
         else:
-            log(f"backup failure notice could not be delivered: {reason}")
+            log_warn(f"backup failure notice could not be delivered: {reason}")
 
     def run_db_backup(self, conn):
         """The db_backup job body. Stamps the UTC day only after the backup really
@@ -4658,6 +4856,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
         except sqlite3.Error as exc:
             log(f"model health event not recorded: {exc!r}")
 
+    MODEL_HEALTH_FALLBACK_EVERY = 4
+
     def check_model_health(self):
         """Periodically verify Cara's models are reachable. The boss hears about it
         ONLY when he is affected (ADR-0008): a model with no fallback, a primary
@@ -4686,12 +4886,24 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 if m and not str(m).startswith("router:") and m not in primaries:
                     primaries.append(m)
             models = list(primaries)
-            # The fallbacks are probed in the SAME sweep: whether a down primary
-            # affects the boss depends on whether its backup answers right now.
-            for m in primaries:
-                for fb in self._fallbacks_for(m, prof):
-                    if fb not in models:
-                        models.append(fb)
+            # ADR-0014: the fallbacks are probed on the first sweep, every 4th sweep,
+            # and in any sweep after a primary was seen failing — whether a down
+            # primary affects the boss depends on whether its backup answers NOW.
+            # The other sweeps cost one call per primary, not one per chain member.
+            try:
+                sweep = int(store.kv_get(self.conn, "mh_sweeps", "0") or 0) + 1
+            except (TypeError, ValueError):
+                sweep = 1
+            store.kv_set(self.conn, "mh_sweeps", sweep)
+            primary_trouble = any(
+                store.kv_get(self.conn, f"mh:{m}") == "down"
+                or str(store.kv_get(self.conn, f"mh_fail:{m}") or "0") != "0"
+                for m in primaries)
+            if sweep == 1 or sweep % self.MODEL_HEALTH_FALLBACK_EVERY == 0 or primary_trouble:
+                for m in primaries:
+                    for fb in self._fallbacks_for(m, prof):
+                        if fb not in models:
+                            models.append(fb)
             # Each probe is capped at llm.HEALTH_PROBE_TIMEOUT_SECONDS: this sweep runs
             # inline on the only thread, so an outage must cost seconds, not 90 s per model.
             probes = [("model", m, (lambda m=m: llm.model_ok(self.cfg, self.conn, m)))
@@ -4783,7 +4995,7 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                         if any(x[1] == m for x in went_down):
                             store.kv_set(self.conn, f"mh:{m}", "down")
                             self._record_health_transition(m, "down", r, True)
-                    log(f"model health: chain {p} dead ({r}), owner notified")
+                    log_err(f"model health: chain {p} dead ({r}), owner notified")
         for m, r in speech_down:
             if self._whisper_cli_available():
                 self._notify_fleet(T("en", "fleet_speech_down", label=label, model=m, reason=r))
@@ -4796,8 +5008,12 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                 self._record_health_transition(m, "down", r, True)
                 log(f"model health: {m} ok -> down ({r}), owner notified")
         if fleet_down:
+            # A down FALLBACK is named as one: «fallback holding» is about the
+            # chain, and the reader should not mistake a spare for the primary.
             self._notify_fleet(T("en", "fleet_models_down", label=label,
-                                 models=", ".join(m for m, r in fleet_down),
+                                 models=", ".join(
+                                     m + ("" if m in primaries else " (fallback)")
+                                     for m, r in fleet_down),
                                  reason=fleet_down[0][1]))
             for m, r in fleet_down:
                 store.kv_set(self.conn, f"mh:{m}", "down")
@@ -5024,6 +5240,8 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
             self.answer_callback(callback_id, "Not allowed.")
             return
         data = callback.get("data") or ""
+        # ADR-0019: a button press is a routed turn too — recorded by its prefix.
+        self._trace_route("router", "callback", button=str(data.split("|", 1)[0])[:12])
         if data.startswith("ta|"):
             self.handle_task_approval_callback(
                 callback_id, chat_id, msg, data)
@@ -6226,6 +6444,10 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                     log(f"stopping: album {group_id} ({len(parts)} part(s)) left"
                         " pending for the startup replay")
                     continue
+                album_chat = ((parts[0].get("chat") or {}).get("id") if parts else None)
+                # ADR-0019: the flush used to run under NO trace, so an album was
+                # the one inbound path with no routing record and no timing.
+                tid = trace.start(self.conn, "inbound", album_chat, prefix="album")
                 try:
                     if buffer.get("store", True):
                         self.finalize(parts)
@@ -6233,8 +6455,11 @@ class Agent(tasks_svc.TasksMixin, hermes.HermesMixin,
                         cap = next((p.get("caption", "").strip() for p in parts
                                     if (p.get("caption") or "").strip()), "")
                         self.handle_own_media(parts, parts[0]["chat"]["id"], cap)
+                    trace.finish(self.conn, tid, "ok",
+                                 f"album {group_id}: {len(parts)} part(s)")
                 except Exception as exc:
-                    log(f"error finalizing album {group_id}: {exc!r}")
+                    log_err(f"error finalizing album {group_id}: {exc!r}")
+                    trace.finish(self.conn, tid, "failed", repr(exc)[:200])
                     # NO album may vanish silently — his own media least of all,
                     # since these rows are now dead-lettered terminally below. It
                     # used to be forwarded-only: the boss sent a 3-file album, the
@@ -7097,7 +7322,16 @@ def db_full_alert(cfg, exc):
     time.sleep(DB_FULL_PAUSE_SECONDS)
 
 
-def main():
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "--check-config":
+        # ADR-0015: validate an env file with the real loader and exit — the
+        # installer runs this BEFORE touching the box, the OnFailure notice names
+        # it, and the operator can run it by hand after editing the env.
+        ok, message = common.check_config(args[1] if len(args) > 1
+                                          else "/etc/tg-ingest-agent.env")
+        print(message)
+        return 0 if ok else 2
     cfg = load_config()
     try:
         agent = Agent(cfg)
@@ -7114,4 +7348,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

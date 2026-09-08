@@ -5,6 +5,14 @@
 Description=Telegram ingest agent (LLM categorization)
 After=network-online.target cara-worker.service
 Wants=network-online.target cara-worker.service
+# ADR-0015: Restart=always + RestartSec=10 never tripped systemd's default
+# limiter (5 starts / 10 s), so June's 18- and 29-restart loops ran with no
+# alert possible. Five starts inside ten minutes now stop the unit as `failed`,
+# and OnFailure posts one fleet notice (cara-failed-notify@.service; %N = the unit
+# name without its .service suffix, so the instance reads cara-failed-notify@tg-ingest-agent).
+StartLimitIntervalSec=600
+StartLimitBurst=5
+OnFailure=cara-failed-notify@%N.service
 
 [Service]
 Type=simple
@@ -47,6 +55,19 @@ NoNewPrivileges=yes
 CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=yes
+# ADR-0016: parity with the sibling units. This process parses untrusted PDFs and
+# forks ffmpeg/whisper-cli on a 4 GB box shared with another application, and it
+# was the only unit with no memory or task ceiling. ProcSubset=pid is deliberately
+# NOT here: sysinfo reads /proc/meminfo and /proc/loadavg for the VPS report.
+MemoryHigh=768M
+MemoryMax=1G
+TasksMax=64
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictRealtime=yes
+RemoveIPC=yes
 ReadWritePaths=/var/lib/tg-ingest-agent /var/lib/cara-worker/spool/requests /var/lib/cara-worker/spool/cancel /var/lib/cara-mentor/spool/requests /var/lib/cara-mentor-runner/spool/requests
 ReadOnlyPaths=/var/lib/cara-worker/spool/results
 PrivateTmp=yes

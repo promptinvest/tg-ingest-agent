@@ -66,6 +66,36 @@ retired-host fallback. `--test` pushes the working tree and runs the suite in
 the disposable stage dir without installing; `--pull` deploys `origin/main`;
 `--rollback <sha|branch>` checks that ref out on the box and reinstalls.
 
+**Rollback that works today (ADR-0017).** `--pull` and `--rollback` need a
+read-only GitHub deploy key on the box (`/root/.ssh/github-tg-ingest-deploy`),
+which the PD box does not have; both now exit 2 before touching anything and
+print this recipe. From the workstation:
+
+```bash
+git checkout <sha>          # the build to return to (see git log / the receipt)
+bash deploy.sh              # deploys the WORKING TREE: tests, install, verify
+git checkout main
+```
+
+The receipt Cara posts to the fleet chat names the source revision, and every
+install leaves `ingest-pre-install.db` (a `sqlite3 .backup` taken before the
+restart) next to the env/unit backups under
+`/root/codex-hardening-backups/<ts>-tg-ingest-agent/`. To enable the git modes:
+`ssh-keygen -t ed25519 -N "" -f /root/.ssh/github-tg-ingest-deploy` on the box,
+add the `.pub` as a read-only deploy key on the GitHub repo, then `./deploy.sh
+--pull` once to create the clone.
+
+A deploy that fails AFTER the install marks the fresh manifest `failed`
+(`deployment_notice.py mark-failed`), prints it in the terminal, and Cara posts
+the same ❌ receipt to the fleet chat on her next start. A deploy that fails
+before the install leaves the previous verified receipt untouched. The stage
+dir on the box is wiped before every untar (dotfiles kept), so nothing an older
+payload shipped can ride into a test run or an install again.
+
+`python3 /opt/tg-ingest-agent/agent.py --check-config [/etc/tg-ingest-agent.env]`
+validates an env file with the real loader and exits 2 on a bad value; the
+installer runs it before any mutation.
+
 The installer is idempotent: it backs up replaced files to
 `/root/codex-hardening-backups/<ts>-tg-ingest-agent/` (newest 10 of its OWN
 `*-tg-ingest-agent` dirs kept — the root is fleet-shared, so the prune never

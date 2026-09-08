@@ -31,7 +31,15 @@ jobs:
           python-version: "3.12"
       - name: Compile Python
         run: python -m compileall -q .
-      - name: Run unit tests
-        run: python -m unittest discover -p 'test_*.py'
+      - name: Run unit tests (with duration)
+        # ADR-0017: the suite's wall time is printed so a creeping gate is visible.
+        run: |
+          start=$(date +%s)
+          python -m unittest discover -p 'test_*.py'
+          echo "suite duration: $(( $(date +%s) - start )) s"
       - name: Check shell syntax
         run: find . -maxdepth 1 -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: shellcheck
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+          shellcheck -S warning deploy.sh install-tg-ingest-agent-pilot-remote.sh verify-cara-runtime.sh

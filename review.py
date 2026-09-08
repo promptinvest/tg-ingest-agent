@@ -242,6 +242,32 @@ def collect(conn, period):
         "SELECT id, kind, hypothesis, status FROM improvement_proposals"
         " WHERE created_at >= ? ORDER BY id", (since,),
     ).fetchall()
+    # Routing record (ADR-0019): router.completed events carry
+    # data.action/source; a source other than 'router' is a deterministic branch.
+    by_action, deterministic, model_routed = {}, 0, 0
+    for row in conn.execute(
+            "SELECT message, data FROM trace_events WHERE stage = 'router.completed'"
+            " AND ts >= ?", (since,)).fetchall():
+        try:
+            payload = json.loads(row["data"] or "{}")
+        except ValueError:
+            payload = {}
+        m = re.match(r"action=([A-Za-z_]+)", str(row["message"] or ""))
+        action = payload.get("action") or (m.group(1) if m else "?")
+        by_action[action] = by_action.get(action, 0) + 1
+        if payload.get("source") and payload.get("source") != "router":
+            deterministic += 1
+        else:
+            model_routed += 1
+    data["routing_by_action"] = sorted(by_action.items(), key=lambda kv: -kv[1])
+    data["routing_deterministic"] = deterministic
+    data["routing_model"] = model_routed
+    data["router_invalid_count"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM issues WHERE kind = 'router_invalid_output' AND ts >= ?",
+        (since,)).fetchone()["n"]
+    data["route_corrected_count"] = conn.execute(
+        "SELECT COUNT(*) AS n FROM issues WHERE kind = 'route_corrected' AND ts >= ?",
+        (since,)).fetchone()["n"]
     data["health_transitions"] = []
     for row in conn.execute(
             "SELECT created_at, payload FROM events WHERE kind = 'model_health'"
@@ -859,6 +885,20 @@ def markdown(conn, cfg, period="week"):
         lines.append(f"- model-health latency: p50 {health_latency['p50']:.2f}s · "
                      f"p95 {health_latency['p95']:.2f}s ({health_latency['calls']} probes)")
     lines.append("")
+    # ADR-0019: the routing record — where every turn went, how often the model's
+    # output was unusable, and how often a correction followed a state-write route
+    # within ten minutes (the cheapest signal that a route was wrong).
+    lines.append("")
+    lines.append("## Routing")
+    if data["routing_by_action"]:
+        lines.append("- routed turns by action: " + ", ".join(
+            f"{action} {n}" for action, n in data["routing_by_action"][:20]))
+    else:
+        lines.append("- routed turns by action: none recorded")
+    lines.append(f"- deterministic (pre-router) resolutions: {data['routing_deterministic']} · "
+                 f"model-routed: {data['routing_model']}")
+    lines.append(f"- unusable router output: {data['router_invalid_count']} · "
+                 f"corrections within 10 min of a state-write route: {data['route_corrected_count']}")
     # Routine model flaps the boss was spared (ADR-0008) still show up here.
     lines.append("")
     lines.append("## Model health")

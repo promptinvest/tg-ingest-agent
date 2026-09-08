@@ -58,7 +58,8 @@ def drain(conn, ctx, *, max_jobs=5):
         except Exception as exc:  # noqa: BLE001 — a bad job must not kill the loop
             terminal = jobs.fail(conn, job["id"], repr(exc))
             log(f"job {job['skill']}/{job['action']} #{job['id']} failed: {exc!r}"
-                + (" (terminal)" if terminal else " (will retry)"))
+                + (" (terminal)" if terminal else " (will retry)"),
+                level="err" if terminal else "warning")
             if terminal:
                 store.issue_add(conn, job.get("chat_id"), "job_failed",
                                 f"{job['skill']}/{job['action']}: {exc}")

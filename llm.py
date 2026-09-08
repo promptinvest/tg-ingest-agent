@@ -12,7 +12,7 @@ import re
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 import common
 import store
@@ -65,7 +65,30 @@ DEFAULT_PRICING = {
     "router:cara": (0.14, 0.28),
 }
 DEFAULT_CHAT_PRICE = (3.0, 15.0)  # unknown models priced conservatively
+
+# Chat-template delimiters per model family — the strings a model honours ABOVE
+# anything written in the prompt body, so untrusted content carrying one must be
+# neutralised (common._FENCE_TAG_RE). Kept beside the pricing table so adding a
+# model slug prompts the question «what are its delimiters?» (ADR-0016); the
+# test suite asserts every entry is stripped.
+CHAT_TEMPLATE_DELIMITERS = {
+    "deepseek": ("<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>"),
+    "kimi": ("<|im_start|>", "<|im_end|>"),
+    "llama": ("<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>", "<|begin_of_text|>"),
+    "gemma": ("<start_of_turn>", "<end_of_turn>"),
+    "mistral": ("[INST]", "[/INST]", "<<SYS>>", "<</SYS>>"),
+    "openai": ("<|start|>", "<|end|>", "<|message|>", "<|channel|>"),
+}
 STT_PRICE_PER_MINUTE = 0.006
+
+def urlopen(request, timeout=None):
+    """Every request this module makes leaves through the credential opener
+    (ADR-0016): no redirects — a 30x can never forward the Bearer header to
+    another host — and no proxies from the environment. Module-level on purpose:
+    the suite patches `llm.urlopen` to script gateway replies."""
+    return common.credential_open(request, timeout=timeout)
+
+
 EMBED_PRICE_PER_1M = 0.02  # BGE-M3-class embedding, USD per 1M tokens
 # Health probes must not hold the single thread for the full LLM_TIMEOUT: three
 # models x 90 s is 4.5 minutes of a frozen bot during exactly the outage the
@@ -255,8 +278,10 @@ _FIXED_MODEL_TEMPERATURES = {
 
 
 def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
-         timeout=None):
-    """Budget-guarded chat completion; logs usage; returns content string."""
+         timeout=None, meta=None):
+    """Budget-guarded chat completion; logs usage; returns content string.
+    `meta`, when a dict is passed, receives `finish_reason` (ADR-0014: a
+    json_required profile retries a length-cut answer instead of benching)."""
     # The single longest thing this process does is wait on a model. Mark progress
     # HERE rather than only between updates: with failover a routed turn is
     # 2 models x 2 attempts x LLM_TIMEOUT, and no watchdog budget can cover that.
@@ -311,6 +336,8 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
     elapsed = max(0.0, time.monotonic() - started)
     choices = data.get("choices") or []
     content = str((choices[0].get("message") or {}).get("content") or "") if choices else ""
+    if isinstance(meta, dict):
+        meta["finish_reason"] = str((choices[0].get("finish_reason") if choices else "") or "")
     # Meter the call BEFORE the no-choices guard so a billed-but-empty response is still
     # counted. If the provider omits a usage block (some meta-routes do), estimate from
     # text length (script-aware, see _estimate_tokens) instead of logging $0 — an
@@ -523,30 +550,40 @@ def default_profiles(cfg):
     # fallback on any fresh deploy that hasn't set LLM_PROFILES_JSON. gpt-oss-20b is the
     # slug the live box overrides to, and it's priced in DEFAULT_PRICING.)
     fb = ["openai-gpt-oss-20b"]
+    # ADR-0014: every model of a profile must be able to answer in the profile's
+    # shape. The router's only fallback returned truncated non-JSON at the 200-token
+    # cap in 7 of 13 calls — so the router gets a real JSON-capable fallback first
+    # and a 400-token cap; and every profile carries its own timeout (a converse
+    # call once hung 181 s before failover on the global LLM_TIMEOUT).
     return {
-        "router_fast": {"primary": router, "fallbacks": fb, "max_tokens": 200, "json_required": True},
-        "ingest_balanced": {"primary": primary, "fallbacks": fb, "max_tokens": 600, "json_required": True},
-        "ask_grounded": {"primary": primary, "fallbacks": [], "max_tokens": 500, "json_required": False},
+        "router_fast": {"primary": router, "fallbacks": ["deepseek-v4-pro"] + fb,
+                        "max_tokens": 400, "json_required": True, "timeout": 30},
+        "ingest_balanced": {"primary": primary, "fallbacks": fb, "max_tokens": 600,
+                            "json_required": True, "timeout": 45},
+        "ask_grounded": {"primary": primary, "fallbacks": [], "max_tokens": 500,
+                         "json_required": False, "timeout": 60},
         # Warm free-form conversation as Cara. A little temperature so she sounds
         # alive rather than canned; a fallback so a chat never dead-ends.
         "converse_warm": {"primary": primary, "fallbacks": fb, "max_tokens": 320,
-                          "json_required": False, "temperature": 0.7},
-        "memory_curator": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
+                          "json_required": False, "temperature": 0.7, "timeout": 60},
+        "memory_curator": {"primary": primary, "fallbacks": fb, "max_tokens": 700,
+                           "json_required": True, "timeout": 60},
         # Weekly memory consolidation (dedup + contradiction judgment) — infrequent but needs
         # real semantic judgment, so it gets a stronger model than the fast curator.
-        "memory_consolidate": {"primary": primary, "fallbacks": fb, "max_tokens": 700, "json_required": True},
+        "memory_consolidate": {"primary": primary, "fallbacks": fb, "max_tokens": 700,
+                               "json_required": True, "timeout": 60},
         # Compound work is infrequent and high-leverage. Keep the fast model for
         # routing; use the stronger open model for bounded plans/synthesis, with
         # Flash as the independent-family availability backstop.
         "task_planner": {"primary": "deepseek-v4-pro",
                          "fallbacks": ["deepseek-4-flash"],
-                         "max_tokens": 1600, "json_required": True},
+                         "max_tokens": 1600, "json_required": True, "timeout": 90},
         "task_synthesis": {"primary": "deepseek-v4-pro",
                            "fallbacks": ["deepseek-4-flash"],
-                           "max_tokens": 1200, "json_required": True},
+                           "max_tokens": 1200, "json_required": True, "timeout": 90},
         "improvement_evaluator": {"primary": "deepseek-v4-pro",
                                   "fallbacks": ["deepseek-4-flash"],
-                                  "max_tokens": 1000, "json_required": True},
+                                  "max_tokens": 1000, "json_required": True, "timeout": 90},
         # (review_balanced retired 2026-07-25: the weekly review is deterministic,
         # nothing requested the profile — a dead entry only invites stale config.)
     }
@@ -633,27 +670,53 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
     mt = max_tokens or prof.get("max_tokens", 300)
     jr = prof.get("json_required", False) if json_required is None else json_required
     temp = prof.get("temperature", 0)
+    # ADR-0014: a per-profile timeout (router 30 s, ingest 45 s, memory/converse
+    # 60 s, task 90 s) instead of the one global LLM_TIMEOUT for everything.
+    try:
+        prof_timeout = float(prof.get("timeout") or 0) or None
+    except (TypeError, ValueError):
+        prof_timeout = None
     models = [prof["primary"]] + list(prof.get("fallbacks") or [])
     active = [m for m in models if not store.cooldown_active(conn, profile, m)]
-    if not active:
-        active = models  # everything is cooling down — try anyway rather than fail outright
+    all_benched = not active
+    if all_benched:
+        # Everything is cooling down: ONE model, ONE attempt (ADR-0014) — trying the
+        # whole chain twice each is how a dead provider cost 4 × LLM_TIMEOUT per turn.
+        active = [prof["primary"]]
+        if current_trace():
+            store.trace_event(conn, current_trace(), "llm.all_benched",
+                              f"{profile}: every model on cooldown; one attempt on the primary",
+                              level="warn", skill=skill, data={"profile": profile})
     last_exc = None
     last_content = None
     failed_models = []
     primary_model = prof["primary"]
     for model in active:
         content = None
-        for attempt in range(2):
+        cap = mt
+        for attempt in range(1 if all_benched else 2):
+            meta = {}
             try:
-                content = chat(cfg, conn, skill, messages, max_tokens=mt, model=model,
-                               temperature=temp)
+                content = chat(cfg, conn, skill, messages, max_tokens=cap, model=model,
+                               temperature=temp, timeout=prof_timeout, meta=meta)
+                # A length-cut answer on a json_required profile is not a broken
+                # model: retry the SAME model once with a doubled cap, never bench.
+                if (jr and meta.get("finish_reason") == "length" and attempt == 0
+                        and not all_benched and parse_llm_json(content) is None):
+                    if current_trace():
+                        store.trace_event(conn, current_trace(), "llm.length_retry",
+                                          f"{profile}:{model} cut at {cap} tokens; retrying at {cap * 2}",
+                                          level="info", skill=skill)
+                    cap *= 2
+                    content = None
+                    continue
                 break
             except BudgetExceeded:
                 raise  # budget hard-stop sits above failover
             except LLMError as exc:
                 last_exc = exc
                 transient = _is_transient_llm_error(str(exc))
-                if transient and attempt == 0:
+                if transient and attempt == 0 and not all_benched:
                     time.sleep(0.8)      # a 'Platform overloaded' 429 usually clears in ~1s
                     continue             # retry the SAME (preferred) model once
                 # Bench only briefly for a transient blip; a hard error gets the full cooldown.

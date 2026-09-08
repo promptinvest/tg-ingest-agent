@@ -21,6 +21,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import common
 import events
 import fetch
 import ingest
@@ -100,8 +101,11 @@ class HermesMixin:
             final_url, title, text = fetch.fetch(
                 url, timeout=self.cfg.fetch_timeout, max_bytes=self.cfg.fetch_max_bytes)
         except fetch.FetchError as exc:
-            log(f"fetch failed for {url}: {exc}")
-            store.issue_add(self.conn, chat_id, "fetch_failed", f"{url}: {exc}")
+            # ADR-0016: the journal and the issue log keep host + path only —
+            # a query string can carry a token the boss pasted without noticing.
+            safe_url = common.redact_url(url)
+            log(f"fetch failed for {safe_url}: {exc}")
+            store.issue_add(self.conn, chat_id, "fetch_failed", f"{safe_url}: {exc}")
             key = exc.reason if exc.reason in ("fetch_blocked", "fetch_private") else "fetch_failed"
             self.reply(chat_id, T(lang, key, error=str(exc)) if key == "fetch_failed"
                        else T(lang, key))
@@ -128,7 +132,7 @@ class HermesMixin:
         if row_id is None:
             # Nothing was stored — say so instead of falling silent after
             # «Читаю ссылку…» (he'd believe the page was filed).
-            log(f"fetched page not stored (id collision) for {url}")
+            log(f"fetched page not stored (id collision) for {common.redact_url(url)}")
             store.issue_add(self.conn, chat_id, "fetch_not_stored", url[:200])
             self.reply(chat_id, T(lang, "fetch_store_failed"))
             return

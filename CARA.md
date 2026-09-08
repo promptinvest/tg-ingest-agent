@@ -1335,6 +1335,26 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   настроек?" — language, timezone, auto‑calendar, named notes.
 
 ### Reporting & ops
+- **Routing record (2026‑09‑08, ADR‑0019):** every turn — model‑routed, resolved by
+  a deterministic branch, or a button press — leaves one `router.completed` trace
+  event with its action and `source`; the model‑routed one also carries the
+  clipped params, the raw router output (400 chars) and the rejection reason. A
+  correction («ты ошиблась», «не надо», «why did you») within ten minutes of a
+  state‑changing route files a `route_corrected` issue. The weekly markdown gains
+  a **Routing** block: turns by action, deterministic vs model‑routed, unusable
+  router outputs, corrections. Album flushes run under their own inbound trace.
+  The maintenance jobs are queued only when there is work (a pending or unindexed
+  note, an expired card; media cleanup hourly), so the jobs table and the journal
+  no longer fill with no‑op rows; the Stage C event queue was retired.
+- **Model failover contract (2026‑09‑08, ADR‑0014):** every model of a profile can
+  answer in the profile's shape — the router's fallback chain is `deepseek-v4-pro`
+  then the small open model, with a 400‑token cap; every profile has its own
+  timeout (router 30 s, ingest 45 s, memory/converse/ask 60 s, task 90 s); a
+  `length`‑cut JSON answer is retried once on the SAME model with a doubled cap and
+  never benches it; with every model on cooldown one model gets one attempt
+  (`llm.all_benched` trace) instead of the whole chain twice. The health sweep
+  probes fallbacks on the first, every fourth and every troubled sweep, and a
+  fleet notice names a down fallback as one.
 - **Morning brief (opt‑in, documented 2026‑07‑26 — it shipped undocumented):** OFF until
   you ask for it — «делай мне утреннюю сводку» / «присылай утренний бриф» (and
   «не нужна утренняя сводка» turns it back off; it is stored as the `morning_brief`
@@ -2194,6 +2214,21 @@ its details.
 ## 7. Security & safety
 
 - **Owner‑only** access on both chat and sender id, for messages, reactions, buttons.
+  **Before persistence (2026‑09‑08, ADR‑0016):** `process_update_batch` derives the
+  chat and the sender for all four update kinds (`message`/`edited_message`
+  `from.id`, a callback's `from.id`, a reaction's `user.id`) and checks `is_owner`
+  BEFORE `telegram_update_receive` and `trace.start` — a stranger's update is never
+  stored, traced or handled; the offset still advances past it, a kv counter
+  (`stranger_updates`) grows, and at most one `stranger_traffic` issue per UTC day
+  reaches the weekly review. The gates inside `handle_update` stay as the second line.
+- **Credentials never travel (ADR‑0016):** every Bearer request (chat, embeddings,
+  remote STT) goes through `common.credential_open` — an opener with NO redirects
+  (a 30x raises instead of forwarding the header to another host) and NO proxies
+  from the environment. Fence look‑alikes are neutralized per model family
+  (`<｜…｜>`, `<∣…∣>`, `<¦…¦>`, `<start_of_turn>`), with the family table
+  (`llm.CHAT_TEMPLATE_DELIMITERS`) kept beside the pricing table and tested
+  row by row. `fetch.validate_url` turns a malformed port into `fetch_blocked`
+  instead of a crash, and URLs are redacted to `scheme://host/…` in issues and logs.
 - Closed router action set; JSON‑only router output; untrusted‑content delimiters for
   forwarded/quoted text and stored notes (prompt‑injection defense); confidence gate.
   **Forwarded content in the conversation log is fenced too** (2026‑07‑02): a forward
@@ -2405,9 +2440,44 @@ is documented twice. The lists above stay as the short tour; they are not the ca
   The deploy payload NAMES the scripts it carries (`deploy.sh` + the two installers)
   rather than globbing `*.sh`, so a one‑shot left at the repo root can never ride onto the
   live box; `migrate-cara-to-pd.sh` is deliberately excluded and checked in a checkout.
-  The stage dir is never wiped, so both one‑shots had already reached
-  `/root/tg-ingest-agent-stage/` while the glob was in place — a real deploy (not
-  `--test`) now deletes those two copies by name before installing.
+  **Phase C (2026‑09‑08, ADR‑0017):** the stage dir is now WIPED before every
+  untar (dotfiles kept — `apply_token.py` reads a staged `.token.env`), replacing
+  the by‑name deletion of the two old one‑shots; nothing an older payload shipped
+  can ride into a test run or an install. The installer takes a `sqlite3 .backup`
+  of `ingest.db` (`ingest-pre-install.db`, 0600) into the same root‑only backup
+  dir before any restart, and runs `agent.py --check-config` on the live env
+  before touching anything. A deploy that fails AFTER the install marks the fresh
+  manifest `failed` (`deployment_notice.py mark-failed`, via an `ERR` trap in the
+  remote block), prints the receipt in the terminal, and Cara posts the same ❌
+  receipt to the fleet chat on her next start; a failure before the install
+  leaves the previous verified receipt alone. **Rollback that works today:** the
+  box has no read‑only deploy key, so `--pull`/`--rollback` exit 2 before any
+  mutation and print the recipe — `git checkout <sha> && bash deploy.sh` from the
+  workstation deploys that working tree (tests, install, verify), then
+  `git checkout main`; enabling the git modes needs `ssh-keygen -t ed25519 -f
+  /root/.ssh/github-tg-ingest-deploy` on the box plus the `.pub` as a read‑only
+  GitHub deploy key. CI prints the suite's wall time and runs `shellcheck` on the
+  three root scripts.
+- **Failure visibility (2026‑09‑08, ADR‑0015):** `agent.py --check-config [env]`
+  parses the EnvironmentFile the way systemd does (`common.read_env_file`) and runs
+  the real `load_config`, exit 2 on a bad numeric knob or an unknown `STT_MODE`.
+  The unit carries `StartLimitIntervalSec=600` / `StartLimitBurst=5` — five starts
+  inside ten minutes stop it as `failed` instead of an endless 10‑second loop —
+  and `OnFailure=cara-failed-notify@%N.service`, a root one‑shot that posts ONE
+  fleet line (unit name, the journal/status commands, the `--check-config` hint)
+  using only the fleet credentials from the env. Ten minutes of consecutive
+  `getUpdates` failures, or a 409 conflict at once, send the boss one
+  `poll_stalled` line by a bare API call (sending works while receiving does not)
+  and file a `poll_stalled` issue; `poll_back` follows the first successful poll.
+  Terminal failures (dead letter, database stall, dead model chain, terminal job
+  failure, failed album) log with journald priorities (`<3>` err / `<4>` warning),
+  so `journalctl -p err -u tg-ingest-agent` finds them.
+- **Sandbox parity (2026‑09‑08, ADR‑0016):** the main unit gained `MemoryHigh=768M`,
+  `MemoryMax=1G`, `TasksMax=64`, `ProtectKernelLogs`, `ProtectClock`,
+  `ProtectHostname`, `ProtectProc=invisible`, `RestrictRealtime`, `RemoveIPC` —
+  the siblings' set; `ProcSubset=pid` deliberately not (sysinfo reads
+  `/proc/meminfo`). The three hand‑made plaintext DB copies in the state dir's
+  `backups/` were encrypted with the backup format and the plaintext removed.
 - **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key); pushed
   after every commit.
 - **Tests:** the full offline suite (no network; temp SQLite) — deliberately not a

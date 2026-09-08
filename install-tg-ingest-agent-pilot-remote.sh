@@ -41,14 +41,25 @@ MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py remind
 # The unit file and the env template are STAGED FILES now, not heredocs in this
 # script: one copy of each, versioned in the repo. A stage dir that predates that
 # change must fail loudly here rather than install half a service.
+FAILED_NOTIFY_UNIT_SRC=cara-failed-notify@.service
 for required in tg_ingest_agent.py verify-cara-runtime.sh "$UNIT_SRC" \
   "$WORKER_UNIT_SRC" "$MENTOR_UNIT_SRC" "$MENTOR_RUNNER_UNIT_SRC" \
-  "$ENV_TEMPLATE" $MODULES; do
+  "$FAILED_NOTIFY_UNIT_SRC" "$ENV_TEMPLATE" $MODULES; do
   if [ ! -f "$STAGE_DIR/$required" ]; then
     echo "Missing $STAGE_DIR/$required (stage it first)." >&2
     exit 1
   fi
 done
+
+# ADR-0015: validate the LIVE env with the code about to be installed BEFORE any
+# mutation — a bad numeric knob or an unknown STT_MODE used to surface only as a
+# crash loop after the restart, with no alert possible.
+if [ -f "$ENV_FILE" ]; then
+  if ! python3 "$STAGE_DIR/tg_ingest_agent.py" --check-config "$ENV_FILE"; then
+    echo "Live env file rejected by --check-config; aborting before any change." >&2
+    exit 1
+  fi
+fi
 
 # Pre-install backups: each one holds a copy of the env file (secrets), and they
 # used to accumulate forever — disk growth plus a widening secrets footprint.
@@ -76,6 +87,13 @@ for existing in "$ENV_FILE" "$MENTOR_ENV_FILE" "$MENTOR_RUNNER_ENV_FILE" \
 done
 if [ -d "$APP_DIR" ]; then
   cp -a "$APP_DIR" "$BACKUP_DIR/opt-app"
+fi
+# ADR-0017: a restorable copy of the live DB BEFORE any restart, beside the env and
+# unit backups (root-only dir, pruned with them). sqlite's online backup — never
+# cp of a file that is open with a WAL.
+if [ -f "$STATE_DIR/ingest.db" ] && command -v sqlite3 >/dev/null 2>&1; then
+  sqlite3 "$STATE_DIR/ingest.db" ".backup '$BACKUP_DIR/ingest-pre-install.db'"
+  chmod 0600 "$BACKUP_DIR/ingest-pre-install.db"
 fi
 
 export DEBIAN_FRONTEND=noninteractive
@@ -157,7 +175,8 @@ for source_file in "$STAGE_DIR"/*.py \
   "$STAGE_DIR/tg-ingest-agent.service" \
   "$STAGE_DIR/cara-worker.service" \
   "$STAGE_DIR/cara-mentor.service" \
-  "$STAGE_DIR/cara-mentor-runner.service"; do
+  "$STAGE_DIR/cara-mentor-runner.service" \
+  "$STAGE_DIR/cara-failed-notify@.service"; do
   install -m 0644 "$source_file" "$MENTOR_SOURCE_TMP/$(basename "$source_file")"
 done
 
@@ -165,7 +184,8 @@ done
 # systemd sandboxes and the live verifier—not only Python imports.
 ( cd "$APP_DIR" && cat agent.py $MODULES verify-cara-runtime.sh \
     "$STAGE_DIR/$UNIT_SRC" "$STAGE_DIR/$WORKER_UNIT_SRC" \
-    "$STAGE_DIR/$MENTOR_UNIT_SRC" "$STAGE_DIR/$MENTOR_RUNNER_UNIT_SRC" |
+    "$STAGE_DIR/$MENTOR_UNIT_SRC" "$STAGE_DIR/$MENTOR_RUNNER_UNIT_SRC" \
+    "$STAGE_DIR/$FAILED_NOTIFY_UNIT_SRC" |
     sha1sum | cut -c1-12 ) > "$APP_DIR/VERSION"
 chmod 0644 "$APP_DIR/VERSION"
 install -m 0644 "$APP_DIR/VERSION" "$MENTOR_SOURCE_TMP/VERSION"
@@ -206,6 +226,9 @@ install -m 0644 "$STAGE_DIR/$WORKER_UNIT_SRC" \
 install -m 0644 "$STAGE_DIR/$MENTOR_UNIT_SRC" "$MENTOR_UNIT_FILE"
 install -m 0644 "$STAGE_DIR/$MENTOR_RUNNER_UNIT_SRC" \
   "$MENTOR_RUNNER_UNIT_FILE"
+# ADR-0015: the OnFailure one-shot the main unit names.
+install -m 0644 "$STAGE_DIR/$FAILED_NOTIFY_UNIT_SRC" \
+  "/etc/systemd/system/$FAILED_NOTIFY_UNIT_SRC"
 python3 "$APP_DIR/cara_mentor.py" write-env "$ENV_FILE" "$MENTOR_ENV_FILE"
 chown root:"$MENTOR_GROUP" "$MENTOR_ENV_FILE"
 chmod 0640 "$MENTOR_ENV_FILE"

@@ -1,0 +1,12 @@
+# Fired by `OnFailure=cara-failed-notify@%n.service` on the main unit (ADR-0015):
+# with Restart=always a crash loop never shows as a failed unit until the start
+# limiter trips — and when it does, this one-shot posts ONE fleet notice so the
+# silence is not the only symptom. Root reads the fleet credentials from the
+# main env file; nothing else from it is used or printed.
+[Unit]
+Description=Fleet notice: %i failed (systemd OnFailure)
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/deployment_notice.py unit-failed --unit %i --env /etc/tg-ingest-agent.env

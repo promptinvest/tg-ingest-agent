@@ -83,14 +83,60 @@ def mark_verified(path, verification_summary):
 
 
 def load_verified(path, build_version):
+    """A manifest worth announcing for THIS build: `verified` (the success
+    receipt) or `failed` (ADR-0017 — a deploy that aborted after install used to
+    leave the new build running with no receipt at all)."""
     try:
         manifest = _load(path)
     except (OSError, ValueError, TypeError):
         return None
-    if (manifest.get("status") != "verified"
+    if (manifest.get("status") not in ("verified", "failed")
             or manifest.get("build_version") != str(build_version or "").strip()):
         return None
     return manifest
+
+
+def mark_failed(path, error):
+    """Record that the deploy step failed AFTER the install wrote this manifest.
+    Only a fresh (`installed`) manifest is touched: a failure before the install
+    reaches the previous, still-verified receipt and must leave it alone."""
+    manifest = _load(path)
+    if manifest.get("status") != "installed":
+        return False
+    # The manifest's field set is fixed (`_load` rejects extras): the error rides
+    # in verification_summary and the failure time in verified_at.
+    manifest["status"] = "failed"
+    manifest["verification_summary"] = _text(
+        "deploy FAILED: " + " ".join(str(error or "deploy step failed").split()), 500)
+    manifest["verified_at"] = _now()
+    _atomic_json(path, manifest)
+    return True
+
+
+def unit_failed_notice(unit, env_path, opener=None):
+    """One fleet line when systemd's OnFailure fires for `unit` (ADR-0015). Reads
+    ONLY the fleet credentials from the env file; never prints them."""
+    import common
+    try:
+        env = common.read_env_file(env_path)
+    except OSError as exc:
+        log(f"unit-failed notice: cannot read {env_path}: {exc}")
+        return 1
+    token = str(env.get("FLEET_NOTIFY_BOT_TOKEN") or "").strip()
+    chat_id = str(env.get("FLEET_NOTIFY_CHAT_ID") or "").strip()
+    label = str(env.get("FLEET_NOTIFY_LABEL") or "tg-ingest-agent (Cara)").strip()
+    if not token or not chat_id:
+        log("unit-failed notice: FLEET_NOTIFY_BOT_TOKEN/CHAT_ID not configured")
+        return 1
+    text = (f"❌ {label}: systemd unit {unit} FAILED (start limit hit or terminal exit). "
+            f"Check: journalctl -u {unit} -n 80 · systemctl status {unit} · "
+            f"a bad env value: python3 /opt/tg-ingest-agent/agent.py --check-config")
+    try:
+        (opener or tg_call)(token, "sendMessage", {"chat_id": chat_id, "text": text})
+    except TelegramError as exc:
+        log(f"unit-failed notice not delivered: {exc}")
+        return 1
+    return 0
 
 
 def verify_manifest(path, build_version):
@@ -161,6 +207,15 @@ def format_message(label, manifest):
     revision = manifest["source_revision"]
     if manifest.get("source_dirty"):
         revision += " + local changes"
+    if manifest.get("status") == "failed":
+        return "\n".join([
+            f"❌ {label} — deployment FAILED after install",
+            f"Receipt: {manifest['deployment_id']}",
+            f"Build: {manifest['build_version']}",
+            f"Source: {revision}",
+            f"Error: {manifest.get('verification_summary') or 'deploy step failed'}",
+            f"Rollback backup: {manifest['backup_dir']}",
+        ])[:4000]
     return "\n".join([
         f"✅ {label} — deployment verified",
         f"Receipt: {manifest['deployment_id']}",
@@ -195,7 +250,7 @@ def _load(path):
         _text(value[key], limit, allow_empty=key == "verification_summary")
     if value["verified_at"] is not None:
         _text(value["verified_at"], 80)
-    if value["status"] not in {"installed", "verified"}:
+    if value["status"] not in {"installed", "verified", "failed"}:
         raise ValueError("deployment manifest status is invalid")
     return value
 
@@ -225,7 +280,21 @@ def main(argv=None):
     check = sub.add_parser("verify-manifest")
     check.add_argument("--manifest", required=True)
     check.add_argument("--build-file", required=True)
+    failed = sub.add_parser("mark-failed")
+    failed.add_argument("--manifest", required=True)
+    failed.add_argument("--error", required=True)
+    unit = sub.add_parser("unit-failed")
+    unit.add_argument("--unit", required=True)
+    unit.add_argument("--env", default="/etc/tg-ingest-agent.env")
     args = parser.parse_args(argv)
+    if args.command == "mark-failed":
+        changed = mark_failed(args.manifest, args.error)
+        print("manifest marked failed" if changed else "manifest untouched (not a fresh install)")
+        if changed:
+            print(Path(args.manifest).read_text(encoding="utf-8"))
+        return 0
+    if args.command == "unit-failed":
+        return unit_failed_notice(args.unit, args.env)
     if args.command == "write-installed":
         write_installed(
             args.manifest,

@@ -607,7 +607,11 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
             store.trace_event(conn, common.current_trace(), "router.invalid_output", reason,
                               level="warn", skill="router",
                               data={"reason": reason, "raw": str(reply)[:200]})
-        return {"action": "clarify", "params": {}, "confidence": 0.0, "invalid": reason}
+        return {"action": "clarify", "params": {}, "confidence": 0.0, "invalid": reason,
+                "raw": str(reply or "")[:400]}
+    # The model's raw output rides on every decision (clipped) so the routing
+    # record can hold it (ADR-0019: 38% of August traces had no routing detail).
+    validated["raw"] = str(reply or "")[:400]
     # When unsure, talk — don't interrogate. A low-confidence read drops to warm
     # free-form chat (where Cara can answer or ask naturally) rather than the cold
     # "уточни, пожалуйста" template. converse changes no state, so this never acts
@@ -615,7 +619,9 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
     if validated["confidence"] < cfg.confidence_threshold and validated["action"] not in (
         "clarify", "out_of_scope", "converse", "smalltalk"
     ):
+        low = {"action": "converse", "params": {}, "confidence": validated["confidence"],
+               "raw": validated["raw"], "demoted_from": validated["action"]}
         if validated["action"] in {"task_start", "multi_action"}:
-            return {"action": "clarify", "params": {}, "confidence": validated["confidence"]}
-        return {"action": "converse", "params": {}, "confidence": validated["confidence"]}
+            low["action"] = "clarify"
+        return low
     return validated

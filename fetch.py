@@ -101,7 +101,11 @@ def validate_url(url):
     if host in METADATA_IPS:
         raise FetchError("metadata endpoint blocked", "fetch_private")
     try:
-        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80),
+        port = parsed.port  # `urlparse` is lazy: a bad port raises HERE, not above
+    except ValueError as exc:
+        raise FetchError("invalid port in URL", "fetch_blocked") from exc
+    try:
+        infos = socket.getaddrinfo(host, port or (443 if parsed.scheme == "https" else 80),
                                    proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         raise FetchError(f"cannot resolve host: {exc}", "fetch_failed") from exc
