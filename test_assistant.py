@@ -27517,3 +27517,134 @@ class PhaseC20260908Tests(unittest.TestCase):
         self.assertEqual(deployment_notice.unit_failed_notice("u", env, opener=sent.append), 1)
         self.assertEqual(deployment_notice.unit_failed_notice("u", env / "nope",
                                                               opener=sent.append), 1)
+
+
+class FiredCardReplyReschedule20260908Tests(unittest.TestCase):
+    """2026-09-08 incident: a TG Reply to the fired «LinkedIn» card saying
+    «Напомни в 17:45» opened a NEW subject-less reminder («Про что напомнить?»)
+    instead of moving LinkedIn. The reply binding worked; the follow-up grammar
+    knew «отложи/напомни НА/ДО HH:MM» but not the everyday «В HH:MM», so the
+    bound message fell through to the router's time-only CREATE shortcut."""
+
+    def setUp(self):
+        import tg_ingest_agent
+        self.mod = tg_ingest_agent
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = make_config(ALLOWED_CHAT_IDS="1", DB_PATH=str(Path(self.tmp.name) / "fr.db"),
+                          MEDIA_DIR=str(Path(self.tmp.name) / "m"))
+        self.agent = tg_ingest_agent.Agent(cfg)
+        self.conn = self.agent.conn
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _fired(self, title, minutes_ago, card_msg_id):
+        now = datetime.now(timezone.utc)
+        rid = store.reminder_add(self.conn, 1, title,
+                                 (now - timedelta(minutes=minutes_ago)).isoformat())
+        store.reminder_touch_fired(self.conn, rid,
+                                   (now - timedelta(minutes=minutes_ago)).isoformat())
+        self.agent._remember_fired_message(card_msg_id, rid)
+        store.kv_set(self.conn, "last_reminder_id", str(rid))
+        return rid
+
+    def _future_clock(self):
+        """A local HH:MM safely in the future today, and its UTC due."""
+        offset = timedelta(hours=self.agent.tz_offset())
+        local_now = datetime.now(timezone.utc) + offset
+        target = local_now + timedelta(hours=2)
+        if target.date() != local_now.date():
+            target = local_now + timedelta(minutes=5)
+        target = target.replace(second=0, microsecond=0)
+        return f"{target.hour:02d}:{target.minute:02d}", (target - offset)
+
+    def _update(self, text, reply_to=None, mid=50):
+        msg = {"chat": {"id": 1}, "from": {"id": 1}, "message_id": mid, "text": text}
+        if reply_to is not None:
+            msg["reply_to_message"] = {"message_id": reply_to,
+                                       "from": {"id": 9, "is_bot": True},
+                                       "text": "⏰ Олег, напоминаю: LinkedIn"}
+        return {"update_id": 1000 + mid, "message": msg}
+
+    def _drive(self, update):
+        sent = []
+
+        def fake_tg(token, method, params=None, **kw):
+            if method == "sendMessage":
+                sent.append((params or {}).get("text", ""))
+            return {"message_id": 51}
+        with mock.patch.object(self.mod, "tg_call", side_effect=fake_tg), \
+                mock.patch.object(self.mod, "tg_set_reaction"), \
+                mock.patch.object(llm, "chat_profile",
+                                  side_effect=AssertionError("deterministic path expected")):
+            self.agent.handle_update(update)
+        return sent
+
+    def test_incident_reply_with_v_time_moves_the_named_reminder(self):
+        rid = self._fired("LinkedIn", 93, 4955)              # fired 93 min ago, window long gone
+        clock, due = self._future_clock()
+        sent = self._drive(self._update(f"Напомни в {clock}", reply_to=4955))
+        row = store.reminder_get(self.conn, rid)
+        self.assertEqual(row["status"], "active")
+        self.assertEqual(reminders.parse_iso_utc(row["due_utc"]), due)   # moved, not recreated
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reminders").fetchone()[0], 1)
+        self.assertIsNone(store.pending_get(self.conn, 1))                # no «Про что?» draft
+        self.assertTrue(any("LinkedIn" in s for s in sent), sent)
+        self.assertFalse(any("Про что" in s for s in sent), sent)
+
+    def test_verbless_and_lead_in_shapes_bind_when_replied(self):
+        for text in ("в {clock}", "давай в {clock}", "лучше в {clock}", "напомни мне в {clock}",
+                     "Перенеси на {clock}"):
+            with self.subTest(text=text):
+                store.pending_clear(self.conn, 1)
+                self.conn.execute("DELETE FROM reminders")
+                self.conn.commit()
+                rid = self._fired("LinkedIn", 40, 4955)
+                clock, due = self._future_clock()
+                self._drive(self._update(text.format(clock=clock), reply_to=4955))
+                row = store.reminder_get(self.conn, rid)
+                self.assertEqual(reminders.parse_iso_utc(row["due_utc"]), due, text)
+                self.assertEqual(
+                    self.conn.execute("SELECT COUNT(*) FROM reminders").fetchone()[0], 1)
+
+    def test_grammar_edges(self):
+        parse = self.agent._parse_fired_followup
+        self.assertIsNone(parse("на 12", title="LinkedIn"))               # verb-less на: not ours
+        self.assertIsNone(parse("до 12", title="LinkedIn"))
+        self.assertEqual(parse("отложи на 2 часа", title="LinkedIn"),
+                         ("amend", {"snooze_minutes": 120}))               # duration idiom kept
+        action, params = parse("напомни в 2 часа", title="LinkedIn")      # «в 2 часа» = at 02:00
+        self.assertNotIn("snooze_minutes", params)
+        self.assertIn(action, ("amend", "clarify_time"))
+        self.assertIsNone(parse("напомни в 17:45 про Эрику", title="LinkedIn"))  # own subject
+
+    def test_without_a_reply_the_three_hour_window_decides(self):
+        # No reply: inside RECURRING_FOLLOWUP_WINDOW (3 h) a subject-less «напомни
+        # в HH:MM» belongs to the fired one-shot (the same rule «напомни через
+        # полчаса» already followed); beyond it the create verb opens a new
+        # draft (ADR-0004) and the fired reminder is untouched.
+        rid = self._fired("LinkedIn", 93, 4955)
+        clock, due = self._future_clock()
+        sent = self._drive(self._update(f"Напомни в {clock}"))
+        self.assertEqual(reminders.parse_iso_utc(store.reminder_get(self.conn, rid)["due_utc"]),
+                         due)
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertFalse(any("Про что" in s for s in sent), sent)
+        self.conn.execute("DELETE FROM reminders")
+        self.conn.commit()
+        rid = self._fired("LinkedIn", 240, 4956)
+        before = store.reminder_get(self.conn, rid)["due_utc"]
+        clock, _ = self._future_clock()
+        sent = self._drive(self._update(f"Напомни в {clock}", mid=60))
+        self.assertEqual(store.reminder_get(self.conn, rid)["due_utc"], before)
+        pending = store.pending_get(self.conn, 1)
+        self.assertIsNotNone(pending)
+        self.assertEqual(pending["kind"], "reminder_partial")
+        self.assertTrue(any("Про что" in s for s in sent), sent)
+        # ...unless he REPLIES to the old card: replying is explicit, however old
+        store.pending_clear(self.conn, 1)
+        clock, due = self._future_clock()
+        self._drive(self._update(f"Напомни в {clock}", reply_to=4956, mid=61))
+        self.assertEqual(reminders.parse_iso_utc(store.reminder_get(self.conn, rid)["due_utc"]),
+                         due)

@@ -1103,7 +1103,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
     Reply to a fired notification and names no target of its own, that reminder IS
     the target if it is still active, and a not‑found refusal if it is closed —
     never a different one. An explicit `#N`/title in the same message still wins,
-    and so does a positional «второе».
+    and so does a positional «второе». The bound follow‑up grammar accepts the
+    everyday «**в** HH:MM» as well as «на/до HH:MM» — a reply to the fired card
+    saying «Напомни в 17:45», «в 17:45», «давай в 17:45» or «напомни мне в 17:45»
+    moves THAT reminder to 17:45 (2026‑09‑08: it used to fall through to the
+    router's time‑only create and ask «Про что напомнить?»). Without a reply the
+    usual window rule applies: within three hours of an unacknowledged one‑shot the
+    same words snooze it; later they start a new reminder (ADR‑0004).
     **Deterministic follow‑up parsing fixes (2026‑07‑25):** «отложи на
     послезавтра» now moves it **two** days (a substring test read «завтра» inside
     it and re‑armed the alarm a full day early; "day after tomorrow" works too),

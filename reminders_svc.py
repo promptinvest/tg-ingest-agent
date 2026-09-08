@@ -392,12 +392,22 @@ class ReminderMixin:
         # means 12:00 LOCAL TODAY, not 12 minutes/hours from now and not a trip
         # through the probabilistic router. If today's clock time already passed,
         # fail closed with a clarification instead of silently rolling tomorrow.
+        # 2026-09-08 incident: he REPLIED to the fired «LinkedIn» card with
+        # «Напомни в 17:45» and got «Про что напомнить?» — the grammar knew
+        # «напомни НА/ДО HH:MM» but not the everyday «В HH:MM», so the bound
+        # follow-up fell through to the router's time-only CREATE shortcut. «в»
+        # is a preposition here now, and a bound message may drop the verb
+        # («в 17:45», «давай в 17:45», «лучше в 17:45»); «на/до» without a verb
+        # stay out (a bare «на 2» is too easily something else).
         absolute = re.fullmatch(
-            r"(?:отложи|перенеси|напомни)(?:\s+(?:это|напоминание|его))?\s+"
-            r"(?P<prep>на|до)\s+(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?"
+            r"(?:(?:давай|лучше|ладно|ок|окей)[,\s]+)?"
+            r"(?:(?P<verb>отложи|перенеси|напомни)(?:\s+(?:это|напоминание|его|мне))?\s+)?"
+            r"(?P<prep>на|до|в)\s+(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?"
             r"(?:\s*(?P<unit>час(?:а|ов)?|ч))?[.! ]*",
             t,
         )
+        if absolute is not None and absolute.group("prep") != "в" and not absolute.group("verb"):
+            absolute = None
         if absolute is not None and absolute.group("prep") == "на" \
                 and absolute.group("unit") and not absolute.group("minute"):
             # «отложи на 2 часа» is the DURATION idiom — postpone BY two hours,
