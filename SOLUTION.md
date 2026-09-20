@@ -1,5 +1,8 @@
 # Cara — Solution Specification
 
+Local checkout and shared KB paths (updated September 20, 2026):
+[working agreement](CLAUDE.md#local-workspace-and-kbs).
+
 > **Bounded Mentor v2 reliability (2026-08-24; v1 shipped 2026-07-29):** a
 > separate inference-only reviewer
 > consumes bounded redacted feedback/issue evidence, not conversations, and may

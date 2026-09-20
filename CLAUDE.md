@@ -3,9 +3,9 @@
 These standing rules from the operator apply to every session on this project.
 
 ## Key references (read these first)
-This is a SEPARATE repo (`promptinvest/tg-ingest-agent`), a **sibling** of the
-Codex / `promptinvest/dataplatform` repo — Cara's code is NOT inside Codex. The
-knowledge bases live in that sibling Codex repo:
+This is the independent `promptinvest/tg-ingest-agent` repository, with its
+canonical checkout at `projects/tg-ingest-agent/`. Shared operator knowledge
+bases live in the sibling local Codex directory, outside application Git working trees:
 
 - **Specs (source of truth — every change updates BOTH, same commit):**
   [`CARA.md`](CARA.md) (capabilities + architecture) and
@@ -21,7 +21,17 @@ knowledge bases live in that sibling Codex repo:
 
 (From this folder the KBs are `../Codex/…`; absolute base is
 `C:\Users\okiri\OneDrive\Документы\projects\Codex\`. A session opened here must
-reach across to that sibling repo to read or update them.)
+reach across to that shared local directory to read or update them.)
+
+## Local workspace and KBs
+
+Open `../Projects.code-workspace` and select `tg-ingest-agent`. Project operator
+material is grouped under `../_local/tg-ingest-agent/`; protected originals remain
+accessible through their existing paths. Shared host KBs and credential
+references stay in `../Codex/`. The old Codex Git worktree is archived and its
+push path is disabled; publish project changes only from this repository.
+These operator paths belong to the local multi-project workspace and are not
+included in a fresh GitHub clone. Historical deployment helpers remain historical.
 
 ## 1. Analyze the architecture before implementing
 Before writing or changing anything, study the current architecture (the
@@ -131,7 +141,7 @@ weaken the closed-world router.
   `deploy.sh --test` runs tests only (no install). Connection details (key,
   known_hosts) are in the PD-VPS KB and `../Codex/.env.pd-digitalocean-secrets`.
 - Tests run on the VPS stage dir (`python3 -m unittest discover -p 'test_*.py'`)
-  — the Windows workstation has no Python and OneDrive is slow. The remote
+  — keep test execution off the OneDrive-synced working copy. The remote
   scripts run `set -o pipefail` (fixed 2026-07-02), so a FAILED test run or a
   mid-way installer abort now fails the deploy instead of being masked by the
   `| tail` pipes.

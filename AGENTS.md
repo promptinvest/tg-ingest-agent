@@ -6,5 +6,6 @@ doing anything, then follow it exactly, including:
 
 - The spec-update rule: every change updates BOTH `CARA.md` and `SOLUTION.md`
   in the same commit.
-- The sibling-repo knowledge bases in `../Codex/` (PD-VPS host KB, fleet KB).
+- The shared local knowledge bases in `../Codex/` (PD-VPS host KB, fleet KB),
+  outside application Git working trees; see CLAUDE.md for current project paths.
 - Analyze architecture first; argue before acting when unsure.

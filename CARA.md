@@ -1,5 +1,8 @@
 # Cara — Capabilities, Features & Architecture
 
+Local checkout and shared KB paths (updated September 20, 2026):
+[working agreement](CLAUDE.md#local-workspace-and-kbs).
+
 > **Bounded Mentor v2 reliability (2026-08-24; v1 shipped 2026-07-29):** Cara
 > has a separate weekly
 > reviewer that receives only redacted task feedback and unresolved issue
