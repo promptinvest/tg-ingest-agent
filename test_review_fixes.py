@@ -175,6 +175,126 @@ class DigestTests(unittest.TestCase):
                 conn.close()
 
 
+class DigestContentTests(unittest.TestCase):
+    NOW = datetime(2026, 10, 7, 14, 35, tzinfo=timezone.utc)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = store.open_db(Path(self.tmp.name) / "digest.db")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def add(self, kind, detail, at, **values):
+        with mock.patch.object(store, "_now", return_value=at):
+            store.issue_add(self.conn, 111, kind, detail)
+        for field, value in values.items():
+            self.conn.execute(f"UPDATE issue_patterns SET {field}=? WHERE kind=? AND detail=?",
+                              (value, kind, detail))
+        self.conn.commit()
+
+    def test_realistic_old_html_and_repair_events_do_not_become_chat_diagnostics(self):
+        self.add("llm_error", "router: inference request failed with HTTP 503: <!DOCTYPE html>\n"
+                 '<html><title>Provider maintenance</title><link href="https://provider.invalid/a">',
+                 "2026-08-24T17:58:51+00:00")
+        self.add("converse_action_repaired", "An old reply that was rewritten", "2026-08-21T10:00:00+00:00")
+        self.add("correction", "A rule already learned", "2026-07-28T10:00:00+00:00")
+        self.add("curation_skipped_after_fabrication", "no rule learned from a fake action",
+                 "2026-08-01T10:00:00+00:00")
+        before = list(self.conn.execute("SELECT * FROM issue_patterns"))
+        body = issue_digest.text(self.conn, "ru", now=self.NOW, tz_offset=3)
+        self.assertIn("Ранее записанные, ещё не отмеченные закрытыми", body)
+        self.assertIn("24.08.2026", body)
+        self.assertIn("Код ошибки: 503.", body)
+        for raw in ("<html", "DOCTYPE", "provider.invalid", "router:", "An old reply", "already learned", "fake action"):
+            self.assertNotIn(raw, body)
+        self.assertNotIn("за месяц:", body)
+        self.assertNotIn("Новые или повторившиеся", body)
+        self.assertNotIn("Закрыто", body)
+        self.assertEqual(list(self.conn.execute("SELECT * FROM issue_patterns")), before)
+
+    def test_owner_example_is_localized_redacted_and_one_line(self):
+        self.add("boss_reported", "Напомнила\nне про ту задачу. password=example-secret-value",
+                 "2026-10-06T10:00:00+00:00")
+        body = issue_digest.text(self.conn, "ru", now=self.NOW)
+        self.assertIn("Проблемы, о которых ты сообщил", body)
+        self.assertIn("Пример: «Напомнила не про ту задачу.", body)
+        self.assertNotIn("boss_reported", body)
+        self.assertNotIn("example-secret-value", body)
+        self.assertIn("07.09.2026–07.10.2026", body)
+
+    def test_recent_recurrence_does_not_report_lifetime_count_as_monthly_count(self):
+        self.add("router_invalid_output", "Напомни в воскресенье", "2026-10-06T10:00:00+00:00",
+                 first_seen_at="2026-07-01T10:00:00+00:00", occurrences=73)
+        body = issue_digest.text(self.conn, "ru", "2026-09-07T10:00:00+00:00", now=self.NOW)
+        self.assertIn("Новые или повторившиеся", body)
+        self.assertIn("открытых записей: 1", body)
+        self.assertNotIn("73", body)
+        self.assertIn("Напомни в воскресенье", body)
+
+    def test_only_completed_handling_stays_quiet_without_resolving_history(self):
+        for kind in issue_digest.COMPLETED_HANDLING:
+            self.add(kind, "Historical handling evidence", "2026-10-06T10:00:00+00:00")
+        self.assertEqual(issue_digest.text(self.conn, "en", now=self.NOW), "")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM issue_patterns WHERE status='open'").fetchone()[0], 3)
+
+    def test_unknown_kind_does_not_leak_identifiers_or_diagnostics(self):
+        self.add("internal_transport_xyz", "Traceback: private diagnostic", "2026-10-06T10:00:00+00:00")
+        body = issue_digest.text(self.conn, "en", now=self.NOW)
+        self.assertIn("Other problems to review", body)
+        self.assertNotIn("internal_transport_xyz", body)
+        self.assertNotIn("Traceback", body)
+
+    def test_previous_digest_and_resolutions_use_timezone_aware_boundaries(self):
+        self.add("boss_reported", "Earlier", "2026-10-06T10:00:00+00:00")
+        self.add("fetch_failed", "A closed request", "2026-10-05T10:00:00+00:00",
+                 status="resolved", resolved_at="2026-10-07T15:00:00+03:00")
+        self.add("calendar_failed", "Resolved before this period", "2026-09-01T10:00:00+00:00",
+                 status="resolved", resolved_at="2026-09-07T09:00:00+03:00")
+        body = issue_digest.text(self.conn, "en", "2026-09-07T10:00:00+03:00", now=self.NOW, tz_offset=3)
+        self.assertIn("Since the previous digest: 07.09.2026–07.10.2026", body)
+        self.assertIn("Issue entries marked resolved during this period: 1.", body)
+
+    def test_first_period_uses_a_calendar_month_at_month_end(self):
+        self.add("boss_reported", "Fixture", "2026-03-30T10:00:00+00:00")
+        body = issue_digest.text(self.conn, "en", now=datetime(2026, 3, 31, tzinfo=timezone.utc))
+        self.assertIn("28.02.2026–31.03.2026", body)
+
+    def test_long_example_has_a_word_boundary_and_explicit_ellipsis(self):
+        self.add("boss_reported", "Repeat this sentence without breaking words. " * 8,
+                 "2026-10-06T10:00:00+00:00")
+        body = issue_digest.text(self.conn, "en", now=self.NOW)
+        line = next(line for line in body.splitlines() if "Example:" in line)
+        self.assertTrue(line.endswith("…”."))
+        self.assertIn(line.split("“", 1)[1][:-3].split()[-1],
+                      ("Repeat", "this", "sentence", "without", "breaking", "words."))
+
+    def test_message_budget_keeps_whole_entries_footer_and_omitted_count(self):
+        for kind in ("boss_reported", "correction_unresolved", "llm_error", "router_invalid_output", "fetch_failed"):
+            self.add(kind, "A reasonably long example about the request. " * 5,
+                     "2026-10-06T10:00:00+00:00")
+        with mock.patch.object(issue_digest, "MAX_MESSAGE_CHARS", 550):
+            body = issue_digest.text(self.conn, "en", now=self.NOW)
+        self.assertLessEqual(len(body), 550)
+        self.assertIn("Other open entries:", body)
+        self.assertTrue(body.endswith("Tell me which problem to start with."))
+        self.assertTrue(all(line.endswith((".", ":")) for line in body.splitlines()))
+
+    def test_october_receipt_prevents_any_replacement_send_on_restart(self):
+        store.kv_set(self.conn, "issue_digest_month", "2026-10")
+        store.kv_set(self.conn, "issue_digest_delivered_at", "2026-10-07T14:35:30.203859+00:00")
+        agent = issue_digest.IssueDigestMixin()
+        agent.conn = self.conn
+        agent.tz_offset = lambda: 3
+        agent._send_all = mock.Mock()
+        with mock.patch.object(issue_digest, "datetime") as clock:
+            clock.now.return_value = self.NOW
+            agent.check_monthly_issue_digest()
+        agent._send_all.assert_not_called()
+        self.assertEqual(store.kv_get(self.conn, "issue_digest_delivered_at"), "2026-10-07T14:35:30.203859+00:00")
+
+
 from testlib import make_config, setUpModule, tearDownModule
 
 
@@ -267,7 +387,7 @@ class RuntimeFixTests(unittest.TestCase):
         self.assertEqual({p.name for p in root.glob("*.db.gz")},{names[0],names[3],names[4]})
 
     def test_digest_is_delivery_gated_deduplicated_and_excludes_legacy(self):
-        store.issue_add(self.conn,111,"router_invalid","fixture open")
+        store.issue_add(self.conn,111,"boss_reported","fixture open")
         store.issue_add(self.conn,111,"obsolete","fixture legacy")
         self.conn.execute("UPDATE issue_patterns SET status='legacy' WHERE kind='obsolete'");self.conn.commit()
         body=issue_digest.text(self.conn,"en")

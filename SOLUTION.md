@@ -11,7 +11,15 @@ Mentor and its candidate runner are stopped and disabled; their code, tests,
 source snapshots and prior results remain preserved. A delivery-gated monthly
 open-issue digest replaces their automatic weekly cycle (ADR-0029), first eligible
 on October 7 at 10:00 owner-local time. The digest uses existing issue records,
-redacts examples, stays quiet when none are open, and applies no changes.
+uses dated RU/EN summaries and short sanitized owner examples. Recent activity
+and older entries still marked open appear separately; counts refer to open
+entries, not lifetime incidents. Completed repair/learning observations remain
+in history and are omitted from the unresolved list. Technical bodies, internal
+kind names and zero-resolution claims are omitted. Whole entries fit the message
+budget, with an explicit count of any omitted entries. The October delivery
+receipt remains unchanged; installing this formatter sends no replacement digest.
+The digest stays quiet when no actionable entries are open and applies no changes.
+See the [focused October 7 digest fix](docs/cara-digest-fix-2026-10-07.md).
 
 Own voice transcription runs on one helper thread without a SQLite connection.
 The poll thread continues callbacks, messages and scheduler ticks, meters the
