@@ -1,5 +1,9 @@
 # Cara reminder conversation correction - October 7, 2026
 
+Current running release: `a793c8679dbbe53da6a8cee9c63e523ebdc77a94`, build
+`6f1997651bbe`, receipt `9924725dba2e893cdb8f4c01`. Deployed and accepted
+`2026-10-07T18:13:03.217273+00:00`. Earlier checkpoints below are retained history.
+
 The owner requested analysis and repair of the latest irritating exchange,
 following the standing "fix & deploy what needed" instruction. Read-only chat,
 reminder events and routing traces establish three linked failures:
@@ -91,3 +95,39 @@ at `/tmp/cara-fix-verify-20261007-522d6c2488` (4.880 seconds including setup).
 Fresh forward preflight passed at `2026-10-07T18:08:00.795839+00:00`; first-install
 source bytes, healthy services, database, archive hashes, environment and digest
 state remain exact. `preflight-forward.json` preserves this separate checkpoint.
+
+## Final accepted release
+
+The exact final deployment gate passed **1,718 tests**, with **nine unchanged
+stage skips**, in **87.089 seconds**. Source `a793c86` is clean, build
+`6f1997651bbe`, receipt `9924725dba2e893cdb8f4c01`. Installed
+`2026-10-07T18:11:24.140114+00:00`; runtime/worker/spool/SQLite/systemd
+verification passed `2026-10-07T18:11:49.930100+00:00`. Protected installer backup:
+`/root/codex-hardening-backups/20261007T181014Z-tg-ingest-agent` (database 0600).
+
+Final acceptance passed `2026-10-07T18:13:03.217273+00:00`. Installed normalized
+source matches the final candidate, SQLite quick_check is ok and foreign-key
+checks have zero errors. Cara/worker are active/enabled with zero unexpected Cara
+restarts; Mentor/runner remain inactive/disabled. Whisper/Nikki keep their PIDs,
+and both production Daily Lingo containers remain healthy. Unrelated isolated
+QA containers present in the raw host snapshot were not changed by this release.
+
+Every original row matches the protected installer snapshot: 241 issue
+observations, 202 issue patterns, 91 messages, three files, 67 journal entries,
+1,235 conversation turns, 108 reminders, 477 reminder events, 11 Mentor cycles
+and 20,684 usage records. Original reminders, prior duplicate events, issue
+statuses and details remain intact; no command is replayed or data repair guessed.
+The environment hash, all seven weekly gzip/encrypted archive pairs and their
+0600 permissions, backup dates/pins and the October digest receipt are unchanged.
+
+The final normal deployment notice was accepted at
+`2026-10-07T18:12:45.053865+00:00`, one recorded attempt. The first actual
+deployment's single receipt remains preserved; no historical message or digest
+was resent. Protected final record:
+`/root/cara-conversation-fix-20261007-cf346a81/acceptance-final.json`.
+The original `preflight.json`, `acceptance.json`, forward preflight and failed
+synthetic regression are retained. Existing spool-canary cleanup permission
+warnings were retained; the canary and runtime verifier passed.
+
+Final documentation changes do not alter the verified runtime. Both specifications
+and the host/fleet KBs now identify this final accepted release.

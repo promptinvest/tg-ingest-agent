@@ -3,12 +3,13 @@
 Local checkout and shared KB paths (updated September 20, 2026):
 [working agreement](CLAUDE.md#local-workspace-and-kbs).
 
-Current running release: code `cb639e7`, build `bb2a35395bb8`; see the
-[October 7 monthly digest correction](docs/cara-digest-fix-2026-10-07.md).
+Current running release: code `a793c86`, build `6f1997651bbe`; see the
+[October 7 reminder conversation correction](docs/cara-conversation-fix-2026-10-07.md).
+The [monthly digest correction](docs/cara-digest-fix-2026-10-07.md) remains included.
 The earlier [review and archive-recovery record](docs/cara-review-fixes-2026-10-07.md) remains preserved.
 
 The [October 7 reminder conversation correction](docs/cara-conversation-fix-2026-10-07.md)
-is implemented for verification/deployment. A requested later day is confirmed
+is deployed and accepted. A requested later day is confirmed
 without repeating the day-or-close question. Same-day repeated snoozes first
 report their actual result; the optional question stays bound to the re-armed
 one-shot (or a recurring reminder's echo). A bare yes asks which alternative.

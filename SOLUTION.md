@@ -3,8 +3,9 @@
 Local checkout and shared KB paths (updated September 20, 2026):
 [working agreement](CLAUDE.md#local-workspace-and-kbs).
 
-Current running release: code `cb639e7`, build `bb2a35395bb8`; see the
-[October 7 monthly digest correction](docs/cara-digest-fix-2026-10-07.md).
+Current running release: code `a793c86`, build `6f1997651bbe`; see the
+[October 7 reminder conversation correction](docs/cara-conversation-fix-2026-10-07.md).
+The [monthly digest correction](docs/cara-digest-fix-2026-10-07.md) remains included.
 The earlier [review and archive-recovery record](docs/cara-review-fixes-2026-10-07.md) remains preserved.
 
 The [October 7 reminder conversation correction](docs/cara-conversation-fix-2026-10-07.md)
@@ -20,7 +21,7 @@ recurring fires still create echoes without moving the series anchor. Identical
 absolute-day actions avoid duplicate writes and preserve undo. Foreign pending
 cards, subject guards, owner isolation and action-truth validation remain.
 The repair prompt requests missing information instead of repeating a complete
-command or offering an unbound yes. This candidate awaits deployment acceptance.
+command or offering an unbound yes. This release is deployed and accepted.
 The final card-reply check adds `source_reminder_id` to that choice: the original
 recurring card and its effective echo are the same bound question. Replies to
 that source move the existing echo; unrelated explicit alarm replies still win.
