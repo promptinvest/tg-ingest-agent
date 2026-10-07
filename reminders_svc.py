@@ -301,7 +301,8 @@ class ReminderMixin:
         if not pending or pending["kind"] != "reminder_snooze_choice":
             return False
         rid = pending["payload"].get("reminder_id")
-        if getattr(self, "turn_reply_reminder_id", None) not in (None, rid):
+        if getattr(self, "turn_reply_reminder_id", None) not in (
+                None, rid, pending["payload"].get("source_reminder_id")):
             return False
         row = store.reminder_get(self.conn, rid)
         if row is None or row["chat_id"] != chat_id or row["status"] != "active":
@@ -1275,7 +1276,8 @@ class ReminderMixin:
                     if not remaining and (pending is None or pending["kind"] in
                                           ("reminder_fired", "reminder_snooze_choice")):
                         store.pending_set(self.conn, chat_id, "reminder_snooze_choice",
-                                          {"reminder_id": eff, "title": title}, ttl_seconds=1800)
+                                          {"reminder_id": eff, "source_reminder_id": rid,
+                                           "title": title}, ttl_seconds=1800)
                     return (confirmation + "\n" + T(lang, "reminder_snooze_escalate", title=title),
                             reminders.escalate_keyboard(eff, lang), remaining)
                 self._clear_snooze_choice(chat_id, rid)

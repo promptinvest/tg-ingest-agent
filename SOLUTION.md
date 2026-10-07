@@ -21,6 +21,9 @@ absolute-day actions avoid duplicate writes and preserve undo. Foreign pending
 cards, subject guards, owner isolation and action-truth validation remain.
 The repair prompt requests missing information instead of repeating a complete
 command or offering an unbound yes. This candidate awaits deployment acceptance.
+The final card-reply check adds `source_reminder_id` to that choice: the original
+recurring card and its effective echo are the same bound question. Replies to
+that source move the existing echo; unrelated explicit alarm replies still win.
 
 The owner-facing poller and isolated local worker are the active runtime.
 Mentor and its candidate runner are stopped and disabled; their code, tests,

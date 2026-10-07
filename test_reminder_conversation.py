@@ -251,6 +251,39 @@ class ReminderConversationTests(unittest.TestCase):
         self.assertEqual(store.reminder_get(self.conn, echo)["due_utc"], self.tomorrow())
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reminders").fetchone()[0], 2)
 
+    def test_reply_to_recurring_snooze_card_moves_existing_echo_once(self):
+        rid = self.reminder(recurrence="daily")
+        original = dict(store.reminder_get(self.conn, rid))
+        self.prior_snoozes(rid)
+        self.agent._remember_fired_message(700, rid)
+        # Deterministic same-day button time, independent of midnight.
+        fixed = datetime.now(timezone.utc).replace(hour=12, minute=0)
+        with mock.patch("reminders_svc.datetime", wraps=datetime) as clock:
+            clock.now.return_value = fixed
+            self.callback(rid, "h1")
+        pending = store.pending_get(self.conn, 1)
+        self.assertEqual(pending["kind"], "reminder_snooze_choice")
+        echo = pending["payload"]["reminder_id"]
+        self.agent.turn_reply_reminder_id = self.agent.fired_reminder_for_message(700)
+        self.dispatch("завтра")
+        self.assertEqual(store.reminder_get(self.conn, echo)["due_utc"], self.tomorrow())
+        self.assertEqual(dict(store.reminder_get(self.conn, rid)), original)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reminders").fetchone()[0], 2)
+        self.assertIsNone(store.pending_get(self.conn, 1))
+
+    def test_reply_to_another_alarm_keeps_its_stronger_target(self):
+        source = self.reminder(recurrence="daily")
+        echo = self.reminder(fired=False)
+        other = self.reminder("банк")
+        before = dict(store.reminder_get(self.conn, echo))
+        store.pending_set(self.conn, 1, "reminder_snooze_choice", {
+            "reminder_id": echo, "source_reminder_id": source, "title": "отчёт"})
+        self.agent.turn_reply_reminder_id = other
+        self.dispatch("завтра")
+        self.assertEqual(dict(store.reminder_get(self.conn, echo)), before)
+        self.assertEqual(store.reminder_get(self.conn, other)["due_utc"], self.tomorrow())
+        self.assertEqual(store.pending_get(self.conn, 1)["payload"]["reminder_id"], echo)
+
     def test_new_subject_is_not_eaten_as_snooze_choice(self):
         rid = self.reminder(fired=False)
         before = dict(store.reminder_get(self.conn, rid))

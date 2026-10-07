@@ -17,6 +17,9 @@ ambiguous titles ask for a pinned choice. Repeated identical day clicks preserve
 the event history and undo date. Existing 09:00 defaults and confirmation guards
 remain. Conversation repair asks only for missing details and does not deny
 Cara's reminder capabilities or earlier completed work.
+The snooze choice remembers both its original alarm and effective echo, so a
+Telegram reply to the recurring card moves that echo once. A reply to a different
+alarm retains its own stronger target.
 
 The owner-facing poller and isolated local worker are the active runtime.
 Mentor and its candidate runner are stopped and disabled; their code, tests,

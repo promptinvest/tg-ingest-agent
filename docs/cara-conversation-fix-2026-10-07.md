@@ -69,3 +69,25 @@ batch-member regression so a named move retains the other fired members' pending
 context; the deploy gate will verify that exact final source again.
 The final focused/source-hygiene gate passed **47 cases** in **3.449 seconds**
 at `/tmp/cara-fix-verify-20261007-56ad437fa1` (5.386 seconds including setup).
+
+The first installed correction was `a018932`, build `ed6ecf5807d3`, receipt
+`c39a8a6c7b4ad35e3d65f070`. Its deployment gate passed 1,716 cases with nine
+unchanged stage skips in 80.240 seconds; runtime verification passed at
+`2026-10-07T18:04:59.774483+00:00`. Protected backup:
+`/root/codex-hardening-backups/20261007T180430Z-tg-ingest-agent`.
+Acceptance at `2026-10-07T18:06:08.799960+00:00` preserved all original rows,
+the environment, archives and digest receipt. One deployment notice was sent
+at `2026-10-07T18:05:50.793133+00:00`, one recorded attempt.
+
+Final review reproduced a recurring-card reply edge case at
+`/tmp/cara-fix-verify-20261007-97d683a80a`: the original card's Telegram reply
+binding bypassed the new echo-bound choice and created a second echo. The
+failed synthetic result is retained. The forward correction adds the original
+source id to the choice's binding, so replying to that card moves the existing
+echo once. Replies to unrelated alarms keep their stronger target. This requires
+a new exact-source full deployment gate; the first receipt does not certify it.
+The forward focused/source-hygiene gate passed **49 cases** in **3.221 seconds**
+at `/tmp/cara-fix-verify-20261007-522d6c2488` (4.880 seconds including setup).
+Fresh forward preflight passed at `2026-10-07T18:08:00.795839+00:00`; first-install
+source bytes, healthy services, database, archive hashes, environment and digest
+state remain exact. `preflight-forward.json` preserves this separate checkpoint.
