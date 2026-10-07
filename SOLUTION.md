@@ -3,8 +3,9 @@
 Local checkout and shared KB paths (updated September 20, 2026):
 [working agreement](CLAUDE.md#local-workspace-and-kbs).
 
-Current running release: code `36f2075`, build `9d041a123f25`; see the
-[October 7 verification, deployment and archive-recovery record](docs/cara-review-fixes-2026-10-07.md).
+Current running release: code `cb639e7`, build `bb2a35395bb8`; see the
+[October 7 monthly digest correction](docs/cara-digest-fix-2026-10-07.md).
+The earlier [review and archive-recovery record](docs/cara-review-fixes-2026-10-07.md) remains preserved.
 
 The owner-facing poller and isolated local worker are the active runtime.
 Mentor and its candidate runner are stopped and disabled; their code, tests,

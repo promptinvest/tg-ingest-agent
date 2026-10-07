@@ -41,3 +41,8 @@ Owner authorized implementation and deployment on 2026-10-07.
   diagnostics, keeps recent/older entries distinct, excludes completed handling
   from unresolved defects and preserves all raw history and delivery receipts.
   Evidence: [focused fix](../cara-digest-fix-2026-10-07.md).
+
+- 2026-10-07: digest correction deployed and accepted at 16:04:28 UTC; code
+  `cb639e7`, build `bb2a35395bb8`, receipt `bdff7ad30587f268eb05c122`.
+  Full 1,694-case gate passed with nine unchanged skips; original October digest
+  receipt and every checked issue/history row remained unchanged.
