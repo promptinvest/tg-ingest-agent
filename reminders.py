@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import store
+import reminder_time
 from texts import T
 
 RECURRENCES = ("none", "daily", "weekly")
@@ -63,7 +64,7 @@ def followup_extra_words(text, title=""):
     for w in re.split(r"\W+", str(text or "").casefold()):
         if not w or w.isdigit():
             continue
-        if w in _FOLLOWUP_SCAFFOLD or any(w.startswith(s) for s in _FOLLOWUP_STEMS):
+        if w in _FOLLOWUP_SCAFFOLD or w in reminder_time.WEEKDAYS or any(w.startswith(s) for s in _FOLLOWUP_STEMS):
             continue
         if w in title_words:
             continue

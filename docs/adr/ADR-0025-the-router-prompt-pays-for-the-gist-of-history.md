@@ -1,6 +1,6 @@
 # ADR-0025: The router prompt pays for the gist of history, not its bytes
 
-- Status: Proposed
+- Status: Implemented 2026-10-07 (router clipping and input telemetry)
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,5 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+
+- 2026-10-07: owner authorized ?fix all & deploy? following the code/live review. Implemented 2026-10-07 (router clipping and input telemetry). Verification and deployment evidence: `../../docs/cara-review-fixes-2026-10-07.md`.

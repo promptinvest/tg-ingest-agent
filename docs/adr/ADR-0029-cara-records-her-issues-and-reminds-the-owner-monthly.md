@@ -1,6 +1,6 @@
 # ADR-0029: Cara records her issues and reminds the owner of them once a month
 
-- Status: Accepted (owner decision 2026-09-07; implementation deferred — backlog)
+- Status: Implemented 2026-10-07
 - Date: 2026-09-07
 - Phase: Phase D — decisions the owner must make
 - Source: owner decision on the Mentor question raised by ADR-0021 (2026-09-07 review)
@@ -26,8 +26,10 @@ task-runtime-mentor#1 … #12 (by retirement rather than repair), proactive-jobs
 
 ## Depends on
 
-nothing (implementation deferred by owner instruction: do not start now)
+Owner authorized implementation and deployment on 2026-10-07.
 
 ## Status log
 
 - 2026-09-07: accepted by the owner («let her record her issues and let her remind me of them once a month, starting a month from now. Don't start any implementation now, put that into the backlog»). Not implemented.
+
+- 2026-10-07: owner authorized ?fix all & deploy? following the code/live review. Implemented 2026-10-07. Verification and deployment evidence: `../../docs/cara-review-fixes-2026-10-07.md`.

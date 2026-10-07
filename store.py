@@ -4045,13 +4045,14 @@ def habit_streak(conn, fwd_chat_id):
 
 def usage_add(conn, skill, kind, model, tokens_in=0, tokens_out=0, seconds=None, cost_usd=0.0):
     ts = _now()
-    conn.execute(
+    cursor = conn.execute(
         "INSERT INTO llm_usage (ts, day, month, skill, kind, model, tokens_in, tokens_out,"
         " seconds, cost_usd, trace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (ts, ts[:10], ts[:7], skill, kind, model, tokens_in, tokens_out, seconds, cost_usd,
          _trace_id()),
     )
     conn.commit()
+    return cursor.lastrowid
 
 
 def usage_total(conn, period):

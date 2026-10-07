@@ -3,21 +3,48 @@
 Local checkout and shared KB paths (updated September 20, 2026):
 [working agreement](CLAUDE.md#local-workspace-and-kbs).
 
-> **Bounded Mentor v2 reliability (2026-08-24; v1 shipped 2026-07-29):** Cara
-> has a separate weekly
-> reviewer that receives only redacted task feedback and unresolved issue
-> patterns — never the conversation database. Proposal review and candidate
-> construction are separate jobs: Cara durably stores the proposal and its
-> immutable evidence before any optional candidate call. Transient candidate
-> transport/timeout/429/5xx failures get at most three bound attempts with
-> 1-hour then 6-hour backoff; malformed, forged, unsafe, source-changed, and
-> ambiguous results fail closed without retry. A second, networkless service
-> applies a validated bounded patch and its dedicated regression test
-> only inside a disposable source copy and runs the full discovery suite.
-> Passing candidates become review-ready artifacts; neither service can merge,
-> push, install, restart, deploy, or alter Cara's live source, prompts, policy,
-> tools, model configuration, database, or secrets.
->
+The owner-facing poller and isolated local worker are the active runtime.
+Mentor and its candidate runner are stopped and disabled; their code, tests,
+source snapshots and prior results remain preserved. A delivery-gated monthly
+open-issue digest replaces their automatic weekly cycle (ADR-0029), first eligible
+on October 7 at 10:00 owner-local time. The digest uses existing issue records,
+redacts examples, stays quiet when none are open, and applies no changes.
+
+Own voice transcription runs on one helper thread without a SQLite connection.
+The poll thread continues callbacks, messages and scheduler ticks, meters the
+result, saves a durable transcript and resumes the original update. Text received
+while transcription is running may be answered first. Other inference is bounded
+by an absolute 90-second turn deadline; each network attempt has its existing
+profile cap. Late transport results never receive the database connection.
+
+Every paid gateway request reserves its conservative maximum cost before sending.
+Successful known usage settles that new row; ambiguous failures retain an explicit
+unknown-usage reserve across restarts. Definite rejected requests release theirs.
+Recent genuine successful chat calls replace redundant paid health probes.
+
+Reminder event times and notification times are separate: explicit relative
+notification offsets are calculated from the source text; a request lacking a time
+asks for one. Named weekdays work on fired follow-ups. Short Latin entity names
+such as SSL inherit the conversation language. An explicit Telegram reply to the
+gratitude reminder remains journal-bound after its short pending window expires.
+KB answers display only validated verbatim excerpts with actual retrieved note
+numbers; empty or invalid evidence produces a deterministic refusal.
+
+Local checked snapshots run daily (`BACKUP_LOCAL_INTERVAL_DAYS=1`); encrypted
+off-box delivery keeps the existing weekly `BACKUP_INTERVAL_DAYS=7` anchor and
+monthly restore check. Existing weekly local recovery points are protected from
+daily rotation. No key escrow is inferred or claimed. Search is advertised as
+unavailable without its key; calendar availability describes the .ics fallback.
+
+Router replay keeps 14 turns but clips each routing hint to 400 characters plus
+up to 16 note references; the current user turn is included once. Stored history
+and warm-conversation replay remain verbatim. Spend reports expose mean/p95 router
+input and unknown reservations. `media_svc.py` and `converse_svc.py` contain pure
+moves of Agent methods; the public composed Agent interface stays compatible.
+Tests use a shared fixture library and separate gateway/media/backup modules.
+`run_tests.py` supports named subsets, full discovery, seeded shuffled order and
+per-case timings; plain deployment always runs the full offline Linux gate.
+
 > **Research & Decision Intelligence v1 (shipped 2026-07-29):** Cara can turn
 > a RU/EN research request into a governed six-step task:
 > `web.search` → three provenance-bound `source.fetch` steps →
@@ -46,8 +73,8 @@ Local checkout and shared KB paths (updated September 20, 2026):
 > forged citations, tainted URL substitution, unauthorized writes, query/spend
 > exhaustion, ambiguous Telegram delivery, forged Mentor results, unsafe patch
 > paths, secret/process/network access in candidates, and high-risk
-> self-modification. The owner-facing service, local worker, Mentor, and
-> networkless candidate runner are active/enabled; the live isolation,
+> self-modification. The owner-facing service and local worker are active/enabled; Mentor and its
+> candidate runner are disabled; the live isolation,
 > spool/source-integrity, SQLite, candidate-runner, and deployment-manifest
 > verifier is green. Each verified deployment produces a durable
 > fleet-notification receipt with its deployment id, build, source revision,
@@ -1809,7 +1836,7 @@ agent.py (tg_ingest_agent.py) — poll loop · owner gate · dispatch · pending
    ├─ sysinfo.py       read-only host stats (/proc, statvfs)
    ├─ fetch.py         SSRF-guarded URL reader
    ├─ storage.py       binary backend (local; DO Spaces S3 SigV4, dormant)
-   ├─ backup.py        weekly-by-default DB snapshot: local rotation + encrypted off-box
+   ├─ backup.py        daily local DB snapshot + weekly encrypted off-box
    │                   copy (Spaces or fleet notify chat), as a durable scheduled job;
    │                   monthly restore self-check (decrypt → gunzip → integrity_check)
    ├─ llm.py           budget-guarded gateway: chat profiles + failover + cooldowns,
@@ -2392,7 +2419,7 @@ each call, including retries; the fixed HTTPS endpoint does not follow redirects
 ambient proxies, and only three sanitized public result URLs may cross the otherwise
 closed untrusted-to-fetch boundary.
 
-Bounded Mentor: `IMPROVEMENT_WEEKDAY=6` / `IMPROVEMENT_HOUR=4` ·
+Retained dormant Mentor configuration: `MENTOR_ENABLED=false`; `IMPROVEMENT_WEEKDAY=6` / `IMPROVEMENT_HOUR=4` ·
 `MENTOR_ENABLED=true` · `MENTOR_REVIEW_SPOOL=/var/lib/cara-mentor/spool` ·
 `MENTOR_RUNNER_SPOOL=/var/lib/cara-mentor-runner/spool` ·
 `MENTOR_RESULT_TIMEOUT_HOURS=48` · `MENTOR_MODEL` (= Cara's current chat model) ·

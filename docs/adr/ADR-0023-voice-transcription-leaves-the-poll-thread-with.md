@@ -1,6 +1,6 @@
 # ADR-0023: Voice transcription leaves the poll thread, with the DB staying on it
 
-- Status: Accepted (owner 2026-09-07; implementation deferred)
+- Status: Implemented 2026-10-07
 - Date: 2026-09-07
 - Phase: Phase D — decisions the owner must make
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -29,3 +29,5 @@ ADR-0007 first; owner decision
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
 - 2026-09-07: ACCEPTED by the owner («it's OK» — the trade-off that a text sent during a transcription is answered before the voice turn is acceptable). Implementation deferred to the backlog by owner instruction; not started.
+
+- 2026-10-07: owner authorized ?fix all & deploy? following the code/live review. Implemented 2026-10-07. Verification and deployment evidence: `../../docs/cara-review-fixes-2026-10-07.md`.

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import journals
 import reminders
+import reminder_time
 import store
 from common import log
 from texts import T
@@ -359,6 +360,9 @@ class ReminderMixin:
         # message to the normal router instead.
         if reminders.followup_extra_words(t, title):
             return None
+        weekday = reminder_time.weekday_due(t, self.tz_offset())
+        if weekday:
+            return "amend", {"due_utc": weekday, **extra}
         if "пропуст" in t or "пропуск" in t or "skip today" in t:
             return "amend", {"done": True, **extra}
         if re.fullmatch(r"(?:закрой|закрыть|готово|сделано|выполнено|done|close|closed)[.! ]*", t):

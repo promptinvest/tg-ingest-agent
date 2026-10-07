@@ -1,6 +1,6 @@
 # ADR-0018: Backup posture: daily local, weekly off-box, verified before rotation
 
-- Status: Proposed
+- Status: Partially implemented 2026-10-07 (daily local / weekly off-box / snapshot integrity; escrow and telemetry follow-ups remain)
 - Date: 2026-09-07
 - Phase: Phase C — robustness, operations, security
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,5 @@ owner confirms the 2026-08-21 weekly decision concerned the off-box post, not lo
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+
+- 2026-10-07: owner authorized ?fix all & deploy? following the code/live review. Partially implemented 2026-10-07 (daily local / weekly off-box / snapshot integrity; escrow and telemetry follow-ups remain). Verification and deployment evidence: `../../docs/cara-review-fixes-2026-10-07.md`.

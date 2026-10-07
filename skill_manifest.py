@@ -276,7 +276,7 @@ def assert_proactive_allowed(action):
         raise SkillPolicyError(f"{action} is not allowed in proactive mode")
 
 
-def capability_titles(lang):
+def capability_titles(lang, cfg=None):
     """Skills worth surfacing to the operator (excludes meta glue), best for
     generating the capabilities answer from a single source of truth."""
     out = []
@@ -286,8 +286,17 @@ def capability_titles(lang):
             continue
         title = (policy.get("title") or {})
         label = title.get(lang) or title.get("en")
+        if cfg is not None and action == "calendar_add" and not _calendar_configured(cfg):
+            label = "события календаря (.ics)" if lang == "ru" else "calendar events (.ics)"
+        if cfg is not None and action == "task_start" and not getattr(cfg, "web_search_api_key", ""):
+            label = "задачи по заметкам и ссылкам; веб-поиск не подключён" if lang == "ru" else "tasks from notes and URLs; web search isn't connected"
         if not label or label in seen:
             continue
         seen.add(label)
         out.append(label)
     return out
+
+
+def _calendar_configured(cfg):
+    import gcal
+    return gcal.configured(cfg)

@@ -15,6 +15,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 import common
+import call_budget
+import inference_io
 import store
 from common import log
 
@@ -287,7 +289,19 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
     # 2 models x 2 attempts x LLM_TIMEOUT, and no watchdog budget can cover that.
     common.watchdog_ping()
     _check_budget(cfg, conn)
+    kind = "chat"
     model = model or cfg.do_model
+    # UTF-8 bytes bound tokenization conservatively; include role/protocol overhead.
+    upper_in = 512 * len(messages)
+    for message in messages:
+        content = message.get("content", "")
+        if isinstance(content, list):
+            upper_in += sum(65536 if part.get("type") == "image_url" else
+                            len(str(part.get("text", "")).encode("utf-8")) for part in content)
+        else:
+            upper_in += len(str(content).encode("utf-8"))
+    reserved = call_budget.reserve(cfg, conn, skill, "chat", model,
+        chat_cost(model, upper_in, max_tokens, pricing_table(cfg)), budget_limits, BudgetExceeded)
     temperature = _FIXED_MODEL_TEMPERATURES.get(model, temperature)
     payload = {
         "model": model,
@@ -307,10 +321,17 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
         method="POST",
     )
     started = time.monotonic()
+    if skill != "healthcheck":
+        store.kv_set(conn, f"model_chat_success:{model}", "")
     try:
-        with urlopen(request, timeout=timeout or cfg.llm_timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        data = inference_io.json_request(urlopen, request, timeout or cfg.llm_timeout, LLMError)
+    except LLMError as exc:
+        if conn is not None and getattr(exc, "request_not_sent", False):
+            call_budget.settle(conn, reserved, "rejected_" + kind)
+        raise
     except HTTPError as exc:
+        if conn is not None:
+            call_budget.rejected(conn, reserved, kind, exc.code)
         raise LLMError(
             _redacted_http_error(exc, cfg.do_key),
             transient=exc.code in {408, 425, 429} or exc.code >= 500) from exc
@@ -353,10 +374,12 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
     tokens_in = int(usage.get("prompt_tokens") or _estimate_prompt_tokens(messages))
     tokens_out = int(usage.get("completion_tokens") or _estimate_tokens(content))
     table = pricing_table(cfg)
-    store.usage_add(
-        conn, skill, "chat", model, tokens_in, tokens_out,
-        seconds=elapsed,
-        cost_usd=chat_cost(model, tokens_in, tokens_out, table),
+    cost = chat_cost(model, tokens_in, tokens_out, table)
+    if estimated:
+        cost = max(cost, conn.execute("SELECT cost_usd FROM llm_usage WHERE id=?", (reserved,)).fetchone()[0])
+    call_budget.settle(
+        conn, reserved, "unknown_chat" if estimated else "chat", tokens_in, tokens_out,
+        seconds=elapsed, cost_usd=cost,
     )
     # Metered first (a billed call is always counted), THEN the two loudness
     # signals: an unpriced slug is billing at the punitive default, and an
@@ -375,6 +398,8 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
                       "guessed": guessed})
     if not choices:
         raise LLMError("inference response had no choices")
+    if skill != "healthcheck" and content.strip():
+        store.kv_set(conn, f"model_chat_success:{model}", store._now())
     return content
 
 
@@ -385,6 +410,15 @@ def model_ok(cfg, conn, model, timeout=None):
     The probe timeout is DELIBERATELY short (and independent of LLM_TIMEOUT): the
     monitor runs inline on the only thread, so a dead provider must cost seconds
     per model, not a 90 s hang per model during the very outage it is reporting."""
+    recent = store.kv_get(conn, f"model_chat_success:{model}")
+    if recent:
+        from datetime import datetime, timezone
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(recent)).total_seconds()
+            if 0 <= age < cfg.model_health_interval:
+                return True, ""
+        except (ValueError, TypeError):
+            pass
     try:
         chat(cfg, conn, "healthcheck", [{"role": "user", "content": "ping"}],
              max_tokens=5, model=model, temperature=0,
@@ -676,6 +710,7 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
         prof_timeout = float(prof.get("timeout") or 0) or None
     except (TypeError, ValueError):
         prof_timeout = None
+    profile_end = min(inference_io.deadline.get() or float("inf"), time.monotonic() + 90)
     models = [prof["primary"]] + list(prof.get("fallbacks") or [])
     active = [m for m in models if not store.cooldown_active(conn, profile, m)]
     all_benched = not active
@@ -695,10 +730,13 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
         content = None
         cap = mt
         for attempt in range(1 if all_benched else 2):
+            remaining = profile_end - time.monotonic()
+            if remaining <= 0:
+                raise LLMError("turn deadline exceeded", transient=True)
             meta = {}
             try:
                 content = chat(cfg, conn, skill, messages, max_tokens=cap, model=model,
-                               temperature=temp, timeout=prof_timeout, meta=meta)
+                               temperature=temp, timeout=min(prof_timeout or cfg.llm_timeout, remaining), meta=meta)
                 # A length-cut answer on a json_required profile is not a broken
                 # model: retry the SAME model once with a doubled cap, never bench.
                 if (jr and meta.get("finish_reason") == "length" and attempt == 0
@@ -774,6 +812,10 @@ def embed(cfg, conn, skill, texts):
         return []
     common.watchdog_ping()      # another bounded network wait — see chat()
     _check_budget(cfg, conn)
+    kind = "embed"
+    upper = sum(len(str(t).encode("utf-8")) + 512 for t in texts)
+    reserved = call_budget.reserve(cfg, conn, skill, kind, cfg.embedding_model,
+        upper / 1_000_000 * EMBED_PRICE_PER_1M, budget_limits, BudgetExceeded)
     payload = {"model": cfg.embedding_model, "input": list(texts)}
     request = Request(
         f"{_base_url(cfg)}/embeddings",
@@ -787,9 +829,14 @@ def embed(cfg, conn, skill, texts):
     )
     started = time.monotonic()
     try:
-        with urlopen(request, timeout=cfg.llm_timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        data = inference_io.json_request(urlopen, request, cfg.llm_timeout, LLMError)
+    except LLMError as exc:
+        if conn is not None and getattr(exc, "request_not_sent", False):
+            call_budget.settle(conn, reserved, "rejected_" + kind)
+        raise
     except HTTPError as exc:
+        if conn is not None:
+            call_budget.rejected(conn, reserved, kind, exc.code)
         raise LLMError(
             _redacted_http_error(exc, cfg.do_key),
             transient=exc.code in {408, 425, 429} or exc.code >= 500) from exc
@@ -814,11 +861,13 @@ def embed(cfg, conn, skill, texts):
     vectors = [[float(x) for x in r.get("embedding") or []] for r in rows]
     if len(vectors) != len(texts):
         raise LLMError("embeddings response count mismatch")
-    tokens = int((data.get("usage") or {}).get("prompt_tokens")
-                 or sum(_estimate_tokens(t) for t in texts))
-    store.usage_add(conn, skill, "embed", cfg.embedding_model, tokens, 0,
-                    seconds=elapsed,
-                    cost_usd=tokens / 1_000_000 * EMBED_PRICE_PER_1M)
+    reported_tokens = (data.get("usage") or {}).get("prompt_tokens")
+    tokens = int(reported_tokens or sum(_estimate_tokens(t) for t in texts))
+    cost = tokens / 1_000_000 * EMBED_PRICE_PER_1M
+    if not reported_tokens:
+        cost = max(cost, conn.execute("SELECT cost_usd FROM llm_usage WHERE id=?", (reserved,)).fetchone()[0])
+    call_budget.settle(conn, reserved, "embed" if reported_tokens else "unknown_embed", tokens, 0,
+                      seconds=elapsed, cost_usd=cost)
     return vectors
 
 
@@ -920,9 +969,10 @@ def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
         text = str((json.loads(raw) or {}).get("text") or "").strip()
     except (ValueError, AttributeError):
         text = raw.strip()
-    store.usage_add(conn, skill, "stt", "whisper.cpp-server",
-                    seconds=duration_seconds, cost_usd=0.0)
-    return text
+    if conn is not None:
+        store.usage_add(conn, skill, "stt", "whisper.cpp-server",
+                        seconds=duration_seconds, cost_usd=0.0)
+    return Transcription(text, "whisper.cpp-server")
 
 
 def _transcribe_local(cfg, conn, skill, audio_path, duration_seconds):
@@ -954,13 +1004,26 @@ def _transcribe_local(cfg, conn, skill, audio_path, duration_seconds):
     finally:
         wav_path.unlink(missing_ok=True)
     text = result.stdout.decode("utf-8", errors="replace").strip()
-    store.usage_add(conn, skill, "stt", "whisper.cpp-local",
-                    seconds=duration_seconds, cost_usd=0.0)
-    return text
+    if conn is not None:
+        store.usage_add(conn, skill, "stt", "whisper.cpp-local",
+                        seconds=duration_seconds, cost_usd=0.0)
+    return Transcription(text, "whisper.cpp-local")
+
+
+class Transcription(str):
+    def __new__(cls, text, model):
+        value = str.__new__(cls, text)
+        value.model = model
+        return value
 
 
 def _transcribe_remote(cfg, conn, skill, audio_path, duration_seconds):
-    _check_budget(cfg, conn)
+    kind = "stt"
+    reserved = None
+    if conn is not None:
+        _check_budget(cfg, conn)
+        reserved = call_budget.reserve(cfg, conn, skill, kind, cfg.stt_model,
+            max(duration_seconds, 1) / 60 * STT_PRICE_PER_MINUTE, budget_limits, BudgetExceeded)
     audio_path = Path(audio_path)
     body, boundary = build_multipart(
         {"model": cfg.stt_model},
@@ -980,9 +1043,14 @@ def _transcribe_remote(cfg, conn, skill, audio_path, duration_seconds):
         method="POST",
     )
     try:
-        with urlopen(request, timeout=cfg.llm_timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        data = inference_io.json_request(urlopen, request, cfg.llm_timeout, LLMError)
+    except LLMError as exc:
+        if conn is not None and getattr(exc, "request_not_sent", False):
+            call_budget.settle(conn, reserved, "rejected_" + kind)
+        raise
     except HTTPError as exc:
+        if conn is not None:
+            call_budget.rejected(conn, reserved, kind, exc.code)
         raise LLMError(
             _redacted_http_error(exc, cfg.do_key),
             transient=exc.code in {408, 425, 429} or exc.code >= 500) from exc
@@ -1001,8 +1069,9 @@ def _transcribe_remote(cfg, conn, skill, audio_path, duration_seconds):
             "transcription response was not valid JSON", transient=True) from exc
     text = str(data.get("text") or "").strip()
     cost = (max(duration_seconds, 1) / 60.0) * STT_PRICE_PER_MINUTE
-    store.usage_add(conn, skill, "stt", cfg.stt_model, seconds=duration_seconds, cost_usd=cost)
-    return text
+    if conn is not None:
+        call_budget.settle(conn, reserved, "stt", seconds=duration_seconds, cost_usd=cost)
+    return Transcription(text, cfg.stt_model)
 
 
 # -- model output parsing helpers ----------------------------------------------

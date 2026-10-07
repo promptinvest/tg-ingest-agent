@@ -36,7 +36,7 @@ MENTOR_UNIT_SRC=cara-mentor.service
 MENTOR_RUNNER_UNIT_SRC=cara-mentor-runner.service
 ENV_TEMPLATE=tg-ingest-agent.env.example
 
-MODULES="common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py web_search.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py task_runner.py tasks_svc.py worker_client.py improvement.py deployment_notice.py cara_worker.py mentor_protocol.py mentor_client.py cara_mentor.py mentor_runner.py verify_task_runtime.py verify_mentor_runtime.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
+MODULES="media_svc.py converse_svc.py reminder_time.py call_budget.py inference_io.py voice_svc.py issue_digest.py common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py web_search.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py task_runner.py tasks_svc.py worker_client.py improvement.py deployment_notice.py cara_worker.py mentor_protocol.py mentor_client.py cara_mentor.py mentor_runner.py verify_task_runtime.py verify_mentor_runtime.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
 
 # The unit file and the env template are STAGED FILES now, not heredocs in this
 # script: one copy of each, versioned in the repo. A stage dir that predates that
@@ -87,6 +87,9 @@ for existing in "$ENV_FILE" "$MENTOR_ENV_FILE" "$MENTOR_RUNNER_ENV_FILE" \
 done
 if [ -d "$APP_DIR" ]; then
   cp -a "$APP_DIR" "$BACKUP_DIR/opt-app"
+fi
+if [ -d "$MENTOR_SOURCE" ]; then
+  cp -a "$MENTOR_SOURCE" "$BACKUP_DIR/mentor-source"
 fi
 # ADR-0017: a restorable copy of the live DB BEFORE any restart, beside the env and
 # unit backups (root-only dir, pruned with them). sqlite's online backup — never
@@ -242,8 +245,7 @@ rm -rf "$APP_DIR/__pycache__"
 systemctl daemon-reload
 systemctl enable "$SERVICE.service"
 systemctl enable "$WORKER_SERVICE.service"
-systemctl enable "$MENTOR_SERVICE.service"
-systemctl enable "$MENTOR_RUNNER_SERVICE.service"
+systemctl disable --now "$MENTOR_SERVICE.service" "$MENTOR_RUNNER_SERVICE.service"
 
 # Anchored to line start: only an ACTIVE `KEY=REPLACE_ME` counts. A commented
 # example line (`# SPACES_KEY=REPLACE_ME`, present in env.example) must not stop
@@ -257,16 +259,10 @@ if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=REPLACE_ME' "$ENV_FILE"; then
   echo "Fill in the secrets, then: systemctl start $SERVICE"
 else
   systemctl restart "$WORKER_SERVICE.service"
-  systemctl restart "$MENTOR_RUNNER_SERVICE.service"
-  systemctl restart "$MENTOR_SERVICE.service"
   systemctl restart "$SERVICE.service"
   sleep 2
   systemctl is-active --quiet "$WORKER_SERVICE.service" || {
     systemctl --no-pager --full status "$WORKER_SERVICE.service"; exit 1; }
-  systemctl is-active --quiet "$MENTOR_SERVICE.service" || {
-    systemctl --no-pager --full status "$MENTOR_SERVICE.service"; exit 1; }
-  systemctl is-active --quiet "$MENTOR_RUNNER_SERVICE.service" || {
-    systemctl --no-pager --full status "$MENTOR_RUNNER_SERVICE.service"; exit 1; }
   systemctl is-active --quiet "$SERVICE.service" || {
     systemctl --no-pager --full status "$SERVICE.service"; exit 1; }
 fi

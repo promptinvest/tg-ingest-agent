@@ -170,6 +170,10 @@ class HermesMixin:
                 store.issue_add(self.conn, chat_id, "llm_error", f"ask embed: {exc}")
             keyword = self._keyword_context(question)
             context = knowledge.fuse_contexts(semantic, keyword, self.cfg.ask_top_k)
+            if not context:
+                store.issue_add(self.conn, chat_id, "ask_no_context", question[:200])
+                self.reply(chat_id, knowledge.no_answer(lang))
+                return
             trace.event(self.conn, current_trace(), "grounding.ranked",
                         f"ask: {len(semantic)} semantic + {len(keyword)} keyword"
                         f" -> {len(context)} notes",
@@ -189,8 +193,12 @@ class HermesMixin:
             store.issue_add(self.conn, chat_id, "llm_error", f"ask: {exc}")
             self.reply(chat_id, T(lang, "llm_error"))
             return
-        if not context:
-            store.issue_add(self.conn, chat_id, "ask_no_context", question[:200])
+        checked = knowledge.checked_answer(answer, context, lang)
+        if checked is None:
+            store.issue_add(self.conn, chat_id, "ask_invalid_grounding", question[:200])
+            self.reply(chat_id, knowledge.no_answer(lang))
+            return
+        answer = checked
         delivered = self.reply(chat_id, answer.strip()[:4000])
         if delivered:
             # Citation in a DELIVERED grounded answer is a real use of the note —

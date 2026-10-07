@@ -10,9 +10,10 @@ fail() {
 [ "$(id -u)" -eq 0 ] || fail "run as root"
 systemctl is-active --quiet tg-ingest-agent || fail "Cara service is not active"
 systemctl is-active --quiet cara-worker || fail "worker service is not active"
-systemctl is-active --quiet cara-mentor || fail "Mentor service is not active"
-systemctl is-active --quiet cara-mentor-runner ||
-  fail "Mentor runner service is not active"
+for retired in cara-mentor cara-mentor-runner; do
+  ! systemctl is-active --quiet "$retired" || fail "$retired must be retired"
+  ! systemctl is-enabled --quiet "$retired" || fail "$retired must be disabled"
+done
 
 [ "$(systemctl show cara-worker -p User --value)" = "cara-worker" ] ||
   fail "worker user mismatch"
@@ -104,92 +105,11 @@ runuser -u tg-ingest -g tg-ingest -G cara-worker-spool -- \
   rm -f "$request_probe" "$cancel_probe"
 runuser -u cara-worker -g cara-worker-spool -- rm -f "$result_probe"
 
-for unit_user in \
-  "cara-mentor cara-mentor" \
-  "cara-mentor-runner cara-mentor-runner"
-do
-  set -- $unit_user
-  [ "$(systemctl show "$1" -p User --value)" = "$2" ] ||
-    fail "$1 user mismatch"
-  [ -z "$(systemctl show "$1" -p CapabilityBoundingSet --value)" ] ||
-    fail "$1 capability bounding set is not empty"
-  [ "$(systemctl show "$1" -p NoNewPrivileges --value)" = "yes" ] ||
-    fail "$1 can gain privileges"
-  [ "$(systemctl show "$1" -p ProtectSystem --value)" = "strict" ] ||
-    fail "$1 filesystem protection is not strict"
-done
-[ "$(systemctl show cara-mentor -p PrivateNetwork --value)" = "no" ] ||
-  fail "Mentor unexpectedly has no inference network"
-[ "$(systemctl show cara-mentor-runner -p PrivateNetwork --value)" = "yes" ] ||
-  fail "Mentor candidate runner network is not private"
-[ "$(systemctl show cara-mentor-runner -p RestrictAddressFamilies --value)" = "AF_UNIX" ] ||
-  fail "Mentor runner address-family boundary mismatch"
-
-for entry in \
-  "/var/lib/cara-mentor root cara-mentor-spool 750" \
-  "/var/lib/cara-mentor/spool root cara-mentor-spool 750" \
-  "/var/lib/cara-mentor/spool/requests tg-ingest cara-mentor-spool 2750" \
-  "/var/lib/cara-mentor/spool/results cara-mentor cara-mentor-spool 2750" \
-  "/var/lib/cara-mentor/inflight cara-mentor cara-mentor-spool 700" \
-  "/var/lib/cara-mentor/usage cara-mentor cara-mentor-spool 700" \
-  "/var/lib/cara-mentor-runner root cara-mentor-runner-spool 750" \
-  "/var/lib/cara-mentor-runner/spool root cara-mentor-runner-spool 750" \
-  "/var/lib/cara-mentor-runner/spool/requests tg-ingest cara-mentor-runner-spool 2750" \
-  "/var/lib/cara-mentor-runner/spool/results cara-mentor-runner cara-mentor-runner-spool 2750" \
-  "/var/lib/cara-mentor-runner/scratch cara-mentor-runner cara-mentor-runner-spool 700"
-do
-  set -- $entry
-  actual="$(stat -c '%U %G %a' "$1")"
-  [ "$actual" = "$2 $3 $4" ] ||
-    fail "bad Mentor ownership/mode on $1: $actual"
-done
-
-mentor_request=/var/lib/cara-mentor/spool/requests/.verify-owner
-mentor_result=/var/lib/cara-mentor/spool/results/.verify-owner
-runner_request=/var/lib/cara-mentor-runner/spool/requests/.verify-owner
-runner_result=/var/lib/cara-mentor-runner/spool/results/.verify-owner
-runuser -u tg-ingest -g tg-ingest \
-  -G cara-worker-spool -G cara-mentor-spool \
-  -G cara-mentor-runner-spool -- \
-  touch "$mentor_request" "$runner_request"
-runuser -u cara-mentor -g cara-mentor-spool -- touch "$mentor_result"
-runuser -u cara-mentor-runner -g cara-mentor-runner-spool -- \
-  touch "$runner_result"
-if runuser -u cara-mentor -g cara-mentor-spool -- \
-    rm -f "$mentor_request" 2>/dev/null; then
-  fail "Mentor can delete Cara-owned review requests"
-fi
-if runuser -u cara-mentor-runner -g cara-mentor-runner-spool -- \
-    rm -f "$runner_request" 2>/dev/null; then
-  fail "Mentor runner can delete Cara-owned test requests"
-fi
-if runuser -u tg-ingest -g tg-ingest \
-    -G cara-worker-spool -G cara-mentor-spool \
-    -G cara-mentor-runner-spool -- \
-    rm -f "$mentor_result" 2>/dev/null; then
-  fail "Cara can delete Mentor-owned results"
-fi
-if runuser -u tg-ingest -g tg-ingest \
-    -G cara-worker-spool -G cara-mentor-spool \
-    -G cara-mentor-runner-spool -- \
-    rm -f "$runner_result" 2>/dev/null; then
-  fail "Cara can delete Mentor-runner-owned results"
-fi
-runuser -u tg-ingest -g tg-ingest \
-  -G cara-worker-spool -G cara-mentor-spool \
-  -G cara-mentor-runner-spool -- \
-  rm -f "$mentor_request" "$runner_request"
-runuser -u cara-mentor -g cara-mentor-spool -- rm -f "$mentor_result"
-runuser -u cara-mentor-runner -g cara-mentor-runner-spool -- rm -f "$runner_result"
-
+# Mentor execution is retired; its files, users, spools and history remain.
 worker_pid="$(systemctl show cara-worker -p MainPID --value)"
 agent_pid="$(systemctl show tg-ingest-agent -p MainPID --value)"
-mentor_pid="$(systemctl show cara-mentor -p MainPID --value)"
-mentor_runner_pid="$(systemctl show cara-mentor-runner -p MainPID --value)"
 [ "${worker_pid:-0}" -gt 1 ] || fail "worker pid is missing"
 [ "${agent_pid:-0}" -gt 1 ] || fail "Cara pid is missing"
-[ "${mentor_pid:-0}" -gt 1 ] || fail "Mentor pid is missing"
-[ "${mentor_runner_pid:-0}" -gt 1 ] || fail "Mentor runner pid is missing"
 spool_gid="$(getent group cara-worker-spool | cut -d: -f3)"
 grep -Eq "^Groups:.*[[:space:]]${spool_gid}([[:space:]]|$)" \
   "/proc/$agent_pid/status" || fail "live Cara process lacks spool gid"
@@ -211,47 +131,9 @@ grep -q '^CapBnd:[[:space:]]*0000000000000000$' "/proc/$worker_pid/status" ||
   fail "live worker retains a capability"
 grep -q '^NoNewPrivs:[[:space:]]*1$' "/proc/$worker_pid/status" ||
   fail "live worker lacks no-new-privileges"
-grep -q '^CapBnd:[[:space:]]*0000000000000000$' "/proc/$mentor_pid/status" ||
-  fail "live Mentor retains a capability"
-grep -q '^CapBnd:[[:space:]]*0000000000000000$' \
-  "/proc/$mentor_runner_pid/status" ||
-  fail "live Mentor runner retains a capability"
-
-tr '\0' '\n' < "/proc/$mentor_pid/environ" |
-  grep -Eq '^(TELEGRAM_BOT_TOKEN|FLEET_NOTIFY_|ALLOWED_CHAT_IDS)=' &&
-  fail "Mentor inherited production messaging identity"
-tr '\0' '\n' < "/proc/$mentor_runner_pid/environ" |
-  grep -Eq '^(DO_MODEL_ACCESS_KEY|TELEGRAM_BOT_TOKEN|FLEET_NOTIFY_)=' &&
-  fail "Mentor runner inherited a network or messaging credential"
-
-for protected in \
-  /etc/tg-ingest-agent.env \
-  /var/lib/tg-ingest-agent/ingest.db \
-  /etc/tg-ingest-agent-backup.key \
-  /root/.ssh
-do
-  nsenter -t "$mentor_pid" -m -- runuser -u cara-mentor -- \
-    test ! -r "$protected" ||
-    fail "Mentor can read protected host path $protected"
-done
-for protected in \
-  /etc/tg-ingest-agent.env \
-  /etc/cara-mentor.env \
-  /var/lib/tg-ingest-agent/ingest.db \
-  /etc/tg-ingest-agent-backup.key \
-  /root/.ssh
-do
-  nsenter -t "$mentor_runner_pid" -m -- runuser -u cara-mentor-runner -- \
-    test ! -r "$protected" ||
-    fail "Mentor runner can read protected host path $protected"
-done
-
 if command -v ss >/dev/null 2>&1; then
   if ss -H -lntup 2>/dev/null | grep -q "pid=$worker_pid,"; then
     fail "worker owns a host-network listener"
-  fi
-  if ss -H -lntup 2>/dev/null | grep -q "pid=$mentor_runner_pid,"; then
-    fail "Mentor runner owns a host-network listener"
   fi
 fi
 
@@ -271,11 +153,6 @@ expected_source_hash="$(cd /opt/cara-mentor-source && {
 
 runuser -u tg-ingest -g tg-ingest -G cara-worker-spool -- \
   /usr/bin/python3 /opt/tg-ingest-agent/verify_task_runtime.py
-runuser -u tg-ingest -g tg-ingest \
-  -G cara-worker-spool -G cara-mentor-spool \
-  -G cara-mentor-runner-spool -- \
-  /usr/bin/python3 /opt/tg-ingest-agent/verify_mentor_runtime.py
-
 /usr/bin/python3 /opt/tg-ingest-agent/deployment_notice.py verify-manifest \
   --manifest /opt/tg-ingest-agent/DEPLOYMENT.json \
   --build-file /opt/tg-ingest-agent/VERSION

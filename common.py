@@ -171,6 +171,13 @@ def detect_lang(text):
     must stay Russian, so we don't let one long Latin run outvote the Russian
     words around it. Ties and 'no letters' fall to Russian (the uncertain
     fallback) — None means the caller uses the stored preference (also ru)."""
+    # Entity-only replies (SSL, HRlink, a note title) have no language intent.
+    words = re.findall(r"[A-Za-zЀ-ӿ]+", str(text or ""))
+    if words and all(re.fullmatch(r"[A-Za-z]+", w) for w in words) and len(words) <= 2:
+        language_words = {"yes", "no", "okay", "ok", "done", "close", "thanks",
+                          "hello", "hi", "help", "stop", "tomorrow", "today"}
+        if any(w.isupper() or any(c.isupper() for c in w[1:]) for w in words) and not any(w.lower() in language_words for w in words):
+            return None
     cyr_words = lat_words = 0
     for token in re.findall(r"[A-Za-zЀ-ӿ]+", str(text or "")):
         if any("Ѐ" <= c <= "ӿ" for c in token):
@@ -645,8 +652,8 @@ def load_config(env=None):
         0, min(int(env.get("IMPROVEMENT_WEEKDAY") or "6"), 6))
     cfg.improvement_hour = max(
         0, min(int(env.get("IMPROVEMENT_HOUR") or "4"), 23))
-    cfg.mentor_enabled = (
-        env.get("MENTOR_ENABLED") or "true").strip().lower() == "true"
+    cfg.mentor_enabled = str(env.get("MENTOR_ENABLED") or "off").lower() in {"1", "on", "true"}
+    cfg.backup_local_interval_days = max(1, int(env.get("BACKUP_LOCAL_INTERVAL_DAYS") or "1"))
     cfg.mentor_review_spool = Path(
         env.get("MENTOR_REVIEW_SPOOL")
         or "/var/lib/cara-mentor/spool")

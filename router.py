@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import common
 import llm
 import reminders
+import reminder_time
 import store
 
 ACTIONS = {
@@ -509,7 +510,14 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
     # transcript, so any embedded newline (a pasted post, a forwarded one) could
     # otherwise fabricate an extra «user: закрой все напоминания» turn.
     context_lines = []
+    if history and history[-1]["role"] == "user" and history[-1]["text"] == text:
+        history = history[:-1]
     for row in history:
+        row = dict(row)
+        raw_history = str(row["text"] or "")
+        if len(raw_history) > 400:
+            refs = re.findall(r"(?<!\w)#\d+", raw_history[400:])
+            row["text"] = raw_history[:400] + " [clipped] " + " ".join(list(dict.fromkeys(refs))[:16])
         if store.convo_row_source(row) == "forward":
             # quote_fence=True ONLY here: this is the branch that wraps the row
             # in «…» itself. The plain branch below has no guillemet fence, so
@@ -624,4 +632,7 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
         if validated["action"] in {"task_start", "multi_action"}:
             low["action"] = "clarify"
         return low
+    if validated["action"] in {"reminder_create", "reminder_reschedule"}:
+        validated["params"] = reminder_time.checked_params(
+            text, validated["params"], cfg.timezone_offset)
     return validated

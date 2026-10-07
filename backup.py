@@ -78,6 +78,8 @@ def snapshot(cfg, conn):
         dst = sqlite3.connect(str(raw))
         try:
             conn.backup(dst)
+            if dst.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise BackupRestoreError("snapshot integrity check failed")
         finally:
             dst.close()
         tmp.unlink(missing_ok=True)
@@ -145,7 +147,7 @@ def sweep_stray(cfg):
     return removed
 
 
-def rotate(cfg, keep_name=None):
+def rotate(cfg, keep_name=None, protected_names=()):
     """Keep only the newest cfg.backup_keep local snapshots (name-sortable
     UTC stamps); returns how many stale ones were removed.
 
@@ -165,7 +167,7 @@ def rotate(cfg, keep_name=None):
                    key=lambda p: p.name, reverse=True)
     removed = 0
     for stale in files[cfg.backup_keep:]:
-        if keep_name is not None and stale.name == keep_name:
+        if stale.name == keep_name or stale.name in protected_names:
             continue  # the current run's file is never this run's garbage
         stale.unlink(missing_ok=True)
         Path(str(stale) + ".enc").unlink(missing_ok=True)
@@ -263,7 +265,7 @@ def offsite(cfg, encrypted_path, conn=None):
     return ""  # unreachable, kept defensive for future target types
 
 
-def run(cfg, conn):
+def run(cfg, conn, *, offsite_due=True, protected_names=()):
     """The scheduled backup job body; returns a result dict for the job log.
 
     Pings the watchdog between its phases (2026-07-27): `runtime.drain` pings
@@ -282,18 +284,18 @@ def run(cfg, conn):
         # REPLACE the diagnosis (2026-07-27): the job row and the boss's
         # backup_failed notice quote whatever escapes here.
         try:
-            rotate(cfg)
+            rotate(cfg, protected_names=protected_names)
         except Exception as sweep_exc:  # noqa: BLE001 — keep the original error
             log(f"retention sweep after a failed snapshot also failed: {sweep_exc!r}")
         raise
     # Rotate BEFORE encryption/off-box: a raised BackupEncryptionError used to skip
     # retention entirely, so a broken key file grew the backups dir without bound.
     # keep_name: today's archive is never rotation's to delete (clock skew).
-    removed = rotate(cfg, keep_name=gz.name)
+    removed = rotate(cfg, keep_name=gz.name, protected_names=protected_names)
     common.watchdog_ping()
     upload_path = encrypt_snapshot(cfg, gz) if offsite_configured(cfg) else gz
     common.watchdog_ping()
-    where = offsite(cfg, upload_path, conn)
+    where = offsite(cfg, upload_path, conn) if offsite_due else "not-due"
     blocked = where == OFFBOX_BLOCKED
     if blocked:
         log("backup WARNING: the encrypted snapshot is too big for the only "

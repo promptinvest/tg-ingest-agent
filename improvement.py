@@ -695,7 +695,7 @@ def _weekly_evidence(conn):
     ).fetchall()
     issues = conn.execute(
         "SELECT fingerprint FROM issue_patterns"
-        " WHERE status != 'resolved' ORDER BY last_seen_at DESC LIMIT 5"
+        " WHERE status = 'open' ORDER BY last_seen_at DESC LIMIT 5"
     ).fetchall()
     if not feedback and not issues:
         return [], [], []

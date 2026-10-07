@@ -84,4 +84,15 @@ def format_spend(conn, period, cfg, lang):
         f"month ${month_total:.2f}{cap(monthly_cap)}"
     )
     lines.append(budget_line)
+    where, value = store.usage_period_filter(period)
+    unknown = conn.execute(f"SELECT COUNT(*),COALESCE(SUM(cost_usd),0) FROM llm_usage WHERE {where} AND kind LIKE 'unknown_%'", (value,)).fetchone()
+    if unknown[0]:
+        lines.append((f"Неизвестное использование: {unknown[0]} вызовов, резерв ${unknown[1]:.3f} включён в бюджет." if lang == "ru"
+                      else f"Unknown usage: {unknown[0]} calls; ${unknown[1]:.3f} reserved in the budget."))
+    router_inputs = sorted(r[0] for r in conn.execute(f"SELECT tokens_in FROM llm_usage WHERE {where} AND skill='router' AND kind='chat'", (value,)))
+    if router_inputs:
+        avg = sum(router_inputs) / len(router_inputs)
+        p95 = router_inputs[min(len(router_inputs)-1, int(len(router_inputs)*.95))]
+        lines.append((f"Роутер: средний вход {avg:.0f}, p95 {p95} токенов." if lang == "ru"
+                      else f"Router input: average {avg:.0f}, p95 {p95} tokens."))
     return "\n".join(lines)

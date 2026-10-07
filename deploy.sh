@@ -31,6 +31,14 @@ SRC="/opt/tg-ingest-agent-src"
 BOX_KEY="/root/.ssh/github-tg-ingest-deploy"
 REPO="git@github.com:promptinvest/tg-ingest-agent.git"
 MODE="${1:-deploy}"
+TEST_TARGETS=""
+if [ "$MODE" = "--test" ]; then
+  shift
+  for target in "$@"; do
+    [[ "$target" =~ ^[A-Za-z_][A-Za-z0-9_.]*$ ]] || { echo "invalid unittest target: $target" >&2; exit 2; }
+    TEST_TARGETS+=" $target"
+  done
+fi
 
 SSH_OPTS=(-i "$KEY" -p "$PORT" -o IdentitiesOnly=yes -o ConnectTimeout=25
           -o UserKnownHostsFile="$KH" -o ServerAliveInterval=15
@@ -107,7 +115,7 @@ git fetch --quiet origin
 git reset --hard origin/main
 echo \"at \$(git rev-parse --short HEAD): \$(git log -1 --format=%s)\"
 echo '--- tests ---'
-python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -15
+nice -n 10 ionice -c 3 python3 run_tests.py 2>&1 | tail -35
 $install_verify"
     ;;
   --rollback)
@@ -166,7 +174,11 @@ sed -i 's/\r\$//' *.py *.sh tg-ingest-agent.service cara-worker.service \
   cara-mentor.service cara-mentor-runner.service cara-failed-notify@.service \
   tg-ingest-agent.env.example
 echo '--- tests ---'
-python3 -m unittest discover -p 'test_*.py' 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | tail -60"
+test_scratch=\$(mktemp -d /dev/shm/cara-tests.XXXXXX)
+trap 'case \"\$test_scratch\" in /dev/shm/cara-tests.??????) rm -rf -- \"\$test_scratch\";; esac' EXIT
+nice -n 10 ionice -c 3 unshare --net env -i PATH=/usr/bin:/bin HOME=\"\$test_scratch\" \
+  PYTHONIOENCODING=utf-8 TMPDIR=\"\$test_scratch\" CARA_TEST_RUNTIME_ROOT=\"\$test_scratch/runtime\" \
+  python3 run_tests.py${TEST_TARGETS} 2>&1 | tail -85"
     if [ "$MODE" != "--test" ]; then
       remote_script+="
 # ADR-0017: a deploy that fails AFTER the install wrote a fresh manifest marks it

@@ -4,3 +4,5 @@
 *.service text eol=lf
 *.env.example text eol=lf
 known_hosts_* text eol=lf
+*.md text eol=lf
+*.yml text eol=lf

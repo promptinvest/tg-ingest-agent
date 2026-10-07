@@ -1,6 +1,6 @@
 # ADR-0028: The entry point is decomposed only after behaviour work settles
 
-- Status: Proposed
+- Status: Partially implemented 2026-10-07 (media and converse pure moves; pending resolver table remains)
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,5 @@ everything above
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+
+- 2026-10-07: owner authorized ?fix all & deploy? following the code/live review. Partially implemented 2026-10-07 (media and converse pure moves; pending resolver table remains). Verification and deployment evidence: `../../docs/cara-review-fixes-2026-10-07.md`.
