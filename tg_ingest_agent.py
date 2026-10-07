@@ -3724,9 +3724,8 @@ class Agent(media_svc.MediaMixin, converse_svc.ConverseMixin, issue_digest.Issue
             pins = json.loads(store.kv_get(conn, "backup_weekly_pins") or "null")
         except ValueError:
             pins = None
-        if not isinstance(pins, list):
-            pins = [p.name for p in sorted(backup.backups_dir(self.cfg).glob("ingest-*.db.gz"))][-self.cfg.backup_keep:]
-            store.kv_set(conn, "backup_weekly_pins", json.dumps(pins))
+        pins = backup.weekly_recovery_pins(self.cfg, last, pins if isinstance(pins,list) else ())
+        store.kv_set(conn, "backup_weekly_pins", json.dumps(pins))
         if last and not store.kv_get(conn, "backup_offsite_day"):
             store.kv_set(conn, "backup_offsite_day", last)
         result = backup.run(self.cfg, conn, offsite_due=offsite_due, protected_names=pins)

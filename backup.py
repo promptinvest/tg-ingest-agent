@@ -175,6 +175,25 @@ def rotate(cfg, keep_name=None, protected_names=()):
     return removed
 
 
+
+def weekly_recovery_pins(cfg, last_offsite_day, existing=()):
+    """Only scheduled snapshots count as weekly points; manual copies never consume slots.
+
+    Daily archives newer than the off-box anchor are not weekly points. Preserve
+    valid existing pins and adopt older automated archives during upgrade/repair.
+    """
+    names = {name for name in existing if isinstance(name,str) and _OWN_ARCHIVE.fullmatch(name)}
+    cutoff = None
+    try:
+        cutoff = datetime.fromisoformat(last_offsite_day).strftime("%Y%m%d")
+    except (TypeError,ValueError):
+        pass
+    for path in backups_dir(cfg).glob("*.db.gz"):
+        match = _OWN_ARCHIVE.fullmatch(path.name)
+        if match and (cutoff is None or match[1][:8] <= cutoff):
+            names.add(path.name)
+    return sorted(names)[-cfg.backup_keep:]
+
 def offsite_configured(cfg):
     return (storage.backend(cfg) == "spaces" or
             bool(cfg.fleet_notify_token and cfg.fleet_notify_chat_id))

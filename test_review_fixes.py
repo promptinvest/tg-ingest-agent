@@ -314,3 +314,21 @@ class RuntimeFixTests(unittest.TestCase):
                 self.agent.handle_update(update)
             self.assertEqual(capture.called,captured,text)
             if captured: self.assertEqual(capture.call_args.args[3],category)
+
+
+    def test_weekly_pins_exclude_manual_and_new_daily_archives(self):
+        import backup
+        self.cfg.backup_keep=7
+        root=backup.backups_dir(self.cfg);root.mkdir(parents=True,exist_ok=True)
+        weeklies=[f"ingest-2026090{day}T120000Z.db.gz" for day in range(1,8)]
+        manual="ingest-pre-review-fixture.db.gz"
+        daily="ingest-20260908T120000Z.db.gz"
+        for name in weeklies+[manual,daily]: (root/name).write_bytes(b"fixture")
+        # Simulates the first installed list, where a manual archive displaced a weekly point.
+        previous=weeklies[1:]+[manual]
+        pins=backup.weekly_recovery_pins(self.cfg,"2026-09-07",previous)
+        self.assertEqual(pins,weeklies)
+        backup.rotate(self.cfg,protected_names=pins)
+        self.assertTrue(all((root/name).exists() for name in weeklies))
+        self.assertTrue((root/manual).exists())
+        self.assertTrue((root/daily).exists())

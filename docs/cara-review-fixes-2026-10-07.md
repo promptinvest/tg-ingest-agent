@@ -64,3 +64,31 @@ content still requires journal wording or an explicit reply to its reminder card
 Research and direct Google Calendar credentials remain unconfigured; existing .ics
 export stays available. No external key escrow or provider billing reconciliation is
 claimed. No historical failed jobs, Mentor candidates or campaigns are replayed.
+
+
+## First deployment and retention correction
+
+Release `7995fad`, build `fc768547dbeb`, was installed October 7 at 14:33:37 UTC;
+manifest `1a776d81538f7700690473a1` verified at 14:34:32 UTC. The exact deployment
+full gate passed 1,683 cases (nine unchanged stage skips) in 87.638 seconds.
+Runtime/source/worker/spool/SQLite checks passed. The protected installer backup is
+`/root/codex-hardening-backups/20261007T143314Z-tg-ingest-agent` (database 0600),
+including the old Mentor source. All prior 91 messages, three files, 67 journal
+entries, 1,219 conversation turns, 108 reminders, 11 Mentor cycles and 20,632 usage
+rows matched verbatim afterward. One fleet deployment receipt was recorded sent.
+
+The first monthly digest was delivered at 14:35:30 UTC. The first daily local
+snapshot completed October 7 while the off-box anchor remained October 3.
+Post-deployment archive inventory then found an error in weekly pin selection:
+two manually named archives consumed slots, permitting rotation of the oldest
+scheduled local recovery point (`ingest-20260822T000428Z.db.gz` and its encrypted
+companion). Current application data and all checked historical database rows are
+preserved; the August 22 job records successful encrypted fleet delivery. No exact
+local duplicate was found in the scoped VPS search. Restoration from that off-box
+copy is being investigated; it is not claimed complete.
+
+The correction filters weekly pins by the module's exact automated filename pattern
+and off-box date anchor, preserves valid existing pins, and adopts older automated
+points still on disk. Regression coverage includes manual copies, newer daily copies
+and all seven original weekly points. The corrective release and recovery status
+are recorded below after verification.

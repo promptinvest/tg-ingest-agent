@@ -33,7 +33,8 @@ numbers; empty or invalid evidence produces a deterministic refusal.
 Local checked snapshots run daily (`BACKUP_LOCAL_INTERVAL_DAYS=1`); encrypted
 off-box delivery keeps the existing weekly `BACKUP_INTERVAL_DAYS=7` anchor and
 monthly restore check. Existing weekly local recovery points are protected from
-daily rotation. No key escrow is inferred or claimed. Search is advertised as
+daily rotation; only automated snapshots at/before the off-box anchor count as
+weekly points, so manual copies and newer daily copies cannot displace them. No key escrow is inferred or claimed. Search is advertised as
 unavailable without its key; calendar availability describes the .ics fallback.
 
 Router replay keeps 14 turns but clips each routing hint to 400 characters plus
