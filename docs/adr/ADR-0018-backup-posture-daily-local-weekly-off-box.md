@@ -29,4 +29,6 @@ owner confirms the 2026-08-21 weekly decision concerned the off-box post, not lo
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
 
-- 2026-10-07: owner authorized ?fix all & deploy? following the code/live review. Partially implemented 2026-10-07 (daily local / weekly off-box / snapshot integrity; escrow and telemetry follow-ups remain). Verification and deployment evidence: `../../docs/cara-review-fixes-2026-10-07.md`.
+- 2026-10-07: owner authorized "fix all & deploy" following the code/live review. Partially implemented 2026-10-07 (daily local / weekly off-box / snapshot integrity; escrow and telemetry follow-ups remain). Verification and deployment evidence: `../../docs/cara-review-fixes-2026-10-07.md`.
+
+- 2026-10-07: shipped in reviewed release `7995fad` and corrected release `36f2075`; live build `9d041a123f25`, receipt `0f839bc1e8c673d4a6f196df`. The August 22 recovery archive is restored and all seven weekly pins are verified. Remaining subtasks named in the status line stay open.

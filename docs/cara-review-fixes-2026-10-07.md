@@ -1,6 +1,6 @@
-# Cara review fixes ? October 7, 2026
+# Cara review fixes - October 7, 2026
 
-Owner instruction: ?fix all & deploy?, following the code and live-performance review.
+Owner instruction: "fix all & deploy", following the code and live-performance review.
 This release addresses the confirmed October 7 findings; remaining historical ADR
 subtasks are explicitly status-tracked and are not represented as completed.
 
@@ -84,11 +84,69 @@ two manually named archives consumed slots, permitting rotation of the oldest
 scheduled local recovery point (`ingest-20260822T000428Z.db.gz` and its encrypted
 companion). Current application data and all checked historical database rows are
 preserved; the August 22 job records successful encrypted fleet delivery. No exact
-local duplicate was found in the scoped VPS search. Restoration from that off-box
-copy is being investigated; it is not claimed complete.
+local duplicate was found in the scoped VPS search. The exact encrypted file was
+subsequently found in the owner's Telegram downloads and restored after verification.
 
 The correction filters weekly pins by the module's exact automated filename pattern
 and off-box date anchor, preserves valid existing pins, and adopts older automated
 points still on disk. Regression coverage includes manual copies, newer daily copies
 and all seven original weekly points. The corrective release and recovery status
-are recorded below after verification.
+are recorded below.
+
+
+## Exact archive recovery
+
+The existing local Telegram download `ingest-20260822T000428Z.db.gz.enc` was uploaded
+to a protected VPS recovery directory and decrypted using the existing on-host key.
+The gzip size matched the original job's 7,093,517 bytes; expansion was 35,323,904
+bytes, all 46 tables passed integrity checking, and latest archived usage was
+August 21 at 23:36:49 UTC. Both the gzip archive and original encrypted companion
+were restored as `tg-ingest:tg-ingest`, mode 0600. The live database was not replaced.
+
+Encrypted SHA256: `94ecb6ea1da361b212278fb505bcfd9674e5be4bb4d789445fa82c4ca1d591a1`.
+Decrypted gzip SHA256: `21136e837cbb8d45758924ee20cbb25a69d6032b35beaa2b0e8a96a36f83df68`.
+Expanded database SHA256: `59987462b11622772b78c25a40daaad9eceeb438facd74b978596a1626178e36`.
+Protected recovery evidence: `/root/cara-retention-recovery-20261007-144140/receipt.json`.
+The expanded scratch database was removed after validation; original local download
+and protected recovery source archives remain preserved. The temporary request for
+an archive location was resolved by this discovery; no owner input is outstanding.
+
+
+## Accepted corrective release
+
+Running source: `36f20752ef9a75cf759dc3aeca115983bce8513e` (clean working tree).
+Build: `9d041a123f25`. Deployment receipt: `0f839bc1e8c673d4a6f196df`.
+Installed: `2026-10-07T14:44:24.992822+00:00`.
+Verified: `2026-10-07T14:44:51.729681+00:00`.
+Protected installer backup: `/root/codex-hardening-backups/20261007T144410Z-tg-ingest-agent`.
+
+The exact full deployment gate passed 1,684 cases, nine unchanged stage skips,
+in 92.166 seconds. Live runtime, worker isolation, spool canary, immutable source,
+deployment manifest, SQLite integrity and foreign keys passed. All prior content,
+conversation, reminders, Mentor cycles and usage rows matched the second protected
+snapshot; the initial snapshot comparison remains above. No app database restore,
+schema migration, profile change or history rewrite occurred.
+
+After verification, an atomic metadata-only correction replaced the faulty weekly
+pin list using the installed verified selector. All seven August 22–October 3
+weekly gzip archives and encrypted companions were present. Its previous JSON value
+was preserved in `kv` audit key `backup_weekly_pins_repair:0f839bc1e8c673d4a6f196df`
+and `/root/cara-retention-recovery-20261007-144140/pins-repair.json`.
+Prior-value SHA256: `309fcc87d00dcf258ce6d0f45a4b0be016be298b17ca23f0d14d67a6c168fec7`.
+The October 7 local stamp, October 3 off-box anchor and October monthly digest
+receipt stayed unchanged across the corrective restart; the digest was not resent.
+
+Final service checks show Cara and its worker active/enabled, both Mentor units
+inactive/disabled, Whisper and Nikki healthy with their original PIDs, and both
+Daily Lingo containers healthy. Final checked source bytes match this release.
+Live provider latency improvement remains unmeasured; new production observations
+are needed to quantify it. Verification itself used no paid model canary or manual
+Telegram test send. GitHub Actions produced no workflow-run record when queried;
+the executed local and on-VPS gates above are the available verification evidence.
+
+Final documentation checks passed 43 focused hygiene/operator regressions at
+`/tmp/cara-fix-verify-20261007-97c92269a1`. A final read-only inspection confirmed
+both actual deployment receipts sent once, the corrective receipt at
+`2026-10-07T14:45:47.654914+00:00`; the recovered archive hashes matched and all
+seven weekly archive pairs remained mode 0600. Source, service, SQLite and
+protected-snapshot history checks remained successful.
