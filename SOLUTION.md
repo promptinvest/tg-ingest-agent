@@ -7,6 +7,21 @@ Current running release: code `cb639e7`, build `bb2a35395bb8`; see the
 [October 7 monthly digest correction](docs/cara-digest-fix-2026-10-07.md).
 The earlier [review and archive-recovery record](docs/cara-review-fixes-2026-10-07.md) remains preserved.
 
+The [October 7 reminder conversation correction](docs/cara-conversation-fix-2026-10-07.md)
+extends the existing reminder module and deterministic dispatch. The escalation
+previously hid an applied move, then cleared the fired context: a later day or
+yes fell through to pending-only router rejection and conversation repair.
+Only repeated same-day postponements now offer the optional day-or-close choice,
+after a truthful success line. `reminder_snooze_choice` binds that question to
+the effective one-shot for 30 minutes; yes cannot choose or close implicitly.
+Explicit stored-title/time commands bypass inference while retaining existing
+numbered, compound and unmatched-title routing. Ambiguity pins the shown ids;
+recurring fires still create echoes without moving the series anchor. Identical
+absolute-day actions avoid duplicate writes and preserve undo. Foreign pending
+cards, subject guards, owner isolation and action-truth validation remain.
+The repair prompt requests missing information instead of repeating a complete
+command or offering an unbound yes. This candidate awaits deployment acceptance.
+
 The owner-facing poller and isolated local worker are the active runtime.
 Mentor and its candidate runner are stopped and disabled; their code, tests,
 source snapshots and prior results remain preserved. A delivery-gated monthly

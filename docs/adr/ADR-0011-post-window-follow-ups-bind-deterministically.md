@@ -29,3 +29,9 @@ ADR-0024 for the precedence table, but can ship as a guard first
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
 - 2026-09-07: implemented in `501b5f9` (Phase B batch) — after the pending window a bare snooze/ack binds to the last FIRED one-shot (`reminders_fired_unacked`) when `last_reminder_id` no longer resolves — subject guard and the Phase A stale-create guard kept; `router.validate_route_reason` → `non_json` / `invalid_action:<name>` / `pending_only_without_pending`, put on the trace (`router.invalid_output`) and filed as `router_invalid_output` (not `unclear_request`); `Agent._degenerate_reply` (under two words, or no word in his script) → one retry, then `llm_error` + `converse_degenerate`. The precedence table itself is still ADR-0024.
+- 2026-10-07: named existing-title/time moves also resolve directly after a
+  fired context has been consumed. Exact titles precede unique substrings;
+  ambiguous matches ask for a pinned selection, never last-touched guessing.
+  Fired recurring targets keep echo semantics. Numbered, compound and unknown
+  titles keep their existing routes. Snooze questions retain their own bound
+  context after re-arming, without weakening pending-only or action-truth guards.

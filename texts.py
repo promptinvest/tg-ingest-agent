@@ -506,6 +506,10 @@ TEXTS = {
         "ru": "Уже третий раз откладываем «{title}» — перенести на другой день или закрыть?",
         "en": "That's the third snooze of «{title}» today — move it to another day, or close it?",
     },
+    "reminder_snooze_choose": {
+        "ru": "«{title}» — на какой день перенести? Можно сказать «завтра» или «закрой».",
+        "en": "«{title}» — which day? You can say ‘tomorrow’ or ‘close’.",
+    },
     "journal_skipped_today": {
         "ru": "Хорошо, сегодня без записи в «{category}» 👌",
         "en": "Okay, no «{category}» entry today 👌",

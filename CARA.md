@@ -7,6 +7,17 @@ Current running release: code `cb639e7`, build `bb2a35395bb8`; see the
 [October 7 monthly digest correction](docs/cara-digest-fix-2026-10-07.md).
 The earlier [review and archive-recovery record](docs/cara-review-fixes-2026-10-07.md) remains preserved.
 
+The [October 7 reminder conversation correction](docs/cara-conversation-fix-2026-10-07.md)
+is implemented for verification/deployment. A requested later day is confirmed
+without repeating the day-or-close question. Same-day repeated snoozes first
+report their actual result; the optional question stays bound to the re-armed
+one-shot (or a recurring reminder's echo). A bare yes asks which alternative.
+Named existing reminders and supported times resolve directly from owner text;
+ambiguous titles ask for a pinned choice. Repeated identical day clicks preserve
+the event history and undo date. Existing 09:00 defaults and confirmation guards
+remain. Conversation repair asks only for missing details and does not deny
+Cara's reminder capabilities or earlier completed work.
+
 The owner-facing poller and isolated local worker are the active runtime.
 Mentor and its candidate runner are stopped and disabled; their code, tests,
 source snapshots and prior results remain preserved. A delivery-gated monthly

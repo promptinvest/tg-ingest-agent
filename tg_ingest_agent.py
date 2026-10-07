@@ -2486,8 +2486,15 @@ class Agent(media_svc.MediaMixin, converse_svc.ConverseMixin, issue_digest.Issue
             self._trace_route("reminder_create", "reminder_draft_text")
             return
         # Common fired-reminder replies are state transitions, not conversation.
+        if self.resolve_snooze_choice_text(chat_id, lang, pending, text):
+            self._trace_route("reminder_reschedule", "snooze_choice")
+            return
+        pending = store.pending_get(self.conn, chat_id)
         # Resolve them deterministically before the LLM router — including an
         # explicit close/skip/snooze after the short pending window expired.
+        if self.resolve_named_reschedule_text(chat_id, lang, text):
+            self._trace_route("reminder_reschedule", "named_time")
+            return
         if self.resolve_fired_followup(chat_id, lang, text, pending):
             self._trace_route("reminder_reschedule", "fired_followup")
             return

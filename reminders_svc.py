@@ -87,7 +87,9 @@ class ReminderMixin:
             op={"op": "reschedule", "due_utc": due.isoformat(), "text": text})
         if row is None:
             return  # _resolve_reminder_target already replied (not found / which?)
-        store.reminder_update_due(self.conn, row["id"], due.isoformat())
+        if not (row["last_fired_at"] is None
+                and reminders.parse_iso_utc(row["due_utc"]) == due):
+            store.reminder_update_due(self.conn, row["id"], due.isoformat())
         self._remember_reminder(row["id"])
         self.reply(chat_id, T(lang, "reminder_rescheduled",
                               rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
@@ -282,6 +284,119 @@ class ReminderMixin:
         """Track the reminder the boss is dealing with right now, so a later bare
         'это напоминание' (reschedule/rename) binds to it instead of guessing (B3)."""
         store.kv_set(self.conn, "last_reminder_id", str(rid))
+
+    def _clear_snooze_choice(self, chat_id, rid):
+        pending = store.pending_get(self.conn, chat_id)
+        if (pending and pending["kind"] == "reminder_snooze_choice"
+                and pending["payload"].get("reminder_id") == rid):
+            store.pending_clear(self.conn, chat_id)
+
+    def resolve_snooze_choice_text(self, chat_id, lang, pending, text):
+        """Keep the day-or-close question bound to the already re-armed row.
+
+        A bare yes cannot choose between those alternatives. Unrelated content
+        abandons this optional question and continues through ordinary routing.
+        Explicit replies to a different alarm retain their stronger binding.
+        """
+        if not pending or pending["kind"] != "reminder_snooze_choice":
+            return False
+        rid = pending["payload"].get("reminder_id")
+        if getattr(self, "turn_reply_reminder_id", None) not in (None, rid):
+            return False
+        row = store.reminder_get(self.conn, rid)
+        if row is None or row["chat_id"] != chat_id or row["status"] != "active":
+            store.pending_clear(self.conn, chat_id)
+            self.reply(chat_id, T(lang, "reminder_already_closed"))
+            return True
+        if re.fullmatch(r"(?:да|yes|yep|ага|ок|okay|ok|\+|✅|👍)[.! ]*",
+                        str(text or "").strip().casefold()):
+            self.reply(chat_id, T(lang, "reminder_snooze_choose", title=row["title"]),
+                       reply_markup=reminders.escalate_keyboard(rid, lang))
+            return True
+        parsed = self._parse_fired_followup(text, title=row["title"])
+        if parsed is None:
+            store.pending_clear(self.conn, chat_id)
+            return False
+        action, params = parsed
+        if action == "clarify_time":
+            self.reply(chat_id, T(lang, "reminder_snooze_past", time=params["time"]))
+            return True
+        store.pending_clear(self.conn, chat_id)
+        payload = {"reminder_id": rid, "title": row["title"]}
+        outcome, keyboard, _remaining = self.resolve_fired_action(
+            chat_id, lang, payload, action, params)
+        self.reply(chat_id, outcome, reply_markup=keyboard)
+        return True
+
+    def resolve_named_reschedule_text(self, chat_id, lang, text):
+        """An explicit existing title + a supported time is an operation.
+
+        Parse the time from the owner's text using the existing follow-up
+        grammar. Never guess a target or accept an invented router date.
+        """
+        match = re.fullmatch(
+            r"\s*(?:перенеси|отложи|move|reschedule|postpone)\s+(.+?)\s+"
+            r"(?:на|до|to|until)\s+(.+?)\s*[.!]?\s*", str(text or ""), re.IGNORECASE)
+        if match is None:
+            return False
+        title = " ".join(match[1].strip(" «»\"'“”").casefold().split())
+        if title in ("это", "его", "напоминание", "it", "this", "the reminder"):
+            return False
+        parsed = self._parse_fired_followup("перенеси на " + match[2])
+        if parsed is None or parsed[0] not in ("amend", "clarify_time"):
+            return False
+        action, params = parsed
+        rows = store.reminders_active(self.conn, chat_id)
+        matches = [r for r in rows if " ".join(r["title"].casefold().split()) == title]
+        if not matches:
+            matches = [r for r in rows if title in " ".join(r["title"].casefold().split())]
+        if not matches:
+            # Keep existing numbered/ordinal/compound and unmatched-title routes.
+            # This shortcut only executes when the text names stored evidence.
+            return False
+        if action == "clarify_time":
+            self.reply(chat_id, T(lang, "reminder_snooze_past", time=params["time"]))
+            return True
+        due = params.get("due_utc")
+        if due is None and params.get("snooze_minutes"):
+            due = (datetime.now(timezone.utc)
+                   + timedelta(minutes=params["snooze_minutes"])).isoformat()
+        if due is None:
+            return False
+        if len(matches) > 1:
+            # Same titles still need a choice; positions stay pinned to the list
+            # shown here. Do not replace another kind of confirmation card.
+            pending = store.pending_get(self.conn, chat_id)
+            if pending is None or pending["kind"] == "reminder_fired":
+                store.pending_set(self.conn, chat_id, "reminder_op",
+                                  {"op": "reschedule", "due_utc": due,
+                                   "ids": [r["id"] for r in matches]})
+            self.reply(chat_id, T(lang, "reschedule_which") + "\n"
+                       + reminders.format_list(matches, self.tz_offset(), lang))
+            return True
+        row = matches[0]
+        self._clear_snooze_choice(chat_id, row["id"])
+        fired = reminders.parse_iso_utc(row["last_fired_at"])
+        if fired is not None and (row["recurrence"] == "none"
+                                  or datetime.now(timezone.utc) - fired <= self.RECURRING_FOLLOWUP_WINDOW):
+            # An explicitly named, recently fired series still snoozes via an
+            # echo; do not move its recurring anchor through do_reschedule.
+            context = {"kind": "reminder_fired", "payload": {
+                "reminder_id": row["id"], "title": row["title"]}}
+            params = {"due_utc": due}
+            pending = store.pending_get(self.conn, chat_id)
+            if pending and pending["kind"] == "reminder_fired":
+                ids = pending["payload"].get("reminder_ids") or [pending["payload"].get("reminder_id")]
+                if row["id"] in ids:
+                    context = pending
+                    if len(ids) > 1:
+                        params["member"] = ids.index(row["id"]) + 1
+            self.resolve_pending(chat_id, "amend", params, context, lang)
+            return True
+        # do_reschedule accepts DISPLAY positions, never raw database ids.
+        position = next(i for i, r in enumerate(rows, 1) if r["id"] == row["id"])
+        self.do_reschedule(chat_id, lang, {"id": position, "due_utc": due}, text)
+        return True
 
     def _followup_day_due(self, t, days):
         """UTC ISO for «(после)завтра [в] HH[:MM]» — `days` ahead in LOCAL time,
@@ -1083,7 +1198,9 @@ class ReminderMixin:
             eff = store.reminder_add(self.conn, chat_id, rem["title"], due_iso)
             store.reminder_event(self.conn, rid, "snoozed", due_iso)
         elif rem is not None:
-            store.reminder_update_due(self.conn, rid, due_iso, reason="snoozed")
+            if not (rem["last_fired_at"] is None
+                    and reminders.parse_iso_utc(rem["due_utc"]) == reminders.parse_iso_utc(due_iso)):
+                store.reminder_update_due(self.conn, rid, due_iso, reason="snoozed")
             eff = rid
         else:
             eff = store.reminder_add(self.conn, chat_id, title, due_iso)
@@ -1147,15 +1264,24 @@ class ReminderMixin:
             done = []
             for rid, title in zip(ids, titles):
                 eff, real_title = self._apply_snooze(chat_id, rid, title, due)
-                done.append((rid, real_title))
+                done.append((rid, eff, real_title))
             if len(done) == 1:
-                rid, title = done[0]
-                if self._snoozes_today(rid) >= self.SNOOZE_ESCALATE_AT:
-                    return (T(lang, "reminder_snooze_escalate", title=title),
-                            reminders.escalate_keyboard(rid, lang), remaining)
-                return T(lang, "reminder_snoozed", title=title, when_rel=when_rel), None, remaining
+                rid, eff, title = done[0]
+                confirmation = T(lang, "reminder_snoozed", title=title, when_rel=when_rel)
+                another_day = ((reminders.parse_iso_utc(due) + timedelta(hours=offset)).date()
+                               > (now + timedelta(hours=offset)).date())
+                if not another_day and self._snoozes_today(rid) >= self.SNOOZE_ESCALATE_AT:
+                    pending = store.pending_get(self.conn, chat_id)
+                    if not remaining and (pending is None or pending["kind"] in
+                                          ("reminder_fired", "reminder_snooze_choice")):
+                        store.pending_set(self.conn, chat_id, "reminder_snooze_choice",
+                                          {"reminder_id": eff, "title": title}, ttl_seconds=1800)
+                    return (confirmation + "\n" + T(lang, "reminder_snooze_escalate", title=title),
+                            reminders.escalate_keyboard(eff, lang), remaining)
+                self._clear_snooze_choice(chat_id, rid)
+                return confirmation, None, remaining
             return (T(lang, "reminder_snoozed_multi", when_rel=when_rel,
-                      items=", ".join(f"«{t}»" for _r, t in done)), None, remaining)
+                      items=", ".join(f"«{t}»" for _r, _e, t in done)), None, remaining)
         # 'готово' — or «сегодня пропустим», which on a journal-invitation card is
         # also what a bare «готово» means (ADR-0005: no entry today).
         close_reason = "skipped" if (action == "amend" and params.get("done")) else "done"
@@ -1166,6 +1292,7 @@ class ReminderMixin:
         for rid in ids:
             rem, disp = self._close_fired(chat_id, rid, close_reason)
             if rem is not None:
+                self._clear_snooze_choice(chat_id, rid)
                 closed.append((rem, disp))
         if not closed:
             return T(lang, "reminder_not_found"), None, remaining
@@ -1271,6 +1398,22 @@ class ReminderMixin:
                 due = reminders.local_day_at(offset, 1, reminders.DEFAULT_SNOOZE_HOUR)
             else:   # day|n
                 due = reminders.local_day_at(offset, int(arg), reminders.DEFAULT_SNOOZE_HOUR)
+            if (row["recurrence"] == "none" and row["last_fired_at"] is None
+                    and reminders.parse_iso_utc(row["due_utc"]) == reminders.parse_iso_utc(due)):
+                # A delayed/repeated absolute-day click is already satisfied.
+                # Preserve the event count and previous due date for undo.
+                self._clear_snooze_choice(chat_id, rid)
+                self._drop_from_fired_pending(chat_id, rid)
+                outcome = T(lang, "card_snoozed",
+                            when_rel=reminders.fmt_relative(due, offset, lang))
+                self.answer_callback(callback_id, outcome)
+                if batch:
+                    remaining = self._mark_fired_message_done(message_id, rid)
+                    keyboard = reminders.batch_keyboard(remaining, lang) if remaining else None
+                self.edit_message(chat_id, message_id,
+                                  base_text if outcome in base_text else base_text + "\n— " + outcome,
+                                  reply_markup=keyboard)
+                return
             text, keyboard, _rest = self.resolve_fired_action(
                 chat_id, lang, payload, "amend", {"due_utc": due})
             outcome = T(lang, "card_snoozed",

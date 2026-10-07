@@ -29,3 +29,9 @@ nothing
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
 - 2026-09-07: implemented in `0a2639a` (Phase A batch) — buttons on fired/batch/draft cards (`reminders.*_keyboard`, `handle_reminder_callback`); «День…» offers the six days after tomorrow at 09:00; third snooze of a day escalates.
+- 2026-10-07: owner requested repair of the latest conversation. The applied
+  snooze is always confirmed first. A later day already answers the escalation;
+  only same-day repeated snoozes offer the optional day-or-close question. Its
+  30-minute pending binds to the effective one-shot/echo, not the recurring
+  series. Bare yes asks which alternative. Repeated identical absolute-day
+  clicks preserve events and undo; existing keyboard/day defaults remain.
