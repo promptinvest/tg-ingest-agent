@@ -40,7 +40,7 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 | [ADR-0027](ADR-0027-documentation-contract-present-tense-guarded.md) | Documentation contract: present tense, guarded maps, one runbook | Phase E | nothing | Proposed |
 | [ADR-0028](ADR-0028-the-entry-point-is-decomposed-only-after.md) | The entry point is decomposed only after behaviour work settles | Phase E | everything above | Partially implemented 2026-10-07 (media and converse pure moves; pending resolver table remains) |
 | [ADR-0029](ADR-0029-cara-records-her-issues-and-reminds-the-owner-monthly.md) | Cara records her issues and reminds the owner of them once a month (first digest 2026-10-07); supersedes the Mentor | Phase D | owner go 2026-10-07 | Implemented 2026-10-07 |
-| [ADR-0030](ADR-0030-evidence-bound-procedural-learning.md) | Evidence-bound procedural learning inside Cara | Phase D | owner go 2026-10-13 | Implemented candidate; verification in progress |
+| [ADR-0030](ADR-0030-evidence-bound-procedural-learning.md) | Evidence-bound procedural learning inside Cara | Phase D | owner go 2026-10-13 | Implemented and deployed 7de363c |
 
 ## Phases
 

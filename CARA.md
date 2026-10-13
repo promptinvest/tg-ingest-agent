@@ -2730,3 +2730,8 @@ practical quality improvement is explicitly unmeasured until new observations
 establish it. This first release does not create new executable tools or deploy
 code fixes automatically. The monthly digest and retained disabled Mentor units
 remain. See [ADR-0030](docs/adr/ADR-0030-evidence-bound-procedural-learning.md).
+
+Accepted deployment October 13: source `7de363c`, build `05f8e80d1687`, receipt
+`387cd0c8d238f0b087484eaa`. Exact 1,743-case gate passed (nine unchanged skips);
+all 59 installed source files and protected historical rows verified.
+[Release and preservation record](docs/cara-learning-2026-10-13.md).

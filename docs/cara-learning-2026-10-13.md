@@ -40,3 +40,37 @@ do not establish live improvement. General executable skill creation and automat
 source-code fixes are later work.
 
 Deployment and exact accepted source/build/receipt are recorded below once verified.
+
+## Accepted deployment
+
+Source `7de363c`, build `05f8e80d1687`, receipt `387cd0c8d238f0b087484eaa`.
+Installed 2026-10-13 07:49:12 UTC; verified 07:49:45 UTC; postcheck passed
+07:52:15 UTC. The exact deployment gate passed 1,743 tests, nine unchanged skips,
+in 83.909 seconds. Portable ShellCheck and all shell/Python syntax passed after
+the installer quoting correction; the original warning and missing-tool result remain.
+
+All 59 installed source files match the committed package. Cara/worker are
+active/enabled with zero unexpected restarts; retained Mentor/runner are
+inactive/disabled. SQLite integrity/foreign keys pass. All original rows in 44
+application/history tables match the installer snapshot, including notes, reminders,
+journals, conversation, profile, task and Mentor history. Every historical usage
+and notification row also matches; six ordinary post-restart health checks appended
+USD0.00005932 and one deployment receipt was sent on one attempt. The environment
+hash, models, budgets, weekly backup pins and original October digest receipt
+remain. No direct paid learning experiment or manual learner message occurred.
+
+Four additive learning tables and the startup marker are live. Newly learned
+lessons are initially empty; relevant existing owner guidance is available to the
+router/planner. Future supported corrections and delivered tasks create lessons
+normally. Quality improvement remains unmeasured; no artificial teaching case was
+inserted into the live database. Whisper/Nikki and both Daily Lingo containers are
+healthy; the latter retained their four-day uptime. October 13 alert opt-outs remain.
+
+Protected installer backup:
+`/root/codex-hardening-backups/20261013T074857Z-tg-ingest-agent`.
+Protected migration/postcheck evidence:
+`/root/cara-learning-20261013-preflight2`.
+Initial preflight helper mistakes (disabled systemctl exit status and sqlite3.Row
+object representations) were corrected in scratch evidence; all 47 original tables
+and existing settings passed the value-based copied-database upgrade comparison.
+No live rollback/database restore or historical controller replay was performed.

@@ -1,6 +1,6 @@
 # ADR-0030: Evidence-bound procedural learning inside Cara
 
-- Status: Implemented candidate 2026-10-13; deployment not yet recorded
+- Status: Implemented and deployed 2026-10-13
 - Date: 2026-10-13
 - Source: owner requested self-improvement, reviewed Hermes Agent, then said "go".
 
@@ -50,3 +50,9 @@ inspired procedural memory; no upstream code was copied.
 Supplement ADR-0029 with active procedural learning. Preserve the monthly issue
 digest and its delivery receipts. Retained Mentor inference/runner units remain
 stopped and disabled; retiring their weekly patch pipeline is still in force.
+
+## Accepted release
+
+Source `7de363c`, build `05f8e80d1687`, receipt `387cd0c8d238f0b087484eaa`.
+Exact 1,743-case deployment gate passed with nine unchanged skips.
+[Record](../cara-learning-2026-10-13.md).
