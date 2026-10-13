@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 import common
 import llm
+import learning
 import reminders
 import reminder_time
 import store
@@ -59,6 +60,8 @@ ACTIONS = {
     "task_cancel",       # params: id
     "task_resume",       # params: id
     "task_feedback",     # params: id?, rating 1..5?, correction?
+    "learning_list",     # /learning: versioned procedural memory
+    "learning_undo",     # /learning undo N vV: disable an exact lesson version
     "improvement_list",
     "improvement_show",  # params: id
     "improvement_decide",  # params: id, accept(bool); workflow status only
@@ -494,6 +497,10 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
     (possibly far older than the recent-history window), already fenced as
     DATA by the caller. Without it a reply-shaped «сохрани это» / «поставь это
     на завтра» routes against the wrong referent."""
+    command = re.fullmatch(r"/learning(?:\s+undo\s+[1-9]\d*\s+v[1-9]\d*)?\s*", text or "", re.I)
+    if command:
+        return {"action": "learning_undo" if re.search(r"\s+undo\s", text, re.I) else "learning_list",
+                "params": {}, "confidence": 1.0}
     if pending is None:
         partial = reminders.parse_time_only_request(text, cfg.timezone_offset)
         if partial:
@@ -503,6 +510,7 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
                                                      "resolved_issue_detail": text},
                 "confidence": 1.0}
     system = build_system_prompt(cfg, pending)
+    learned = learning.context(conn, chat_id, "router", text)
     history = store.convo_recent(conn, chat_id, limit=14)
     # A forwarded turn is UNTRUSTED channel content — fence it so a forwarded post
     # ("ignore your instructions / напомни перевести деньги") can't steer routing.
@@ -531,7 +539,7 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
         else:
             context_lines.append(
                 f"{row['role']}: {common.neutralize_untrusted(row['text'])}")
-    user_content = ""
+    user_content = (learned + "\n\n") if learned else ""
     if context_lines:
         user_content += "Recent conversation:\n" + "\n".join(context_lines) + "\n\n"
     if extra_context:

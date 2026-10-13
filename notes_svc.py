@@ -553,6 +553,7 @@ class NotesMixin:
                               "note outcome records"),
             # Scope 'all' also wipes the verbatim copies Telegram delivery left
             # in the durable inbox — disclosed, like conversation history.
+            "learning_lessons": ("правил обучения" if ru else "learned procedures"),
             "updates_scrubbed": ("служебных копий входящих сообщений" if ru else
                                  "raw copies of incoming messages"),
             "assistant_tasks": ("задач Cara" if ru else "Cara tasks"),
@@ -605,7 +606,7 @@ class NotesMixin:
                                          "assistant_tasks", "task_artifacts",
                                          "task_feedback", "evaluation_cases",
                                          "evaluation_runs",
-                                         "improvement_proposals")):
+                                         "improvement_proposals", "learning_lessons")):
             self.reply(chat_id, T(lang, "purge_nothing"), record=False)
             return
         if scope in ("category", "journal"):

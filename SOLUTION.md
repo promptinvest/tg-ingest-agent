@@ -1376,3 +1376,31 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   (WP9 — `allowed_updates` never asked for `edited_message`, so an edit was never
   delivered at all; §3, with its remaining honest exclusions in CARA.md §10).
 ```
+
+## Evidence-bound procedural learning — October 13, 2026
+
+The first learning release adds `learning.py` within Cara's existing process.
+Supported normal owner corrections create source-bound lesson versions; completed,
+successfully delivered task workflows create input-free recipes from validated
+plans and successful receipts. Relevant lessons reach conversation, routing and
+planning. Existing normal standing guidance also reaches matching router/planner
+requests without backfilling or changing historical memory rows. Learned procedures
+cannot override current instructions, tool availability, permissions, source
+bindings, fresh write approvals, budgets or fixed policy.
+
+`/learning` lists new procedural lessons. `/learning undo N vV` disables the exact
+current lesson version, retaining prior versions, the undo event and original
+source memory. Automatic capture cannot re-enable a disabled rule. A rejected,
+changed or missing source, outdated tool contract or negative task feedback stops
+reuse. Purge-all includes the derived lessons; other purge scopes keep their
+existing meanings. Lesson IDs are monotonic to prevent a stale undo binding to a
+new lesson after purge.
+
+The bounded scheduler learns at most five newly delivered tasks per minute.
+A durable startup cutoff excludes old completed tasks; no old Mentor cycle or
+delivery is replayed. Learning adds no model calls; existing curator/router/planner
+calls keep their current budget gateway. Structural/provenance checks are recorded;
+practical quality improvement is explicitly unmeasured until new observations
+establish it. This first release does not create new executable tools or deploy
+code fixes automatically. The monthly digest and retained disabled Mentor units
+remain. See [ADR-0030](docs/adr/ADR-0030-evidence-bound-procedural-learning.md).

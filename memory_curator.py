@@ -13,6 +13,7 @@ optional LLM extraction pass is gated behind MEMORY_CURATOR_LLM.
 import re
 from datetime import datetime, timezone
 
+import learning
 import boss_model
 import common
 import store
@@ -261,9 +262,10 @@ def curate_conversation(conn, cfg, chat_id, limit=CONVO_WINDOW, correction_mode=
         store.issue_add(conn, chat_id, "correction", text)
         sens = boss_model.effective_sensitivity(kind, text)
         if boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]:
-            store.boss_add(conn, kind, text, status="inferred", confidence=0.8,
+            item_id = store.boss_add(conn, kind, text, status="inferred", confidence=0.8,
                            sensitivity=sens, source_table="correction",
                            evidence=str(item.get("evidence") or "").strip())
+            learning.capture_correction(conn, chat_id, item_id, item.get("evidence"))
             learned.append(text)   # ACTIVE now — the «Запомнила» claim is true
             corrections_added += 1
         # A sensitive correction is confirm-FIRST: the candidate is not a standing

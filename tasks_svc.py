@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import common
+import learning
 import improvement
 import llm
 import mentor_client
@@ -76,7 +77,7 @@ def _tool_manifest():
     return rows
 
 
-def _planner_messages(text, source_time, timezone_offset, correction=None):
+def _planner_messages(text, source_time, timezone_offset, correction=None, learned_context=""):
     source_hash = tasking.source_hash(text)
     system = (
         "You are Cara's bounded task planner. Return exactly one JSON object with "
@@ -118,6 +119,8 @@ def _planner_messages(text, source_time, timezone_offset, correction=None):
         common.neutralize_untrusted(text),
         "</SOURCE>",
     ])
+    if learned_context:
+        user += "\n" + learned_context
     if correction:
         user += "\n<VALIDATOR_FEEDBACK>\n" + common.neutralize_untrusted(
             tasking.redact_derived_text(correction)[:500]
@@ -224,7 +227,8 @@ class TasksMixin:
             try:
                 raw = llm.chat_profile(
                     self.cfg, self.conn, "task_planner",
-                    _planner_messages(text, source_time, self.tz_offset(), error),
+                    _planner_messages(text, source_time, self.tz_offset(), error,
+                                      learning.context(self.conn, chat_id, "planner", text)),
                     profile="task_planner", json_required=True)
             except llm.BudgetExceeded as exc:
                 self.reply(

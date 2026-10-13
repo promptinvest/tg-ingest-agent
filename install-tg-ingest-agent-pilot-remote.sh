@@ -36,7 +36,7 @@ MENTOR_UNIT_SRC=cara-mentor.service
 MENTOR_RUNNER_UNIT_SRC=cara-mentor-runner.service
 ENV_TEMPLATE=tg-ingest-agent.env.example
 
-MODULES="media_svc.py converse_svc.py reminder_time.py call_budget.py inference_io.py voice_svc.py issue_digest.py common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py web_search.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py task_runner.py tasks_svc.py worker_client.py improvement.py deployment_notice.py cara_worker.py mentor_protocol.py mentor_client.py cara_mentor.py mentor_runner.py verify_task_runtime.py verify_mentor_runtime.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
+MODULES="learning.py media_svc.py converse_svc.py reminder_time.py call_budget.py inference_io.py voice_svc.py issue_digest.py common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py web_search.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py task_runner.py tasks_svc.py worker_client.py improvement.py deployment_notice.py cara_worker.py mentor_protocol.py mentor_client.py cara_mentor.py mentor_runner.py verify_task_runtime.py verify_mentor_runtime.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
 
 # The unit file and the env template are STAGED FILES now, not heredocs in this
 # script: one copy of each, versioned in the repo. A stage dir that predates that
@@ -240,7 +240,11 @@ python3 "$APP_DIR/cara_mentor.py" write-runner-env \
 chown root:"$MENTOR_RUNNER_GROUP" "$MENTOR_RUNNER_ENV_FILE"
 chmod 0640 "$MENTOR_RUNNER_ENV_FILE"
 
-python3 -m py_compile "$APP_DIR/agent.py" $(for m in $MODULES; do echo "$APP_DIR/$m"; done)
+compile_paths=("$APP_DIR/agent.py")
+for module_name in $MODULES; do
+  compile_paths+=("$APP_DIR/$module_name")
+done
+python3 -m py_compile "${compile_paths[@]}"
 rm -rf "$APP_DIR/__pycache__"
 systemctl daemon-reload
 systemctl enable "$SERVICE.service"

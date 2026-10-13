@@ -67,6 +67,7 @@ import texts
 import tool_broker
 import trace
 import improvement
+import learning
 import issue_digest
 from common import (Config, ShutdownInterrupt, current_trace, load_config, log,  # noqa: F401
                     log_err, log_warn)
@@ -140,6 +141,8 @@ _DISPATCH = {
     "task_resume":         lambda s, c: s.do_task_resume(c.chat_id, c.lang, c.params),
     "task_feedback":       lambda s, c: s.do_task_feedback(
         c.chat_id, c.lang, c.params, c.text),
+    "learning_list":       lambda s, c: s.do_learning_list(c.chat_id, c.lang),
+    "learning_undo":       lambda s, c: s.do_learning_undo(c.chat_id, c.lang, c.text),
     "improvement_list":    lambda s, c: s.do_improvement_list(c.chat_id, c.lang),
     "improvement_show":    lambda s, c: s.do_improvement_show(
         c.chat_id, c.lang, c.params),
@@ -187,7 +190,7 @@ _LIST_REPLACING_ACTIONS = frozenset({
 })
 
 
-class Agent(media_svc.MediaMixin, converse_svc.ConverseMixin, issue_digest.IssueDigestMixin, voice_svc.VoiceMixin, tasks_svc.TasksMixin, hermes.HermesMixin,
+class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseMixin, issue_digest.IssueDigestMixin, voice_svc.VoiceMixin, tasks_svc.TasksMixin, hermes.HermesMixin,
             reminders_svc.ReminderMixin, notes_svc.NotesMixin):
     def __init__(self, cfg):
         # Fail fast if a router action lacks a manifest policy (P0.1: the
@@ -801,6 +804,7 @@ class Agent(media_svc.MediaMixin, converse_svc.ConverseMixin, issue_digest.Issue
         "check_model_health",
         "check_disk_space",
         "check_monthly_issue_digest",
+        "check_procedural_learning",
     )
 
     def check_assistant_tasks(self):

@@ -92,7 +92,10 @@ KB for SSH/deploy/model details.
   `media_svc.py` and `converse_svc.py` preserve extracted Agent methods;
   `voice_svc.py` keeps STT transport off the database thread; `call_budget.py`
   reserves paid requests and `inference_io.py` bounds their transport;
-  `issue_digest.py` replaces the disabled Mentor with a monthly open-issue digest. Own PHOTOS are never
+  `issue_digest.py` retains the monthly open-issue digest. `learning.py` captures
+  source-bound procedural lessons, retrieves relevant guidance for conversation,
+  routing and planning, and provides exact-version owner undo. The old Mentor
+  inference/runner units remain disabled. Own PHOTOS are never
   stored (retired 2026-07-16) — own text/PDF docs still save via caption.
 - `llm.py` — DO Gradient gateway (chat + local/remote Whisper STT), pricing,
   budgets, JSON parsing helpers.

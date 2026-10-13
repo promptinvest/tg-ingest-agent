@@ -750,6 +750,48 @@ CREATE TABLE IF NOT EXISTS evaluation_runs (
   created_at TEXT NOT NULL
 );
 
+
+-- Owner-approved bounded procedural learning. Exact versions and undo history
+-- are retained; source tables and source histories are never rewritten.
+CREATE TABLE IF NOT EXISTS learning_lessons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER NOT NULL,
+  lesson_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('active','disabled')),
+  current_version INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(chat_id,lesson_key)
+);
+CREATE TABLE IF NOT EXISTS learning_versions (
+  lesson_id INTEGER NOT NULL REFERENCES learning_lessons(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('correction','workflow')),
+  instruction TEXT NOT NULL,
+  topics_json TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  evidence_hash TEXT NOT NULL,
+  recipe_json TEXT NOT NULL,
+  validation_json TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(lesson_id,version)
+);
+CREATE TABLE IF NOT EXISTS learning_events (
+  id INTEGER PRIMARY KEY,
+  lesson_id INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  event TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(lesson_id,version) REFERENCES learning_versions(lesson_id,version) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS learning_task_observations (
+  task_id INTEGER PRIMARY KEY REFERENCES assistant_tasks(id) ON DELETE CASCADE,
+  lesson_id INTEGER REFERENCES learning_lessons(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS improvement_proposals (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -1461,6 +1503,7 @@ def _migrate(conn):
     conn.execute("BEGIN IMMEDIATE")
     try:
         _migrate_steps(conn)
+        conn.execute("INSERT OR IGNORE INTO kv(key,value) VALUES ('learning_started_at',?)", (_now(),))
     except BaseException:
         conn.rollback()
         raise
@@ -3870,6 +3913,9 @@ def purge_preview(conn, scope, category=None):
         info["improvement_proposals"] = count(
             "SELECT COUNT(*) FROM improvement_proposals")
         info["mentor_cycles"] = count("SELECT COUNT(*) FROM mentor_cycles")
+        learning_count = count("SELECT COUNT(*) FROM learning_lessons")
+        if learning_count:
+            info["learning_lessons"] = learning_count
     elif scope == "category":
         info["messages"] = len(_messages_in_category(conn, category))
         info["category"] = category
@@ -3917,6 +3963,8 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
         # Improvement/evaluation rows can contain redacted boss corrections and
         # task-derived evidence. Delete them explicitly; task children then
         # cascade from assistant_tasks.
+        conn.execute("DELETE FROM learning_task_observations")
+        conn.execute("DELETE FROM learning_lessons")
         conn.execute("DELETE FROM mentor_cycles")
         conn.execute("DELETE FROM improvement_proposals")
         conn.execute("DELETE FROM evaluation_cases")

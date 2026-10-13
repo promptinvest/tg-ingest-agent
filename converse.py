@@ -20,6 +20,7 @@ Safety that stays even on this path:
 """
 import re
 
+import learning
 import boss_model
 import common
 import store
@@ -243,6 +244,11 @@ def build_messages(conn, chat_id, lang, extra_context=None):
     is UNTRUSTED channel content — it's fenced (not presented as the boss's own
     words) so a forwarded post can't inject instructions into the conversation."""
     messages = [{"role": "system", "content": build_system(conn, lang, extra_context)}]
+    turns = store.convo_recent(conn, chat_id, limit=1)
+    query = (turns[-1]["text"] if turns else "") + " " + str(extra_context or "")
+    learned = learning.context(conn, chat_id, "conversation", query)
+    if learned:
+        messages.append({"role": "user", "content": learned})
     # 20 turns (was 12, 2026-07-22): enough of the past conversation that «как я
     # говорил выше» resolves without an explicit recall_conversation; deeper
     # reads stay behind that action.
