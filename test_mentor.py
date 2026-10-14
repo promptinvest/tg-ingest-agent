@@ -248,6 +248,25 @@ class MentorBoundaryTests(unittest.TestCase):
         self.assertIn("test_path", summary)
         self.assertNotIn("Traceback", summary)
 
+    def test_retired_companion_paths_remain_denied_when_present(self):
+        root = Path(__file__).resolve().parent
+        for name in ("cara-worker.service", "cara-mentor.service",
+                     "cara-mentor-runner.service"):
+            with self.subTest(unit=name):
+                text = (root / name).read_text(encoding="utf-8")
+                entries = next(line.split("=", 1)[1].split()
+                               for line in text.splitlines()
+                               if line.startswith("InaccessiblePaths="))
+                for path in ("/etc/nikki-agent.env", "/var/lib/nikki-agent",
+                             "/etc/nikki-agent-backup.key"):
+                    self.assertIn("-" + path, entries)
+                    self.assertNotIn(path, entries)
+                for path in ("/etc/tg-ingest-agent.env",
+                             "/var/lib/tg-ingest-agent",
+                             "/etc/tg-ingest-agent-backup.key"):
+                    self.assertIn(path, entries)
+                    self.assertNotIn("-" + path, entries)
+
     def test_service_units_enforce_network_and_secret_boundaries(self):
         root = Path(__file__).resolve().parent
         mentor = (root / "cara-mentor.service").read_text(encoding="utf-8")

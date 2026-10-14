@@ -1,5 +1,16 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 14, 2026 - Nikki retirement compatibility
+
+Nikki is retired at the owner's request. The three Cara worker/Mentor unit
+files now prefix only the three retired Nikki `InaccessiblePaths` entries with
+`-`: missing companion paths no longer prevent a future service start, while
+existing paths remain inaccessible. All Cara private paths remain mandatory
+and denied. Runtime modules, environment, state, reminders, learning, speech
+and backups are unchanged. Live Cara, worker and whisper processes were not
+restarted. Missing-path namespace checks and credential-access denial passed.
+
+
 Local checkout and shared KB paths (updated September 20, 2026):
 [working agreement](CLAUDE.md#local-workspace-and-kbs).
 
