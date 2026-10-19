@@ -33,3 +33,7 @@ nothing
   validation, with focused regression cases. This does not implement or approve
   the general precedence table, other action contracts or new inverse operations.
   See [release evidence](../cara-reminder-safety-2026-10-19.md).
+- 2026-10-19: the focused fixes are deployed and accepted as `bc67c89`, build
+  `c605cb100b37`, receipt `3d54e432e890e1b38f779a41`; the full 1,763-test gate
+  and live source/data/config/recovery/runtime checks pass. General table and
+  inverse-operation work remain proposed.
