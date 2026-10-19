@@ -1026,6 +1026,10 @@ TEXTS = {
     # NB: nudge_unsorted was REMOVED 2026-07-17 — the generic unsorted-pile nudge
     # became the note-review invitation (nudge_note_review); untriaged items
     # surface there as one of the deterministic review reasons.
+    "reminder_schedule_unsupported": {
+        "ru": "Такой график напоминаний пока не поддерживается. Могу поставить новое разовое, ежедневное или еженедельное напоминание без даты окончания. Перенос меняет только время. Какой вариант нужен?",
+        "en": "That reminder schedule is not supported yet. I can create a one-time, daily or weekly reminder without an end date. Rescheduling changes only the time. Which option would you like?",
+    },
     "nudge_overdue": {
         "ru": "Ждут решения ({n}): {items}. Перенести или закрыть?",
         "en": "Waiting on you ({n}): {items}. Reschedule, or close?",

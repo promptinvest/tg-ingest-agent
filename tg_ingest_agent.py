@@ -50,6 +50,7 @@ import notes_svc
 import persona
 import proactive
 import reminders
+import reminder_time
 import reminders_svc
 import relationship
 import review
@@ -2219,6 +2220,8 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
     # -- action handlers extracted from the old inline dispatch (verbatim behavior) --------
 
     def do_reminder_create(self, chat_id, lang, params, msg_id=None):
+        if self._reject_reminder_schedule(chat_id, lang, params):
+            return
         params = self._note_reminder_title(params)  # "напомни по заметке N"
         if params is None:
             # He named a note that isn't there. Not-found, never another note's
@@ -2472,6 +2475,19 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
                 self._trace_route("recategorize", "category_rejected")
                 self.reply(chat_id, T(lang, "category_correction_needed"))
                 return
+        # A repeat request cannot be silently reduced to a one-shot by a pending
+        # resolver or the model. Keep every current confirmation intact.
+        reminder_context = pending and pending["kind"] in {
+            "reminder", "reminder_partial", "reminder_fired", "reminder_snooze_choice", "reminder_op"}
+        repeat_followup = reminder_context and re.match(
+            r"\s*(?:кажд\w*|ежечасно|ежемесячно|ежегодно|every|each|hourly|monthly|yearly|"
+            r"repeat|повтор\w*)\b", text, re.I)
+        reminder_request = re.match(
+            r"\s*(?:напомн\w*|напомин\w*|отложи|перенеси|remind\w*|reschedule|snooze|postpone)\b",
+            text, re.I)
+        if (repeat_followup or reminder_request) and self._reject_reminder_schedule(chat_id, lang, {}, text):
+            self._trace_route("clarify", "unsupported_reminder_schedule")
+            return
         # A pending reminder disambiguation ('which reminder?'): his next pick
         # ('второе'/'#2'/'про банк') completes the remembered reschedule/rename (B2).
         if pending and pending["kind"] == "reminder_op":
@@ -2517,10 +2533,14 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
             self._deterministic_capture(chat_id, lang, msg, explicit_category, source="replied_gratitude")
             return
         fired_pending_context = None
+        fired_pending_row = None
         if (pending and pending["kind"] == "reminder_fired"
                 and not self._is_reminder_ack(
                     text, str(pending["payload"].get("title") or ""))):
             fired_pending_context = pending
+            fired_pending_row = self.conn.execute(
+                "SELECT chat_id,kind,payload,created_at,expires_at FROM pending_actions WHERE chat_id=?",
+                (chat_id,)).fetchone()
             fired_gratitude_category = self._fired_gratitude_category(pending, msg)
             store.pending_clear(self.conn, chat_id)
             pending = None
@@ -2610,6 +2630,22 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
             return
         action, params = decision["action"], decision["params"]
         self._turn_route_invalid = decision.get("invalid")
+        schedule_action = action in {"reminder_create", "reminder_reschedule"}
+        schedule_pending = pending or fired_pending_context
+        schedule_amend = (action == "amend" and schedule_pending
+                          and schedule_pending["kind"] in {"reminder", "reminder_partial", "reminder_fired"})
+        if (self._turn_route_invalid == "unsupported_reminder_schedule"
+                or ((schedule_action or schedule_amend) and reminder_time.unsupported_schedule(
+                    params, text, reschedule=(action == "reminder_reschedule" or bool(
+                        schedule_amend and schedule_pending["kind"] == "reminder_fired"))))):
+            if fired_pending_row is not None and store.pending_get(self.conn, chat_id) is None:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO pending_actions(chat_id,kind,payload,created_at,expires_at)"
+                    " VALUES (?,?,?,?,?)", tuple(fired_pending_row))
+                self.conn.commit()
+            self._trace_route("clarify", "unsupported_reminder_schedule")
+            self.reply(chat_id, T(lang, "reminder_schedule_unsupported"))
+            return
         if action == "ask" and self._own_photo_turn:
             # A photo with a question (ADR-0013): `ask` never sees the vision read,
             # so it falls through to converse, which grounds on his notes AND has
@@ -2881,6 +2917,9 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
             self.reply(chat_id, T(lang, "nothing_pending"))
             return
         kind, payload = pending["kind"], pending["payload"]
+        if (kind == "reminder_fired" and action == "amend"
+                and self._reject_reminder_schedule(chat_id, lang, params, reschedule=True)):
+            return
         if action == "cancel":
             if kind == "note_edit":
                 # The staged text dies with the offer — nothing may still be
@@ -2941,6 +2980,8 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
                 store.pending_clear(self.conn, chat_id)
                 self.reply(chat_id, T(lang, "nothing_pending"))
         elif kind == "reminder":
+            if self._reject_reminder_schedule(chat_id, lang, params):
+                return
             if action == "amend":
                 merged = dict(payload)
                 merged.update({k: v for k, v in params.items() if v is not None})
@@ -3876,9 +3917,19 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
         lang = self.lang()
         tid = trace.start(self.conn, "proactive_tick", chat_id)
         try:
+            observed_at = datetime.now(timezone.utc)
+            overdue_ids = [row["id"] for row in proactive.overdue_rows(
+                self.conn, self.cfg, observed_at, chat_id=chat_id)]
+            delivered = {}
+
+            def send_nudge(text):
+                result = self.reply(chat_id, text)
+                if isinstance(result, dict):
+                    delivered.update(result)
+                return result
+
             sent = proactive.run(self.conn, self.cfg, lang,
-                                 lambda text: self.reply(chat_id, text),
-                                 chat_id=chat_id)
+                                 send_nudge, now=observed_at, chat_id=chat_id)
             # Snapshot the exact queue behind the delivered nudge. A later
             # «Давай»/"show them" can then continue deterministically.
             if sent:
@@ -3890,8 +3941,12 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
                     ids = [row["id"] for row, _reason in
                            store.notes_review_candidates(self.conn, limit=3)]
                 elif sent == "overdue":
-                    ids = [row["id"] for row in proactive.overdue_rows(
-                        self.conn, self.cfg, datetime.now(timezone.utc), chat_id=chat_id)]
+                    ids = overdue_ids
+                    # The nudge displays three titles at most. Explicit replies
+                    # bind only those visible targets, using the existing durable
+                    # single/batch notification path, ahead of stale snooze context.
+                    if ids:
+                        self._remember_fired_message(delivered.get("message_id"), ids[:3])
                 elif sent == "task_open_loop":
                     try:
                         ids = [int(store.kv_get(

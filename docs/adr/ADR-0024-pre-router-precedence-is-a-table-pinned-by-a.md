@@ -1,6 +1,6 @@
 # ADR-0024: Pre-router precedence is a table pinned by a matrix test; every immediate action has an inverse
 
-- Status: Proposed
+- Status: Partially implemented 2026-10-19 (reminder reply bindings and schedule guards; precedence table and inverses remain proposed)
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,8 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-10-19: owner requested fixing three confirmed reminder defects. Implemented
+  delivered-nudge reply bindings, exact-card draft callbacks and reminder schedule
+  validation, with focused regression cases. This does not implement or approve
+  the general precedence table, other action contracts or new inverse operations.
+  See [release evidence](../cara-reminder-safety-2026-10-19.md).

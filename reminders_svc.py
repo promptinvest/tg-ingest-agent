@@ -42,13 +42,31 @@ class ReminderMixin:
             text += "\n" + T(lang, "reminder_twin", rid=self.reminder_no(chat_id, twin["id"]),
                              title=twin["title"],
                              when_rel=reminders.fmt_relative(twin["due_utc"], self.tz_offset(), lang))
-        return self.reply(chat_id, text, reply_markup=reminders.draft_keyboard(lang, twin_id))
+        sent = self.reply(chat_id, text, reply_markup=reminders.draft_keyboard(lang, twin_id))
+        if isinstance(sent, dict) and sent.get("message_id"):
+            pending = store.pending_get(self.conn, chat_id)
+            if pending and pending["kind"] == "reminder" and pending["payload"] == draft:
+                payload = dict(draft, card_message_id=int(sent["message_id"]))
+                # Bind this revision without extending the confirmation's lifetime.
+                self.conn.execute("UPDATE pending_actions SET payload=?"
+                                  " WHERE chat_id=? AND kind='reminder'",
+                                  (json.dumps(payload, ensure_ascii=False), chat_id))
+                self.conn.commit()
+        return sent
+
+    def _reject_reminder_schedule(self, chat_id, lang, params, text=None, *, reschedule=False):
+        if not reminder_time.unsupported_schedule(params, text, reschedule=reschedule):
+            return False
+        self.reply(chat_id, T(lang, "reminder_schedule_unsupported"))
+        return True
 
     def do_reschedule(self, chat_id, lang, params, text=None):
         """Move an existing reminder to a new time (applied immediately, like
         cancel). Targets by id/title; a bare 'это/последнее' reference uses the
         sole active reminder, but never silently picks one when an explicit
         id/title was given but matched nothing (that moved the wrong reminder)."""
+        if self._reject_reminder_schedule(chat_id, lang, params, text, reschedule=True):
+            return
         due = reminders.parse_iso_utc(params.get("due_utc"))
         if due is None:
             self.reply(chat_id, T(lang, "reschedule_when"))
@@ -127,6 +145,8 @@ class ReminderMixin:
         command turn's Telegram message id — it rides the partial into the
         full draft so the edit-notice pointer is written when the reminder is
         actually created at confirm (2026-07-27)."""
+        if self._reject_reminder_schedule(chat_id, lang, params):
+            return
         now = datetime.now(timezone.utc)
         draft = {"recurrence": "none"}
         if msg_id:
@@ -159,6 +179,8 @@ class ReminderMixin:
         if action not in ("amend", "confirm"):
             store.pending_clear(self.conn, chat_id)  # boss moved on to something else
             return False
+        if self._reject_reminder_schedule(chat_id, lang, params):
+            return True
         draft = {k: v for k, v in pending["payload"].items()
                  if k in ("title", "due_utc", "recurrence", "src_msg_id", "note_msg_id")}
         title = str(params.get("title") or "").strip()
@@ -1445,6 +1467,16 @@ class ReminderMixin:
             self.edit_message(chat_id, message_id, base_text + "\n" + T(lang, "card_expired"))
             return
         payload = pending["payload"]
+        if (not payload.get("card_message_id")
+                or message_id != payload["card_message_id"]
+                or (op == "move" and rid != payload.get("twin_id"))):
+            # Buttons authorize the card actually shown, never the replacement
+            # draft in the single pending slot. Legacy unbound cards need a new
+            # confirmation (text yes/no on the current draft still works).
+            self.answer_callback(callback_id, T(lang, "card_expired"))
+            if message_id != payload.get("card_message_id"):
+                self.edit_message(chat_id, message_id, base_text + "\n" + T(lang, "card_expired"))
+            return
         if op == "set":
             self.resolve_pending(chat_id, "confirm", {}, pending, lang)
             self.answer_callback(callback_id, T(lang, "card_set"))

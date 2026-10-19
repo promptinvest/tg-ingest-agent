@@ -28,6 +28,37 @@ _EVIDENCE = re.compile(
     r"сейчас|немедленно|через|ежедневно|кажд\w*|today|tomorrow|tonight|"
     r"morning|evening|noon|now|immediately|daily|weekly|in\s+\d+)\b", re.I)
 
+_UNSUPPORTED_REPEAT = re.compile(
+    r"\b(?:hourly|minutely|monthly|yearly|annually|ежечасно|ежемесячно|ежегодно)\b|"
+    r"\b(?:every|each)\s+(?:(?:\d+|other|an?|one|two|three|four|five)\s+)?"
+    r"(?:minutes?|hours?|months?|years?)\b|"
+    r"\bкажд\w*\s+(?:(?:\d+|втор\w*|друг\w*)\s+)?"
+    r"(?:минут\w*|час\w*|месяц\w*|год\w*)\b|"
+    r"\b(?:every|each|кажд\w*)\s+(?:[2-9]|[1-9]\d+|other|two|three|втор\w*)\s+"
+    r"(?:days?|weeks?|дн\w*|недел\w*)\b|"
+    r"\b(?:daily|weekly|ежедневно|еженедельно|every\s+(?:day|week)|"
+    r"кажд\w*\s+(?:день|недел\w*)).{0,80}\b(?:until|through|до)\s+"
+    r"(?:\d|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"понедельник|вторник|сред|четверг|пятниц|суббот|воскресень)", re.I)
+_UNSUPPORTED_SCHEDULE_FIELDS = {
+    "until", "until_utc", "end_utc", "end_date", "ends_at", "count", "repeat_count",
+    "interval", "interval_minutes", "repeat_interval", "repeat_every", "frequency", "rrule",
+}
+
+
+def unsupported_schedule(params, text=None, *, reschedule=False):
+    """Reject schedule semantics the reminder executor cannot carry out in full.
+
+    The draft normalizer's historical fallback remains available to its other
+    callers. State-changing reminder entry points apply this gate before it.
+    """
+    recurrence = str(params.get("recurrence") or "none").strip().casefold()
+    allowed = {"none"} if reschedule else {"none", "daily", "weekly"}
+    source = re.sub(r'«[^»]*»|“[^”]*”|"[^"]*"', "", str(text or ""))
+    return (recurrence not in allowed
+            or any(params.get(key) not in (None, "") for key in _UNSUPPORTED_SCHEDULE_FIELDS)
+            or bool(_UNSUPPORTED_REPEAT.search(source)))
+
 
 def clock(text, default=None):
     match = _CLOCK.search(text)

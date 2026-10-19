@@ -481,6 +481,9 @@ def validate_route_reason(parsed, has_pending):
     params = parsed.get("params")
     if not isinstance(params, dict):
         params = {}
+    if action in {"reminder_create", "reminder_reschedule"} and reminder_time.unsupported_schedule(
+            params, reschedule=action == "reminder_reschedule"):
+        return None, "unsupported_reminder_schedule"
     try:
         confidence = float(parsed.get("confidence", 0.5))
     except (TypeError, ValueError):

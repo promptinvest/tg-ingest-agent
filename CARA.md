@@ -1,5 +1,24 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 19, 2026 - Reminder correctness fixes
+
+Delivered overdue nudges now retain durable reply bindings to the reminder titles
+actually displayed (at most three). An explicit reply follows the existing single/
+batch reminder path and overrides an unrelated snooze choice. Failed deliveries
+create no binding. Closed targets never fall back to another reminder.
+
+Draft buttons act only on the exact Telegram card currently awaiting confirmation.
+A replacement or amended card invalidates the old buttons, including cancel, time
+and move. Moving an existing reminder must name the twin offered on that card.
+Bindings survive restart and preserve the original confirmation expiry. Legacy
+unbound buttons expire safely; ordinary text confirmation remains available.
+
+Unsupported repetition, intervals and repeat end dates are clarified before any
+reminder or draft changes. New reminders retain one-time/daily/weekly support;
+rescheduling changes only time. There is no hourly scheduler in this release.
+See [scope and verification](docs/cara-reminder-safety-2026-10-19.md).
+The final candidate passes 81 focused cases and 1,763 full Linux tests (nine skips).
+
 ## October 14, 2026 - Nikki retirement compatibility
 
 Nikki is retired at the owner's request. The three Cara worker/Mentor unit
@@ -14,8 +33,9 @@ restarted. Missing-path namespace checks and credential-access denial passed.
 Local checkout and shared KB paths (updated September 20, 2026):
 [working agreement](CLAUDE.md#local-workspace-and-kbs).
 
-Current running release: code `a793c86`, build `6f1997651bbe`; see the
-[October 7 reminder conversation correction](docs/cara-conversation-fix-2026-10-07.md).
+Last verified running release: code `7de363c`, build `05f8e80d1687`; see the
+[October 13 procedural learning release](docs/cara-learning-2026-10-13.md).
+October 19 reminder fixes are a candidate until the release record says accepted.
 The [monthly digest correction](docs/cara-digest-fix-2026-10-07.md) remains included.
 The earlier [review and archive-recovery record](docs/cara-review-fixes-2026-10-07.md) remains preserved.
 
