@@ -15,7 +15,9 @@ send_chat_action at the top of dispatch and at the start of suggest_row; for voi
 
 ## Consequences
 
-one extra Telegram call per turn; the STT wait is still synchronous (see ADR-0023).
+one extra Telegram call per turn; ordinary inbound STT now runs on the serial
+transport helper described in implemented ADR-0023. The retained synchronous
+helper keeps its state-free typing thread; the poll thread owns all persistence.
 
 ## Resolves
 

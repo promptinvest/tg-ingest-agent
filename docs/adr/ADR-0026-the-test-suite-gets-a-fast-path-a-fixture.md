@@ -1,6 +1,6 @@
 # ADR-0026: The test suite gets a fast path, a fixture library and a measured gate
 
-- Status: Partially implemented 2026-10-07 (timed gate, subsets, shared fixtures, split suites, tmpfs and shuffle; lint/serializer follow-ups remain)
+- Status: Partially implemented 2026-10-19 (timed gate, subsets, fixtures, split suites, tmpfs, shuffle and undefined-name lint; broader lint/serializer follow-ups remain)
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -32,3 +32,6 @@ nothing
 - 2026-10-07: owner authorized "fix all & deploy" following the code/live review. Partially implemented 2026-10-07 (timed gate, subsets, shared fixtures, split suites, tmpfs and shuffle; lint/serializer follow-ups remain). Verification and deployment evidence: `../../docs/cara-review-fixes-2026-10-07.md`.
 
 - 2026-10-07: shipped in reviewed release `7995fad` and corrected release `36f2075`; live build `9d041a123f25`, receipt `0f839bc1e8c673d4a6f196df`. Remaining subtasks named in the status line stay open.
+- 2026-10-19: owner requested adding undefined-name lint from the follow-up review.
+  CI pins Ruff 0.17.1 and enables F821/F822/F823 without runtime dependencies.
+  Wider F-rule cleanup, prompt snapshots and serializer consolidation remain open.

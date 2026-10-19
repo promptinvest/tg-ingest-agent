@@ -29,6 +29,28 @@ class ReminderMixin:
     REPING_LOCAL_HOUR = 9           # the one re-ping before expiry lands at the next local 09:00
     SNOOZE_ESCALATE_AT = 3          # third snooze in a day → «перенести на день или закрыть?»
 
+    def _bind_reminder_prompt(self, chat_id, kind, draft, sent):
+        """Bind a delivered prompt revision without extending its original TTL."""
+        if isinstance(sent, dict) and sent.get("message_id"):
+            pending = store.pending_get(self.conn, chat_id)
+            if pending and pending["kind"] == kind and pending["payload"] == draft:
+                payload = dict(draft, card_message_id=int(sent["message_id"]))
+                self.conn.execute("UPDATE pending_actions SET payload=? WHERE chat_id=? AND kind=?",
+                                  (json.dumps(payload, ensure_ascii=False), chat_id, kind))
+                self.conn.commit()
+
+    def _send_partial_reminder_prompt(self, chat_id, lang, draft):
+        sent = self.reply(chat_id, T(lang, "reminder_need_" + draft["need"]))
+        self._bind_reminder_prompt(chat_id, "reminder_partial", draft, sent)
+
+    def _reject_reminder_draft_reply(self, chat_id, lang, pending):
+        """An explicit reply names its prompt; an unquoted answer uses the slot."""
+        target = getattr(self, "turn_reply_message_id", None)
+        if target is None or target == pending["payload"].get("card_message_id"):
+            return False
+        self.reply(chat_id, T(lang, "card_expired"))
+        return True
+
     def _send_reminder_draft(self, chat_id, lang, draft, twin=None):
         """The draft card (ADR-0001): Ставлю · Другое время · Не надо buttons, plus
         the «move the existing one» offer when an active reminder already carries
@@ -43,15 +65,7 @@ class ReminderMixin:
                              title=twin["title"],
                              when_rel=reminders.fmt_relative(twin["due_utc"], self.tz_offset(), lang))
         sent = self.reply(chat_id, text, reply_markup=reminders.draft_keyboard(lang, twin_id))
-        if isinstance(sent, dict) and sent.get("message_id"):
-            pending = store.pending_get(self.conn, chat_id)
-            if pending and pending["kind"] == "reminder" and pending["payload"] == draft:
-                payload = dict(draft, card_message_id=int(sent["message_id"]))
-                # Bind this revision without extending the confirmation's lifetime.
-                self.conn.execute("UPDATE pending_actions SET payload=?"
-                                  " WHERE chat_id=? AND kind='reminder'",
-                                  (json.dumps(payload, ensure_ascii=False), chat_id))
-                self.conn.commit()
+        self._bind_reminder_prompt(chat_id, "reminder", draft, sent)
         return sent
 
     def _reject_reminder_schedule(self, chat_id, lang, params, text=None, *, reschedule=False):
@@ -166,12 +180,14 @@ class ReminderMixin:
         need = "title" if not draft.get("title") else "time"
         draft["need"] = need
         store.pending_set(self.conn, chat_id, "reminder_partial", draft)
-        self.reply(chat_id, T(lang, "reminder_need_" + need))
+        self._send_partial_reminder_prompt(chat_id, lang, draft)
 
     def continue_partial_reminder(self, chat_id, lang, pending, action, params):
         """Stitch a missing field into a half-specified reminder. Returns True if
         the message completed/continued the draft (or cancelled it), False if it
         is an unrelated intent (the partial is then abandoned and falls through)."""
+        if action in ("cancel", "amend", "confirm") and self._reject_reminder_draft_reply(chat_id, lang, pending):
+            return True
         if action == "cancel":
             store.pending_clear(self.conn, chat_id)
             self.reply(chat_id, T(lang, "reminder_partial_cancelled"))
@@ -211,7 +227,7 @@ class ReminderMixin:
             need = "title" if not draft.get("title") else "time"
             draft["need"] = need
             store.pending_set(self.conn, chat_id, "reminder_partial", draft)
-            self.reply(chat_id, T(lang, "reminder_need_" + need))
+            self._send_partial_reminder_prompt(chat_id, lang, draft)
         return True
 
     def continue_partial_reminder_from_forward(self, chat_id, lang, pending, text):
@@ -1495,7 +1511,7 @@ class ReminderMixin:
             store.pending_set(self.conn, chat_id, "reminder_partial", draft)
             self.answer_callback(callback_id, "🕒")
             self.edit_message(chat_id, message_id, base_text)
-            self.reply(chat_id, T(lang, "reminder_need_time"))
+            self._send_partial_reminder_prompt(chat_id, lang, draft)
             return
         # op == "move": reschedule the existing twin to the draft's time instead
         twin = store.reminder_get(self.conn, rid)
@@ -1573,20 +1589,24 @@ class ReminderMixin:
         if not t or len(t) > 60:
             return False
         kind, payload = pending["kind"], pending["payload"]
-        if self._DRAFT_NO_RE.fullmatch(t):
+        no = self._DRAFT_NO_RE.fullmatch(t)
+        yes = kind == "reminder" and self._DRAFT_YES_RE.fullmatch(t)
+        due = None
+        if kind == "reminder" or payload.get("need") == "time":
+            due = self._parse_draft_time(t, str(payload.get("title") or ""))
+        if not (no or yes or due):
+            return False
+        if self._reject_reminder_draft_reply(chat_id, lang, pending):
+            return True
+        if no:
             if kind == "reminder":
                 self.resolve_pending(chat_id, "cancel", {}, pending, lang)
             else:
                 self.continue_partial_reminder(chat_id, lang, pending, "cancel", {})
             return True
-        if kind == "reminder" and self._DRAFT_YES_RE.fullmatch(t):
+        if yes:
             self.resolve_pending(chat_id, "confirm", {}, pending, lang)
             return True
-        if kind == "reminder_partial" and payload.get("need") != "time":
-            return False
-        due = self._parse_draft_time(t, str(payload.get("title") or ""))
-        if due is None:
-            return False
         if kind == "reminder":
             self.resolve_pending(chat_id, "amend", {"due_utc": due}, pending, lang)
         else:

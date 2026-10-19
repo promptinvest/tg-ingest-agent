@@ -12,10 +12,17 @@ A replacement or amended card invalidates the old buttons, including cancel, tim
 and move. Moving an existing reminder must name the twin offered on that card.
 Bindings survive restart and preserve the original confirmation expiry. Legacy
 unbound buttons expire safely; ordinary text confirmation remains available.
+Explicit text replies must also match the current draft or partial prompt.
+Replies to delivered alarms take precedence over another reminder's draft,
+without discarding that draft. Unquoted yes/no/time answers keep their existing flow.
 
 Unsupported repetition, intervals and repeat end dates are clarified before any
 reminder or draft changes. New reminders retain one-time/daily/weekly support;
 rescheduling changes only time. There is no hourly scheduler in this release.
+Source checks include Russian number words and «раз в месяц», even when a model
+omits the requested repeat. CI checks undefined Python names with pinned Ruff
+F821/F822/F823 rules, without adding a runtime dependency.
+See the [reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md).
 See [scope and verification](docs/cara-reminder-safety-2026-10-19.md).
 The accepted release passes 81 focused cases and 1,763 full Linux tests (nine skips).
 
@@ -1973,9 +1980,12 @@ weekly redacted evidence
 - **She always signals that she is working (2026‑09‑07, ADR‑0007):** a typing indicator
   is sent at the top of every dispatch and at the start of every ingest suggestion (a
   forward used to sit silent for 9–23 s). A voice note longer than 15 s gets «🎤 Слушаю
-  (~N с)…» (not recorded in the history) and a state‑free keepalive thread re‑sends
-  «typing» every 4 s while whisper blocks the loop — the thread touches no database and
-  no shared state; the transcription itself is still synchronous (ADR‑0023).
+  (~N с)…» (not recorded in the history). `voice_svc` submits transcription to one
+  serial helper thread without SQLite access; the poll thread continues handling
+  text and callbacks, then meters and routes the completed transcript (ADR‑0023).
+  A later text turn can therefore finish before the earlier voice turn. The retained
+  synchronous `transcribe_voice` helper has a state-free typing keepalive; ordinary
+  inbound voice uses the deferred path.
 - **STT_MODE is validated at startup (2026‑07‑25)**: only `local` / `local_server` /
   `remote`: an unknown value used to fall through to `remote`, so a typo would have
   shipped the boss's private voice audio to an off‑box endpoint. **Outage resilience:**
@@ -2015,8 +2025,8 @@ weekly redacted evidence
   survive restart, retry on failure, and run under their own traces. A job left
   `claimed` by a crash mid‑run is **reclaimed at startup** (`jobs.reclaim_stale`,
   2026‑07‑02) — requeued while retry budget remains, else terminally failed — so a
-  crash can never wedge a job kind forever. The live request→reply path stays
-  synchronous by design (single‑user, low volume).
+  crash can never wedge a job kind forever. Text request handling stays on the poll
+  thread; voice transcription is deferred to its serial transport helper.
 - **Crash‑loop containment (2026‑07‑25):** a SQLite failure — a full disk is the
   realistic case — anywhere in the inbound path used to leave the poll loop, and
   systemd's 10 s restart hit the same failing write forever: Cara was permanently

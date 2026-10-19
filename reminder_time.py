@@ -28,14 +28,23 @@ _EVIDENCE = re.compile(
     r"сейчас|немедленно|через|ежедневно|кажд\w*|today|tomorrow|tonight|"
     r"morning|evening|noon|now|immediately|daily|weekly|in\s+\d+)\b", re.I)
 
+_RU_MULTI_NUMBER = (r"(?:[2-9]|[1-9]\d+|два|две|три|четыре|пять|шесть|семь|восемь|девять|"
+                    r"десять|одиннадцать|двенадцать|тринадцать|четырнадцать|пятнадцать|"
+                    r"шестнадцать|семнадцать|восемнадцать|девятнадцать|двадцать|тридцать|"
+                    r"сорок|пятьдесят|шестьдесят|полтора|полторы)")
+_RU_NUMBER = rf"(?:\d+|один|одну|одно|{_RU_MULTI_NUMBER})(?:\s+{_RU_MULTI_NUMBER})?"
 _UNSUPPORTED_REPEAT = re.compile(
     r"\b(?:hourly|minutely|monthly|yearly|annually|ежечасно|ежемесячно|ежегодно)\b|"
     r"\b(?:every|each)\s+(?:(?:\d+|other|an?|one|two|three|four|five)\s+)?"
     r"(?:minutes?|hours?|months?|years?)\b|"
-    r"\bкажд\w*\s+(?:(?:\d+|втор\w*|друг\w*)\s+)?"
+    rf"\bкажд\w*\s+(?:(?:{_RU_NUMBER}|втор\w*|друг\w*)\s+)?"
     r"(?:минут\w*|час\w*|месяц\w*|год\w*)\b|"
-    r"\b(?:every|each|кажд\w*)\s+(?:[2-9]|[1-9]\d+|other|two|three|втор\w*)\s+"
+    rf"\b(?:every|each|кажд\w*)\s+(?:{_RU_MULTI_NUMBER}|other|two|three|втор\w*)\s+"
     r"(?:days?|weeks?|дн\w*|недел\w*)\b|"
+    rf"\b(?:{_RU_NUMBER}\s+)?раз(?:а)?\s+в\s+(?:{_RU_NUMBER}\s+)?"
+    r"(?:минут\w*|час\w*|месяц\w*|год\w*)\b|"
+    rf"\b{_RU_MULTI_NUMBER}\s+раз(?:а)?\s+в\s+(?:день|сутки|недел\w*)\b|"
+    rf"\bраз\s+в\s+{_RU_MULTI_NUMBER}\s+(?:дн\w*|недел\w*)\b|"
     r"\b(?:daily|weekly|ежедневно|еженедельно|every\s+(?:day|week)|"
     r"кажд\w*\s+(?:день|недел\w*)).{0,80}\b(?:until|through|до)\s+"
     r"(?:\d|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"

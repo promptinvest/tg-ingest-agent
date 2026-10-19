@@ -1,6 +1,6 @@
 # ADR-0027: Documentation contract: present tense, guarded maps, one runbook
 
-- Status: Proposed
+- Status: Partially implemented 2026-10-19 (runtime/voice/retired-host descriptions corrected; broader contract work remains proposed)
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -28,3 +28,8 @@ nothing
 ## Status log
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
+- 2026-10-19: owner requested correcting the stale architecture descriptions.
+  README names the poll/voice threads and isolated worker; the entry docstring
+  records Pilot retirement, and current voice sections in both specs describe
+  deferred STT and text-before-voice ordering. Broader schema/runbook/documentation
+  contract work remains proposed; historical checkpoints are preserved.

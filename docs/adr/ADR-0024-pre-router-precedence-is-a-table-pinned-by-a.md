@@ -37,3 +37,9 @@ nothing
   `c605cb100b37`, receipt `3d54e432e890e1b38f779a41`; the full 1,763-test gate
   and live source/data/config/recovery/runtime checks pass. General table and
   inverse-operation work remain proposed.
+- 2026-10-19: owner requested all four follow-ups from the additional review.
+  Explicit draft/partial text replies now check prompt identity; delivered-alarm
+  replies precede reminder pending guards without losing unrelated drafts. Source
+  repeat detection covers Russian number words and «раз в месяц». General table
+  and inverse-operation work remain proposed. See the
+  [follow-up evidence](../cara-reply-completeness-2026-10-19.md).

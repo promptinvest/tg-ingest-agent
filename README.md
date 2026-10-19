@@ -8,10 +8,12 @@ notes) in Russian or English, a closed-world intent router decides which skill
 handles the request, and everything that changes state is confirmed
 conversationally ("да" / "нет, лучше крипта" / "через полчаса"). Forwarded
 channel posts are ingested automatically without burning router tokens.
-Stdlib-only Python 3 (urllib, sqlite3), one process, one thread, one SQLite
-connection; long polling, so no inbound ports — the host firewall stays
-SSH-only. Runs as systemd service `tg-ingest-agent` under the non-root user
-`tg-ingest`.
+Stdlib-only Python 3 (urllib, sqlite3), with one long-poll thread owning the
+bot's SQLite connection and state changes. Voice transcription uses a serial
+helper thread; the separate, isolated `cara-worker` service executes allowlisted
+local tasks. Long polling needs no inbound ports, so the host firewall stays
+SSH-only. The bot runs as systemd service `tg-ingest-agent` under the non-root
+user `tg-ingest`; Mentor and its candidate runner remain disabled.
 
 ## Where the real documentation lives
 

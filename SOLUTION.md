@@ -12,6 +12,10 @@ Each reminder draft stores its delivered card ID in the existing pending payload
 without resetting its expiry. Set/cancel/time/move callbacks must match that ID;
 move also matches the offered twin. Each newly delivered card is a revision.
 Unbound historical buttons require fresh confirmation; text yes/no stays supported.
+Draft and partial prompts bind explicit text replies to their delivered revision.
+Deterministic and model-based confirm/amend/cancel paths check that identity.
+Explicit delivered-alarm replies resolve before reminder draft/reopen/pick guards,
+while preserving any unrelated draft and its original expiry.
 
 A shared schedule guard rejects unsupported recurrence, interval and end conditions
 before reminder creation, rescheduling, or pending-draft mutation. The router also
@@ -19,6 +23,11 @@ validates those fields; source-based repeat checks cover model omission. Existin
 low-level normalization and calendar behavior remain, while reminder execution
 cannot silently apply part of a repeat request. Schema, services, budgets, models,
 stored history and normal one-time/daily/weekly creation are unchanged.
+Russian number-word intervals and «раз в месяц» are checked in the source even if
+the router omits repetition. CI runs pinned Ruff F821/F822/F823 checks for undefined
+names; production stays stdlib-only. README, entry-module and voice architecture
+descriptions reflect the existing helper thread and isolated worker.
+See the [reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md).
 See [scope and verification](docs/cara-reminder-safety-2026-10-19.md).
 The accepted release passes 81 focused cases and 1,763 full Linux tests (nine skips).
 
@@ -853,8 +862,9 @@ Budget warnings and the weekly digest keep their own dedicated notifiers.
 - **Events & jobs (`events`/`jobs`/`runtime`).** Durable, retryable background
   work: the daily memory curator and maintenance (pending-ingest retry sweep,
   media cleanup, expiring abandoned pending actions) run as jobs that survive
-  restart, retry on failure, and run under their own traces. The live
-  request→reply path stays synchronous by design (single-user, low volume).
+  restart, retry on failure, and run under their own traces. Text requests run on
+  the poll thread; voice transcription uses a serial transport helper and resumes
+  on the poll thread for persistence and routing.
   **Stage C retired (2026-09-08, ADR-0019).** The `events` claim layer
   (`claim_next`/`complete`/`fail`/`reclaim_stale`, the 2026-07-26 parity work)
   duplicated the durable inbox and nothing ever claimed an event in six weeks of
@@ -984,14 +994,15 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
 
 ## 9. Voice & storage
 
-- **She signals that she is working (2026-09-07, ADR-0007):** `send_chat_action` at the
-  top of `dispatch` and of `suggest_row`, and for a voice note over 15 s a «🎤 Слушаю
-  (~N с)…» line plus `_typing_keepalive` — a daemon thread that re-sends «typing» every
-  `TYPING_KEEPALIVE_SECONDS` (4) until the transcription returns. The thread is
-  deliberately state-free (token + chat id only; no DB, no agent attributes) so it can run
-  beside the single-threaded loop; the STT call itself stays synchronous (ADR-0023). The
-  offline suite neutralises the indicator once in `setUpModule`, since every dispatch
-  would otherwise be a real HTTPS call.
+- **She signals that she is working (ADR-0007/0023):** `send_chat_action` runs at the
+  top of `dispatch` and `suggest_row`. An inbound voice note over 15 s also gets a
+  «🎤 Слушаю (~N с)…» line. `voice_svc` transcribes on a serial helper thread without
+  SQLite access, while the poll thread continues processing text and callbacks.
+  Completed transcripts return to the poll thread for metering, durable caching
+  and routing; a later text can finish before the earlier voice turn. The retained
+  synchronous `transcribe_voice` helper uses the state-free `_typing_keepalive`;
+  ordinary inbound voice follows the deferred path. The offline suite neutralises
+  typing indicators in `setUpModule` to avoid HTTPS calls.
 - **Voice (STT):** DO's serverless catalog exposes no transcription model, so
   Cara runs **whisper.cpp locally** on the VPS. A warm `whisper-server`
   (`STT_MODE=local_server`, OpenBLAS build, `ggml-small-q5_1`) keeps the model

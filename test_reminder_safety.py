@@ -274,6 +274,167 @@ class ReminderSafetyTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(reminder_time.unsupported_schedule({}, text))
 
+    def text_reply(self, text, target, *, decision=None):
+        update = {"update_id": 900002, "message": {
+            "message_id": 930, "chat": {"id": 1, "type": "private"}, "from": {"id": 1},
+            "date": int(datetime.now(timezone.utc).timestamp()), "text": text,
+            "reply_to_message": {"message_id": target, "from": {"is_bot": True},
+                                 "text": "Earlier reminder card"}}}
+        with mock.patch.object(router, "route", **(
+                {"return_value": decision} if decision else
+                {"side_effect": AssertionError("no model routing")})), \
+                mock.patch.object(self.agent, "reply", return_value={"message_id": 931}) as reply:
+            self.agent.handle_update(update)
+        return reply
+
+    def test_old_draft_text_replies_preserve_replacement_and_expiry(self):
+        for text in ("да", "нет", "завтра", "yes", "tomorrow"):
+            with self.subTest(text=text):
+                self.draft("old work", 910)
+                self.draft("new work", 911)
+                before = self.state()
+                expiry = tuple(self.conn.execute("SELECT created_at,expires_at FROM pending_actions").fetchone())
+                reply = self.text_reply(text, 910)
+                self.assertEqual(self.state(), before)
+                self.assertEqual(tuple(self.conn.execute("SELECT created_at,expires_at FROM pending_actions").fetchone()), expiry)
+                lang = "en" if text in ("yes", "tomorrow") else "ru"
+                self.assertEqual(reply.call_args.args[1], T(lang, "card_expired"))
+
+    def test_current_draft_text_reply_and_unquoted_confirmation_still_work(self):
+        self.draft("current work", 910)
+        self.text_reply("да", 910)
+        self.assertEqual([r["title"] for r in store.reminders_active(self.conn, 1)], ["current work"])
+        self.draft("unquoted work", 911)
+        with mock.patch.object(self.agent, "reply"):
+            self.agent.dispatch(1, {"message_id": 932}, "да")
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), 2)
+
+    def test_fired_reply_wins_over_draft_without_losing_draft(self):
+        rid = self.add("fired work", fired=True)
+        self.agent._remember_fired_message(900, [rid])
+        self.draft("new work", 911)
+        pending = tuple(self.conn.execute("SELECT * FROM pending_actions").fetchone())
+        due = store.reminder_get(self.conn, rid)["due_utc"]
+        self.text_reply("завтра", 900)
+        self.assertNotEqual(store.reminder_get(self.conn, rid)["due_utc"], due)
+        self.assertEqual(tuple(self.conn.execute("SELECT * FROM pending_actions").fetchone()), pending)
+
+    def test_fired_reply_wins_over_partial_draft(self):
+        rid = self.add("fired work", fired=True)
+        self.agent._remember_fired_message(900, [rid])
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 911}):
+            self.agent.start_partial_reminder(1, "ru", {"title": "new work"})
+        pending = tuple(self.conn.execute("SELECT * FROM pending_actions").fetchone())
+        self.text_reply("готово", 900)
+        self.assertEqual(store.reminder_get(self.conn, rid)["status"], "done")
+        self.assertEqual(tuple(self.conn.execute("SELECT * FROM pending_actions").fetchone()), pending)
+
+    def test_fired_reply_precedes_other_reminder_pending_guards(self):
+        for kind, payload in (("reminder_expired", {"reminder_ids": []}),
+                              ("reminder_op", {"ids": [], "op": "reschedule"})):
+            with self.subTest(kind=kind):
+                rid = self.add("fired work", fired=True)
+                self.agent._remember_fired_message(900, [rid])
+                store.pending_set(self.conn, 1, kind, payload)
+                pending = tuple(self.conn.execute("SELECT * FROM pending_actions").fetchone())
+                self.text_reply("да", 900)
+                self.assertEqual(store.reminder_get(self.conn, rid)["status"], "done")
+                self.assertEqual(tuple(self.conn.execute("SELECT * FROM pending_actions").fetchone()), pending)
+
+    def test_closed_fired_reply_cannot_confirm_current_draft(self):
+        rid = self.add("fired work", fired=True)
+        self.agent._remember_fired_message(900, [rid])
+        store.reminder_close(self.conn, rid, "done")
+        self.draft("new work", 911)
+        before = self.state()
+        self.text_reply("да", 900)
+        self.assertEqual(self.state(), before)
+
+    def test_partial_prompt_reply_is_bound_and_stale_prompt_cannot_complete_it(self):
+        for target in (910, 911):
+            with self.subTest(target=target):
+                self.draft("old work", 910)
+                with mock.patch.object(self.agent, "reply", return_value={"message_id": 911}):
+                    self.agent.start_partial_reminder(1, "ru", {"title": "new work"})
+                before = self.state()
+                self.text_reply("завтра", target)
+                if target == 910:
+                    self.assertEqual(self.state(), before)
+                else:
+                    pending = store.pending_get(self.conn, 1)
+                    self.assertEqual(pending["kind"], "reminder")
+                    self.assertEqual(pending["payload"]["title"], "new work")
+
+    def test_model_confirmation_on_old_card_cannot_mutate_current_draft(self):
+        for action in ("confirm", "cancel", "amend"):
+            with self.subTest(action=action):
+                self.draft("old work", 910)
+                self.draft("new work", 911)
+                before = self.state()
+                decision = {"action": action, "params": {"title": "wrong work"}, "confidence": .99}
+                self.text_reply("Пожалуйста, именно так и сделай", 910, decision=decision)
+                self.assertEqual(self.state(), before)
+
+    def test_model_reply_on_old_card_cannot_mutate_partial_draft(self):
+        self.draft("old work", 910)
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 911}):
+            self.agent.start_partial_reminder(1, "ru", {"title": "new work"})
+        for action in ("confirm", "cancel", "amend"):
+            with self.subTest(action=action):
+                before = self.state()
+                decision = {"action": action, "params": {
+                    "due_utc": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()}, "confidence": .99}
+                self.text_reply("Пожалуйста, именно так и сделай", 910, decision=decision)
+                self.assertEqual(self.state(), before)
+
+    def test_partial_binding_preserves_expiry_and_restart(self):
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 911}):
+            self.agent.start_partial_reminder(1, "ru", {"title": "new work"})
+        pending = store.pending_get(self.conn, 1)
+        before = tuple(self.conn.execute("SELECT created_at,expires_at FROM pending_actions").fetchone())
+        with mock.patch.object(self.agent, "reply", return_value={"message_id": 912}):
+            self.agent._send_partial_reminder_prompt(1, "ru", pending["payload"])
+        self.assertEqual(tuple(self.conn.execute("SELECT created_at,expires_at FROM pending_actions").fetchone()), before)
+        reopened = store.open_db(self.cfg.db_path)
+        try:
+            self.assertEqual(store.pending_get(reopened, 1)["payload"]["card_message_id"], 912)
+        finally:
+            reopened.close()
+
+    def test_russian_interval_and_monthly_sources_survive_model_omission(self):
+        for text in ("Напоминай каждые два часа", "Напоминай раз в месяц в 9:00",
+                     "Напоминай каждые три дня", "Напоминай два раза в неделю"):
+            with self.subTest(text=text):
+                self.draft("original work", 910)
+                before = self.state()
+                decision = {"action": "reminder_create", "params": {
+                    "title": "work", "due_utc": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+                    "recurrence": "none"}, "confidence": .99}
+                with mock.patch.object(router, "route", return_value=decision), \
+                        mock.patch.object(self.agent, "reply") as reply:
+                    self.agent.dispatch(1, {"message_id": 932}, text)
+                self.assertEqual(self.state(), before)
+                self.assertEqual(reply.call_args.args[1], T("ru", "reminder_schedule_unsupported"))
+
+    def test_supported_repeat_phrasing_and_quoted_titles_stay_supported(self):
+        for text in ("напомни раз в день в 9", "напомни раз в неделю в понедельник",
+                     "напомни один раз завтра", "напомни через два часа",
+                     'напомни завтра прочитать «Раз в месяц»',
+                     'напомни завтра прочитать "Каждые два часа"'):
+            with self.subTest(text=text):
+                self.assertFalse(reminder_time.unsupported_schedule({}, text))
+
+    def test_repeat_followup_preserves_pending_before_router(self):
+        self.draft("original work", 910)
+        for text in ("раз в месяц", "каждые два часа", "два раза в неделю"):
+            with self.subTest(text=text):
+                before = self.state()
+                with mock.patch.object(router, "route", side_effect=AssertionError("no model call")), \
+                        mock.patch.object(self.agent, "reply") as reply:
+                    self.agent.dispatch(1, {"message_id": 932}, text)
+                self.assertEqual(self.state(), before)
+                self.assertEqual(reply.call_args.args[1], T("ru", "reminder_schedule_unsupported"))
+
 
 if __name__ == "__main__":
     unittest.main()

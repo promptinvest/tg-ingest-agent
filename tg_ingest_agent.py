@@ -7,8 +7,10 @@ suggest-and-confirm categorization, reminders, AI-spend stats, and a small
 preference memory. All model calls go through the budget-guarded gateway in
 llm.py. No inbound ports; stdlib only.
 
-Deployed on the PD-VPS (174.138.108.85) as /opt/tg-ingest-agent/agent.py;
-Pilot-VPS is a cold standby.
+Deployed on the PD-VPS (174.138.108.85) as /opt/tg-ingest-agent/agent.py.
+The former Pilot-VPS was retired in June 2026. Voice transcription runs on a
+serial helper thread; SQLite and state changes remain on the poll thread.
+The isolated cara-worker service executes allowlisted local tasks.
 """
 import ast
 import json
@@ -2481,13 +2483,23 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
             "reminder", "reminder_partial", "reminder_fired", "reminder_snooze_choice", "reminder_op"}
         repeat_followup = reminder_context and re.match(
             r"\s*(?:кажд\w*|ежечасно|ежемесячно|ежегодно|every|each|hourly|monthly|yearly|"
-            r"repeat|повтор\w*)\b", text, re.I)
+            r"repeat|повтор\w*|раз|(?:\S+\s+){1,3}раза?)\b", text, re.I)
         reminder_request = re.match(
             r"\s*(?:напомн\w*|напомин\w*|отложи|перенеси|remind\w*|reschedule|snooze|postpone)\b",
             text, re.I)
         if (repeat_followup or reminder_request) and self._reject_reminder_schedule(chat_id, lang, {}, text):
             self._trace_route("clarify", "unsupported_reminder_schedule")
             return
+        # A reply names a delivered alarm before another reminder's draft,
+        # reopen question or disambiguation can consume it. A source/echo snooze
+        # choice keeps its existing binding; unrelated drafts retain their TTL.
+        if self.turn_reply_reminder_id is not None:
+            if self.resolve_snooze_choice_text(chat_id, lang, pending, text):
+                self._trace_route("reminder_reschedule", "snooze_choice")
+                return
+            if self.resolve_fired_followup(chat_id, lang, text, pending):
+                self._trace_route("reminder_reschedule", "fired_followup")
+                return
         # A pending reminder disambiguation ('which reminder?'): his next pick
         # ('второе'/'#2'/'про банк') completes the remembered reschedule/rename (B2).
         if pending and pending["kind"] == "reminder_op":
@@ -2917,6 +2929,8 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
             self.reply(chat_id, T(lang, "nothing_pending"))
             return
         kind, payload = pending["kind"], pending["payload"]
+        if kind == "reminder" and self._reject_reminder_draft_reply(chat_id, lang, pending):
+            return
         if (kind == "reminder_fired" and action == "amend"
                 and self._reject_reminder_schedule(chat_id, lang, params, reschedule=True)):
             return
