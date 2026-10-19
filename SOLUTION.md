@@ -1,5 +1,16 @@
 # Cara — Solution Specification
 
+## October 19, 2026 - Host clutter cleanup
+
+Owner-approved maintenance clears63 empty draft keys,13 legacy keys with no live
+source references and7 expired cooldowns. A root-only SQLite backup precedes the
+short transaction; only the selected kv/cooldown rows change, with no triggers,
+schema change or VACUUM. Integrity/FK checks pass. User history and recovery data
+remain. Completed scratch/source/log/controller copies have a verified lossless
+archive and manifest before removal; rebuildable caches need no backup. Cara's
+running source/build and all service identities remain the accepted reply release.
+See [host cleanup evidence](docs/cara-host-cleanup-2026-10-19.md).
+
 ## October 19, 2026 - Reminder correctness fixes
 
 The existing reminder module keeps the three reviewed corrections. The proactive

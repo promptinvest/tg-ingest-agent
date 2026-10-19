@@ -1,5 +1,15 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 19, 2026 - Host clutter cleanup
+
+Owner-approved operational cleanup removes63 empty journal-draft keys,13 unused
+legacy settings and7 expired model cooldowns after a protected SQLite backup.
+Schema,user history,notes,reminders,budgets,preferences and backup pins remain.
+Unused QA scratch/log/source copies and stray files are preserved in a verified
+root-only archive before removal. Rebuildable host caches are cleared. No bot
+runtime/dependency change,app restart,manual message or history purge is included.
+See [host cleanup evidence](docs/cara-host-cleanup-2026-10-19.md).
+
 ## October 19, 2026 - Reminder correctness fixes
 
 Delivered overdue nudges now retain durable reply bindings to the reminder titles
