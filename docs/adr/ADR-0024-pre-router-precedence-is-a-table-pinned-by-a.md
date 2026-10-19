@@ -43,3 +43,6 @@ nothing
   repeat detection covers Russian number words and «раз в месяц». General table
   and inverse-operation work remain proposed. See the
   [follow-up evidence](../cara-reply-completeness-2026-10-19.md).
+- 2026-10-19: follow-up deployed and accepted as `6a430ad`, build `4cc84f818306`,
+  receipt `f69a035e89d8b23ac681a9ff`; 56 focused and 1,776 full Linux cases pass,
+  with original source/data/config/recovery/runtime gates preserved.

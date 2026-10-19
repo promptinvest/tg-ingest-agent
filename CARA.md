@@ -22,9 +22,9 @@ rescheduling changes only time. There is no hourly scheduler in this release.
 Source checks include Russian number words and «раз в месяц», even when a model
 omits the requested repeat. CI checks undefined Python names with pinned Ruff
 F821/F822/F823 rules, without adding a runtime dependency.
-See the [reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md).
-See [scope and verification](docs/cara-reminder-safety-2026-10-19.md).
-The accepted release passes 81 focused cases and 1,763 full Linux tests (nine skips).
+See the accepted [reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md)
+and preserved [original correction](docs/cara-reminder-safety-2026-10-19.md).
+The follow-up passes 56 focused cases and 1,776 full Linux tests (nine skips).
 
 ## October 14, 2026 - Nikki retirement compatibility
 
@@ -40,8 +40,8 @@ restarted. Missing-path namespace checks and credential-access denial passed.
 Local checkout and shared KB paths (updated September 20, 2026):
 [working agreement](CLAUDE.md#local-workspace-and-kbs).
 
-Current running release: code `bc67c89`, build `c605cb100b37`, accepted
-2026-10-19 08:46:21 UTC; see the [October 19 reminder correctness release](docs/cara-reminder-safety-2026-10-19.md).
+Current running release: code `6a430ad`, build `4cc84f818306`, accepted
+2026-10-19 09:19:30 UTC; see the [October 19 reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md).
 The [October 13 procedural learning release](docs/cara-learning-2026-10-13.md) remains included.
 The [monthly digest correction](docs/cara-digest-fix-2026-10-07.md) remains included.
 The earlier [review and archive-recovery record](docs/cara-review-fixes-2026-10-07.md) remains preserved.
