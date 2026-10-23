@@ -11,7 +11,7 @@ select verified findings and prerequisite-bound hypotheses, without publishing
 arbitrary factual prose. One optional additional read stays inside the same scope,
 budget and closed facets. Existing executor/keys/maintenance confirmations remain.
 PI probe mappings use the actual health-watch and encrypted-backup timer names.
-Overview reports also normalize available process measurements; each selected hypothesis names its measured basis. Closed report hints accept equivalent single-value/list shapes observed in real model output. Code validates every selected finding before bounding highlights and optional reads. A newly selected project starts a new subject and replaces inherited whole-fleet scope. Verification and deployment are pending; earlier acceptance records remain as
+Overview reports also normalize available process measurements; each selected hypothesis names its measured basis. Closed report hints accept equivalent single-value/list shapes observed in real model output. Code validates every selected finding before bounding highlights and optional reads. A newly selected project starts a new subject and replaces inherited whole-fleet scope. Unknown service/container states stay outside observed-state fractions. Verification and deployment are pending; earlier acceptance records remain as
 evidence of their narrower checks. See ADR-0032.
 
 

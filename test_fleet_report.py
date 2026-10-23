@@ -65,6 +65,16 @@ class ReportContracts(unittest.TestCase):
         built = report.build(response, catalog, request)
         obs = [o for o in built["observations"].values() if o["host"] == "pi" and o["field"] == "services.ssh.service"][0]
         self.assertEqual(obs["status"], "unavailable")
+        answer = "\n".join(report.render(built))
+        self.assertIn("service/timer states unknown; 1 configured", answer)
+        self.assertNotIn("active 0/1", answer)
+
+    def test_unavailable_containers_are_not_reported_as_stopped(self):
+        catalog, request, response = fixture()
+        response["hosts"]["pd"]["projects"] = {"daily-lingo": {"containers": {"app": {"available": False}}}}
+        answer = "\n".join(report.render(report.build(response, catalog, request)))
+        self.assertIn("container states unknown; 1 configured", answer)
+        self.assertNotIn("containers running 0/1", answer)
 
     def test_gateway_requests_load_state(self):
         with mock.patch.object(fleet_host, "command", return_value="LoadState=not-found\nActiveState=inactive\nInvocationID=\n") as run:

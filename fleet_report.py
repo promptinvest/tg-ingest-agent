@@ -84,8 +84,9 @@ def build(result, inventory, plan, history=()):
                     elif status == "unavailable": unknown.append(unit)
                     elif state.get("ActiveState") == "active": active.append(unit)
                     else: inactive.append(unit)
-                ru = f"службы/таймеры: active {len(active)}/{len(states)}"
-                en = f"services/timers: active {len(active)}/{len(states)}"
+                observed_count = len(active) + len(inactive)
+                ru = (f"службы/таймеры: active {len(active)}/{observed_count} проверенных; настроено {len(states)}" if observed_count else f"состояния служб/таймеров неизвестны; настроено {len(states)}")
+                en = (f"services/timers: active {len(active)}/{observed_count} observed; {len(states)} configured" if observed_count else f"service/timer states unknown; {len(states)} configured")
                 for units, r, e in ((absent, "не найдены", "not found"), (unknown, "не проверены", "unverified"), (inactive, "inactive/failed", "inactive/failed")):
                     if units:
                         ru += "; " + r + ": " + ", ".join(units)
@@ -107,8 +108,8 @@ def build(result, inventory, plan, history=()):
                     if isinstance(containers, dict):
                         known = [s for s in containers.values() if isinstance(s, dict) and s.get("available") is not False and type(s.get("Running")) is bool]
                         running = sum(s["Running"] for s in known)
-                        details.append(f"контейнеры running {running}/{len(containers)} (проверены {len(known)})")
-                        english.append(f"containers running {running}/{len(containers)} ({len(known)} observed)")
+                        details.append(f"контейнеры running {running}/{len(known)} проверенных; настроено {len(containers)}" if known else f"состояния контейнеров неизвестны; настроено {len(containers)}")
+                        english.append(f"containers running {running}/{len(known)} observed; {len(containers)} configured" if known else f"container states unknown; {len(containers)} configured")
                         for name, s in containers.items():
                             if not isinstance(s, dict): continue
                             if "release" in report["focus"] and s.get("image_id"):
