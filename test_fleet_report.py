@@ -178,6 +178,15 @@ class ReportContracts(unittest.TestCase):
             self.assertEqual(value["operation"], "inspect")
         with self.assertRaises(ValueError): fleet.validate_plan(dict(plan(), focus="shell"), catalog)
 
+    def test_new_named_project_replaces_prior_fleet_scope_and_starts_new_subject(self):
+        catalog, request, response = fixture()
+        previous = fleet_context.frame("List my VPSs", request, catalog, update=1)
+        selected = fleet.validate_plan(dict(plan(), hosts=request["hosts"], projects=["daily-lingo"], scope="inherit", focus=["progress"]), catalog, previous)
+        self.assertEqual(selected["hosts"], ["pd"])
+        self.assertEqual(selected["scope"], "explicit")
+        context = fleet_context.frame("How is Daily Lingo progressing?", selected, catalog, previous, 2)
+        self.assertEqual(context["original_question"], "How is Daily Lingo progressing?")
+
 
 class PipelineContracts(unittest.TestCase):
     setUp = base.FleetLifecycle.setUp

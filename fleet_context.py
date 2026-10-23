@@ -67,6 +67,11 @@ def scope(value, inventory, previous):
     if (not isinstance(focus, list) or not 1 <= len(focus) <= 5
             or any(not isinstance(f, str) or f not in FOCUS for f in focus)):
         raise ValueError("unknown investigation focus")
-    if mode == "explicit" and projects and not value["hosts"]:
+    if projects and mode == "inherit" and set(projects) != set(previous.get("projects", [])):
+        # A newly selected named project starts a new subject. It must not retain
+        # every host of a prior fleet overview because the model said inherit.
+        mode = "explicit"
+        value["hosts"] = sorted({h for p in projects for h in inventory["projects"][p]["hosts"]})
+    elif mode == "explicit" and projects and not value["hosts"]:
         value["hosts"] = sorted({h for p in projects for h in inventory["projects"][p]["hosts"]})
     return mode, projects, list(dict.fromkeys(focus))
