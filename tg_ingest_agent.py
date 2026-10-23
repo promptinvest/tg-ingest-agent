@@ -2440,6 +2440,11 @@ class Agent(fleet.FleetMixin, learning.LearningMixin, media_svc.MediaMixin, conv
                               "action": "report_problem"})
             self.do_report_problem(chat_id, lang, {"detail": problem_detail}, text)
             return
+        # Fleet decisions bind their own delivered card before another pending
+        # confirmation can consume a short yes/no answer.
+        if self.resolve_fleet_confirmation_text(chat_id, lang, msg, text):
+            self._trace_route("fleet_maintain", "fleet_confirmation_text")
+            return
         # A pending purge is confirmed ONLY by typing the exact phrase —
         # handled deterministically (no LLM), so a stray "да" can't wipe data.
         if pending and pending["kind"] == "purge":

@@ -12,7 +12,10 @@ Two additive SQLite workflow tables hold requests/events. Six monitored hosts
 are in scope; retired hosts and the unverified testing address remain excluded.
 See [ADR-0031](docs/adr/ADR-0031-natural-language-fleet-management.md) and the
 [operator runbook](ops/fleet/README.md). Verification and activation are pending;
-this candidate heading does not claim a deployment.
+this candidate heading does not claim a deployment. The router receives current
+inventory names and roles. Restart approval persists its exact execution binding
+before publication; interrupted or uncertain effects are never retried. Text
+confirmations bind the delivered fleet card and preserve unrelated confirmations.
 
 ## October 19, 2026 - Host clutter cleanup
 

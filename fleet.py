@@ -26,14 +26,21 @@ def spool(cfg):
     return SimpleNamespace(task_worker_spool=getattr(cfg, "fleet_spool", "/var/lib/cara-fleet/spool"))
 
 
-def submit(cfg, update, step, operation):
+def submission_binding(update, step):
+    nonce = secrets.token_hex(16)
+    return {"job_id": f"w_{update}_{step}_{nonce}", "nonce": nonce}
+
+
+def submit(cfg, update, step, operation, binding=None):
     """Publish structural IDs/hashes verbatim; the research client redacts hashes."""
     directory = Path(spool(cfg).task_worker_spool) / "requests"
     pending = list(directory.glob("w_*.json"))
     if len(pending) >= 100 or sum(p.stat().st_size for p in pending) > 1024 * 1024:
         raise ValueError("fleet spool quota reached")
-    nonce = secrets.token_hex(16)
-    job = f"w_{update}_{step}_{nonce}"
+    binding = submission_binding(update, step) if binding is None else binding
+    nonce, job = binding["nonce"], binding["job_id"]
+    if not protocol.TOKEN.fullmatch(nonce) or job != f"w_{update}_{step}_{nonce}":
+        raise ValueError("invalid submission binding")
     envelope = {"version": 1, "job_id": job, "nonce": nonce, "task_id": update,
                 "step_id": step, "tool": "fleet." + operation["operation"],
                 "input": operation, "input_hash": protocol.digest(operation),
@@ -267,14 +274,46 @@ class FleetMixin:
         self._fleet_save(row, "approval", payload, "approval_delivered")
         worker_client.acknowledge(spool(self.cfg), payload["binding"]["job_id"])
 
+    def _fleet_notice(self, callback_id, chat_id, text):
+        if callback_id is None:
+            self.reply(chat_id, text)
+        else:
+            self.answer_callback(callback_id, text)
+
+    def resolve_fleet_confirmation_text(self, chat_id, lang, msg, text):
+        if not getattr(self.cfg, "fleet_enabled", False):
+            return False
+        decision = {"yes": "y", "да": "y", "confirm": "y", "подтверждаю": "y",
+                    "no": "n", "нет": "n", "cancel": "n", "отмена": "n"}.get(text.strip().lower())
+        if decision is None:
+            return False
+        reply_id = (msg.get("reply_to_message") or {}).get("message_id")
+        rows = self.conn.execute("SELECT * FROM fleet_requests WHERE chat_id=? ORDER BY updated_at DESC", (chat_id,)).fetchall()
+        if reply_id is not None:
+            matching = [r for r in rows if json.loads(r["payload"]).get("approval_message") == reply_id]
+            if not matching:
+                return False
+            row = matching[0]
+        else:
+            active = [r for r in rows if r["state"] == "approval"]
+            if not active:
+                return False
+            if len(active) != 1 or store.pending_get(self.conn, chat_id) or store.task_approvals_live(self.conn, chat_id):
+                self.reply(chat_id, "Ответь на нужную карточку или нажми её кнопку." if lang == "ru" else "Reply to the intended card or use its button.")
+                return True
+            row = active[0]
+            reply_id = json.loads(row["payload"]).get("approval_message")
+        self.handle_fleet_callback(None, chat_id, {"message_id": reply_id}, "fl|" + row["id"] + "|" + decision)
+        return True
+
     def handle_fleet_callback(self, callback_id, chat_id, msg, data):
         if not getattr(self.cfg, "fleet_enabled", False):
-            self.answer_callback(callback_id, "Unavailable / недоступно")
+            self._fleet_notice(callback_id, chat_id, "Unavailable / недоступно")
             return
         parts = data.split("|")
         row = self.conn.execute("SELECT * FROM fleet_requests WHERE id=? AND chat_id=?", (parts[1] if len(parts) == 3 else "", chat_id)).fetchone()
         if row is None or row["state"] != "approval" or parts[-1] not in {"y", "n"}:
-            self.answer_callback(callback_id, "Expired / истекло")
+            self._fleet_notice(callback_id, chat_id, "Expired / истекло")
             return
         payload = json.loads(row["payload"])
         try:
@@ -285,19 +324,21 @@ class FleetMixin:
                 raise ValueError("owner request changed")
             if parts[-1] == "n":
                 self._fleet_save(row, "cancelled", payload, "owner_cancelled")
-                self.answer_callback(callback_id, "Cancelled / отменено")
+                self._fleet_notice(callback_id, chat_id, "Cancelled / отменено")
                 return
             protocol.request(payload["approval"], catalog(self.cfg))
-            # Consume the exact card durably before publishing the external job.
-            self._fleet_save(row, "executing", payload, "owner_approved")
+            # Persist the exact restart binding before publishing, so an
+            # interruption never leaves the DB pointing at the old inspection.
             operation = payload["approval"]
-            binding = submit(self.cfg, row["source_update"], 2, operation)
+            binding = submission_binding(row["source_update"], 2)
             payload.update(binding=binding, operation=operation, submitted_at=protocol.now())
+            self._fleet_save(row, "executing", payload, "owner_approved")
+            submit(self.cfg, row["source_update"], 2, operation, binding=binding)
             self._fleet_save(row, "executing", payload, "maintenance_submitted")
-            self.answer_callback(callback_id, "Started / выполняю")
+            self._fleet_notice(callback_id, chat_id, "Started / выполняю")
         except (ValueError, OSError, worker_client.WorkerError):
             self._fleet_save(row, "ambiguous", payload, "approval_or_execution_unavailable")
-            self.answer_callback(callback_id, "Check state / проверь состояние")
+            self._fleet_notice(callback_id, chat_id, "Check state / проверь состояние")
 
     def check_fleet_requests(self):
         if not getattr(self.cfg, "fleet_enabled", False):

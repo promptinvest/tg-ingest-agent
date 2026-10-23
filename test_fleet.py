@@ -268,6 +268,62 @@ class FleetLifecycle(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0], "approval")
         self.agent.handle_fleet_callback("cb", 111, {"message_id": 999}, "fl|" + row["id"] + "|y")
         self.assertNotEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0], "executing")
+
+    def test_interruption_after_restart_publication_keeps_exact_binding(self):
+        row = self.result(self.start("restart"))
+        payload = json.loads(row["payload"])
+        original_submit = fleet.submit
+        def publish_then_interrupt(*args, **kwargs):
+            original_submit(*args, **kwargs)
+            raise SystemExit("interrupted after publish")
+        with mock.patch.object(fleet, "submit", side_effect=publish_then_interrupt), self.assertRaises(SystemExit):
+            self.agent.handle_fleet_callback("cb", 111, {"message_id": payload["approval_message"]}, "fl|" + row["id"] + "|y")
+        current = self.conn.execute("SELECT * FROM fleet_requests").fetchone()
+        bound = json.loads(current["payload"])
+        self.assertEqual(current["state"], "executing")
+        self.assertEqual(bound["operation"]["operation"], "restart")
+        self.assertIn("w_1_2_", bound["binding"]["job_id"])
+        with mock.patch.object(worker_client, "poll", return_value={"outcome": "succeeded"}) as poll:
+            self.agent.check_fleet_requests()
+        self.assertEqual(poll.call_args.kwargs["tool"], "fleet.restart")
+        self.assertEqual(poll.call_args.kwargs["step_id"], 2)
+        self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0], "done")
+
+    def test_publish_failure_consumes_card_without_replay(self):
+        row = self.result(self.start("restart"))
+        payload = json.loads(row["payload"])
+        with mock.patch.object(fleet, "submit", side_effect=OSError("spool unavailable")) as publish:
+            for _ in range(2):
+                self.agent.handle_fleet_callback("cb", 111, {"message_id": payload["approval_message"]}, "fl|" + row["id"] + "|y")
+        self.assertEqual(publish.call_count, 1)
+        current = self.conn.execute("SELECT * FROM fleet_requests").fetchone()
+        self.assertEqual(current["state"], "ambiguous")
+        self.assertEqual(json.loads(current["payload"])["operation"]["operation"], "restart")
+
+    def test_explicit_text_reply_binds_fleet_card_with_legacy_pending(self):
+        row = self.result(self.start("restart"))
+        payload = json.loads(row["payload"])
+        with mock.patch.object(store, "pending_get", return_value={"kind": "reminder"}), mock.patch.object(store, "pending_clear") as clear:
+            handled = self.agent.resolve_fleet_confirmation_text(111, "en", {"reply_to_message": {"message_id": payload["approval_message"]}}, "yes")
+        self.assertTrue(handled)
+        clear.assert_not_called()
+        self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0], "executing")
+
+    def test_unquoted_yes_with_two_confirmation_types_changes_neither(self):
+        row = self.result(self.start("restart"))
+        with mock.patch.object(store, "pending_get", return_value={"kind": "reminder"}):
+            self.assertTrue(self.agent.resolve_fleet_confirmation_text(111, "en", {}, "yes"))
+        self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0], "approval")
+        self.assertEqual(len(list((self.root / "spool" / "requests").glob("*.json"))), 0)
+
+    def test_old_fleet_reply_is_expired_and_other_card_keeps_legacy_flow(self):
+        row = self.result(self.start("restart"))
+        payload = json.loads(row["payload"])
+        self.conn.execute("UPDATE fleet_requests SET state='cancelled'")
+        self.conn.commit()
+        self.assertTrue(self.agent.resolve_fleet_confirmation_text(111, "en", {"reply_to_message": {"message_id": payload["approval_message"]}}, "yes"))
+        self.assertFalse(self.agent.resolve_fleet_confirmation_text(111, "en", {"reply_to_message": {"message_id": 999}}, "yes"))
+        self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0], "cancelled")
     def test_edited_owner_request_invalidates_approval(self):
         row = self.result(self.start("restart"))
         payload = json.loads(row["payload"])
@@ -325,6 +381,29 @@ class FleetLifecycle(unittest.TestCase):
         evidence = fleet.historical_facts(self.conn, 111, ["pd"], inventory())
         self.assertTrue(evidence)
         self.assertTrue(all("HISTORICAL" in value["field"] for value in evidence.values()))
+
+    def test_router_receives_current_inventory_names_and_roles(self):
+        from test_tg_ingest_agent import make_config
+        cfg=make_config()
+        cfg.fleet_enabled=True
+        cfg.fleet_inventory=self.agent.cfg.fleet_inventory
+        with mock.patch.object(router.llm,"chat_profile",return_value='{"action":"fleet_investigate","params":{},"confidence":0.99}') as chat:
+            result=router.route(cfg,self.conn,111,"Что с российским прокси?",None)
+        self.assertEqual(result["action"],"fleet_investigate")
+        system=chat.call_args.args[3][0]["content"]
+        self.assertIn("Cara host",system)
+        self.assertIn("Daily Lingo",system)
+        self.assertIn("Generic local-server stats retain vps_stats",system)
+        self.assertNotIn("/etc/cara-fleet",system)
+
+    def test_missing_inventory_does_not_break_existing_routes(self):
+        from test_tg_ingest_agent import make_config
+        cfg=make_config()
+        cfg.fleet_enabled=True
+        cfg.fleet_inventory=str(self.root/'missing.json')
+        with mock.patch.object(router.llm,"chat_profile",return_value='{"action":"reminder_list","params":{},"confidence":0.99}'):
+            result=router.route(cfg,self.conn,111,"Покажи напоминания",None)
+        self.assertEqual(result["action"],"reminder_list")
 
 
 if __name__ == "__main__":
