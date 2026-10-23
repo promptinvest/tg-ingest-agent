@@ -515,6 +515,9 @@ class Config:
 def load_config(env=None):
     env = os.environ if env is None else env
     cfg = Config()
+    cfg.fleet_enabled = (env.get("CARA_FLEET_ENABLED") or "false").strip().lower() == "true"
+    cfg.fleet_inventory = "/etc/cara-fleet/inventory.json"
+    cfg.fleet_spool = "/var/lib/cara-fleet/spool"
     cfg.token = (env.get("TELEGRAM_BOT_TOKEN") or "").strip()
     if not cfg.token:
         raise SystemExit("TELEGRAM_BOT_TOKEN is required")

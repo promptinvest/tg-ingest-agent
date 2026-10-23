@@ -20,8 +20,9 @@ from pathlib import Path
 import common
 import tasking
 import tool_broker
+import fleet_protocol
 
-SCHEMA = """
+SCHEMA = fleet_protocol.SCHEMA + """
 CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

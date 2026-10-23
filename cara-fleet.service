@@ -1,0 +1,43 @@
+[Unit]
+Description=Cara restricted fleet executor
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=cara-fleet-executor
+Group=cara-fleet-spool
+SupplementaryGroups=cara-fleet-executor
+ExecStart=/usr/bin/python3 /opt/tg-ingest-agent/cara_fleet.py
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=10
+UMask=0027
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+InaccessiblePaths=/etc/tg-ingest-agent.env /var/lib/tg-ingest-agent /etc/tg-ingest-agent-backup.key /etc/codex-auto-update/telegram.env
+ReadWritePaths=/var/lib/cara-fleet
+MemoryMax=128M
+CPUQuota=20%
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

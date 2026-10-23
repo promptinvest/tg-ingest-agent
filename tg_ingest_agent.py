@@ -64,6 +64,7 @@ import spend
 import storage
 import store
 import sysinfo
+import fleet
 import task_runner
 import tasks_svc
 import texts
@@ -125,6 +126,8 @@ _DISPATCH = {
     "read_media":          lambda s, c: s.do_read_media(c.chat_id, c.lang, c.params),
     "discard":             lambda s, c: s.do_discard(c.chat_id, c.lang, c.pending),
     "vps_stats":           lambda s, c: s.reply(c.chat_id, sysinfo.format_report(sysinfo.collect(str(s.cfg.db_path.parent)), c.lang, s.media_bytes())),
+    "fleet_investigate":   lambda s, c: s.do_fleet(c.chat_id, c.lang, c.text, c.msg_id),
+    "fleet_maintain":      lambda s, c: s.do_fleet(c.chat_id, c.lang, c.text, c.msg_id, allow_maintenance=True),
     "purge":               lambda s, c: s.do_purge(c.chat_id, c.lang, c.params),
     "fetch":               lambda s, c: s.do_fetch(c.chat_id, c.lang, c.params),
     "ask":                 lambda s, c: s.do_ask(c.chat_id, c.lang, c.params, c.text),
@@ -193,7 +196,7 @@ _LIST_REPLACING_ACTIONS = frozenset({
 })
 
 
-class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseMixin, issue_digest.IssueDigestMixin, voice_svc.VoiceMixin, tasks_svc.TasksMixin, hermes.HermesMixin,
+class Agent(fleet.FleetMixin, learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseMixin, issue_digest.IssueDigestMixin, voice_svc.VoiceMixin, tasks_svc.TasksMixin, hermes.HermesMixin,
             reminders_svc.ReminderMixin, notes_svc.NotesMixin):
     def __init__(self, cfg):
         # Fail fast if a router action lacks a manifest policy (P0.1: the
@@ -811,6 +814,7 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
     )
 
     def check_assistant_tasks(self):
+        self.check_fleet_requests()
         self.recover_pending_task_purge(timeout_seconds=0.1)
         task_runner.expire_approvals(self.conn)
         self.retry_task_deliveries()
@@ -4556,6 +4560,10 @@ class Agent(learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseM
             self.answer_callback(callback_id, "Not allowed.")
             return
         data = callback.get("data") or ""
+        if data.startswith("fl|"):
+            self._trace_route("fleet_maintain", "fleet_approval_callback")
+            self.handle_fleet_callback(callback_id, chat_id, msg, data)
+            return
         # ADR-0019: a button press is a routed turn too — recorded by its prefix.
         self._trace_route("router", "callback", button=str(data.split("|", 1)[0])[:12])
         if data.startswith("ta|"):

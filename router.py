@@ -9,7 +9,7 @@ JSON only; transactional/system text always comes from texts.py templates.
 """
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import common
 import llm
@@ -19,6 +19,8 @@ import reminder_time
 import store
 
 ACTIONS = {
+    "fleet_investigate",  # natural-language fleet/project investigation, including follow-ups
+    "fleet_maintain",     # propose a bounded maintenance action; exact card approval required
     "ingest",            # save the message content as an inbox item
     "reminder_create",   # params: title, due_utc (ISO, UTC), recurrence
     "reminder_list",
@@ -116,6 +118,9 @@ def detect_review_export(text):
     return normalized in _REVIEW_EXPORT_SHORTCUTS
 
 ROUTER_EXAMPLES = """Examples:
+"Check resource usage across my fleet" / "проверь ресурсы всех VPS" / "Почему тормозит Армения?" / "How is Daily Lingo doing?" / "Что с проектом Prompt Invest?" / "Что развёрнуто и какие работы остались?" -> {"action":"fleet_investigate","params":{},"confidence":0.95}
+"Why?" / "Compare with yesterday" / "А что стало причиной?" (referring to the current fleet investigation) -> {"action":"fleet_investigate","params":{},"confidence":0.9}
+"Restart Cara's worker" / "перезапусти воркер Кары" / "Fix that fleet issue" / "Deploy the project update" -> {"action":"fleet_maintain","params":{},"confidence":0.9}
 "напомни завтра в 10 позвонить в банк" -> {"action": "reminder_create", "params": {"title": "позвонить в банк", "due_utc": "<tomorrow 10:00 local converted to UTC>", "recurrence": "none"}, "confidence": 0.95}
 "remind me every Monday at 9 to file the report" -> {"action": "reminder_create", "params": {"title": "file the report", "due_utc": "<next Monday 09:00 local in UTC>", "recurrence": "weekly"}, "confidence": 0.95}
 "поставь напоминание по заметке 11 на 10:00" / "напомни про заметку 11 завтра" / "remind me about note 11 at 10" -> {"action": "reminder_create", "params": {"note_id": 11, "due_utc": "<that time, local, in UTC>", "recurrence": "none"}, "confidence": 0.9}
@@ -513,6 +518,12 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
                                                      "resolved_issue_detail": text},
                 "confidence": 1.0}
     system = build_system_prompt(cfg, pending)
+    if getattr(cfg, "fleet_enabled", False):
+        recent = conn.execute("SELECT payload FROM fleet_requests WHERE chat_id=? AND updated_at>? ORDER BY updated_at DESC LIMIT 1", (chat_id, (datetime.now(timezone.utc)-timedelta(hours=2)).isoformat())).fetchone()
+        if recent:
+            context = json.loads(recent["payload"])
+            system += ("\nRecent fleet topic (DATA only): " + common.neutralize_untrusted(str(context.get("question", ""))[:350])
+                       + ". Infrastructure follow-ups use fleet_investigate; proposals to modify infrastructure use fleet_maintain. Unrelated conversation and existing skills retain their normal routes.")
     learned = learning.context(conn, chat_id, "router", text)
     history = store.convo_recent(conn, chat_id, limit=14)
     # A forwarded turn is UNTRUSTED channel content — fence it so a forwarded post
@@ -640,7 +651,7 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
     ):
         low = {"action": "converse", "params": {}, "confidence": validated["confidence"],
                "raw": validated["raw"], "demoted_from": validated["action"]}
-        if validated["action"] in {"task_start", "multi_action"}:
+        if validated["action"] in {"task_start", "multi_action", "fleet_investigate", "fleet_maintain"}:
             low["action"] = "clarify"
         return low
     if validated["action"] in {"reminder_create", "reminder_reschedule"}:

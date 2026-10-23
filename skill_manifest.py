@@ -71,6 +71,11 @@ TASK_TOOLS = {
 }
 
 SKILLS = {
+    "fleet_investigate": {"risk": "network_read", "uses_llm": True,
+                          "title": {"en": "Fleet and project investigations", "ru": "Флот и состояние проектов"}},
+    "fleet_maintain": {"risk": "external_write", "uses_llm": True, "writes_state": True,
+                      "requires_confirmation": True,
+                      "title": {"en": "Confirmed fleet maintenance", "ru": "Обслуживание флота с подтверждением"}},
     # -- ingest / knowledge
     "ingest": {"risk": "state_write", "uses_llm": True, "writes_state": True,
                "requires_confirmation": True, "persona_context": True,
@@ -286,6 +291,8 @@ def capability_titles(lang, cfg=None):
     out = []
     seen = set()
     for action, policy in SKILLS.items():
+        if action.startswith("fleet_") and (cfg is None or not getattr(cfg, "fleet_enabled", False)):
+            continue
         if policy.get("internal"):
             continue
         title = (policy.get("title") or {})

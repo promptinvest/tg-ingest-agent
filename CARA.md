@@ -1,5 +1,19 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 23, 2026 - Fleet investigations (implementation candidate)
+
+Owner-approved natural RU/EN fleet questions use a dedicated inventory and a
+restricted background executor. Fresh host/resource/service/project observations,
+dated records and available historical investigation receipts support follow-ups.
+The initial write runbook restarts Cara's worker only after a fresh, exact,
+one-time owner card. Other operations name their missing runbook. Existing
+conversation, reminders, history, budgets, backups and worker isolation remain.
+Two additive SQLite workflow tables hold requests/events. Six monitored hosts
+are in scope; retired hosts and the unverified testing address remain excluded.
+See [ADR-0031](docs/adr/ADR-0031-natural-language-fleet-management.md) and the
+[operator runbook](ops/fleet/README.md). Verification and activation are pending;
+this candidate heading does not claim a deployment.
+
 ## October 19, 2026 - Host clutter cleanup
 
 Owner-approved operational cleanup removes63 empty journal-draft keys,13 unused

@@ -43,6 +43,7 @@ from tg_api import TelegramError, tg_send_document
 # register. Routing one of these means "he's working": it sets the businesslike
 # resting tone (see Agent._register_state) and is answered in the Hermes voice.
 ACTIONS = frozenset({
+    "fleet_investigate", "fleet_maintain",
     "ingest", "reminder_create", "reminder_list", "reminder_cancel",
     "reminder_reschedule", "reminder_rename", "reminder_undo", "list_files",
     "calendar_add", "spend", "budget_set", "stats", "categories", "overview",

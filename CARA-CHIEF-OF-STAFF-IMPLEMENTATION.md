@@ -9,6 +9,16 @@ chief of staff. `CARA.md` and `SOLUTION.md` remain the maintained product and
 architecture sources of truth; this document records the locked design,
 delivery gates, and production evidence for the shipped release.
 
+## October 23 narrow fleet amendment
+
+The owner's “go with this” authorizes the six-host fleet investigation skill and
+one confirmed maintenance runbook: restarting Cara's isolated worker. ADR-0031
+records this extension. The Telegram poller receives no SSH identities; a separate
+restricted executor uses fixed host gateways. Arbitrary shell, unrestricted host
+administration, credential changes and unconfigured deployment/update/cleanup
+operations remain outside the runtime authority. Existing direct skills and
+research-task entry points retain their behavior.
+
 ## 1. Locked product decisions
 
 - Cara remains owner-only, Telegram-first, bilingual, and the same human
