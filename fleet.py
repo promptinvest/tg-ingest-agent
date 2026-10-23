@@ -554,7 +554,7 @@ class FleetMixin:
                         decision = fleet_report.selection(llm.parse_llm_json(raw), report)
                         payload["selection"] = decision
                     except (ValueError, llm.LLMError, llm.BudgetExceeded) as exc:
-                        payload["analysis_gap"] = type(exc).__name__
+                        payload["analysis_gap"] = str(exc)[:160] if isinstance(exc, ValueError) else type(exc).__name__
                     # One bounded additional read for selected, previously absent facets.
                     checks = [c for c in (decision or {}).get("next_checks", [])
                               if c["facet"] not in payload["result"]["hosts"].get(c["host"], {})]

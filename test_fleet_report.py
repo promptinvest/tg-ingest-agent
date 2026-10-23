@@ -101,6 +101,15 @@ class ReportContracts(unittest.TestCase):
         self.assertIn("window 3600s", answer)
         self.assertNotIn("no historical failures", answer)
 
+    def test_overview_normalizes_processes_and_hypothesis_names_its_basis(self):
+        catalog, request, response = fixture()
+        response["hosts"]["pd"]["resources"]["top_memory"] = [{"name": "python", "pid": 123, "rss_bytes": 726*1048576, "cpu_one_core_percent": 0}]
+        built = report.build(response, catalog, request)
+        decision = {"highlights": [], "hypotheses": [{"host": "pd", "kind": "memory_consumers"}], "next_checks": []}
+        answer = "\n".join(report.render(built, decision))
+        self.assertIn("Hypothesis — PD: Processes in this sample: python", answer)
+        self.assertIn("726.0 MiB RSS", answer)
+
     def test_dated_policy_is_separate_from_current_backup_results(self):
         catalog, request, response = fixture()
         request["focus"] = ["backups", "progress"]
