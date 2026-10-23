@@ -136,6 +136,22 @@ class ReportContracts(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 report.selection(dict(highlights=[], hypotheses=[], next_checks=[], **{}) | change, built)
 
+    def test_code_bounds_oversized_valid_selections_after_validating_every_item(self):
+        catalog, request, response = fixture(); built = report.build(response, catalog, request)
+        value = {"highlights": list(built["findings"])[:21], "hypotheses": [],
+                 "next_checks": [{"host": h, "facet": "services"} for h in request["hosts"]]}
+        normalized = report.selection(value, built)
+        self.assertEqual(len(normalized["highlights"]), 8)
+        self.assertEqual(len(normalized["next_checks"]), 3)
+        value["highlights"].append("invented-last-item")
+        with self.assertRaises(ValueError): report.selection(value, built)
+
+    def test_missing_facets_take_precedence_over_redundant_optional_checks(self):
+        catalog, request, response = fixture(); request["facets"] = ["resources", "projects", "services"]
+        built = report.build(response, catalog, request)
+        value = {"highlights": [], "hypotheses": [], "next_checks": [{"host": h, "facet": "services"} for h in request["hosts"][:5]] + [{"host": "utah", "facet": "errors"}]}
+        self.assertEqual(report.selection(value, built)["next_checks"][0], {"host": "utah", "facet": "errors"})
+
     def test_large_reports_split_without_losing_findings(self):
         catalog, request, response = fixture()
         for raw in response["hosts"].values():

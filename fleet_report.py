@@ -182,9 +182,9 @@ def selection(value, report):
     if not isinstance(value, dict) or set(value) != {"highlights", "hypotheses", "next_checks"}:
         raise ValueError("fleet analysis must select verified findings, not free prose")
     ids = value["highlights"]
-    if not isinstance(ids, list) or len(ids) > 8 or any(not isinstance(i, str) or i not in report["findings"] for i in ids):
+    if not isinstance(ids, list) or len(ids) > 128 or any(not isinstance(i, str) or i not in report["findings"] for i in ids):
         raise ValueError("unknown report finding")
-    if not isinstance(value["hypotheses"], list) or len(value["hypotheses"]) > 3:
+    if not isinstance(value["hypotheses"], list) or len(value["hypotheses"]) > 24:
         raise ValueError("invalid hypotheses")
     for item in value["hypotheses"]:
         if not isinstance(item, dict) or set(item) != {"host", "kind"} or not isinstance(item["kind"], str) or item["kind"] not in HYPOTHESES or item["host"] not in report["hosts"]:
@@ -193,12 +193,21 @@ def selection(value, report):
         if not any(o["host"] == item["host"] and o["field"] == field and o["status"] == "observed" for o in report["observations"].values()):
             raise ValueError("hypothesis lacks prerequisite observations")
     checks = value["next_checks"]
-    if not isinstance(checks, list) or len(checks) > 3:
+    if not isinstance(checks, list) or len(checks) > 24:
         raise ValueError("invalid next checks")
     for item in checks:
         if not isinstance(item, dict) or set(item) != {"host", "facet"} or item["host"] not in report["hosts"] or not isinstance(item["facet"], str) or item["facet"] not in protocol.FACETS:
             raise ValueError("check outside investigation scope")
-    return value
+    def unique(items):
+        out = []
+        for item in items:
+            if item not in out: out.append(item)
+        return out
+    # Validate every submitted item before bounding presentation/work. Quantity
+    # limits belong to code; oversized valid selections are not lost reports.
+    checks = sorted(unique(checks), key=lambda c: c["facet"] in report["facets"])
+    return {"highlights": list(dict.fromkeys(ids))[:8],
+            "hypotheses": unique(value["hypotheses"])[:3], "next_checks": checks[:3]}
 
 
 def messages(question, report, lang):
