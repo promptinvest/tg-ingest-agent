@@ -79,7 +79,9 @@ def build(result, inventory, plan, history=()):
                 for unit, state in states.items():
                     load = state.get("LoadState")
                     status = ("unavailable" if state.get("available") is False else "not_found" if load == "not-found" else "unavailable" if load != "loaded" else "observed")
-                    add(host, "services." + unit, status, state, unit + ": " + str(state.get("ActiveState", "?")), unit + ": " + str(state.get("ActiveState", "?")))
+                    state_ru = "не найден" if status == "not_found" else "не проверено" if status == "unavailable" else str(state.get("ActiveState", "?"))
+                    state_en = "not found" if status == "not_found" else "unverified" if status == "unavailable" else str(state.get("ActiveState", "?"))
+                    add(host, "services." + unit, status, state, unit + ": " + state_ru, unit + ": " + state_en)
                     if status == "not_found": absent.append(unit)
                     elif status == "unavailable": unknown.append(unit)
                     elif state.get("ActiveState") == "active": active.append(unit)

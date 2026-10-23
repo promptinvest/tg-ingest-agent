@@ -82,6 +82,17 @@ class ReportContracts(unittest.TestCase):
         self.assertIn("LoadState", run.call_args.args[0][-1])
         self.assertEqual(state["LoadState"], "not-found")
 
+    def test_highlights_cannot_turn_not_found_or_unverified_units_into_inactive(self):
+        catalog, request, response = fixture()
+        response["hosts"]["pi"]["services"] = {"missing.timer": {"LoadState": "not-found", "ActiveState": "inactive"}, "legacy.timer": {"ActiveState": "inactive"}}
+        built = report.build(response, catalog, request)
+        ids = [key for key, o in built["observations"].items() if o["host"] == "pi" and o["field"] in {"services.missing.timer", "services.legacy.timer"}]
+        answer = "\n".join(report.render(built, {"highlights": ids, "hypotheses": [], "next_checks": []}))
+        self.assertIn("missing.timer: not found", answer)
+        self.assertIn("legacy.timer: unverified", answer)
+        self.assertNotIn("missing.timer: inactive", answer)
+        self.assertNotIn("legacy.timer: inactive", answer)
+
     def test_cited_cpu_cannot_become_healthy_backups_or_monthly_stability(self):
         catalog, request, response = fixture()
         built = report.build(response, catalog, request)
