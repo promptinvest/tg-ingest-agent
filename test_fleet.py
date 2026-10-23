@@ -34,25 +34,32 @@ def plan(operation="inspect"):
 
 
 class FleetContracts(unittest.TestCase):
-    def test_human_summary_keeps_assessment_and_never_dumps_json(self):
-        evidence={}
-        for i in range(1,15):
-            evidence['F'+str(i)]={'field':f'Host{i}.services','value':{f'unit{j}.service':{'ActiveState':'active','SubState':'running','MemoryCurrent':99999} for j in range(20)}}
-        answer=fleet.render_analysis({'observations':list(evidence),'interpretation':'Итоговый вывод. [F1]','gaps':['Не хватает долгих замеров.'],'next_steps':['Повторить проверку позже.']},evidence,'ru')
-        self.assertLessEqual(len(answer),3800)
-        self.assertIn('Итоговый вывод.',answer)
-        self.assertIn('Повторить проверку позже.',answer)
-        for technical in ('[F1]','ActiveState','MemoryCurrent','{','}'):
-            self.assertNotIn(technical,answer)
+    def test_human_summary_keeps_every_host_and_never_dumps_json(self):
+        import fleet_report
+        from test_fleet_report import fixture
+        catalog, request, response = fixture()
+        report = fleet_report.build(response, catalog, request)
+        pages = fleet_report.render(report, {"highlights":["O1"],"hypotheses":[],"next_checks":[]}, "ru")
+        answer = "\n".join(pages)
+        self.assertTrue(all(len(page) <= 3700 for page in pages))
+        for host in request["hosts"]:
+            self.assertIn(host.upper() + " —", answer)
+        for technical in ('[F1]', 'ActiveState', 'MemoryCurrent', '{', '}'):
+            self.assertNotIn(technical, answer)
 
     def test_fallback_measurements_are_readable_and_historical_is_dated(self):
-        evidence={'F1':{'field':'PD.resources','value':{'cpu_percent':2.5,'cpu_sample_seconds':0.2,'memory_used_percent':45,'disk_used_percent':34}},
-                  'H1':{'field':'PD.resources — HISTORICAL 2026-10-22T12:00:00+00:00','value':{'cpu_percent':9,'cpu_sample_seconds':0.2}}}
-        answer=fleet.render_measurements(evidence,'en')
-        self.assertIn('CPU 2.5%',answer)
-        self.assertIn('historical 2026-10-22',answer)
-        self.assertIn('Measurements received',answer)
+        import fleet_report
+        from test_fleet_report import fixture
+        catalog, request, response = fixture()
+        request["focus"] = ["trend"]
+        old = copy.deepcopy(response)
+        for raw in old["hosts"].values(): raw["observed_at"] = "2026-10-22T10:00:00+00:00"
+        answer = fleet.render_measurements(fleet_report.build(response,catalog,request,[old]), 'en')
+        self.assertIn('CPU 0.0%', answer)
+        self.assertIn('2026-10-22', answer)
+        self.assertIn('two-snapshot comparison', answer)
         self.assertNotIn('{',answer)
+
     def test_inventory_and_identity_phrases_are_typed_reads(self):
         for text in ("Напиши список моих VPS", "список моих серверов", "Какие VPS у меня?", "Покажи все VPS", "List my VPSs", "Show me all servers", "Which servers do I have?"):
             self.assertEqual(fleet.direct_view(text), "inventory", text)
@@ -124,10 +131,15 @@ class FleetContracts(unittest.TestCase):
             fleet.render_analysis({"observations": ["invented"], "interpretation": "fine", "gaps": [], "next_steps": []}, {}, "en")
 
     def test_measurements_rendered_from_receipts(self):
-        text = fleet.render_analysis({"observations": ["F1"], "interpretation": "[F1] is a short sample.", "gaps": ["No historical series."], "next_steps": []},
-            {"F1": {"field": "CPU", "value": 12.5}}, "en")
-        self.assertIn("CPU: 12.5", text)
-        self.assertIn("No historical series.", text)
+        import fleet_report
+        from test_fleet_report import fixture
+        catalog, request, response = fixture()
+        response["hosts"]["pd"]["resources"]["cpu_percent"] = 12.5
+        request["focus"] = ["trend"]
+        report = fleet_report.build(response, catalog, request)
+        text = fleet.render_analysis({"highlights":["O1"],"hypotheses":[],"next_checks":[]}, report, 'en')
+        self.assertIn('CPU 12.5%', text)
+        self.assertIn('no comparable history', text)
 
     def test_every_host_retains_evidence(self):
         data = inventory()

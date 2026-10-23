@@ -97,6 +97,8 @@ KB for SSH/deploy/model details.
   routing and planning, and provides exact-version owner undo. The old Mentor
   inference/runner units remain disabled. Own PHOTOS are never
   stored (retired 2026-07-16) — own text/PDF docs still save via caption.
+- `fleet_context.py` owns source-bound investigation scope; `fleet_report.py`
+  normalizes observations and renders code-owned claims with full host coverage.
 - `fleet.py` handles natural-language fleet questions, fresh evidence, durable
   follow-ups and exact-card worker maintenance. `cara_fleet.py` is a separate
   restricted SSH executor; root-owned `fleet_host.py` gateways expose only fixed

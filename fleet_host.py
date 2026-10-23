@@ -15,7 +15,7 @@ import fleet_protocol as protocol
 
 CONFIG = Path("/etc/cara-fleet-host.json")
 LEDGER = Path("/var/lib/cara-fleet-host")
-PROPERTIES = ("ActiveState", "SubState", "Type", "NRestarts", "InvocationID",
+PROPERTIES = ("LoadState", "ActiveState", "SubState", "Type", "NRestarts", "InvocationID",
               "ExecMainStartTimestampMonotonic", "MainPID", "MemoryCurrent",
               "CPUUsageNSec", "Result")
 

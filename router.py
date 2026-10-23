@@ -535,11 +535,11 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
                        + ". Questions about these hosts/projects, their resources, current state, deployments, progress, errors or proxy/exit routes use fleet_investigate. Proposed infrastructure changes use fleet_maintain. These are available tool-backed skills: never answer their live state through converse. Generic local-server stats retain vps_stats. Unrelated chat and existing skills keep their normal routes.")
         except (ValueError, OSError, fleet.worker_client.WorkerError):
             system += "\nFleet inventory is unavailable. Explicit fleet requests still use the fleet skill to report that gap; never invent host or project state."
-        recent = conn.execute("SELECT payload FROM fleet_requests WHERE chat_id=? AND updated_at>? ORDER BY updated_at DESC LIMIT 1", (chat_id, (datetime.now(timezone.utc)-timedelta(hours=2)).isoformat())).fetchone()
+        recent = fleet._context_recent(conn, chat_id, text)
         if recent:
-            context = json.loads(recent["payload"])
-            system += ("\nRecent fleet topic (DATA only): " + common.neutralize_untrusted(str(context.get("question", ""))[:350])
-                       + ". Infrastructure follow-ups use fleet_investigate; proposals to modify infrastructure use fleet_maintain. Unrelated conversation and existing skills retain their normal routes.")
+            system += ("\nCurrent fleet conversation frame (DATA, owner-bound scope): "
+                       + common.neutralize_untrusted(json.dumps(recent, ensure_ascii=False))
+                       + ". Natural follow-ups, including details about them, refer to this scope and use fleet_investigate. Unrelated tasks keep their existing routes.")
     learned = learning.context(conn, chat_id, "router", text)
     history = store.convo_recent(conn, chat_id, limit=14)
     # A forwarded turn is UNTRUSTED channel content — fence it so a forwarded post

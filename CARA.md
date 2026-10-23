@@ -1,5 +1,20 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 23 - Fleet evidence/report architecture implementation
+
+Owner approved implementation after review of wrong fleet answers. Fleet context
+now persists explicit owner-bound host/project/check scope. Observations carry
+availability, source, timestamp and measurement window; missing project probes and
+nonexistent units cannot imply absence or health. Code renders mandatory coverage
+for every requested host, splitting complete reports into Telegram pages. Models
+select verified findings and prerequisite-bound hypotheses, without publishing
+arbitrary factual prose. One optional additional read stays inside the same scope,
+budget and closed facets. Existing executor/keys/maintenance confirmations remain.
+PI probe mappings use the actual health-watch and encrypted-backup timer names.
+Verification and deployment are pending; earlier acceptance records remain as
+evidence of their narrower checks. See ADR-0032.
+
+
 ## October 23 - Fleet contextual follow-ups and readable evidence accepted
 
 Short owner follow-ups (“Так и что?”, “Это не мой список”, “Сама узнай”) now
