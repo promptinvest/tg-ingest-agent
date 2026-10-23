@@ -519,7 +519,7 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
                 "confidence": 1.0}
     if getattr(cfg, "fleet_enabled", False):
         import fleet
-        if fleet.direct_view(text):
+        if fleet.resolved_view(conn, chat_id, text):
             return {"action": "fleet_investigate", "params": {}, "confidence": 1.0}
     system = build_system_prompt(cfg, pending)
     if getattr(cfg, "fleet_enabled", False):

@@ -1,5 +1,15 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 23 - Fleet contextual follow-ups and readable evidence (candidate)
+
+New live replies showed that short follow-ups still escaped to conversation and
+repeated an invented roster. Canonical owner history now binds inventory follow-ups
+to the original request; unrelated owner tasks end that scope. Conversation cannot
+deliver a freeform server roster for that context. The live raw-JSON reply exposed
+an additional presentation defect: selected observations now use bounded human
+summaries, preserving the assessment and next steps. Historical data stays dated.
+Verification/deployment are pending; prior receipts remain historical evidence.
+
 ## October 23 - Fleet inventory and identity correction accepted
 
 The real “Напиши список моих VPS” request reached local stats, and its follow-up

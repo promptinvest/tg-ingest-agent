@@ -530,7 +530,7 @@ class ConverseMixin:
         message. No state changes here; real tasks go through the skills."""
         if getattr(self.cfg, "fleet_enabled", False):
             import fleet
-            if fleet.direct_view(text):
+            if fleet.resolved_view(self.conn, chat_id, text):
                 self.do_fleet(chat_id, lang, text, message_id)
                 return
         self.send_chat_action(chat_id, "typing")
@@ -552,6 +552,14 @@ class ConverseMixin:
             store.issue_add(self.conn, chat_id, "llm_error", f"converse: {exc}")
             self.reply(chat_id, T(lang, "llm_error"))
             return
+        if getattr(self.cfg, "fleet_enabled", False):
+            import fleet
+            view = fleet.guarded_reply_view(self.cfg, self.conn, chat_id, text, reply)
+            if view:
+                log("blocked ungrounded fleet roster from conversation")
+                self.arm_fabrication_guard(chat_id)
+                self.do_fleet(chat_id, lang, text, message_id, view_override=view)
+                return
         reaction, reply = self._clean_converse_output(reply)
         if reply and self._degenerate_reply(reply, lang):
             # ADR-0011: a 4-token 'article\nYes' once reached the owner with no

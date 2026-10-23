@@ -50,6 +50,50 @@ def conversation_inventory(cfg):
             "Correct any conflicting earlier claim using these records: " + protocol.canonical(hosts))
 
 
+def is_view_followup(text):
+    value = " ".join((text or "").casefold().strip().rstrip(".!?").split())
+    return bool(re.fullmatch(
+        r"(?:так и что|ну и|и что|ну что|что там|ну|и|где список|а список|"
+        r"это не (?:мой|тот|правильный) список|это не мои (?:vps|серверы)|"
+        r"неверно|неправильно|не тот список|исправь список|"
+        r"(?:сама|сам) (?:узнай|проверь|посмотри|разберись)|"
+        r"(?:узнай|проверь|посмотри|разберись) (?:сама|сам)|"
+        r"so|and|so what|what about it|where is the list|that's not my list|"
+        r"that is not my list|wrong list|find out yourself|check it yourself)", value))
+
+
+def prior_view(conn, chat_id, text):
+    """Resolve only canonical owner turns; an assistant's invented roster is inert."""
+    rows = conn.execute("SELECT text,ts FROM conversation WHERE chat_id=? AND role='user' AND source='boss' ORDER BY id DESC LIMIT 12", (chat_id,)).fetchall()
+    if rows and rows[0]["text"] == text:
+        rows = rows[1:]
+    found = None
+    for row in rows:
+        if not -30 <= protocol.age(row["ts"]) < 7200:
+            break
+        view = direct_view(row["text"])
+        if view == "inventory":
+            return view
+        if view:
+            found = found or view
+        elif not is_view_followup(row["text"]):
+            break
+    return found
+
+
+def resolved_view(conn, chat_id, text):
+    return direct_view(text) or (prior_view(conn, chat_id, text) if is_view_followup(text) else None)
+
+
+def guarded_reply_view(cfg, conn, chat_id, text, reply):
+    if not getattr(cfg, "fleet_enabled", False):
+        return None
+    view = prior_view(conn, chat_id, text)
+    if view and re.search(r"\b(?:vps|servers?|hosts?|ubuntu|debian|сервер\w*|хост\w*|инфраструктур\w*)\b|\b[a-z]{2,}-[0-9]+\b", reply or "", re.I):
+        return view
+    return None
+
+
 def catalog(cfg):
     path = Path(getattr(cfg, "fleet_inventory", "/etc/cara-fleet/inventory.json"))
     raw = worker_client._read_regular_nofollow(path, 20000)
@@ -104,6 +148,70 @@ def facts(result, inventory):
     return out
 
 
+def short_text(value, limit):
+    text = " ".join(str(value).split())
+    return text if len(text) <= limit else text[:limit-1].rsplit(" ", 1)[0] + "…"
+
+
+def readable_fact(item, lang):
+    """Render selected observations, never raw dictionaries or debug IDs."""
+    ru = lang == "ru"
+    field, data = item["field"], item["value"]
+    field, historical, observed = field.partition(" — HISTORICAL ")
+    label, _, facet = field.partition(".")
+    if historical:
+        label += (" (история " if ru else " (historical ") + observed + ")"
+    if facet == "observed_at":
+        return ""
+    if facet.startswith("resources") and isinstance(data, dict):
+        if "cpu_percent" not in data:
+            return label + (": ресурсы недоступны" if ru else ": resources unavailable")
+        return (label + f": CPU {data['cpu_percent']}% ({data.get('cpu_sample_seconds', '?')}s); "
+                + f"RAM {data.get('memory_used_percent', '?')}%; "
+                + ("диск " if ru else "disk ") + f"{data.get('disk_used_percent', '?')}%.")
+    if facet.startswith("services") and isinstance(data, dict):
+        known = {k: v for k, v in data.items() if v.get("available") is not False}
+        active = sum(v.get("ActiveState") == "active" for v in known.values())
+        others = [k for k, v in known.items() if v.get("ActiveState") != "active"]
+        answer = label + (f": служб активны {active}/{len(known)}" if ru else f": services active {active}/{len(known)}")
+        if others:
+            answer += ("; не активны: " if ru else "; inactive: ") + ", ".join(others[:3])
+        if len(known) != len(data):
+            answer += ("; часть данных недоступна" if ru else "; some observations unavailable")
+        return answer + "."
+    if facet.startswith("errors") and isinstance(data, dict):
+        known = [v for v in data.values() if "warning_or_worse" in v]
+        total = sum(v["warning_or_worse"] for v in known)
+        return label + (f": в доступных журналах за час предупреждений/ошибок {total}" if ru else f": sampled warnings/errors in the last hour: {total}") + (("; часть журналов недоступна." if ru else "; some logs unavailable.") if len(known) != len(data) else ".")
+    if facet.startswith("projects") and isinstance(data, dict):
+        parts = []
+        for project, state in data.items():
+            if not isinstance(state, dict):
+                continue
+            details = []
+            if state.get("build_version"):
+                details.append(("сборка " if ru else "build ") + str(state["build_version"]))
+            if "http_status" in state:
+                details.append("HTTP " + str(state["http_status"]))
+            if isinstance(state.get("containers"), dict):
+                containers = state["containers"]
+                running = sum(v.get("Running") is True for v in containers.values())
+                details.append(("контейнеры работают " if ru else "containers running ") + f"{running}/{len(containers)}")
+                health = state.get("health", {}).get("status") if isinstance(state.get("health"), dict) else None
+                if health:
+                    details.append(("здоровье " if ru else "health ") + str(health))
+            if details:
+                parts.append(project + ": " + ", ".join(details))
+        return label + ": " + "; ".join(parts) + "." if parts else ""
+    if facet == "available" and data is False:
+        return label + (": наблюдение недоступно." if ru else ": observation unavailable.")
+    if facet == "reason":
+        return ""
+    if isinstance(data, (dict, list)):
+        return short_text(field, 160) + (": подробные данные сохранены." if ru else ": detailed observations retained.")
+    return short_text(field + ": " + str(data), 220)
+
+
 def render_analysis(value, evidence, lang):
     if not isinstance(value, dict) or set(value) != {"observations", "interpretation", "gaps", "next_steps"}:
         raise ValueError("invalid fleet analysis")
@@ -119,23 +227,35 @@ def render_analysis(value, evidence, lang):
     for field in ("gaps", "next_steps"):
         if not isinstance(value[field], list) or len(value[field]) > 4 or any(not isinstance(s, str) or len(s) > 300 for s in value[field]):
             raise ValueError("invalid fleet advice")
-    lines = [("Проверила. Наблюдения:" if lang == "ru" else "Checked. Observations:")]
+    lines = [("Проверила." if lang == "ru" else "Checked.")]
+    observations = []
     for key in dict.fromkeys(ids):
-        item = evidence[key]
-        data = item["value"]
-        if item["field"].endswith(".resources") and isinstance(data, dict) and "cpu_percent" in data:
-            rendered = (f"CPU {data['cpu_percent']}% ({data['cpu_sample_seconds']}s sample); "
-                        f"RAM {data.get('memory_used_percent', '?')}%; disk {data.get('disk_used_percent', '?')}%; "
-                        + "top CPU: " + ", ".join(f"{p['name']} {p['cpu_one_core_percent']}% of one core" for p in data.get("top_cpu", [])[:3]))
-        else:
-            rendered = protocol.canonical(data) if isinstance(data, (dict, list)) else str(data)
-        lines.append(f"[{key}] {item['field']}: {rendered}")
-    lines.append(("Оценка: " if lang == "ru" else "Assessment: ") + value["interpretation"])
+        rendered = readable_fact(evidence[key], lang)
+        if rendered:
+            observations.append("• " + short_text(rendered, 250))
+    assessment = ("Оценка: " if lang == "ru" else "Assessment: ") + re.sub(r"\s*\[[FHR][0-9]+\]", "", value["interpretation"])
+    extra = [assessment]
     if value["gaps"]:
-        lines.append(("Не хватает данных: " if lang == "ru" else "Evidence gaps: ") + "; ".join(value["gaps"]))
+        extra.append(("Не хватает данных: " if lang == "ru" else "Evidence gaps: ") + "; ".join(short_text(v, 130) for v in value["gaps"][:2]))
     if value["next_steps"]:
-        lines.append(("Следующие шаги: " if lang == "ru" else "Suggested next steps: ") + "; ".join(value["next_steps"]))
-    return tasking.redact_derived_text("\n".join(lines))[:3900]
+        extra.append(("Следующие шаги: " if lang == "ru" else "Suggested next steps: ") + "; ".join(short_text(v, 130) for v in value["next_steps"][:2]))
+    used = sum(len(v)+1 for v in lines+extra)
+    for observation in observations:
+        if used + len(observation)+1 <= 3800:
+            lines.append(observation)
+            used += len(observation)+1
+    return tasking.redact_derived_text("\n".join(lines+extra))
+
+
+def render_measurements(evidence, lang):
+    preferred = [key for facet in ("resources", "projects", "services", "available", "errors")
+                 for key, item in evidence.items() if item["field"].partition(".")[2].startswith(facet)]
+    ids = list(dict.fromkeys(preferred or evidence))[:14]
+    if not ids:
+        return "Нет подтверждённых измерений." if lang == "ru" else "No confirmed measurements."
+    return render_analysis({"observations": ids,
+        "interpretation": ("Измерения получены; анализ недоступен." if lang == "ru" else "Measurements received; analysis is unavailable.") + " [" + ids[0] + "]",
+        "gaps": [], "next_steps": []}, evidence, lang)
 
 
 def historical_facts(conn, chat_id, hosts, inventory):
@@ -290,7 +410,7 @@ class FleetMixin:
                     "answer": data.get("answer", "")[:3900]}
         return {}
 
-    def do_fleet(self, chat_id, lang, text, msg_id=None, allow_maintenance=False):
+    def do_fleet(self, chat_id, lang, text, msg_id=None, allow_maintenance=False, view_override=None):
         if not getattr(self.cfg, "fleet_enabled", False):
             self.reply(chat_id, "Управление флотом пока не подключено." if lang == "ru" else "Fleet access is not connected yet.")
             return
@@ -307,7 +427,11 @@ class FleetMixin:
             return
         try:
             inventory = catalog(self.cfg)
-            view = direct_view(text)
+            view = resolved_view(self.conn, chat_id, text)
+            if view_override is not None:
+                if view_override != prior_view(self.conn, chat_id, text):
+                    raise ValueError("unbound inventory view")
+                view = view_override
             if view:
                 hosts, answer = self._fleet_direct_reply(chat_id, lang, view, inventory)
                 payload = {"question": text, "source_hash": tasking.source_hash(text), "lang": lang,
@@ -491,8 +615,7 @@ class FleetMixin:
                             profile="task_synthesis", json_required=True)
                         answer = render_analysis(llm.parse_llm_json(raw), evidence, lang)
                     except (ValueError, llm.LLMError, llm.BudgetExceeded):
-                        answer = ("Измерения получены; анализ недоступен.\n" if lang == "ru" else "Measurements received; analysis is unavailable.\n")
-                        answer += "\n".join(f"[{key}] {v['field']}: {v['value']}" for key, v in list(evidence.items())[:14])
+                        answer = render_measurements(evidence, lang)
                 payload["answer"] = answer[:3900]
                 self._fleet_save(row, "delivering", payload, "result_delivery_started")
                 sent = self.reply(row["chat_id"], payload["answer"])

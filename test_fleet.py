@@ -34,6 +34,25 @@ def plan(operation="inspect"):
 
 
 class FleetContracts(unittest.TestCase):
+    def test_human_summary_keeps_assessment_and_never_dumps_json(self):
+        evidence={}
+        for i in range(1,15):
+            evidence['F'+str(i)]={'field':f'Host{i}.services','value':{f'unit{j}.service':{'ActiveState':'active','SubState':'running','MemoryCurrent':99999} for j in range(20)}}
+        answer=fleet.render_analysis({'observations':list(evidence),'interpretation':'Итоговый вывод. [F1]','gaps':['Не хватает долгих замеров.'],'next_steps':['Повторить проверку позже.']},evidence,'ru')
+        self.assertLessEqual(len(answer),3800)
+        self.assertIn('Итоговый вывод.',answer)
+        self.assertIn('Повторить проверку позже.',answer)
+        for technical in ('[F1]','ActiveState','MemoryCurrent','{','}'):
+            self.assertNotIn(technical,answer)
+
+    def test_fallback_measurements_are_readable_and_historical_is_dated(self):
+        evidence={'F1':{'field':'PD.resources','value':{'cpu_percent':2.5,'cpu_sample_seconds':0.2,'memory_used_percent':45,'disk_used_percent':34}},
+                  'H1':{'field':'PD.resources — HISTORICAL 2026-10-22T12:00:00+00:00','value':{'cpu_percent':9,'cpu_sample_seconds':0.2}}}
+        answer=fleet.render_measurements(evidence,'en')
+        self.assertIn('CPU 2.5%',answer)
+        self.assertIn('historical 2026-10-22',answer)
+        self.assertIn('Measurements received',answer)
+        self.assertNotIn('{',answer)
     def test_inventory_and_identity_phrases_are_typed_reads(self):
         for text in ("Напиши список моих VPS", "список моих серверов", "Какие VPS у меня?", "Покажи все VPS", "List my VPSs", "Show me all servers", "Which servers do I have?"):
             self.assertEqual(fleet.direct_view(text), "inventory", text)
@@ -245,7 +264,7 @@ class FleetLifecycle(unittest.TestCase):
             return {"message_id":100+len(sent)}
         try:
             with mock.patch.object(real,"reply",side_effect=deliver),mock.patch.object(real,"send_chat_action"),mock.patch.object(fleet.llm,"chat_profile") as chat:
-                for update,text in [(2,"Напиши список моих VPS"),(3,"Это какой сервер?")]:
+                for update,text in [(2,"Напиши список моих VPS"),(3,"Это какой сервер?"),(4,"Так и что?"),(5,"Это не мой список"),(6,"Сама узнай")]:
                     self.owner_turn(update,text)
                     real._current_update_id=update
                     real.dispatch(111,{"message_id":update+10},text)
@@ -254,8 +273,34 @@ class FleetLifecycle(unittest.TestCase):
             self.assertIn("PD — Cara host",sent[1])
             self.assertNotIn("ru-1","\n".join(sent))
             self.assertNotIn("**","\n".join(sent))
+            self.assertTrue(all("PD — Cara host" in answer for answer in sent))
         finally:
             real.conn.close()
+
+    def test_unrelated_owner_turn_ends_inventory_followup_scope(self):
+        self.owner_turn(2,"Напиши список моих VPS")
+        self.owner_turn(3,"Напомни проверить VPS завтра")
+        self.owner_turn(4,"Так и что?")
+        self.assertIsNone(fleet.resolved_view(self.conn,111,"Так и что?"))
+
+    def test_invented_assistant_roster_does_not_create_inventory_scope(self):
+        store.convo_add(self.conn,111,"bot","Твои VPS: ru-1, nl-2")
+        self.owner_turn(2,"Так и что?")
+        self.assertIsNone(fleet.resolved_view(self.conn,111,"Так и что?"))
+
+    def test_unknown_followup_cannot_deliver_freeform_server_inventions(self):
+        self.owner_turn(2,"Напиши список моих VPS")
+        self.owner_turn(3,"Повтори нормально")
+        view=fleet.guarded_reply_view(self.agent.cfg,self.conn,111,"Повтори нормально","Твои VPS: **ru-1** Ubuntu 22.04, **nl-2** Debian 12")
+        self.assertEqual(view,"inventory")
+        self.agent.do_fleet(111,"ru","Повтори нормально",view_override=view)
+        self.assertIn("PD — Cara host",self.agent.messages[-1][1])
+        self.assertNotIn("ru-1",self.agent.messages[-1][1])
+        self.assertIsNone(fleet.guarded_reply_view(self.agent.cfg,self.conn,111,"Повтори нормально","Привет, как дела?"))
+
+    def test_unbound_override_cannot_change_the_read_target(self):
+        self.agent.do_fleet(111,"en","Check fleet",view_override="inventory")
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM fleet_requests").fetchone()[0],0)
 
     def test_actual_identity_followup_uses_real_local_stats_trace(self):
         store.trace_start(self.conn,"local-report","inbound",111)
