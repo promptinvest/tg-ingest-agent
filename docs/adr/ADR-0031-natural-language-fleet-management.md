@@ -38,3 +38,5 @@ maintenance action merely to demonstrate the feature.
   [release record](../cara-fleet-deployment-2026-10-23.md).
 - 2026-10-23T11:32:46.882938+00:00: inventory/identity routing corrected in `54b7e15`;
   [observed failures and acceptance](../cara-fleet-answerfix-2026-10-23.md).
+- 2026-10-23T11:48:11.347028+00:00: contextual owner follow-ups and readable evidence accepted
+  in `a7168bd`; [record](../cara-fleet-contextfix-2026-10-23.md).

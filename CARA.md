@@ -1,14 +1,20 @@
 # Cara — Capabilities, Features & Architecture
 
-## October 23 - Fleet contextual follow-ups and readable evidence (candidate)
+## October 23 - Fleet contextual follow-ups and readable evidence accepted
 
-New live replies showed that short follow-ups still escaped to conversation and
-repeated an invented roster. Canonical owner history now binds inventory follow-ups
-to the original request; unrelated owner tasks end that scope. Conversation cannot
-deliver a freeform server roster for that context. The live raw-JSON reply exposed
-an additional presentation defect: selected observations now use bounded human
-summaries, preserving the assessment and next steps. Historical data stays dated.
-Verification/deployment are pending; prior receipts remain historical evidence.
+Short owner follow-ups (“Так и что?”, “Это не мой список”, “Сама узнай”) now
+remain bound to the original inventory request. Only canonical owner turns can
+create that scope; an unrelated owner task ends it. A conversation output guard
+blocks invented server rosters in that context. Resource/project/service/log
+observations render as bounded human summaries, without raw JSON or debug
+citations. Assessment and next steps remain complete; historical data stays dated.
+
+Accepted 2026-10-23T11:48:11.347028+00:00; source `a7168bd`,
+build `a01f3e740a3b`, receipt `ca0333cddc0bf2e810d97869`. All 1,836 Linux
+tests (nine unchanged skips),60 focused cases, the full observed exchange,
+adversarial model-output and actual-result rendering fixtures, pinned Ruff and
+CI pass. All54 original tables/rows/schema objects and unrelated behavior remain.
+See [complete correction](docs/cara-fleet-contextfix-2026-10-23.md).
 
 ## October 23 - Fleet inventory and identity correction accepted
 

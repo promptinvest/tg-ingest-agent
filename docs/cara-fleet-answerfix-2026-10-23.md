@@ -73,3 +73,6 @@ operation was manually sent or replayed. Final checks retain the accepted source
 enabled fleet flag, unchanged service identities and no new issue rows or pending
 updates. Testing130.49.190.246 remains excluded with unverified identity/status;
 this release makes no retirement claim.
+
+Subsequent ordinary traffic exposed unresolved contextual follow-ups and raw-data
+presentation; see the [complete follow-up correction](cara-fleet-contextfix-2026-10-23.md).

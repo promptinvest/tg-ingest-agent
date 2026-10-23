@@ -48,3 +48,6 @@ receipts, recovery evidence and limits. Ask Cara, for example,
 
 Inventory/identity correction accepted: source `54b7e15`, build `86db8e9d2812`.
 [Correction record](../../docs/cara-fleet-answerfix-2026-10-23.md).
+
+Contextual follow-ups/readable evidence accepted: source `a7168bd`, build `a01f3e740a3b`.
+[Current correction](../../docs/cara-fleet-contextfix-2026-10-23.md).
