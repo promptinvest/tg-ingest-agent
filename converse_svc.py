@@ -124,6 +124,9 @@ class ConverseMixin:
         Cara's own if her timezone differs), the review schedule, open threads,
         her active reminders, and any reaction the boss just left (surfaced once)."""
         parts = []
+        if getattr(self.cfg, "fleet_enabled", False):
+            import fleet
+            parts.append(fleet.conversation_inventory(self.cfg))
         boss_local = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
         is_weekend = boss_local.weekday() >= 5
         parts.append(
@@ -525,6 +528,11 @@ class ConverseMixin:
         """Reply in Cara's own voice — warm, human, language-matched. May open with
         an optional [[react:emoji]] tag, which becomes a Telegram reaction on his
         message. No state changes here; real tasks go through the skills."""
+        if getattr(self.cfg, "fleet_enabled", False):
+            import fleet
+            if fleet.direct_view(text):
+                self.do_fleet(chat_id, lang, text, message_id)
+                return
         self.send_chat_action(chat_id, "typing")
         extra = self.converse_context(lang, chat_id)
         grounding = self._converse_grounding(text)

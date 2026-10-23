@@ -1,5 +1,16 @@
 # Cara — Solution Specification
 
+## October 23 - Fleet inventory and identity correction (candidate)
+
+The observed “Напиши список моих VPS” request was incorrectly routed to local
+stats; its identity follow-up reached general chat and invented hosts. Narrow
+RU/EN inventory and identity questions now resolve directly from configured
+records and actual prior report scope. Local stats name PD. Multi-host ambiguity
+asks for a target. Conversation receives trusted inventory identities and treats
+old assistant claims as unverified. The exact failing exchange, disabled behavior,
+source bindings and unrelated reminder intents have regression coverage. This
+candidate does not claim deployment; existing effects and approvals are unchanged.
+
 ## October 23, 2026 - Natural-language fleet management accepted
 
 Cara answers ordinary RU/EN questions and follow-ups about resources, services

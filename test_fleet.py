@@ -34,6 +34,14 @@ def plan(operation="inspect"):
 
 
 class FleetContracts(unittest.TestCase):
+    def test_inventory_and_identity_phrases_are_typed_reads(self):
+        for text in ("Напиши список моих VPS", "список моих серверов", "Какие VPS у меня?", "Покажи все VPS", "List my VPSs", "Show me all servers", "Which servers do I have?"):
+            self.assertEqual(fleet.direct_view(text), "inventory", text)
+        self.assertEqual(fleet.direct_view("Это какой сервер?"), "identity")
+        self.assertEqual(fleet.direct_view("Where are you hosted?"), "local_identity")
+        for text in ("Напомни проверить VPS", "список книг про VPS", "загрузка сервера", "How's the server?", "перезапусти сервер", "покажи напоминания"):
+            self.assertIsNone(fleet.direct_view(text), text)
+
     def test_inventory_has_no_model_addresses_or_commands(self):
         for field in ("address", "command", "key", "shell"):
             data = inventory()
@@ -200,6 +208,116 @@ class FleetLifecycle(unittest.TestCase):
         with mock.patch.object(fleet.llm, "chat_profile", return_value=json.dumps(plan(operation))):
             self.agent.do_fleet(111, "en", "Check fleet", allow_maintenance=operation == "restart")
         return self.conn.execute("SELECT * FROM fleet_requests").fetchone()
+
+    def owner_turn(self, update, text):
+        self.agent._current_update_id = update
+        store.telegram_update_receive(self.conn, {"update_id": update, "message": {"chat": {"id": 111}, "text": text, "message_id": update+10}}, chat_id=111)
+        store.convo_add(self.conn, 111, "user", text, update_id=update, source="boss", tg_message_id=update+10)
+
+    def test_actual_inventory_request_bypasses_model_and_spool(self):
+        question="Напиши список моих VPS"
+        self.owner_turn(2,question)
+        self.agent.cfg.timezone_offset=3
+        with mock.patch.object(fleet.llm,"chat_profile") as chat:
+            route=router.route(self.agent.cfg,self.conn,111,question,{"kind":"journal_capture"})
+            self.assertEqual(route["action"],"fleet_investigate")
+            self.agent.do_fleet(111,"ru",question)
+        chat.assert_not_called()
+        answer=self.agent.messages[-1][1]
+        self.assertIn("PD — Cara host",answer)
+        self.assertNotIn("CPU",answer)
+        self.assertNotIn("**",answer)
+        row=self.conn.execute("SELECT * FROM fleet_requests").fetchone()
+        self.assertEqual(row["state"],"done")
+        self.assertEqual(json.loads(row["payload"])["model_calls"],0)
+        self.assertFalse((self.root/"spool/requests").exists())
+
+    def test_full_dispatch_of_actual_list_and_identity_exchange(self):
+        import tg_ingest_agent
+        from test_tg_ingest_agent import make_config
+        cfg=make_config(DB_PATH=str(self.root/"test.db"),MEDIA_DIR=str(self.root/"media"),CARA_FLEET_ENABLED="true")
+        cfg.fleet_inventory=self.agent.cfg.fleet_inventory
+        cfg.fleet_spool=self.agent.cfg.fleet_spool
+        real=tg_ingest_agent.Agent(cfg)
+        sent=[]
+        def deliver(chat,text,**kwargs):
+            sent.append(text)
+            return {"message_id":100+len(sent)}
+        try:
+            with mock.patch.object(real,"reply",side_effect=deliver),mock.patch.object(real,"send_chat_action"),mock.patch.object(fleet.llm,"chat_profile") as chat:
+                for update,text in [(2,"Напиши список моих VPS"),(3,"Это какой сервер?")]:
+                    self.owner_turn(update,text)
+                    real._current_update_id=update
+                    real.dispatch(111,{"message_id":update+10},text)
+            chat.assert_not_called()
+            self.assertIn("PD — Cara host",sent[0])
+            self.assertIn("PD — Cara host",sent[1])
+            self.assertNotIn("ru-1","\n".join(sent))
+            self.assertNotIn("**","\n".join(sent))
+        finally:
+            real.conn.close()
+
+    def test_actual_identity_followup_uses_real_local_stats_trace(self):
+        store.trace_start(self.conn,"local-report","inbound",111)
+        store.trace_event(self.conn,"local-report","router.completed","action=vps_stats",skill="vps_stats")
+        self.owner_turn(2,"Это какой сервер?")
+        with mock.patch.object(fleet.llm,"chat_profile") as chat:
+            self.agent.do_fleet(111,"ru","Это какой сервер?")
+        chat.assert_not_called()
+        answer=self.agent.messages[-1][1]
+        self.assertIn("PD — Cara host",answer)
+        self.assertNotIn("ru-1",answer)
+        self.assertNotIn("Ubuntu",answer)
+        self.assertNotIn("Нидерланд",answer)
+
+    def test_inventory_followup_with_several_hosts_asks_for_target(self):
+        data=inventory()
+        data["hosts"]["utah"]=dict(data["hosts"]["pd"],label="Utah")
+        (self.root/"inventory.json").write_text(protocol.canonical(data))
+        self.owner_turn(2,"Напиши список моих VPS")
+        self.agent.do_fleet(111,"ru","Напиши список моих VPS")
+        self.owner_turn(3,"Это какой сервер?")
+        self.agent.do_fleet(111,"ru","Это какой сервер?")
+        self.assertIn("Какой сервер ты имеешь в виду?",self.agent.messages[-1][1])
+        self.assertIn("UTAH",self.agent.messages[-1][1])
+
+    def test_conversation_fallback_cannot_invent_inventory(self):
+        import converse_svc
+        self.owner_turn(2,"Напиши список моих VPS")
+        with mock.patch.object(fleet.llm,"chat_profile") as chat:
+            converse_svc.ConverseMixin.do_converse(self.agent,111,"ru","Напиши список моих VPS")
+        chat.assert_not_called()
+        self.assertIn("PD — Cara host",self.agent.messages[-1][1])
+
+    def test_conversation_inventory_overrides_prior_unverified_claims(self):
+        context=fleet.conversation_inventory(self.agent.cfg)
+        self.assertIn("Cara host",context)
+        self.assertIn("Prior assistant replies",context)
+        self.assertIn("operating systems",context)
+        self.agent.cfg.fleet_enabled=False
+        self.assertEqual(fleet.conversation_inventory(self.agent.cfg),"")
+
+    def test_disabled_local_stats_are_byte_compatible_and_enabled_are_named(self):
+        import sysinfo
+        self.agent.cfg.db_path=self.root/"test.db"
+        self.agent.media_bytes=lambda: 0
+        self.agent.cfg.fleet_enabled=False
+        with mock.patch.object(sysinfo,"collect",return_value={}),mock.patch.object(sysinfo,"format_report",return_value="old report"):
+            self.agent.do_local_vps_stats(111,"ru")
+            self.assertEqual(self.agent.messages[-1][1],"old report")
+            self.agent.cfg.fleet_enabled=True
+            self.agent.do_local_vps_stats(111,"ru")
+        self.assertEqual(self.agent.messages[-1][1],"Сервер: PD — Cara host\nold report")
+
+    def test_direct_view_remains_source_bound_and_delivery_does_not_replay(self):
+        self.agent.do_fleet(111,"ru","Напиши список моих VPS")
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM fleet_requests").fetchone()[0],0)
+        self.owner_turn(2,"Напиши список моих VPS")
+        with mock.patch.object(self.agent,"reply",return_value=None) as send:
+            self.agent.do_fleet(111,"ru","Напиши список моих VPS")
+            self.agent.do_fleet(111,"ru","Напиши список моих VPS")
+        self.assertEqual(send.call_count,1)
+        self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0],"ambiguous")
     def result(self, row):
         payload = json.loads(row["payload"])
         response = {"version": protocol.VERSION, "observed_at": protocol.now(), "hosts": {"pd": {

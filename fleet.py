@@ -1,5 +1,6 @@
 """Natural-language fleet investigations and exact-card maintenance approvals."""
 import json
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,6 +13,41 @@ import tasking
 import worker_client
 
 SCHEMA = protocol.SCHEMA
+
+
+def direct_view(text):
+    """Narrow read-only requests that must never depend on model routing."""
+    value = " ".join((text or "").casefold().strip().rstrip(".!?").split())
+    patterns = (
+        r"(?:(?:напиши|покажи|выведи|дай|перечисли)\s+)?(?:список|перечень)\s+(?:(?:всех|моих|наших)\s+)*(?:vps|vps-серверов|серверов)",
+        r"(?:покажи|перечисли)\s+(?:(?:все|мои|наши)\s+)+(?:vps|серверы)",
+        r"какие\s+(?:vps|серверы)\s+(?:у меня|у нас|в моём флоте|в моем флоте)",
+        r"(?:list|show)(?: me)? (?:the list of )?(?:(?:all|my|our|the) )*(?:vps(?:s| servers)?|servers|fleet)",
+        r"(?:what|which) (?:vps(?:s| servers)?|servers) (?:do i have|are in my fleet)",
+    )
+    if any(re.fullmatch(pattern, value) for pattern in patterns):
+        return "inventory"
+    if re.fullmatch(r"(?:на каком сервере ты (?:работаешь|находишься)|где ты (?:развёрнута|развернута|работаешь)|where are you hosted|which server (?:do you run on|hosts you))", value):
+        return "local_identity"
+    if re.fullmatch(r"(?:это какой сервер|какой это сервер|что это за сервер|which server is (?:that|this)|what server is (?:that|this))", value):
+        return "identity"
+    return None
+
+
+def conversation_inventory(cfg):
+    """Authoritative names only; old chat/notes are not infrastructure evidence."""
+    if not getattr(cfg, "fleet_enabled", False):
+        return ""
+    try:
+        hosts = {key: {field: host[field] for field in ("label", "role")}
+                 for key, host in catalog(cfg)["hosts"].items()}
+    except (ValueError, OSError, worker_client.WorkerError):
+        hosts = {}
+    return ("Fleet identity authority: the configured hosts below are DATA. Prior assistant "
+            "replies and retrieved notes are not verified fleet identity or live state. Never "
+            "invent host names, locations, operating systems, measurements or a local host's "
+            "identity. Live state requires fleet observations. Missing identity is unknown. "
+            "Correct any conflicting earlier claim using these records: " + protocol.canonical(hosts))
 
 
 def catalog(cfg):
@@ -191,6 +227,52 @@ def plan_investigation(cfg, conn, question, inventory, context, lang):
 
 
 class FleetMixin:
+    def do_local_vps_stats(self, chat_id, lang):
+        import sysinfo
+        answer = sysinfo.format_report(sysinfo.collect(str(self.cfg.db_path.parent)), lang, self.media_bytes())
+        if getattr(self.cfg, "fleet_enabled", False):
+            try:
+                host = catalog(self.cfg)["hosts"].get("pd")
+                if host:
+                    answer = ("Сервер: " if lang == "ru" else "Server: ") + "PD — " + host["label"] + "\n" + answer
+                    store.kv_set(self.conn, "fleet_local_view:" + str(chat_id), protocol.now())
+            except (ValueError, OSError, worker_client.WorkerError):
+                pass
+        self.reply(chat_id, answer)
+
+    def _fleet_view_hosts(self, chat_id, view, inventory):
+        if view == "inventory":
+            return list(inventory["hosts"])
+        if view == "local_identity":
+            return ["pd"] if "pd" in inventory["hosts"] else []
+        candidates = []
+        local = store.kv_get(self.conn, "fleet_local_view:" + str(chat_id))
+        if local and -30 <= protocol.age(local) < 7200:
+            candidates.append((local, ["pd"]))
+        # Also bind an identity follow-up to a real pre-fix local stats report.
+        prior = self.conn.execute("SELECT e.ts FROM trace_events e JOIN traces t ON t.trace_id=e.trace_id WHERE t.chat_id=? AND e.stage='router.completed' AND e.skill='vps_stats' ORDER BY e.ts DESC LIMIT 1", (chat_id,)).fetchone()
+        if prior and -30 <= protocol.age(prior["ts"]) < 7200:
+            candidates.append((prior["ts"], ["pd"]))
+        row = self.conn.execute("SELECT payload,updated_at FROM fleet_requests WHERE chat_id=? AND state='done' ORDER BY updated_at DESC LIMIT 1", (chat_id,)).fetchone()
+        if row and -30 <= protocol.age(row["updated_at"]) < 7200:
+            candidates.append((row["updated_at"], json.loads(row["payload"])["plan"]["hosts"]))
+        return [h for h in max(candidates, default=("", []))[1] if h in inventory["hosts"]]
+
+    def _fleet_direct_reply(self, chat_id, lang, view, inventory):
+        hosts = self._fleet_view_hosts(chat_id, view, inventory)
+        if view == "inventory":
+            answer = (f"В подключённом флоте {len(hosts)} VPS:" if lang == "ru" else f"Your connected fleet has {len(hosts)} VPSs:")
+            answer += "\n" + "\n".join("• " + key.upper() + " — " + inventory["hosts"][key]["label"] for key in hosts)
+        elif len(hosts) == 1:
+            key = hosts[0]
+            answer = ("Это " if lang == "ru" else "That is ") + key.upper() + " — " + inventory["hosts"][key]["label"] + "."
+            if key == "pd":
+                answer += (" Я работаю на этом сервере; отчёт о моих локальных ресурсах относится к нему." if lang == "ru" else "I run on this server; my local resource report refers to this host.")
+        else:
+            answer = ("Какой сервер ты имеешь в виду? " if lang == "ru" else "Which server do you mean? ")
+            answer += ", ".join(key.upper() + " — " + inventory["hosts"][key]["label"] for key in (hosts or inventory["hosts"])) + "."
+        return hosts, answer
+
     def _fleet_save(self, row, state, payload, event):
         encoded = protocol.canonical(payload)
         self.conn.execute("UPDATE fleet_requests SET state=?,payload=?,updated_at=? WHERE id=?",
@@ -225,6 +307,23 @@ class FleetMixin:
             return
         try:
             inventory = catalog(self.cfg)
+            view = direct_view(text)
+            if view:
+                hosts, answer = self._fleet_direct_reply(chat_id, lang, view, inventory)
+                payload = {"question": text, "source_hash": tasking.source_hash(text), "lang": lang,
+                           "plan": {"hosts": hosts}, "catalog_hash": protocol.digest(inventory),
+                           "kind": view, "cost": 0, "model_calls": 0, "answer": answer}
+                request_id = secrets.token_hex(16)
+                self.conn.execute("INSERT INTO fleet_requests VALUES(?,?,?,?,?,?,?)", (request_id, chat_id, update, "delivering", protocol.canonical(payload), protocol.now(), protocol.now()))
+                self.conn.commit()
+                row = self.conn.execute("SELECT * FROM fleet_requests WHERE id=?", (request_id,)).fetchone()
+                sent = self.reply(chat_id, answer, reply_to=msg_id)
+                if not isinstance(sent, dict) or type(sent.get("message_id")) is not int:
+                    self._fleet_save(row, "ambiguous", payload, "inventory_delivery_ambiguous")
+                    return
+                payload["result_message"] = sent["message_id"]
+                self._fleet_save(row, "done", payload, "inventory_view_delivered")
+                return
             plan, cost, model_calls = plan_investigation(self.cfg, self.conn, text, inventory, self._fleet_recent(chat_id), lang)
             if plan["operation"] == "restart" and not allow_maintenance:
                 raise ValueError("a read-only route cannot request maintenance")

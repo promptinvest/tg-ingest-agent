@@ -125,7 +125,7 @@ _DISPATCH = {
     "show_media":          lambda s, c: s.do_show_media(c.chat_id, c.lang, c.params),
     "read_media":          lambda s, c: s.do_read_media(c.chat_id, c.lang, c.params),
     "discard":             lambda s, c: s.do_discard(c.chat_id, c.lang, c.pending),
-    "vps_stats":           lambda s, c: s.reply(c.chat_id, sysinfo.format_report(sysinfo.collect(str(s.cfg.db_path.parent)), c.lang, s.media_bytes())),
+    "vps_stats":           lambda s, c: s.do_local_vps_stats(c.chat_id, c.lang),
     "fleet_investigate":   lambda s, c: s.do_fleet(c.chat_id, c.lang, c.text, c.msg_id),
     "fleet_maintain":      lambda s, c: s.do_fleet(c.chat_id, c.lang, c.text, c.msg_id, allow_maintenance=True),
     "purge":               lambda s, c: s.do_purge(c.chat_id, c.lang, c.params),
