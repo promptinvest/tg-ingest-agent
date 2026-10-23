@@ -1,15 +1,21 @@
 # Cara — Capabilities, Features & Architecture
 
-## October 23 - Fleet inventory and identity correction (candidate)
+## October 23 - Fleet inventory and identity correction accepted
 
-The observed “Напиши список моих VPS” request was incorrectly routed to local
-stats; its identity follow-up reached general chat and invented hosts. Narrow
-RU/EN inventory and identity questions now resolve directly from configured
-records and actual prior report scope. Local stats name PD. Multi-host ambiguity
-asks for a target. Conversation receives trusted inventory identities and treats
-old assistant claims as unverified. The exact failing exchange, disabled behavior,
-source bindings and unrelated reminder intents have regression coverage. This
-candidate does not claim deployment; existing effects and approvals are unchanged.
+The real “Напиши список моих VPS” request reached local stats, and its follow-up
+reached general chat and invented hosts. Inventory and identity questions now
+resolve directly from configured records and actual prior report scope. Local
+stats name PD; multiple possible hosts require a target. Conversation receives
+trusted inventory names and treats old assistant claims as unverified. Lists use
+plain text and require no model call or SSH probe. Existing skills, effects,
+approvals, budgets and history remain preserved.
+
+Accepted 2026-10-23T11:32:46.882938+00:00; source `54b7e15`,
+build `86db8e9d2812`, receipt `902d076941789cfaa6a57743`. All1,830 Linux
+tests (nine unchanged skips),54 focused cases, exact full-dispatch replay against
+the real six-host inventory, pinned Ruff and CI pass. All54 original database
+tables/rows/schema objects remain exact at the stopped gate; no schema additions.
+See [correction and acceptance](docs/cara-fleet-answerfix-2026-10-23.md).
 
 ## October 23, 2026 - Natural-language fleet management accepted
 

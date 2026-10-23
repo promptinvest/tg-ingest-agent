@@ -36,3 +36,5 @@ maintenance action merely to demonstrate the feature.
 - 2026-10-23: owner accepted implementation; source8dbf4a1 then fb20e4d.
 - 2026-10-23T09:42:36.751288+00:00: deployed and accepted after all original gates;
   [release record](../cara-fleet-deployment-2026-10-23.md).
+- 2026-10-23T11:32:46.882938+00:00: inventory/identity routing corrected in `54b7e15`;
+  [observed failures and acceptance](../cara-fleet-answerfix-2026-10-23.md).
