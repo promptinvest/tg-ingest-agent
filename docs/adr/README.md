@@ -42,7 +42,7 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 | [ADR-0029](ADR-0029-cara-records-her-issues-and-reminds-the-owner-monthly.md) | Cara records her issues and reminds the owner of them once a month (first digest 2026-10-07); supersedes the Mentor | Phase D | owner go 2026-10-07 | Implemented 2026-10-07 |
 | [ADR-0030](ADR-0030-evidence-bound-procedural-learning.md) | Evidence-bound procedural learning inside Cara | Phase D | owner go 2026-10-13 | Implemented and deployed 7de363c |
 | [ADR-0031](ADR-0031-natural-language-fleet-management.md) | Natural-language fleet investigations with a restricted executor | Phase D | owner go 2026-10-23 | Implemented and deployed fb20e4d |
-| [ADR-0032](ADR-0032-code-owned-fleet-findings.md) | Owner-bound fleet scope and code-owned findings | Phase D | owner go 2026-10-23 | Implementation in verification |
+| [ADR-0032](ADR-0032-code-owned-fleet-findings.md) | Owner-bound fleet scope and code-owned findings | Phase D | owner go 2026-10-23 | Implemented and deployed e925af3 |
 
 ## Phases
 

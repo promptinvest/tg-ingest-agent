@@ -1,6 +1,6 @@
 # ADR-0032: Owner-bound fleet scope and code-owned findings
 
-- Status: Implementation in verification, October 23, 2026.
+- Status: Implemented and deployed `e925af3`, accepted 2026-10-23T13:32:16.855166+00:00.
 - Owner authorization: “go and implement” after the architecture review.
 - Scope: fleet conversation/evidence/reporting and corrected PI probe mapping.
 
@@ -38,3 +38,5 @@ Qualification includes the owner's actual list/details exchange, real six-host
 receipts, adversarial missing/contradictory evidence, actual bounded model calls,
 and existing source/approval/spool/backup/runtime regression gates. Fix PI's probe
 names without changing its backup/health service configuration or executing them.
+
+Accepted release: [exact evidence](../cara-fleet-report-architecture-2026-10-23.md).

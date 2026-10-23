@@ -51,3 +51,12 @@ Inventory/identity correction accepted: source `54b7e15`, build `86db8e9d2812`.
 
 Contextual follow-ups/readable evidence accepted: source `a7168bd`, build `a01f3e740a3b`.
 [Current correction](../../docs/cara-fleet-contextfix-2026-10-23.md).
+
+Typed evidence/complete reports accepted: source `e925af3`, build `38e1d657420c`.
+[Architecture release](../../docs/cara-fleet-report-architecture-2026-10-23.md).
+`fleet_context.py` owns canonical owner scope and `fleet_report.py` owns factual
+clauses/coverage. Root-owned observation updates use the source-bound one-use
+`update-observations.py`; read its receipt and never replay it. PI observes
+`pi-prod-health-watch.timer` and `pi-prod-encrypted-backup.timer`. A loaded/active
+timer still does not establish backup success; fresh backup receipts and repository
+progress remain unconnected capabilities. No service, alert or schedule is changed.

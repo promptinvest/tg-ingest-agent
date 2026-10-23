@@ -1,19 +1,30 @@
 # Cara — Solution Specification
 
-## October 23 - Fleet evidence/report architecture implementation
+## October 23 - Fleet evidence/report architecture accepted
 
-Owner approved implementation after review of wrong fleet answers. Fleet context
-now persists explicit owner-bound host/project/check scope. Observations carry
-availability, source, timestamp and measurement window; missing project probes and
-nonexistent units cannot imply absence or health. Code renders mandatory coverage
-for every requested host, splitting complete reports into Telegram pages. Models
-select verified findings and prerequisite-bound hypotheses, without publishing
-arbitrary factual prose. One optional additional read stays inside the same scope,
-budget and closed facets. Existing executor/keys/maintenance confirmations remain.
-PI probe mappings use the actual health-watch and encrypted-backup timer names.
-Overview reports also normalize available process measurements; each selected hypothesis names its measured basis. Closed report hints accept equivalent single-value/list shapes observed in real model output. Code validates every selected finding before bounding highlights and optional reads. A newly selected project starts a new subject and replaces inherited whole-fleet scope. Unknown service/container states stay outside observed-state fractions. Per-unit highlights apply the same availability rules as host summaries. Unsupported optional exploration is refused and recorded without discarding independently verified findings. Verification and deployment are pending; earlier acceptance records remain as
-evidence of their narrower checks. See ADR-0032.
+Fleet investigations persist explicit owner-bound host/project/check scope.
+Inherited/all scopes resolve in code; a newly selected project starts a new
+subject. Assistant narrative cannot define scope. Existing research, reminders,
+conversation, worker isolation and exact maintenance confirmations remain.
 
+Observations retain source, time, sample window and availability. Missing units,
+unconfigured project probes, unavailable observations and dated records stay
+distinct. Unknown service/container states stay outside observed-state fractions.
+Code renders every requested host, splits complete reports into pages and records
+page delivery without automatic replay after an interruption. Models select only
+verified findings and prerequisite-bound hypotheses; code bounds valid selections
+and permits one additional read inside the same scope and budgets. Unsupported
+analysis falls back to the measured report with explicit gaps.
+
+Accepted 2026-10-23T13:32:16.855166+00:00; source `e925af3`, build `38e1d657420c`,
+receipt `dee5d54d2808f8361681e36f`. All 1,861 Linux tests (nine unchanged skips), 85 focused
+fleet cases, pinned Ruff and CI pass. Real-model full-dispatch list/details/memory,
+Daily Lingo progress and PI backup conversations pass, including bounded follow-up
+reads and truthful gaps. Qualification used 14 accounted calls
+($0.07449064), zero Telegram messages and zero maintenance effects.
+All 54 original database tables/rows/schema objects and other applications remain.
+Six host gateways now collect LoadState; PI probe names match the actual timers,
+with no service restart. See [release](docs/cara-fleet-report-architecture-2026-10-23.md).
 
 ## October 23 - Fleet contextual follow-ups and readable evidence accepted
 
