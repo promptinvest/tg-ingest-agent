@@ -97,6 +97,11 @@ KB for SSH/deploy/model details.
   routing and planning, and provides exact-version owner undo. The old Mentor
   inference/runner units remain disabled. Own PHOTOS are never
   stored (retired 2026-07-16) — own text/PDF docs still save via caption.
+- `fleet.py` handles natural-language fleet questions, fresh evidence, durable
+  follow-ups and exact-card worker maintenance. `cara_fleet.py` is a separate
+  restricted SSH executor; root-owned `fleet_host.py` gateways expose only fixed
+  observations and the reviewed worker restart. Existing research worker remains
+  networkless. See ADR-0031 and `ops/fleet/README.md`.
 - `llm.py` — DO Gradient gateway (chat + local/remote Whisper STT), pricing,
   budgets, JSON parsing helpers.
 - `storage.py` — binary backend: local default, optional DO Spaces (S3 SigV4

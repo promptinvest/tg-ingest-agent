@@ -1,6 +1,6 @@
 # ADR-0031: Natural-language fleet investigations with a restricted executor
 
-- Status: Accepted for implementation, 2026-10-23
+- Status: Implemented and deployed `fb20e4d`, 2026-10-23
 - Owner authorization: “go with this” after the natural-language fleet design.
 
 Cara gains a dedicated skill module behind the existing closed router. Owners ask
@@ -30,3 +30,9 @@ monitoring, alert preferences and application-specific deployment rules remain.
 The implementation request includes deploying this integration under the standing
 owner rule; it does not authorize manual learner messages or exercising a live
 maintenance action merely to demonstrate the feature.
+
+## Status log
+
+- 2026-10-23: owner accepted implementation; source8dbf4a1 then fb20e4d.
+- 2026-10-23T09:42:36.751288+00:00: deployed and accepted after all original gates;
+  [release record](../cara-fleet-deployment-2026-10-23.md).

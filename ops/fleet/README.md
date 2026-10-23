@@ -39,3 +39,9 @@ expire after 24 hours only after the request has been consumed; the durable data
 receipt remains. Missing or stale data always means unknown. Short resource samples
 are not long-term performance measurements. Repository CI/issues remain unavailable
 until an explicitly scoped integration is installed.
+
+Production accepted October 23, 2026: source `fb20e4d`, build `bb4054457736`.
+See the [accepted release](../../docs/cara-fleet-deployment-2026-10-23.md) for exact gates,
+receipts, recovery evidence and limits. Ask Cara, for example,
+“How is Daily Lingo doing?”, “What is using its memory?” or
+“Что с российским прокси и его выходом?”.

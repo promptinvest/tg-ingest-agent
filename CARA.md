@@ -1,21 +1,27 @@
 # Cara — Capabilities, Features & Architecture
 
-## October 23, 2026 - Fleet investigations (implementation candidate)
+## October 23, 2026 - Natural-language fleet management accepted
 
-Owner-approved natural RU/EN fleet questions use a dedicated inventory and a
-restricted background executor. Fresh host/resource/service/project observations,
-dated records and available historical investigation receipts support follow-ups.
-The initial write runbook restarts Cara's worker only after a fresh, exact,
-one-time owner card. Other operations name their missing runbook. Existing
-conversation, reminders, history, budgets, backups and worker isolation remain.
-Two additive SQLite workflow tables hold requests/events. Six monitored hosts
-are in scope; retired hosts and the unverified testing address remain excluded.
-See [ADR-0031](docs/adr/ADR-0031-natural-language-fleet-management.md) and the
-[operator runbook](ops/fleet/README.md). Verification and activation are pending;
-this candidate heading does not claim a deployment. The router receives current
-inventory names and roles. Restart approval persists its exact execution binding
-before publication; interrupted or uncertain effects are never retried. Text
-confirmations bind the delivered fleet card and preserve unrelated confirmations.
+Cara answers ordinary RU/EN questions and follow-ups about resources, services
+and configured project state across PD, Utah, Armenia, Russia, Exit and PI. Fresh
+structured evidence is separate from dated records and historical observations.
+Missing CI/issues, historical measurements or a maintenance runbook remain explicit
+gaps. The first write runbook restarts only Cara's isolated worker after a fresh,
+exact, one-time confirmation card; an explicit text reply binds that same card.
+Overlapping confirmations require a target. Uncertain execution is never retried.
+
+Accepted 2026-10-23T09:42:36.751288+00:00; source `fb20e4d`, build `bb4054457736`,
+receipt `783c4e2526aed3d08e9bc581`. All 1,821 Linux tests (nine unchanged skips),
+45 focused fleet tests, pinned Ruff, GitHub CI and five bounded model routing/planning
+scenarios pass. Real observations from all six hosts pass through the installed
+executor. The two additive workflow tables preserve all 52 original tables/rows
+at the stopped migration gate. Existing history, reminders, budgets, recovery,
+worker isolation, speech and neighboring Daily Lingo runtime remain preserved.
+Testing 130.49.190.246 stays excluded: host-key identity is unverified and the KB
+does not establish retirement. No live maintenance trial or manual test message.
+See [accepted release](docs/cara-fleet-deployment-2026-10-23.md),
+[ADR-0031](docs/adr/ADR-0031-natural-language-fleet-management.md) and
+[operator runbook](ops/fleet/README.md).
 
 ## October 19, 2026 - Host clutter cleanup
 
