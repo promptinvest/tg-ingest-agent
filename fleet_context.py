@@ -40,7 +40,7 @@ def recent(conn, chat_id, text=""):
             "source_update": row["source_update"], "inventory_hash": payload.get("catalog_hash")}
 
 
-FOCUS = frozenset({"overview", "memory", "cpu", "disk", "services", "projects",
+FOCUS = frozenset({"overview", "resources", "memory", "cpu", "disk", "services", "projects",
                    "errors", "release", "progress", "backups", "trend"})
 
 
@@ -57,6 +57,10 @@ def scope(value, inventory, previous):
         value["hosts"] = list(previous["hosts"])
     projects = value.get("projects", [])
     focus = value.get("focus", ["overview"])
+    # A single closed hint has the same meaning as a one-element hint array.
+    # Focus is a report hint, never an address, command or maintenance authority.
+    if isinstance(focus, str):
+        focus = [focus]
     if (not isinstance(projects, list) or len(projects) > 20 or any(not isinstance(p, str) for p in projects) or len(set(projects)) != len(projects)
             or any(p not in inventory["projects"] for p in projects)):
         raise ValueError("unknown fleet project")

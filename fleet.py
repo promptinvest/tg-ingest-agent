@@ -196,7 +196,7 @@ def planner_messages(question, inventory, context, lang):
         "Plan a Cara fleet investigation. Return ONLY JSON with hosts (inventory IDs), "
         "facets (resources|services|projects|errors), clarification (empty unless ambiguous), "
         "operation (inspect|restart), service (empty for inspect), scope (all|inherit|explicit), "
-        "projects (inventory project IDs, possibly empty), focus (1..5 of overview|memory|cpu|disk|services|projects|errors|release|progress|backups|trend). "
+        "projects (inventory project IDs, possibly empty), focus (JSON array of 1..5 of overview|resources|memory|cpu|disk|services|projects|errors|release|progress|backups|trend, e.g. [\"overview\"]). "
         "Use scope inherit for pronouns like 'them', 'по ним', 'на нём', 'а память?' that refer to the structured prior scope. "
         "Code resolves inherit to ALL prior hosts and all to ALL configured hosts. Explicit names select explicit scope. "
         "Choose memory/cpu focus for causes or process breakdown, progress for development state, backups for backup results. "
@@ -242,7 +242,7 @@ def validate_plan(value, inventory, context=None):
         # Installed release/container/health evidence is part of every selected
         # project's context even if the model selects only host resources.
         base["facets"] = sorted(set(base["facets"]) | {"projects"})
-        if set(focus) & {"memory", "cpu", "disk", "trend"}:
+        if set(focus) & {"resources", "memory", "cpu", "disk", "trend"}:
             base["facets"] = sorted(set(base["facets"]) | {"resources"})
         for facet in ("services", "errors"):
             if facet in focus:

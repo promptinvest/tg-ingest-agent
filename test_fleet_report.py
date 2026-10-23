@@ -153,6 +153,15 @@ class ReportContracts(unittest.TestCase):
         self.assertEqual(fleet.validate_plan(dict(plan(), scope="all"), catalog)["hosts"], request["hosts"])
         with self.assertRaises(ValueError): fleet.validate_plan(dict(plan(), scope="inherit"), catalog, {})
 
+    def test_actual_model_focus_shapes_are_normalized_without_widening_authority(self):
+        catalog, request, response = fixture()
+        for focus in ("overview", ["overview", "services", "resources"]):
+            value = fleet.validate_plan(dict(plan(), focus=focus), catalog)
+            self.assertIsInstance(value["focus"], list)
+            self.assertEqual(value["hosts"], ["pd"])
+            self.assertEqual(value["operation"], "inspect")
+        with self.assertRaises(ValueError): fleet.validate_plan(dict(plan(), focus="shell"), catalog)
+
 
 class PipelineContracts(unittest.TestCase):
     setUp = base.FleetLifecycle.setUp
