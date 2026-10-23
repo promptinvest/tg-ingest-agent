@@ -153,9 +153,20 @@ class ReportContracts(unittest.TestCase):
 
     def test_model_can_never_add_text_commands_or_extra_hosts(self):
         catalog, request, response = fixture(); built = report.build(response, catalog, request)
-        for change in ({"highlights": ["invented"]}, {"highlights": [{}]}, {"interpretation": "healthy"}, {"hypotheses": [{"host": "pd", "kind": []}]}, {"next_checks": [{"host": "retired", "facet": "resources"}]}, {"next_checks": [{"host": "pd", "facet": "shell"}]}):
+        for change in ({"highlights": ["invented"]}, {"highlights": [{}]}, {"interpretation": "healthy"}, {"hypotheses": [{"host": "pd", "kind": []}]}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 report.selection(dict(highlights=[], hypotheses=[], next_checks=[], **{}) | change, built)
+
+    def test_unsupported_optional_checks_are_refused_without_losing_valid_findings(self):
+        catalog, request, response = fixture(); built = report.build(response, catalog, request)
+        value = {"highlights": ["O1"], "hypotheses": [], "next_checks": [{"host": "retired", "facet": "resources"}, {"host": "pd", "facet": "shell"}, {"host": "pd", "facet": "capability.progress"}]}
+        normalized = report.selection(value, built)
+        self.assertEqual(normalized["highlights"], ["O1"])
+        self.assertEqual(normalized["next_checks"], [])
+        self.assertEqual(built["rejected_optional_checks"], 3)
+        answer = "\n".join(report.render(built, normalized))
+        self.assertIn("they were not executed", answer)
+        self.assertTrue(all(h.upper()+" — " in answer for h in request["hosts"]))
 
     def test_code_bounds_oversized_valid_selections_after_validating_every_item(self):
         catalog, request, response = fixture(); built = report.build(response, catalog, request)

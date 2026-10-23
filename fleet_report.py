@@ -198,9 +198,14 @@ def selection(value, report):
     checks = value["next_checks"]
     if not isinstance(checks, list) or len(checks) > 24:
         raise ValueError("invalid next checks")
+    allowed = []
     for item in checks:
-        if not isinstance(item, dict) or set(item) != {"host", "facet"} or item["host"] not in report["hosts"] or not isinstance(item["facet"], str) or item["facet"] not in protocol.FACETS:
-            raise ValueError("check outside investigation scope")
+        if isinstance(item, dict) and set(item) == {"host", "facet"} and item["host"] in report["hosts"] and isinstance(item["facet"], str) and item["facet"] in protocol.FACETS:
+            allowed.append(item)
+    # Proposed exploration is separate from factual claims. Refuse unsupported
+    # checks, record the gap, and retain independently validated findings.
+    report["rejected_optional_checks"] = max(report.get("rejected_optional_checks", 0), len(checks) - len(allowed))
+    checks = allowed
     def unique(items):
         out = []
         for item in items:
@@ -242,6 +247,8 @@ def render(report, decision=None, lang="en"):
         key = next(k for k, o in report["observations"].items() if o["host"] == item["host"] and o["field"] == prerequisite and o["status"] == "observed")
         basis = report["findings"][key][field]
         lines.append(("Гипотеза — " if ru else "Hypothesis — ") + item["host"].upper() + ": " + basis + ". " + HYPOTHESES[item["kind"]][1 if ru else 2])
+    if report.get("rejected_optional_checks"):
+        lines.append("Часть предложенных дополнительных проверок недоступна или выходит за выбранные серверы; они не выполнялись." if ru else "Some proposed additional checks are unavailable or outside the selected hosts; they were not executed.")
     lines.append("\n" + ("Это проверка настроенных наблюдений в указанный момент; она не подтверждает полное здоровье приложений, успешность бэкапов или отсутствие прошлых сбоев." if ru else "These are configured observations at the stated time; they do not establish complete application health, successful backups or absence of earlier incidents."))
     pages, current = [], ""
     for line in lines:
