@@ -119,3 +119,7 @@ Three explicit MCP lifecycle gaps remain. A final exact combined full run, pinne
 lint/CI and new bounded accounted model qualification are required before release.
 Original failed logs and fixture mistakes remain evidence; assertions were not
 weakened to accept regressions. No release has occurred for this increment.
+
+## Retained full-gate failure for3197bff
+
+CI40088187924 failed the old broker assertion that fleet.investigate must be absent. The implemented retained task read now has dedicated waiting/accounting/receipt/recovery tests. Its exact network-read manifest contract replaces only that obsolete absence assertion; fleet execute/restart/deploy remain absent. All runtime bytes are unchanged by this correction. The failed exact-source Linux attempt and CI log remain; fresh full gates are required.
