@@ -1,5 +1,18 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 12 - stale and partial development evidence
+
+Development adapters retain complete:false, but a single gaps field records
+staleness ahead of partial_coverage. The typed reply previously displayed only
+that single gap, losing a separate limit on what the sampled CI/issues establish.
+Add the missing coverage qualifier in presentation only when its recorded sample
+is incomplete and the existing gap does not already state partial coverage.
+Preserve stale/revision/date qualifiers, source bytes and every fresh output.
+No fixture clock change, assertion relaxation or schema/probe/prompt/budget change.
+Fresh exact-source release qualification remains pending; all packages stay open.
+[Increment 12](docs/cara-fleet-increment-12-2026-10-24.md).
+
+
 ## October 24 - Increment 11 runtime subfield obligations
 
 A composite runtime finding prevents the concise renderer from answering only

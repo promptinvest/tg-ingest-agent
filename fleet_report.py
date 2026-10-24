@@ -84,6 +84,14 @@ def _dated_project_summary(capability, state, ru=False):
                 ("в выборке нет" if ru else "none in sample")))
     if state["gaps"]:
         parts.append(_project_gaps(state["gaps"], ru))
+    if capability == "development":
+        # Freshness and sample coverage are independent properties. The source
+        # keeps complete:false even when its single gap slot describes age.
+        incomplete = {field: "partial_coverage" for field in ("ci", "issues")
+                      if state[field]["status"] == "recorded" and state[field].get("complete") is False
+                      and state["gaps"].get(field) != "partial_coverage"}
+        if incomplete:
+            parts.append(_project_gaps(incomplete, ru))
     return "; ".join(parts)
 
 

@@ -1,5 +1,17 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 12 - stale and partial development evidence
+
+A retained owner-loop replay exposes that stale development observations can
+hide incomplete CI/issue coverage. These are independent qualifiers: an old
+subset remains a subset. Render the validated partial coverage alongside its
+existing stale/date gaps; retain raw observations, schema and fresh output.
+No new source read, model call, capability, budget or authority is added.
+New-source full/model/installed acceptance remains required; production99037c5
+and MCP disabled remain the accepted state. All packages stay open.
+[Increment 12](docs/cara-fleet-increment-12-2026-10-24.md).
+
+
 ## October 24 - Increment 11 requested application fields
 
 Manual review finds that a formally passing runtime answer can still violate

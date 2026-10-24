@@ -342,3 +342,12 @@ relevance and catalog checks pass. Validators/renderers/age/models/budgets stay
 unchanged. Fresh full/CI/model/installed acceptance remains required; all packages
 open, production `99037c5` / MCP disabled; source/archive/operator/window UNSELECTED.
 [Increment 09](../../cara-fleet-increment-09-2026-10-24.md).
+
+## Increment 12 - stale and partial development evidence
+
+A fresh owner-loop synthetic replay finds that stale development samples omit
+an independent incomplete-coverage qualifier. Keep the original failed replay
+and restore both qualifications from retained typed evidence. No model calls
+were made in this check. New-source full/CI/model/installed gates remain pending;
+production99037c5/MCP disabled and all independent package criteria remain.
+[Record](../../cara-fleet-increment-12-2026-10-24.md).

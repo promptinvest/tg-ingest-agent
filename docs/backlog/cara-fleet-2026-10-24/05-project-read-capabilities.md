@@ -174,3 +174,13 @@ authority and model budgets. Focused actual Agent/runtime/catalog/relevance
 regressions pass in isolated Linux. Fresh full/CI/model/installed release gates
 remain required; every package stays open, production `99037c5` / MCP disabled.
 [Increment 09](../../cara-fleet-increment-09-2026-10-24.md).
+
+## Increment 12 - stale and partial development evidence
+
+Source age and CI/issue coverage are independent. When a validated recorded
+sample has complete:false and its gap already reports stale, keep both stale
+and partial coverage visible. Preserve source/commit/update dates and revision
+coverage gaps; do not refresh the fixture clock or invent a new source. Fresh
+partial/full, unconnected and backup replies remain exact. Original acceptance
+criteria stay open until new-source full/model/installed qualification passes.
+[Record](../../cara-fleet-increment-12-2026-10-24.md).

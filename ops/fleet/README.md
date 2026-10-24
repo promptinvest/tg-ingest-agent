@@ -596,3 +596,13 @@ reports, requested failures/gaps/dates, model/production budgets and authority.
 A real-model field-presence pass alone cannot close business acceptance. New
 semantic, reply, source, actual-model and original installed/release checks remain
 required; production99037c5/MCP disabled, packages open. [Increment 11](../../docs/cara-fleet-increment-11-2026-10-24.md).
+
+## Increment 12 - stale and partial development evidence
+
+Dated development replies preserve source age and incomplete sample scope
+together. A current read cannot make an old subset fresh or complete. This is a
+reply-only correction using existing validated complete:false metadata; no
+adapter/source/probe/schema/prompt or authority change. Preserve prior unpaid
+replay failures and all original release gates. New exact committed source,
+full/CI and bounded actual qualification precede a fresh single-use selection;
+never replay earlier qualification or deployment controllers.

@@ -43,7 +43,7 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 | [ADR-0030](ADR-0030-evidence-bound-procedural-learning.md) | Evidence-bound procedural learning inside Cara | Phase D | owner go 2026-10-13 | Implemented and deployed 7de363c |
 | [ADR-0031](ADR-0031-natural-language-fleet-management.md) | Natural-language fleet investigations with a restricted executor | Phase D | owner go 2026-10-23 | Implemented and deployed fb20e4d |
 | [ADR-0032](ADR-0032-code-owned-fleet-findings.md) | Owner-bound fleet scope and code-owned findings | Phase D | owner go 2026-10-23 | Implemented and deployed e925af3 |
-| [ADR-0033](ADR-0033-fleet-knowledge-and-project-capability-backlog.md) | Fleet knowledge, adaptive answers and project capability backlog | Follow-up roadmap | ADR-0031/0032; six business packages plus downstream MCP | Accepted 2026-10-24; business baseline accepted; source9dd727e full Linux/CI and formal model pass; manual reply review rejected; increment11 scoped runtime fields candidate; packages open |
+| [ADR-0033](ADR-0033-fleet-knowledge-and-project-capability-backlog.md) | Fleet knowledge, adaptive answers and project capability backlog | Follow-up roadmap | ADR-0031/0032; six business packages plus downstream MCP | Accepted 2026-10-24; business baseline accepted; increment11 source d30e60e full Linux/CI; fresh retained replay finds stale/partial development gap; increment12 candidate; packages open |
 
 ## Phases
 
@@ -64,3 +64,10 @@ remain open; [increment record](../cara-fleet-increment-10-2026-10-24.md).
 October24 increment11: typed runtime answer-field obligations address the manual
 business rejection of a formally passing dense reply; original evidence, legacy
 reports and every qualification/release gate remain. Packages stay open.
+
+## Increment 12 - stale and partial development evidence
+
+ADR-0033/CF-05 presentation correction retains both source age and incomplete
+CI/issue coverage in dated answers. New exact-source qualification and guarded
+installed acceptance remain required; no package is complete.
+[Evidence](../cara-fleet-increment-12-2026-10-24.md).

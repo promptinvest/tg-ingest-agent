@@ -267,3 +267,13 @@ reports, requested failures/gaps/dates, model/production budgets and authority.
 A real-model field-presence pass alone cannot close business acceptance. New
 semantic, reply, source, actual-model and original installed/release checks remain
 required; production99037c5/MCP disabled, packages open. [Increment 11](../cara-fleet-increment-11-2026-10-24.md).
+
+## Increment 12 - stale and partial development evidence
+
+Fresh retained owner-loop qualification replay finds a CF-05 presentation gap:
+stale CI/issue samples with complete:false lose visible partial coverage because
+stale occupies their single gap enum. Render both independent qualifiers from
+the already validated record. Preserve existing fresh replies, dates, observation
+schema and evidence. No new inference/read/effect/budget. Keep the failed unpaid
+replay; require a new committed source/full/CI/model/installed qualification.
+[Record](../cara-fleet-increment-12-2026-10-24.md); every package remains open.
