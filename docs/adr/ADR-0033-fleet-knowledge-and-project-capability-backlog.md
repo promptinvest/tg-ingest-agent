@@ -1,6 +1,6 @@
 # ADR-0033: Fleet knowledge and project capability development backlog
 
-- Status: Proposed; backlog created 2026-10-24.
+- Status: Accepted for implementation October 24, 2026; packages in progress.
 - Owner request: create a backlog for further development after a fleet behavior/architecture review.
 - Implementation authorization: no implementation is claimed by this planning record.
 
@@ -34,3 +34,5 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
 
 - 2026-10-24: owner requested durable development backlog; proposed work, fixtures and trackers prepared. No runtime implementation, paid qualification or deployment.
 - 2026-10-24: owner requested the MCP backlog extension with explicit preservation of existing business goals; CF-07 and additional parity scenarios added. Planning only.
+
+- 2026-10-24: owner requested implementing, testing, publishing and deploying the complete backlog. First independent cleanup/completion-poll increments begin; no package completion or release is inferred. Existing authority and compatibility gates remain.

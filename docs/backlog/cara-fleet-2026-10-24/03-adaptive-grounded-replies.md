@@ -1,6 +1,6 @@
 # CF-03 — Adaptive grounded replies, corrections and safe cleanup
 
-- Status: Proposed; backlog only.
+- Status: Implementation authorized October 24; partial work in progress.
 - Priority: P1.
 - Depends on CF-02's answer contract; the sanitizer fix and shared style review can start independently.
 - Size: Medium; cleanup, response contract and real-model qualification are separate increments.
@@ -77,3 +77,9 @@ Update BOTH CARA.md and SOLUTION.md, relevant ADR/backlog status and operator do
 
 Full handoff, source map, sanitized production evidence, bootstrap facts and semantic regression corpus:
 https://github.com/promptinvest/tg-ingest-agent/tree/main/docs/backlog/cara-fleet-2026-10-24
+
+
+## Implementation progress — October 24
+
+CF-03 cleanup increment in progress; adaptive replies and qualification remain.
+See [increment 01](../../cara-fleet-increment-01-2026-10-24.md). Original acceptance criteria remain required.

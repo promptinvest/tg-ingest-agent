@@ -60,3 +60,14 @@ clauses/coverage. Root-owned observation updates use the source-bound one-use
 `pi-prod-health-watch.timer` and `pi-prod-encrypted-backup.timer`. A loaded/active
 timer still does not establish backup success; fresh backup receipts and repository
 progress remain unconnected capabilities. No service, alert or schedule is changed.
+
+## October 24 backlog increments
+
+[Increment 01](../../docs/cara-fleet-increment-01-2026-10-24.md) repairs final
+emphasis cleanup and pending fleet completion polling. It introduces no gateway,
+transport or maintenance policy change. Run focused cleanup/poll tests in the
+isolated Linux stage, then retain all full release and preservation gates above.
+No package is complete until its business, compatibility and release criteria pass.
+Model I/O and queue lifecycle remain separate work; a short poll does not make a
+synchronous model call nonblocking. The original 47+15 specifications remain
+required, with their qualification recorded independently from interface checks.

@@ -957,6 +957,30 @@ class Agent(fleet.FleetMixin, learning.LearningMixin, media_svc.MediaMixin, conv
         except Exception as exc:  # noqa: BLE001 — a bad tick must never kill the loop
             log(f"scheduler tick {name} failed: {exc!r}")
 
+    # Match the existing album/voice completion cadence. This bounds a result
+    # that arrives during getUpdates without creating another polling thread.
+    PENDING_WORK_POLL_SECONDS = 2
+
+    def _pending_work_poll_timeout(self):
+        if self.albums or getattr(self, "voice_jobs", {}):
+            return self.PENDING_WORK_POLL_SECONDS
+        if getattr(self.cfg, "fleet_enabled", False):
+            try:
+                pending = self.conn.execute(
+                    "SELECT 1 FROM fleet_requests WHERE state IN "
+                    "('preparing','queued','executing','ready',"
+                    "'approval_sending','delivering','analysis_started') LIMIT 1"
+                ).fetchone()
+            except sqlite3.Error as exc:
+                # Reading pending work must not add an unguarded SQLite failure
+                # to run(); keep the existing containment and retry promptly.
+                log(f"pending fleet check failed: {exc!r}")
+                self._db_stall(exc)
+                return min(self.PENDING_WORK_POLL_SECONDS, self.cfg.poll_timeout)
+            if pending:
+                return min(self.PENDING_WORK_POLL_SECONDS, self.cfg.poll_timeout)
+        return self.cfg.poll_timeout
+
     def run(self):
         self.voice_async = True
         try:
@@ -1004,7 +1028,7 @@ class Agent(fleet.FleetMixin, learning.LearningMixin, media_svc.MediaMixin, conv
                     if self.stop:
                         break
                     self._tick(name, fn)
-            poll_timeout = 2 if self.albums or getattr(self, "voice_jobs", {}) else self.cfg.poll_timeout
+            poll_timeout = self._pending_work_poll_timeout()
             try:
                 updates = tg_call(
                     self.cfg.token,

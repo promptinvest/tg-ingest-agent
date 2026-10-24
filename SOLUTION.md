@@ -1,5 +1,22 @@
 # Cara — Solution Specification
 
+## October 24 - Fleet backlog implementation started
+
+The owner requested implementation, publication and deployment of CF-01–CF-07.
+The first independent increment repairs content-erasing emphasis cleanup and
+includes consumable fleet requests in the existing two-second pending-work poll
+cadence. Meaningful emphasized names survive; narrated physical gestures remain
+suppressed. Waiting owner approvals and terminal requests retain normal idle
+polling. Existing voice/album cadence, source bindings, budgets and exact
+maintenance cards retain their meanings.
+
+This is partial CF-03/CF-04 progress. It does not qualify asynchronous model I/O,
+facts synchronization, semantic answers, project adapters, lifecycle or MCP.
+Every package retains its independent acceptance and release criteria; the original
+47 business and 15 MCP/parity specifications remain unchanged. See the
+[increment record](docs/cara-fleet-increment-01-2026-10-24.md) and
+[backlog](docs/backlog/cara-fleet-2026-10-24/README.md).
+
 ## October 24 - Fleet and project development backlog (proposed)
 
 A [self-contained developer backlog](docs/backlog/cara-fleet-2026-10-24/README.md)

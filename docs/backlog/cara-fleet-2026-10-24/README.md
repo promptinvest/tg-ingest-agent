@@ -1,6 +1,6 @@
 # Cara fleet and project development backlog — October 24, 2026
 
-Status: Proposed development backlog. No runtime implementation or deployment is claimed.
+Status: Implementation authorized October 24, 2026; work in progress. No package is complete.
 Parent tracker: [CF-00 / issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
 
 ## Start here
@@ -132,3 +132,16 @@ Canonical specification files live here; GitHub issues track discussion and comp
 Update CARA.md, SOLUTION.md, the ADR status/index and operator runbook in every implementing commit. Commit and publish repository changes through this repository's existing workflow; do not use the archived mixed checkout.
 
 Do not mark an issue implemented because its fixtures or documentation exist. Close it only after required behavior, regressions, compatibility and release acceptance are satisfied. Keep CF-00 open until all required packages are complete; any owner-approved deferral must be explicit and linked.
+
+## Implementation progress — October 24
+
+Owner request: implement the backlog, test, publish and deploy through existing
+gates. The standing implementation-includes-deployment rule applies; no separate
+hash-specific approval is claimed. Planning-era authorization statements above
+remain historical descriptions of the backlog-creation request.
+
+Increment 01 isolates CF-03 content-preserving emphasis cleanup and CF-04 fleet
+completion polling. CF-01 facts contract/export work proceeds independently.
+[Increment evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).
+Neither unit fixtures nor protocol checks close any package; the preserved 47+15
+specifications retain all original assertions and independent acceptance criteria.

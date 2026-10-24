@@ -21,13 +21,56 @@ from common import (Config, ShutdownInterrupt, current_trace, load_config, log, 
 from texts import T
 
 class ConverseMixin:
-    @staticmethod
-    def _strip_roleplay(text):
-        """Remove asterisk stage-directions (*закрываю глаза*, *прижимаю телефон к губам*)
-        the model sometimes narrates. The boss wants feeling shown with words, emojis and
-        reactions — not narrated physical actions. Replies are plain text (no markdown),
-        so a *...*  span is always roleplay, never emphasis."""
-        cleaned = re.sub(r"\*[^*\n]{1,300}\*", "", text or "")
+    # Physical narration is not the same as emphasis. Match complete gesture
+    # clauses rather than swallowing arbitrary names or factual prose.
+    _EMPHASIS_SPAN_RE = re.compile(
+        r"(?<!\*)(?P<mark>\*{1,3})(?P<body>[^*\n]{1,300})(?P=mark)(?!\*)")
+    _GESTURE_SEPARATOR_RE = re.compile(
+        r"(\s*[,;]\s*|\s+(?:и|and|then|затем)\s+)", re.IGNORECASE)
+    _NARRATED_GESTURE_RE = re.compile(
+        r"(?:(?:я|I|she)\s+)?"
+        r"(?:(?:тихо|мягко|слегка|тепло|нежно|медленно|softly|warmly|gently|"
+        r"slowly|slightly|quietly)\s+)*"
+        r"(?:улыбаюсь|усмехаюсь|смеюсь|хихикаю|киваю|вздыхаю|выдыхаю|"
+        r"подмигиваю|пожимаю плечами|закрываю глаза|отвожу взгляд|опускаю глаза|"
+        r"наклоняю голову|обнимаю(?: тебя)?|смотрю (?:на тебя|тебе в глаза)|"
+        r"прижимаю (?:телефон|ладонь|руку) к (?:губам|груди|щеке)|"
+        r"smiles?|smiling|grins?|grinning|nods?|nodding|sighs?|sighing|"
+        r"exhales?|exhaling|chuckles?|chuckling|laughs?|laughing|winks?|winking|"
+        r"shrugs?(?: (?:my|her) shoulders)?|tilts? (?:my|her) head|"
+        r"closes? (?:my|her) eyes|looks? (?:at you|into your eyes)|hugs? you|"
+        r"press(?:es)? (?:my|the|her) phone to (?:my|her) lips)"
+        r"(?:\s+(?:тихо|мягко|слегка|тепло|нежно|медленно|softly|warmly|gently|"
+        r"slowly|slightly|quietly))*[.!…]?", re.IGNORECASE)
+
+    @classmethod
+    def _strip_roleplay(cls, text):
+        """Suppress recognized narrated gestures and flatten ordinary emphasis.
+
+        Keep names in single/bold emphasis. In a mixed span remove only recognized
+        gesture clauses: asterisks never authorize deleting arbitrary answer text.
+        Preserve literal spaced asterisks (multiplication) and list markers.
+        """
+        def plain_span(match):
+            body = match.group("body")
+            clauses = cls._GESTURE_SEPARATOR_RE.split(body.strip())
+            kept = []
+            removed = False
+            for index in range(0, len(clauses), 2):
+                clause = clauses[index]
+                # A lone title-cased word can be a meaningful name ("Smiles").
+                ambiguous_name = clause[:1].isupper() and len(clause.split()) == 1
+                if not ambiguous_name and cls._NARRATED_GESTURE_RE.fullmatch(clause):
+                    removed = True
+                    continue
+                if kept and index:
+                    kept.append(clauses[index - 1])
+                kept.append(clause)
+            if removed:
+                return "".join(kept).strip()
+            return body if body == body.strip() else match.group(0)
+
+        cleaned = cls._EMPHASIS_SPAN_RE.sub(plain_span, text or "")
         cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         # tidy lines left dangling (leading/trailing spaces from a removed action)

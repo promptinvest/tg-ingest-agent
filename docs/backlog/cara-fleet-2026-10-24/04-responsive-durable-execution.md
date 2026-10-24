@@ -1,6 +1,6 @@
 # CF-04 — Responsive durable planning, synthesis and fleet queues
 
-- Status: Proposed; backlog only.
+- Status: Implementation authorized October 24; partial work in progress.
 - Priority: P1; can proceed independently of knowledge work.
 - Dependencies: none; coordinate CF-02/CF-03 contracts.
 - Size: Large; split completion wakeup, asynchronous inference and queue lifecycle.
@@ -64,3 +64,9 @@ Update BOTH CARA.md and SOLUTION.md, relevant ADR/backlog status and operator do
 
 Full handoff, source map, sanitized production evidence, bootstrap facts and semantic regression corpus:
 https://github.com/promptinvest/tg-ingest-agent/tree/main/docs/backlog/cara-fleet-2026-10-24
+
+
+## Implementation progress — October 24
+
+CF-04 completion-poll increment in progress; async inference and queue lifecycle remain.
+See [increment 01](../../cara-fleet-increment-01-2026-10-24.md). Original acceptance criteria remain required.

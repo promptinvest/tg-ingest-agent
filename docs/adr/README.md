@@ -43,7 +43,7 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 | [ADR-0030](ADR-0030-evidence-bound-procedural-learning.md) | Evidence-bound procedural learning inside Cara | Phase D | owner go 2026-10-13 | Implemented and deployed 7de363c |
 | [ADR-0031](ADR-0031-natural-language-fleet-management.md) | Natural-language fleet investigations with a restricted executor | Phase D | owner go 2026-10-23 | Implemented and deployed fb20e4d |
 | [ADR-0032](ADR-0032-code-owned-fleet-findings.md) | Owner-bound fleet scope and code-owned findings | Phase D | owner go 2026-10-23 | Implemented and deployed e925af3 |
-| [ADR-0033](ADR-0033-fleet-knowledge-and-project-capability-backlog.md) | Fleet knowledge, adaptive answers and project capability backlog | Follow-up roadmap | ADR-0031/0032; six business packages plus downstream MCP | Proposed 2026-10-24; backlog only |
+| [ADR-0033](ADR-0033-fleet-knowledge-and-project-capability-backlog.md) | Fleet knowledge, adaptive answers and project capability backlog | Follow-up roadmap | ADR-0031/0032; six business packages plus downstream MCP | Accepted 2026-10-24; implementation in progress |
 
 ## Phases
 

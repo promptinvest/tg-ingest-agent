@@ -156,7 +156,10 @@ echo '(return to latest with: ./deploy.sh --pull)'"
            verify-cara-runtime.sh
            tg-ingest-agent.env.example tg-ingest-agent.service
            cara-worker.service cara-mentor.service
-           cara-mentor-runner.service cara-failed-notify@.service)
+           cara-mentor-runner.service cara-failed-notify@.service
+           docs/backlog/cara-fleet-2026-10-24/regression-cases.json
+           docs/backlog/cara-fleet-2026-10-24/mcp-regression-cases.json
+           docs/backlog/cara-fleet-2026-10-24/bootstrap-facts.json)
     SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
     DIRTY=""; [ -n "$(git status --porcelain 2>/dev/null)" ] && DIRTY=" +local-changes"
     DIRTY_BOOL=false; [ -n "$DIRTY" ] && DIRTY_BOOL=true
