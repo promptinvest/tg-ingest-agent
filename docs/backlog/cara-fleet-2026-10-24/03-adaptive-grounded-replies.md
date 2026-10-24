@@ -1,6 +1,6 @@
 # CF-03 — Adaptive grounded replies, corrections and safe cleanup
 
-- Status: Implementation authorized October 24; partial work in progress.
+- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
 - Priority: P1.
 - Depends on CF-02's answer contract; the sanitizer fix and shared style review can start independently.
 - Size: Medium; cleanup, response contract and real-model qualification are separate increments.
@@ -85,3 +85,11 @@ CF-03 cleanup increment in progress; adaptive replies and qualification remain.
 See [increment 01](../../cara-fleet-increment-01-2026-10-24.md). Original acceptance criteria remain required.
 
 Integrated business candidate: local obligations/semantic formats, durable nonblocking phases, queue starts/cancellation, shared lookup and typed content lifecycle are implemented. Focused Linux evidence and remaining model/release gates are in [the increment record](../../cara-fleet-increment-01-2026-10-24.md). No package is complete or deployed yet.
+
+
+## Accepted business baseline ? October 24
+
+Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
+Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
+and scoped-read gates. This is an incremental business baseline; no full package
+completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).

@@ -1,6 +1,6 @@
 # CF-01 — Fleet facts and synchronization
 
-- Status: Proposed; backlog only.
+- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
 - Priority: P1, prerequisite for correct static answers.
 - Dependencies: none; coordinate with CF-02 and CF-05.
 - Size: Large; schema/bootstrap and publication are separate reviewable increments.
@@ -84,3 +84,10 @@ The later combined integration check passed those cases again; installer checks
 remain a separate gate. No new fact artifact is installed in production yet.
 Source synchronization is an explicit review/export/status workflow at this stage,
 not a claim of an automatic scheduler. No CF-01 completion is claimed.
+
+## Accepted business baseline ? October 24
+
+Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
+Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
+and scoped-read gates. This is an incremental business baseline; no full package
+completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).

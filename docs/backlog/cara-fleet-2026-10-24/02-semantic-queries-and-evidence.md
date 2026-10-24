@@ -1,6 +1,6 @@
 # CF-02 — Semantic questions and evidence selection
 
-- Status: Proposed; backlog only.
+- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
 - Priority: P1.
 - Depends on CF-01's facts contract; planning fixtures can start in parallel.
 - Size: Medium; query contract/routing and full-dispatch qualification are separate increments.
@@ -97,3 +97,11 @@ Thirty-four isolated Linux query cases pass, including frozen obligations from
 qualification, not a claim that free-form model behavior or all 47+15 scenarios pass.
 Full-dispatch integration and actual-model/release acceptance remain separate gates.
 Integrated business candidate: local obligations/semantic formats, durable nonblocking phases, queue starts/cancellation, shared lookup and typed content lifecycle are implemented. Focused Linux evidence and remaining model/release gates are in [the increment record](../../cara-fleet-increment-01-2026-10-24.md). No package is complete or deployed yet.
+
+
+## Accepted business baseline ? October 24
+
+Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
+Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
+and scoped-read gates. This is an incremental business baseline; no full package
+completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).

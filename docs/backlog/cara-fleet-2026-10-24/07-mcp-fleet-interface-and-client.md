@@ -1,6 +1,6 @@
 # CF-07 — Reusable MCP fleet interface and Cara client
 
-- Status: Proposed; backlog update only. No interface is installed or enabled.
+- Status: Implementation in progress; offline contract published; MCP not enabled in production.
 - Priority: P2 integration. CF-01–CF-06 keep their existing business priorities.
 - Planning: capability and client/server contracts can be designed immediately.
 - Production prerequisites: CF-01/02/03/04 for the facts/client path; the applicable CF-05 adapter for each project-read capability. CF-06 gates any future write exposure, which is outside this package.
@@ -137,3 +137,10 @@ Twenty-seven isolated Linux checks pass. This is an offline facts-only increment
 no production endpoint/client is enabled, no investigation/project API or Tasks is
 advertised, and no new content ledger exists. Durable read parity, unprivileged
 installation, owner-loop responsiveness and complete CF-07 acceptance remain open.
+
+## Accepted business baseline ? October 24
+
+Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
+Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
+and scoped-read gates. This is an incremental business baseline; no full package
+completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).

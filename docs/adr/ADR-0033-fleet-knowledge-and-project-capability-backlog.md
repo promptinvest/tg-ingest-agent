@@ -48,3 +48,12 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
 - 2026-10-24: offline facts-only MCP adapter/client preserves shared cells/provenance and trusted caller scope;27 Linux cases pass. It is neither installed/enabled nor a durable/project interface. CF-01–06 still have independent gates; A2A and writes remain excluded.
 
 - 2026-10-24: integrated local catalog/semantic formats and question-aligned rendering, owner-thread durable inference, source-bound executor queue/start/cancellation, shared read-only lookup and typed fleet content lifecycle. ADR-0032's factual/scope/evidence safeguards remain; its exhaustive ordinary presentation is replaced only in the new concise path, with explicit full detail retained. Exact combined release/actual-model gates remain pending; no package completion.
+
+
+- 2026-10-24T10:46:31UTC: first combined business release accepted, source99037c5,
+  buildf54906e304fe. Descriptive obligations, async durable phases/queue, scoped
+  reads, adaptive presentation, shared lookup and typed fleet lifecycle are live.
+  Six gateway source/policy-preservation and all original app/data/backup/runtime
+  gates pass. Retained operator failures required fresh guarded continuations;
+  no completed controller/installer/gateway replay. MCP remains disabled and no
+  package-completion claim is made. See the increment release record.

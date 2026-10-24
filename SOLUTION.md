@@ -1,5 +1,23 @@
 # Cara — Solution Specification
 
+## October 24 - Grounded fleet business release accepted
+
+Source `99037c5`, build `f54906e304fe`, was accepted at 10:46:31 UTC.
+Published descriptive facts answer address/provider/placement questions without
+host inspections; semantic RU/EN plans preserve requested fields and formats.
+Nonblocking durable model phases, bounded executor starts/cancellation, grounded
+concise/detail replies, content-preserving cleanup, shared local lookup and typed
+fleet content-purge coverage are live. Existing budgets, exact maintenance cards,
+history, backups and unrelated applications retain their behavior.
+
+The exact full Linux orders, CI, accounted model qualification, real facts reader,
+scoped gateways, sandbox/readiness and recovery gates pass. Operator harness
+failures and their safe continuations are retained. No completed controller,
+installer or gateway update was replayed. MCP remains disabled. Rich project
+adapters, shared investigation tasks and MCP client integration are subsequent
+increments; no CF package is declared complete.
+[Release evidence and limitations](docs/cara-fleet-increment-01-2026-10-24.md).
+
 ## October 24 - Fleet backlog implementation started
 
 The owner requested implementation, publication and deployment of CF-01–CF-07.
@@ -1651,7 +1669,7 @@ Twenty-seven isolated Linux checks pass. This is an offline facts-only increment
 no production endpoint/client is enabled, no investigation/project API or Tasks is
 advertised, and no new content ledger exists. Durable read parity, unprivileged
 installation, owner-loop responsiveness and complete CF-07 acceptance remain open.
-## October 24 - Integrated fleet business candidate (not yet deployed)
+## October 24 - Integrated fleet business implementation
 
 The current candidate routes published address/provider/placement facts to local
 obligations, uses the existing budgeted planner for free-form RU/EN fields/format,

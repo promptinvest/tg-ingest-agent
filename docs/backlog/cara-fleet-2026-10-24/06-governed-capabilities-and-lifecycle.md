@@ -1,6 +1,6 @@
 # CF-06 — Governed task capabilities and fleet content lifecycle
 
-- Status: Proposed; backlog only.
+- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
 - Priority: P2 for lifecycle integration; required P1 gate before adding broader project effects.
 - Depends on CF-04/CF-05 contracts for execution integration. Purge analysis/fixtures can start independently.
 - Size: Large; separate lifecycle/purge, read-broker adapter and existing-effect compatibility increments.
@@ -87,3 +87,11 @@ Full handoff, source map, sanitized production evidence, bootstrap facts and sem
 https://github.com/promptinvest/tg-ingest-agent/tree/main/docs/backlog/cara-fleet-2026-10-24
 
 Integrated business candidate: local obligations/semantic formats, durable nonblocking phases, queue starts/cancellation, shared lookup and typed content lifecycle are implemented. Focused Linux evidence and remaining model/release gates are in [the increment record](../../cara-fleet-increment-01-2026-10-24.md). No package is complete or deployed yet.
+
+
+## Accepted business baseline ? October 24
+
+Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
+Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
+and scoped-read gates. This is an incremental business baseline; no full package
+completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).

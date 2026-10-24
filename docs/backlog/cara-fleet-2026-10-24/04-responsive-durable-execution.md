@@ -1,6 +1,6 @@
 # CF-04 — Responsive durable planning, synthesis and fleet queues
 
-- Status: Implementation authorized October 24; partial work in progress.
+- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
 - Priority: P1; can proceed independently of knowledge work.
 - Dependencies: none; coordinate CF-02/CF-03 contracts.
 - Size: Large; split completion wakeup, asynchronous inference and queue lifecycle.
@@ -85,3 +85,11 @@ Eighteen focused isolated Linux cases pass, including foreground access while a
 background request is blocked and database/error/cancellation boundaries. Durable
 fleet phase integration, queue rollout and production acceptance remain pending.
 Integrated business candidate: local obligations/semantic formats, durable nonblocking phases, queue starts/cancellation, shared lookup and typed content lifecycle are implemented. Focused Linux evidence and remaining model/release gates are in [the increment record](../../cara-fleet-increment-01-2026-10-24.md). No package is complete or deployed yet.
+
+
+## Accepted business baseline ? October 24
+
+Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
+Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
+and scoped-read gates. This is an incremental business baseline; no full package
+completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).

@@ -148,3 +148,11 @@ specifications retain all original assertions and independent acceptance criteri
 CF-01 contract/publisher: 53 schema/history and 17 exporter/publication Linux cases pass. Reviewed source-hash export and root-only sanitized installation are implemented; real publication, synchronization operations and full acceptance remain pending. No package is complete.
 
 Integrated business candidate: local obligations/semantic formats, durable nonblocking phases, queue starts/cancellation, shared lookup and typed content lifecycle are implemented. Focused Linux evidence and remaining model/release gates are in [the increment record](../../cara-fleet-increment-01-2026-10-24.md). No package is complete or deployed yet.
+
+
+Accepted first integrated business release: source99037c5/buildf54906e304fe,
+10:46:31UTC. Known-fact obligations, responsive durable phases, grounded replies,
+scoped reads and lifecycle coverage are live. All original release/preservation
+gates pass; retained operator failures/continuations and exact evidence are in the
+[increment record](../../cara-fleet-increment-01-2026-10-24.md). MCP remains disabled.
+No package is complete; independent project/shared-task/client increments continue.

@@ -71,7 +71,7 @@ No package is complete until its business, compatibility and release criteria pa
 Model I/O and queue lifecycle remain separate work; a short poll does not make a
 synchronous model call nonblocking. The original 47+15 specifications remain
 required, with their qualification recorded independently from interface checks.
-### Reviewed descriptive facts (pending activation)
+### Reviewed descriptive facts (first publication accepted)
 
 Keep the reviewed projection and source register in private operator storage. Run
 `python3 fleet_facts_publish.py status --projection <private-projection> --register
@@ -123,3 +123,23 @@ investigation is later disabled, so dormant content copies remain in typed purge
 Purge validation uses isolated fixtures only. Keep consumed tokens indefinitely.
 Use the original backup/stopped-data-parity/recovery/readiness/runtime gates and a
 fresh one-use active-session source-bound controller. Do not enable MCP yet.
+
+### Accepted business release and operator publication rules
+
+Source99037c5/buildf54906e304fe is accepted. Read the increment record for the exact
+receipts and retained failures; never replay its controllers. Facts revision1 is
+installed, lifecycle coverage is explicitly enabled, and MCP remains disabled.
+
+Publish watched operator plans/receipts atomically: transfer to a private incoming
+path, verify complete bytes/root ownership/digest, fsync, then rename into place.
+A reader must never treat a file that is still being transferred as complete.
+Static compilation is insufficient for operator qualification. Check fixed binary
+paths, namespace working directory and exact service UID/GID/supplementary groups.
+The outer executor state directory is executor-owned; the spool container is
+root-owned and protected. Preserve the accepted inner ownership/denial boundaries.
+Never change permissions merely to make a new operator assertion pass.
+
+Discover selected capabilities before writing verification expectations. An empty
+binding is not configured; do not assert a live observation from it or disguise
+the gap. Qualify configured reads individually and retain their full timestamps.
+A protocol-success result alone does not qualify the requested business answer.

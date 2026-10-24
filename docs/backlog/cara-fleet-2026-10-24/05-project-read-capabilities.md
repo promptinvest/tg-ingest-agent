@@ -1,6 +1,6 @@
 # CF-05 — Project-scoped read capabilities
 
-- Status: Proposed; backlog only.
+- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
 - Priority: P1 before broader project operations.
 - Depends on CF-01/CF-02 contracts and CF-04's bounded I/O for integrated release.
 - Size: Large; scope contract and individual adapters are separate reviewable increments.
@@ -96,3 +96,10 @@ development evidence stay distinct. Missing backup/development adapters return
 not-configured; process activity does not establish project health or progress.
 Thirty-two isolated Linux contract/dispatch cases pass. Runtime composition,
 production gateway binding and full acceptance remain pending; CF-05 is partial.
+
+## Accepted business baseline ? October 24
+
+Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
+Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
+and scoped-read gates. This is an incremental business baseline; no full package
+completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).

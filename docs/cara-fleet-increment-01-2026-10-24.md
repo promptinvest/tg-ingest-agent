@@ -1,6 +1,6 @@
 # Cara fleet increment 01 — October 24, 2026
 
-Status: implementing; not deployed or accepted yet. No CF package is complete.
+Status: first integrated business release accepted October 24 at10:46:31UTC. No complete CF-package claim; subsequent increments continue.
 
 ## Authorized behavior and boundaries
 
@@ -170,3 +170,77 @@ independent increments; MCP is not enabled by this candidate.
 Exact-source full gate for76ecf87 passed2,203 tests and failed the unchanged config-catalogue check because the new lifecycle setting was missing from the environment example (nine unchanged skips). The correction documents its defaultfalse and installedtrue semantics only; Python runtime and model prompts are byte-identical. The original archive/log/failure and successful six-case model receipt are retained. Fresh full gates remain required; no assertion or runtime guard is relaxed.
 
 The exact661e94a distro-Linux normal and shuffled runs pass (2,204 cases, nine unchanged skips). CI40084077888 caught the existing documentation-hygiene rule against hard-coded suite counts in primary specs. The correction removes that count from CARA.md/SOLUTION.md only, retaining the exact evidence here. No Python, environment example, test or assertion changes. The failed CI/log and original archives remain; fresh exact-source CI/full verification is required.
+
+## Accepted integrated business release
+
+Accepted `2026-10-24T10:46:31.562448+00:00`: source
+`99037c5a0ca7a4bd18a0f4e0c2131faba88e4994`, build `f54906e304fe`,
+receipt `2b5a1d3634fe97d6436c6b6b`. Canonical archive
+`b55c4fd31fe20349a9a68328af1e078cfd8712164c30546e94d3c1fe0ae133d1`;
+acceptance `734afd1a84ca90ac9dfa4cf215789602c96d31b7053d9ceddc560d7c4bd3700b`.
+Implementation and exact runtime bytes are published; later evidence commits do
+not claim a different running source.
+
+Exact distro-Linux compile and both complete orders pass:2,204 cases each, nine
+unchanged skips,90.708s normal and93.302s shuffled.
+[CI40084506736](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40084506736)
+passes pinned lint, compilation, both orders and shell checks. Six actual-model
+RU/EN catalog cases pass through real obligation/render/delivery code with fake
+sends: provider columns, provider/address table, project purpose, colocated names,
+address correction and dated outbound address. Successful qualification cost
+USD0.020000256; aggregate including retained failed qualification attempts
+USD0.036970128 under the existing bounded cap. Qualification originates at76ecf87;
+all Python bytes match99037c5 and the environment example matches661e94a. The
+stronger parity receipt pins the entire Python hash map; no new paid trial was
+used to qualify documentation-only corrections.
+
+The real service UID reads forty catalog obligations with zero host probes and
+zero model calls. Facts revision1 is installed with immutable history and root
+publication receipts; source-check, evidence, generation and installation times
+stay distinct. Six gateways have exact verified protocol/host modules and only
+reviewed additive project-service mappings. Existing keys, sudo/wrappers/relay,
+service identities, monitors, timers and alerts remain unchanged; no gateway
+application restarts. Eight real read-only spool requests pass: original six-host
+observation, six selected host/project reads and a separate colocated application
+health read. The last read includes only its requested project. Its release
+metadata binding is not configured and remains a truthful explicit gap.
+
+All original54 stopped-table columns/rows and schema are preserved, with no new
+table. Seventy-nine installed Python files match the canonical installer/source.
+Original runtime and cross-writer/secret-denial checks, fresh executor loaded
+source/PID/readiness, checked source/database/recovery backups, unchanged speech
+process and neighboring application/container identities pass. Existing budget
+and backup state are exact. The normal deployment notification is sent once with
+one recorded attempt; manual test messages, paid corpus work, maintenance effects,
+owner-update replay and gateway/controller replay remain zero. MCP is not enabled.
+
+### Retained operator failures and containment
+
+The first controller read a receipt during a non-atomic SCP transfer and stopped
+before facts/application installation. All gateway updates had already accepted.
+A fresh source-bound continuation validated the complete frozen receipts and
+unconsumed prefix, then installed once. Subsequent verification-only packages
+caught new operator-harness assumptions: the outer executor state directory is
+executor-owned; restricted verifier environments need an absolute system binary
+and a readable working directory; an unconfigured release binding must remain a
+gap. The app was forward-paused on each failed gate. All originals, logs, backups,
+source, failed phases and authorizations remain preserved. No historical data or
+source rollback, completed-controller replay, installer replay or gateway replay
+occurred. Final acceptance uses a new package pinned to all prior evidence and
+qualified capabilities, retaining every actual denial and preservation check.
+
+Future receipt transfer must finish under an unwatched incoming name, fsync, then
+rename atomically into the watched directory. Static compile alone does not
+qualify an operator workflow: validate its real service identity, groups, PATH,
+working directory and configured capability metadata before a transition.
+
+### Remaining work
+
+Keep all package trackers open. Rich typed application/backup/development sources,
+manual current backup publication, shared retained status/result and investigation
+waiting/accounting, and nonblocking MCP facts/client/retained-read integration are
+subsequent increments. Initial source-corpus execution does not qualify every
+47+15 requirement. Cross-path preferences/model quality, connected project source
+coverage and complete business/protocol/recovery parity still need their own
+acceptance. Unavailable sources cannot establish project completion, backup
+success, proxy client load or a current release.
