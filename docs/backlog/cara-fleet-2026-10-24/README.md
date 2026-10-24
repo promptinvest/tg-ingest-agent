@@ -289,3 +289,17 @@ and retain exact historical totals in the dated increment 07 record. No guard,
 assertion, application, model, budget or authorization changes. The failed
 artifacts remain; fresh full/model/installed/deployment acceptance is pending.
 Production remains accepted 99037c5/MCP disabled; every package stays open.
+
+## Increment 08 task planner guidance checkpoint
+
+Published `8cbf06f` passes CI, but its actual-model check fails third-phase task
+admission after two catalog phases pass. The existing validator rejects an
+array input and the malformed plan before task/fleet dispatch. Preserve this
+failure and its charges; it is not a successful nine-phase qualification.
+Clarify exact JSON object/provenance and whole owner-clause guidance, with a
+valid illustrative example. Validators, two-attempt correction, existing tools,
+models/budgets and all original assertions remain unchanged. Focused isolated
+Linux task/source/hygiene checks pass. Fresh full/CI/model/installed acceptance
+is required; source/archive/operator/window UNSELECTED, all packages open,
+production accepted `99037c5`/MCP disabled.
+[Increment 08](../../cara-fleet-increment-08-2026-10-24.md).

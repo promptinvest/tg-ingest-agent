@@ -203,3 +203,21 @@ SOLUTION; exact results remain in the dated increment 07 record. README, tests,
 all runtime/model/budget/authority behavior and failed artifacts stay unchanged.
 Fresh exact-source full/model/installed/release acceptance remains pending;
 production stays accepted 99037c5 with MCP disabled, all packages open.
+
+## Increment 08 actual-model task admission failure and guidance
+
+Source `8cbf06f` passes full CI, but its bounded real-model check stops at the third
+accounted phase. Two catalog plans/answers pass; fleet task admission emits an
+array input and a cropped owner span. The unchanged registry/validator rejects
+it before a task, gateway job or effect. Keep failed output and accounting; do
+not normalize the malformed plan or declare the nine-phase cohort passed.
+
+Clarify task planner instructions and replace the incomplete pseudo-object
+example with a full valid JSON step, its own illustrative source and exact
+literal span/hash. Actual plans must emit input.query plus matching object
+provenance for the complete owner clause, including intent/metric/reply format.
+Preserve validators, two-attempt correction, generic task flows, models, budgets,
+source authority and approvals. Focused isolated task/source/hygiene checks pass;
+fresh exact-source full/CI/model and installed/release gates remain required.
+Production stays accepted `99037c5` with MCP disabled; packages remain open.
+[Increment 08](../cara-fleet-increment-08-2026-10-24.md).

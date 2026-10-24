@@ -1,5 +1,27 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 08 task admission prompt contract
+
+The published `8cbf06f` CI succeeds, including normal/shuffled and lint gates.
+Its real-model cohort nevertheless fails task admission after two passing
+catalog phases. The candidate supplies an array for input and a cropped binding
+instead of the complete owner investigation. Strict validation rejects it; no
+task or fleet dispatch is admitted, and every attempted charge remains accounted.
+
+Clarify the existing task planner: input and bindings are keyed JSON objects;
+provenance does not supply a missing input.query. Preserve the exact contiguous
+owner fleet clause, every target, metric and reply-format request, using the
+complete source span when it is one fleet request. Include a complete valid JSON
+example with separate illustrative source/hash/bounds. Actual source bindings,
+validators, original correction attempts, generic task flows, models/providers,
+budgets, data and approval/effect rules remain unchanged.
+
+Focused task/source/hygiene checks pass in isolated Linux. These deterministic
+checks do not repair or replay the failed paid attempt, qualify the new prompt's
+model behavior, or substitute for final full/CI/installed release evidence.
+Production remains accepted `99037c5`, MCP disabled; every package remains open.
+Next exact source/archive/operator/window: UNSELECTED.
+[Increment 08 evidence and remaining gates](docs/cara-fleet-increment-08-2026-10-24.md).
 ## October 24 - Increment 07 fixture-only correction
 
 The first complete qualification of source `12a47d7` failed two fixture checks:

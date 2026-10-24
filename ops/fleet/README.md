@@ -532,3 +532,19 @@ increment 07 record. Do not relax the guard or replay the failed verifier. No
 application/test/model/budget change or live action accompanies this correction.
 Require fresh complete-source qualification and every existing installed/release
 gate. Production remains accepted 99037c5/MCP disabled; packages remain open.
+
+## Increment 08 task admission guidance release gate
+
+Published `8cbf06f` passes CI but fails its accounted model check at task admission
+following two passing catalog phases. Reject the malformed array input and
+retain its usage/failure. Do not normalize it, replay the attempt or change
+validator, retry, model or budget policy. New guidance supplies an exact JSON
+object/binding example and preserves complete owner investigation intent.
+
+Focused isolated task/source/hygiene regressions pass; fresh whole-source
+full/CI and bounded model qualification remain gates before the existing paused
+installation/backups/parity/readiness/monitor/recovery/acceptance process. No
+live task, host effect, Telegram test or model retry accompanies this source
+increment. Compare original corpus bytes from canonical archives; working-copy
+line endings are a separate representation. Production remains accepted `99037c5`,
+MCP disabled; all packages open. [Increment 08](../../docs/cara-fleet-increment-08-2026-10-24.md).

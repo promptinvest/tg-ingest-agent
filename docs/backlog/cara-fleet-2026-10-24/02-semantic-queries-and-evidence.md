@@ -131,3 +131,15 @@ The frozen task-page suite separately passes 45 tests in 22.201 s in isolated
 Linux; failed originals remain. Fresh bounded RU/EN/context/correction/mixed-answer
 and exact full/release criteria remain required independently of MCP.
 [Increment 04](../../cara-fleet-increment-04-2026-10-24.md).
+
+## Increment 08 shared task planner guidance
+
+The accounted model cohort for published `8cbf06f` stops at third-phase task
+admission despite successful CI and two passing catalog phases. Strict existing
+validation rejects an array input; malformed source binding is not repaired.
+Clarify object input/provenance and complete owner-clause instructions using a
+fully valid illustrative JSON step. Preserve existing validators, correction
+attempts, model/provider/budget, authority and all original assertions. Focused
+isolated task/source/hygiene checks pass; fresh full/CI/model/installed release
+acceptance remains required. All packages stay open; production `99037c5` / MCP
+remains disabled. [Increment 08](../../cara-fleet-increment-08-2026-10-24.md).

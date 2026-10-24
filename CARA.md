@@ -1,5 +1,26 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 08 task planner guidance
+
+Published `8cbf06f` passes CI, including normal/shuffled regressions and lint.
+Its bounded actual-model check stopped at the third accounted phase: two catalog
+answers passed, but task admission returned an input array and a source span
+that cut away the investigation intent. The existing validator safely rejected
+it before any task, host dispatch or effect. Failed outputs and charges remain.
+
+The task planner now explicitly requires field-keyed JSON input/binding objects,
+both the literal query and its provenance, and the complete owner fleet clause
+including requested metric and reply format. A complete valid JSON example uses
+its own illustrative source; it grants no authority over the actual request.
+Validators, existing two-attempt correction, tools, models and budgets stay exact.
+Focused isolated Linux task/source/hygiene regressions pass; this is not model
+qualification. The intended cohort is nine model phases across five questions,
+not nine independent language cases.
+
+Fresh exact-source full/CI, bounded accounted model and installed/release gates
+remain required. Production stays accepted `99037c5` / build `f54906e304fe`, MCP
+disabled, all packages open. Next source/archive/operator/window: UNSELECTED.
+[Increment 08 failure, correction and verification](docs/cara-fleet-increment-08-2026-10-24.md).
 ## October 24 - Increment 07 verification correction
 
 Full qualification of published `12a47d7` failed two fixture checks.

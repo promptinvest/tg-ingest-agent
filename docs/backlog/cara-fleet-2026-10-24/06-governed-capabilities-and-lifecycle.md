@@ -204,3 +204,15 @@ poll/wait/exact-hygiene run passes 104/ 7.342 s; fresh whole-source/full/model/C
 and original installed/operator release remain required. Production stays
 accepted `99037c5`, MCP disabled; no package completion.
 [Increment 07](../../cara-fleet-increment-07-2026-10-24.md).
+
+## Increment 08 shared task planner guidance
+
+The accounted model cohort for published `8cbf06f` stops at third-phase task
+admission despite successful CI and two passing catalog phases. Strict existing
+validation rejects an array input; malformed source binding is not repaired.
+Clarify object input/provenance and complete owner-clause instructions using a
+fully valid illustrative JSON step. Preserve existing validators, correction
+attempts, model/provider/budget, authority and all original assertions. Focused
+isolated task/source/hygiene checks pass; fresh full/CI/model/installed release
+acceptance remains required. All packages stay open; production `99037c5` / MCP
+remains disabled. [Increment 08](../../cara-fleet-increment-08-2026-10-24.md).

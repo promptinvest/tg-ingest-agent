@@ -90,8 +90,14 @@ def _planner_messages(text, source_time, timezone_offset, correction=None, learn
         "only objective, deliverable, steps, capability_gaps. deliverable is "
         "answer|brief|comparison|"
         "checklist|draft. Each step has only key, tool, input, bindings, depends_on, "
-        "purpose. Use 1..8 steps and only TOOLS below. Never invent a tool. Every "
-        "bound input must cite a zero-based [start,end) character span in the exact "
+        "purpose. Use 1..8 steps and only TOOLS below. Never invent a tool. "
+        "Every step's input and bindings MUST be JSON objects keyed by input field "
+        "names, never arrays. Use input={} only when the tool requires no inputs; "
+        "use bindings={} only when no input requires provenance. A binding does "
+        "not populate a missing input value. Arrays belong "
+        "only in array-typed fields such as steps, depends_on, capability_gaps or "
+        "fleet.lookup input.fields. Every bound input must cite a zero-based "
+        "[start,end) character span in the exact "
         "SOURCE plus source_hash and transform. A boss_span input must semantically "
         "and exactly derive from that span. Valid transforms are literal, url, "
         "positive_int, reminder_title, reminder_due, reminder_recurrence. "
@@ -112,11 +118,18 @@ def _planner_messages(text, source_time, timezone_offset, correction=None, learn
         "fields must be a JSON array using its fields_contract, never memory, CPU, "
         "hostname or live status. A current investigation uses ONE fleet.investigate "
         "step for the complete contiguous fleet clause, preserving every named "
-        "host/project, requested metric and reply format. Its input has only query: "
-        "the exact source text, never rewritten host: selectors. Bindings MUST be "
-        "an object keyed query, e.g. {query:{source:'boss_span',start:0,end:N,"
-        "source_hash:SOURCE_HASH,transform:'literal'}} with real span bounds; "
-        "bindings arrays are invalid. This investigation already supplies a grounded "
+        "host/project, requested metric and reply format. Its input MUST be an "
+        "object with exactly one string field query, and bindings MUST be an "
+        "object with exactly the key query. Emit both input.query and bindings.query. "
+        "The query is the complete exact owner fleet clause, never rewritten host: "
+        "selectors or just the target name. Keep the investigation intent, metric "
+        "and reply-format words inside the span. When SOURCE is one fleet request, "
+        "use the complete SOURCE as input.query with start=0 and end=SOURCE_LENGTH. "
+        "For mixed requests use the complete contiguous fleet clause and its exact "
+        "bounds, leaving unrelated clauses to their own tools or capability_gaps. "
+        "Use the actual SOURCE_HASH and literal transform; offsets count characters, "
+        "not bytes. Input or bindings arrays are invalid. "
+        "This investigation already supplies a grounded "
         "answer; do not add research.synthesize or artifact.markdown unless the "
         "owner requested those separate deliverables. fleet.status/fleet.result read "
         "an existing owner-bound investigation, not a new observation. "
@@ -124,6 +137,24 @@ def _planner_messages(text, source_time, timezone_offset, correction=None, learn
         "capability_gaps; never silently omit a clause or promise unavailable work. "
         "Use an empty capability_gaps array only when the complete request is covered."
     )
+    example_source = "Inspect memory on Example host and give a concise answer."
+    example_step = {
+        "key": "inspect", "tool": "fleet.investigate",
+        "input": {"query": example_source},
+        "bindings": {"query": {
+            "source": "boss_span", "start": 0, "end": len(example_source),
+            "source_hash": tasking.source_hash(example_source),
+            "transform": "literal",
+        }},
+        "depends_on": [], "purpose": "Answer the complete owner fleet request",
+    }
+    system += (
+        " The illustrative fleet source and complete JSON step below demonstrate "
+        "shape and binding only. They are not evidence, an additional requested "
+        "step or a fallback query. Never copy their target, hash or bounds into "
+        "the actual plan; use the actual SOURCE and SOURCE_HASH."
+        "\nFLEET_EXAMPLE_SOURCE=" + _compact(example_source)
+        + "\nFLEET_EXAMPLE_STEP=" + _compact(example_step) + "\n")
     if correction:
         system += (
             " A prior candidate failed validation. Treat VALIDATOR_FEEDBACK as "
