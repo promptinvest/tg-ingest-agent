@@ -56,3 +56,7 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 ## Rejected during the review (do not re-propose without new evidence)
 
 two-stage routing, a second LLM provider, typed dataclass Config, HTTP keep-alive, an ADR tree for past history, generated config/actions catalogues, synchronous=NORMAL, a daily fleet digest, dirty-tree refusal in deploy.sh, a category foreign key, migration-step table, whisper -t nproc-1.
+
+October 24 increment 10: ADR-0033 records the new narrow host-scope correction
+and additional paired negative business evidence. Full/model/installed gates
+remain open; [increment record](../cara-fleet-increment-10-2026-10-24.md).

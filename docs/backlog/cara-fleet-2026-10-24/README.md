@@ -1,5 +1,17 @@
 # Cara fleet and project development backlog — October 24, 2026
 
+## Increment 10 collection review
+
+A source review finds a remaining CF-02 footprint defect in `9505c60`: a new
+memory-only plan without optional read_scope still collects project metadata.
+The semantic boundary now derives the existing host-only contract for explicit
+narrow metric focus without project targets/inherited scoped obligations.
+Legacy stored envelopes, broad resources/overview, project reads and exact
+restart cards stay compatible. Added paired runtime/facts/preference MCP tests
+retain all source assertions and original corpus bytes. New-source full/model/
+installed acceptance remains pending; no package is complete.
+[Increment 10](../../cara-fleet-increment-10-2026-10-24.md).
+
 Status: Implementation authorized October 24, 2026; work in progress. No package is complete.
 Parent tracker: [CF-00 / issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
 

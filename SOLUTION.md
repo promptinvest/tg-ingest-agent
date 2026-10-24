@@ -1,5 +1,22 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 10 semantic host scope
+
+A memory-only model plan can omit optional read_scope. The legacy base validator
+then adds project metadata even though the answer correctly filters to RAM.
+Correct this at the new semantic planner boundary: explicit narrow host focus
+without project targets or an inherited scoped contract derives kind:host with
+empty project/capability lists. The existing scoped transport enforces the
+resulting no-project footprint; it is not merely an output filter.
+
+Keep the base validator and stored legacy wire contracts, broad overview/resource
+plans, project requests and maintenance confirmations exact. No prompt, model,
+provider, budget or new host probe is introduced. Add paired negative-runtime
+MCP evidence while retaining every original business assertion and corpus byte.
+Focused isolated Linux collection/compatibility checks pass. Complete-source/
+model/installed release gates remain open; production
+is accepted `99037c5`, MCP disabled. [Increment 10](docs/cara-fleet-increment-10-2026-10-24.md).
+
 ## October 24 - Increment 09 operational context and minimal focus
 
 Complete Linux/CI passes for published `9566d1b` do not establish a passing model

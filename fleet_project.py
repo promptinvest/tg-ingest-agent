@@ -124,8 +124,15 @@ class ProjectReadMixin:
         if read_scope is None and plan.get("projects"):
             read_scope = {"version": protocol.READ_VERSION, "kind": "projects", "projects": list(plan["projects"]),
                           "capabilities": focused_capabilities(plan.get("focus", ["overview"]))}
+        if read_scope is None and explicit_focus and set(explicit_focus) <= {
+                "memory", "cpu", "disk", "services", "errors", "trend"}:
+            # New metric-focused plans need no project observations. The base
+            # validator remains compatible with stored legacy diagnostics;
+            # only new semantic reads acquire this narrower wire contract.
+            read_scope = {"version": protocol.READ_VERSION, "kind": "host",
+                          "projects": [], "capabilities": []}
         if read_scope is None:
-            return plan  # Preserve supported legacy host/all diagnostics.
+            return plan  # Preserve supported legacy and explicit broad diagnostics.
         if read_scope["kind"] == "projects":
             # Complete configured coverage of a multi-host project is code-owned.
             if any(project not in inventory["projects"] for project in read_scope["projects"]):

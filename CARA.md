@@ -1,5 +1,22 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 10 host-only metric reads
+
+Current-source review finds a collection defect beneath the correct concise
+memory answer: a new semantic plan that omits optional read_scope still inherits
+the base validator's blanket project facet. New explicitly narrow host metric
+plans now select the existing host-only read contract automatically when no
+project target or retained scoped obligation applies. Project IDs/capabilities
+stay empty; project metadata is excluded through executor and gateway.
+
+The base validator and existing stored envelopes, broad resources/overview,
+project-scoped reads and exact restart cards remain compatible. Model prompts,
+profiles, providers and budgets are unchanged. Additional source-linked MCP
+parity tests retain original business assertions and compare typed observations,
+source dates/gaps and final pages. Focused isolated Linux collection/compatibility checks pass. Complete
+current-source/model/installed gates remain pending; all packages stay open. Production remains accepted `99037c5`,
+MCP disabled. [Increment 10](docs/cara-fleet-increment-10-2026-10-24.md).
+
 ## October 24 - Increment 09 investigation scope and focus guidance
 
 Published `9566d1b` passes complete Linux and CI checks, but its actual-model

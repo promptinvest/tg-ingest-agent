@@ -156,3 +156,20 @@ authority and model budgets. Focused actual Agent/runtime/catalog/relevance
 regressions pass in isolated Linux. Fresh full/CI/model/installed release gates
 remain required; every package stays open, production `99037c5` / MCP disabled.
 [Increment 09](../../cara-fleet-increment-09-2026-10-24.md).
+
+## Increment 10 narrow semantic reads and paired business proof
+
+Correct a remaining collection defect: new explicitly narrow host metric plans
+without optional read_scope still inherited the legacy blanket project facet.
+The semantic mixin now derives the existing host-only contract when no project
+or inherited scoped obligation applies. Executor/gateway project reads are then
+excluded. Base legacy parsing/wire, stored observations, broad resource/overview,
+project scopes and exact restart confirmations remain unchanged.
+
+Additional source-linked parity tests exercise original negative runtime,
+conflict/completeness/date, mixed and preference assertions through internal and
+MCP reads with exact observations/final pages. Preserve both original corpora.
+These tests do not constitute model or installed qualification; current-source
+complete Linux/CI, bounded accounted requested answers and every backup/readiness/
+monitor/recovery gate remain required. Production remains accepted `99037c5`,
+MCP disabled; every package stays open.

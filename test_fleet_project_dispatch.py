@@ -117,13 +117,31 @@ class ProjectSemanticDispatch(unittest.TestCase):
             self.validate(proposal(read_scope=scope(projects=["project-alpha"], capabilities=["release"], kind="all_projects")))
 
     def test_legacy_host_and_all_diagnostics_keep_their_exact_plan_and_wire(self):
-        for value in (proposal(), proposal(scope="all", facets=["resources", "services"], focus=["memory"])):
+        for value in (proposal(), proposal(scope="all", facets=["resources", "services"], focus=["overview"])):
             expected = fleet.validate_plan(copy.deepcopy(value), self.catalog)
             actual = self.validate(value)
             with self.subTest(value=value):
                 self.assertEqual(actual, expected)
                 self.assertNotIn("read_scope", actual)
                 self.assertEqual(self.agent._fleet_inspect_operation(actual, self.catalog), LegacyCore()._fleet_inspect_operation(actual, self.catalog))
+
+    def test_new_narrow_host_semantics_omit_projects_even_without_optional_read_scope(self):
+        for mode, hosts in (("explicit", ["host-a"]), ("all", ["host-a", "host-b"])):
+            for focus in (["memory"], ["cpu"], ["disk"], ["services"], ["errors"], ["trend"], ["memory", "cpu"]):
+                value = proposal(hosts=hosts, scope=mode, focus=focus)
+                legacy = fleet.validate_plan(copy.deepcopy(value), self.catalog)
+                self.assertIn("projects", legacy["facets"])
+                actual = self.validate(value)
+                self.assertEqual(actual["read_scope"], scope(projects=[], capabilities=[], kind="host"))
+                self.assertEqual(actual["hosts"], legacy["hosts"])
+                self.assertEqual(actual["focus"], focus)
+                self.assertEqual(actual["facets"], [facet for facet in legacy["facets"] if facet != "projects"])
+                operation = self.agent._fleet_inspect_operation(actual, self.catalog)
+                self.assertNotIn("projects", operation["facets"])
+                self.assertEqual(operation["read_scope"], actual["read_scope"])
+                # Parsing stored legacy envelopes does not pass through the
+                # new semantic planner boundary and retains its exact wire.
+                self.assertEqual(LegacyCore()._fleet_inspect_operation(legacy, self.catalog)["facets"], legacy["facets"])
 
     def test_restart_card_plan_is_unchanged_and_cannot_acquire_a_scoped_read(self):
         value = proposal(operation="restart", service="example-worker.service", facets=["services"])

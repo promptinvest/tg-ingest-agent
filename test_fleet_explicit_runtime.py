@@ -189,6 +189,81 @@ class ExplicitDatedRuntime(unittest.TestCase):
         self.assertTrue(any(item["field"] == "resources.top_memory" and item["status"] == "unavailable"
                             for item in report["observations"].values()))
 
+    def test_memory_plan_without_read_scope_collects_only_host_resources_through_real_spool(self):
+        case, inventory = self.fixture()
+        question = "Investigate the current memory usage on Example application host and give a concise answer."
+        raw = asynchronous.plan()
+        raw.update(scope="explicit", projects=[], focus=["memory"], detail="concise")
+        self.assertNotIn("read_scope", raw)
+        scope = {"version": protocol.READ_VERSION, "kind": "host", "projects": [], "capabilities": []}
+        policy = monitor_flow.SelectedMonitorBusiness().policy("daily_lingo_observer")
+        remotes = []
+        def remote(_transport, host, request):
+            self.assertEqual(host, "host-a")
+            self.assertEqual(request["read_scope"], scope)
+            self.assertIn(request["operation"], {"capabilities", "inspect"})
+            if request["operation"] == "inspect":
+                self.assertEqual(request["facets"], ["resources"])
+            remotes.append(copy.deepcopy(request))
+            return fleet_host.run(policy, request)
+        def transport(prepared):
+            self.assertIn(prepared["skill"], {"fleet_planner", "fleet_synthesis"})
+            return asynchronous.completion(raw if prepared["skill"] == "fleet_planner" else
+                {"highlights": [], "hypotheses": [], "next_checks": []})
+        forbidden = AssertionError("unselected project, HTTP, container, unit or model path")
+        with mock.patch.object(llm, "transport_chat", side_effect=transport) as model, \
+                mock.patch.object(llm, "chat_profile", side_effect=forbidden) as synchronous_model, \
+                mock.patch.object(cara_fleet, "remote", side_effect=remote), \
+                mock.patch.object(fleet_host, "resources", return_value={"memory_used_percent": 30}) as resources, \
+                mock.patch.object(fleet_host, "projects", side_effect=forbidden) as project_manifests, \
+                mock.patch.object(fleet_host, "_project_read", side_effect=forbidden) as project_read, \
+                mock.patch.object(fleet_host, "read", side_effect=forbidden) as fixed_read, \
+                mock.patch.object(fleet_host, "command", side_effect=forbidden) as command, \
+                mock.patch.object(fleet_host, "unit_state", side_effect=forbidden) as unit_state, \
+                mock.patch.object(fleet_host.urllib.request, "build_opener", side_effect=forbidden) as http, \
+                mock.patch.object(adapters, "read_bound", side_effect=forbidden) as bound_read, \
+                mock.patch.object(adapters, "_read_fixed_json", side_effect=forbidden) as adapter_source:
+            case.source(1, question)
+            case.agent.do_fleet(111, "en", question)
+            case.drain()
+            operation = case.payload()["operation"]
+            self.assertEqual(operation["read_scope"], scope)
+            self.assertEqual(operation["hosts"], ["host-a"])
+            self.assertEqual(operation["facets"], ["resources"])
+            requests = list((case.root / "spool/requests").glob("w_*.json"))
+            self.assertEqual(len(requests), 1)
+            envelope = json.loads(requests[0].read_text())
+            self.assertEqual(envelope["input"], operation)
+            self.assertEqual(envelope["input_hash"], protocol.digest(operation))
+            config = case.root / "executor-config"
+            config.mkdir()
+            (config / "inventory.json").write_text(protocol.canonical(inventory), encoding="utf-8")
+            (config / "transport.json").write_text("{}", encoding="utf-8")
+            cara_fleet.run_once(case.root, config)
+            receipt = json.loads((case.root / "spool/results" / requests[0].name).read_text())
+            self.assertEqual(receipt["status"], "ok")
+            host = receipt["result"]["hosts"]["host-a"]
+            self.assertEqual(set(host), {"host", "observed_at", "read_scope", "resources"})
+            self.assertEqual(host["resources"], {"memory_used_percent": 30})
+            self.assertEqual(host["read_scope"], scope)
+            case.drain("done")
+        resources.assert_called_once_with()
+        for guard in (synchronous_model, project_manifests, project_read, fixed_read, command,
+                      unit_state, http, bound_read, adapter_source):
+            guard.assert_not_called()
+        self.assertEqual([request["operation"] for request in remotes], ["capabilities", "inspect"])
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(case.payload()["model_calls"], 2)
+        self.assertEqual(case.payload()["result"], receipt["result"])
+        self.assertEqual(case.payload()["plan"]["focus"], ["memory"])
+        answer = case.payload()["answer"]
+        for required in ("RAM", "30%", "process measurements unavailable", "Snapshot:"):
+            self.assertIn(required, answer)
+        for unrelated in ("CPU", "disk", "Project Alpha", "Project Beta", "Possible cause", "Longer measurements"):
+            self.assertNotIn(unrelated, answer)
+        self.assertEqual(case.conn.execute("SELECT count(*) FROM fleet_requests").fetchone()[0], 1)
+        self.assertFalse((case.root / "consumed").exists())
+
     def test_explicit_broad_resources_plus_memory_retains_existing_overview_semantics(self):
         case, inventory = self.fixture()
         raw = asynchronous.plan()
