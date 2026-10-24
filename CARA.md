@@ -6,7 +6,8 @@ A [self-contained developer backlog](docs/backlog/cara-fleet-2026-10-24/README.m
 records six work packages for synchronized descriptive facts, semantic query modes,
 adaptive grounded LLM replies, responsiveness, project read adapters and governed
 capability/content lifecycle. It includes dependencies, compatibility/release gates
-and 47 synthetic regression specifications. The owner explicitly permits LLM
+and 47 synthetic regression specifications, including missing-model fallbacks,
+shared style and mixed emphasis/gesture cleanup. The owner explicitly permits LLM
 interpretation of free-form questions and appropriate reply format; known facts
 must not require host probes.
 

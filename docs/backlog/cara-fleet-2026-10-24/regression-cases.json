@@ -517,7 +517,7 @@
         ]
       },
       "kind": "output_cleanup",
-      "raw_output": "**Project Alpha**. *закрываю глаза, выдыхаю*",
+      "raw_output": "**Project Alpha**. *закрываю глаза, выдыхаю* Ordinary answer text.",
       "raw_output_variants": [
         "**Project Alpha**. *закрываю глаза, выдыхаю* Ordinary answer text.",
         "*прижимаю телефон к губам* **Project Alpha**. Ordinary answer text."
