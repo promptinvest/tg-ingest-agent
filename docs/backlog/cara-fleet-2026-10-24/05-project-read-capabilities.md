@@ -147,3 +147,17 @@ The frozen taskbridge suite separately passes 45 tests in 22.201 s in isolated
 Linux; failed originals remain. Final client/full/model/installed qualification
 remains separate.
 [Increment 04](../../cara-fleet-increment-04-2026-10-24.md).
+
+## Increment 07 qualification correction
+
+The existing project integration keeps full revision in typed gateway evidence,
+12-character display, exact CI/issue names, dates, partial coverage and scope.
+
+Complete `12a47d7` Linux/CI qualification failed two fixture checks; normal ran
+2,769 tests with two failures and nine baseline skips, shuffled not reached.
+The failed originals remain. No application/budget/authority change. Focused
+project integration/parity pass 42/ 7.357 s and a separate legacy/resource/fleet/
+poll/wait/exact-hygiene run passes 104/ 7.342 s; fresh whole-source/full/model/CI
+and original installed/operator release remain required. Production stays
+accepted `99037c5`, MCP disabled; no package completion.
+[Increment 07](../../cara-fleet-increment-07-2026-10-24.md).

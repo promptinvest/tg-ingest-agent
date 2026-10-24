@@ -173,3 +173,23 @@ source/archive/operator/window remain UNSELECTED; full/model/CI, actual source/
 stdio/service identity, complete host-ledger backup/preservation and original
 release gates remain pending. Production stays accepted `99037c5`, MCP disabled;
 all package criteria remain open. [Increment 06](../cara-fleet-increment-06-2026-10-24.md).
+
+## Increment 07 full-gate correction checkpoint
+
+Published `12a47d7` failed complete Linux/CI qualification on two fixture checks,
+not an accepted release. Linux normal ran 2,769 tests/ 139.409 s with two failures
+and nine baseline skips; shuffled was not reached. Preserve the failed canonical
+source/archive/log/CI evidence.
+
+The approved short revision display requires its old display-only expectation to
+change while the full revision remains asserted in typed state. Keep all CI,
+issues, dates, coverage, names and scope assertions. Replace only the legacy
+fixture cleanup conditional expression with equivalent explicit if/else; its
+assertions and unknown-outcome safety checks remain unchanged. No runtime, provider/model, budget, capability or authority change.
+
+Separate isolated Linux runs pass project integration 16/parity 26 as42 in 7.357 s
+and legacy/resource/fleet/poll/wait/exact-hygiene 104 in 7.342 s. These focused runs
+do not qualify the next whole source. Final full/model/CI and original installed/
+operator release gates remain pending; source/archive/operator/window UNSELECTED.
+Production stays accepted `99037c5`, MCP disabled, all packages open.
+[Increment 07](../cara-fleet-increment-07-2026-10-24.md).

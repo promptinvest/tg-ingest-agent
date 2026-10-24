@@ -189,3 +189,18 @@ with checked backups/full manifests and no rollback/recreation. That operator ga
 and final full/model/CI/installed/sandbox/lifecycle acceptance remain pending.
 No live maintenance or purge demonstration. Production remains accepted `99037c5`,
 MCP disabled, all packages open. [Increment 06](../../cara-fleet-increment-06-2026-10-24.md).
+
+## Increment 07 qualification correction
+
+The legacy-history fixture cleanup uses equivalent explicit if/else instead of
+a conditional expression. No assertion, unknown-outcome refusal, immutable
+history, token or resource check changes.
+
+Complete `12a47d7` Linux/CI qualification failed two fixture checks; normal ran
+2,769 tests with two failures and nine baseline skips, shuffled not reached.
+The failed originals remain. No application/budget/authority change. Focused
+project integration/parity pass 42/ 7.357 s and a separate legacy/resource/fleet/
+poll/wait/exact-hygiene run passes 104/ 7.342 s; fresh whole-source/full/model/CI
+and original installed/operator release remain required. Production stays
+accepted `99037c5`, MCP disabled; no package completion.
+[Increment 07](../../cara-fleet-increment-07-2026-10-24.md).

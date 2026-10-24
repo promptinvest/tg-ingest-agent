@@ -498,3 +498,27 @@ secret denial, fixed source bindings, checked online/stopped backups/original
 parity, loaded-source readiness, monitor/alert/retention/neighbors/recovery and
 fresh once-only guarded acceptance. Production remains accepted99037c5, MCP
 disabled, all packages open. [Increment 06](../../docs/cara-fleet-increment-06-2026-10-24.md).
+
+## Increment 07 fixture correction and failed full qualification
+
+Do not treat source 12a47d7 as fully qualified. Its normal isolated Linux run
+completed 2,769 tests with two failures/nine baseline skips; shuffled was not
+reached. CI 40094268134 failed the same two checks. Retain those source/archive/
+log/result artifacts and use a fresh exact-source attempt after correction.
+
+The correction changes tests only: expect the already approved 12-character
+repository display while independently asserting the full revision in typed
+state, no masked placeholder/full long hash in the answer and original CI/issue/
+date/scope assertions. The legacy fixture cleanup uses equivalent explicit
+if/else instead of a conditional expression rejected by the test-hygiene check;
+all its assertions stay unchanged. No application or budget/provider/model change.
+
+Fresh separate isolated Linux runs pass 42 project integration/parity tests in
+7.357 s and104 legacy/resource/fleet/poll/wait/exact-hygiene tests in 7.342 s.
+They do not replace the next exact whole-source normal/shuffled/lint/CI or bounded
+accounted model gate. All installed source/policy/service-identity/stdio/sandbox,
+backups/stopped parity, ledger preservation, readiness, monitor/alert/retention/
+recovery and guarded acceptance remain required. Production remains accepted
+99037c5/MCPdisabled; all packages open. Next source/archive/operator/window:
+UNSELECTED. No paid call, live effect, purge, Telegram test or deployment occurred
+for this correction. [Increment 07](../../docs/cara-fleet-increment-07-2026-10-24.md).

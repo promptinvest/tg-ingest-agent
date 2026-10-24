@@ -122,3 +122,17 @@ All 47 + 15 source IDs are executable; focused durable-client Linux 227 passes.
 Existing cleanup/preferences/format assertions stay intact. Fresh model
 entailment/omission and full compatibility/release acceptance remain required.
 [Increment 04](../../cara-fleet-increment-04-2026-10-24.md).
+
+## Increment 07 qualification correction
+
+The approved 12-character display expectation is corrected; full revision stays
+asserted in typed state and no masked-placeholder output is accepted.
+
+Complete `12a47d7` Linux/CI qualification failed two fixture checks; normal ran
+2,769 tests with two failures and nine baseline skips, shuffled not reached.
+The failed originals remain. No application/budget/authority change. Focused
+project integration/parity pass 42/ 7.357 s and a separate legacy/resource/fleet/
+poll/wait/exact-hygiene run passes 104/ 7.342 s; fresh whole-source/full/model/CI
+and original installed/operator release remain required. Production stays
+accepted `99037c5`, MCP disabled; no package completion.
+[Increment 07](../../cara-fleet-increment-07-2026-10-24.md).

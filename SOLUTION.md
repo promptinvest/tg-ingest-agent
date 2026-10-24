@@ -1,5 +1,27 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 07 fixture-only correction
+
+The first complete qualification of source `12a47d7` failed two fixture checks:
+a previous full-revision display expectation and a conditional-expression cleanup
+in the new legacy-history fixture rejected by the repository test-hygiene rule. Linux normal: 2,769 tests, two failures, nine baseline
+skips, 139.409 s; shuffled not reached. CI has the same two failures. Failed
+source/archive/logs remain; none is replaced by a focused passing checkpoint.
+
+Correct only the explicit 12-character display expectation and replace the
+fixture cleanup expression with equivalent explicit if/else. Full typed revision, CI/issues/date/scope, legacy-unknown
+refusal and original data/authority/secret assertions remain. Application bytes,
+providers/models, budgets, wire contracts and deployment state are unchanged.
+Project integration 16 plus parity 26 pass 42 in 7.357 s; legacy 13/resource 20/fleet 60/
+poll 7/waits 3 plus exact hygiene pass 104 in 7.342 s in a separate isolated run.
+Fresh complete-source qualification remains a gate.
+
+Next source/archive/operator/window: UNSELECTED. Full normal/shuffled/lint/CI,
+accounted model and actual installation/backups/parity/sandbox/readiness/monitor/
+recovery acceptance are pending. Production remains accepted `99037c5` / build
+`f54906e304fe`, MCP disabled; no CF package is complete.
+[Increment 07 correction record](docs/cara-fleet-increment-07-2026-10-24.md).
+
 ## October 24 - Increment 06 compatibility and proof candidate
 
 The existing host restart checks legacy token history under the same per-unit

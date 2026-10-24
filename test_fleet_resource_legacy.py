@@ -164,7 +164,10 @@ class FleetLegacyResourceHistory(unittest.TestCase):
                     self.unknown()
                     self.assertTrue(path.exists())
             finally:
-                path.unlink() if path.is_file() else path.rmdir()
+                if path.is_file():
+                    path.unlink()
+                else:
+                    path.rmdir()
 
     def test_more_than_4096_real_entries_refuses_before_new_token_or_fingerprint(self):
         self.ledger.mkdir(mode=0o700)

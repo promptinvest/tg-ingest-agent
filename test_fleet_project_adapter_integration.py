@@ -132,8 +132,11 @@ class ProjectAdapterIntegrationTests(unittest.TestCase):
         request = operation(); value = self.full_read(request)
         report = fleet_report.build(value, scoped.inventory(), self.plan(request))
         answer = "\n".join(fleet_answers.render(report, None, self.plan(request)))
-        for fact in (fixture.REPO, fixture.REVISION, "#101 success", "#7 Example / Project Alpha: keep useful names (open)", "partial coverage"):
+        for fact in (fixture.REPO, "revision " + fixture.REVISION[:12], "#101 success", "#7 Example / Project Alpha: keep useful names (open)", "partial coverage"):
             self.assertIn(fact, answer)
+        self.assertEqual(value["hosts"]["host-a"]["projects"]["project-alpha"]["development"]["repository"]["revision"], fixture.REVISION)
+        self.assertNotIn(fixture.REVISION, answer)
+        self.assertNotIn("revision ***", answer)
         self.assertNotIn("development complete", answer)
         self.assertNotIn("repository, CI and issues are not connected", answer)
         self.assertIn("Example / Project Alpha", "\n".join(fleet_report.render(report, lang="ru")))

@@ -3,7 +3,24 @@
 Status: Implementation authorized October 24, 2026; work in progress. No package is complete.
 Parent tracker: [CF-00 / issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
 
-## Increment 06 current checkpoint
+## Increment 07 correction checkpoint
+
+Published increment06 `12a47d7` failed complete Linux/CI qualification on two
+fixture checks. Linux normal: 2,769 tests/two failures/nine baseline skips;
+shuffled was not reached. Original artifacts/results remain. Correct only the
+old full-revision display expectation (keep full typed revision and all other
+business assertions) and the legacy fixture cleanup expression, rewritten as
+equivalent explicit if/else with no assertion changes.
+No runtime, model/budget, capability, account or authority change.
+
+Separate isolated Linux runs pass project integration/parity42 in 7.357 s and
+legacy/resource/fleet/poll/wait/exact-hygiene 104 in 7.342 s. Fresh combined/full/
+model/CI and all actual source/identity/backup/readiness/release
+checks remain pending. Next source/archive/operator/window: UNSELECTED.
+Production remains accepted `99037c5`, MCP disabled, all packages open.
+[Increment 07 retained failure/correction](../../cara-fleet-increment-07-2026-10-24.md).
+
+## Increment 06 published source checkpoint
 
 Published increment05 `fca4ac4` is followed by a narrow compatibility/proof
 candidate: protect the existing restart from unresolved legacy host markers and

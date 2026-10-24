@@ -1,5 +1,25 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 07 verification correction
+
+Full qualification of published `12a47d7` failed two fixture checks. The isolated
+Linux normal run completed 2,769 tests with two failures and nine baseline skips;
+shuffled was not reached. CI failed the same two checks. Originals remain.
+
+The existing project-answer test now expects the approved 12-character display
+revision while independently retaining the full revision in typed evidence and
+all original CI/issues/date/scope assertions. The legacy fixture cleanup now
+uses equivalent explicit if/else for the repository test-hygiene rule; none of
+its assertions changed. No application, model, budget or authority change.
+
+Separate isolated Linux runs pass project integration/parity42 in 7.357 s and
+legacy/resource/fleet/poll/wait/hygiene 104 in 7.342 s. Fresh combined/full/CI and
+bounded accounted model qualification remain
+required before installed/source/readiness/backup/release acceptance. Production
+stays accepted `99037c5` / build `f54906e304fe`, MCP disabled, all packages open.
+The next exact source/archive/operator/window remain UNSELECTED.
+[Retained failure and correction evidence](docs/cara-fleet-increment-07-2026-10-24.md).
+
 ## October 24 - Increment 06 compatibility and acceptance proofs
 
 Published restart-resource source `fca4ac4` is followed by a narrow compatibility
