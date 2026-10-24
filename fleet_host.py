@@ -37,9 +37,9 @@ def read(path, limit=65536):
     return text
 
 
-def unit_state(unit):
+def unit_state(unit, timeout=5):
     text = command(["/usr/bin/systemctl", "show", unit, "--no-pager",
-                    "--property=" + ",".join(PROPERTIES)])
+                    "--property=" + ",".join(PROPERTIES)], timeout=timeout)
     values = {}
     for line in text.splitlines():
         key, _, value = line.partition("=")
@@ -193,6 +193,141 @@ def inspect(config, facets):
     return out
 
 
+def _read_budget(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired("project read", 0)
+    return min(5, remaining)
+
+
+def _configured(config, project, capability):
+    section = {"release": "projects", "http_health": "health", "containers": "containers", "runtime": "project_services"}.get(capability)
+    return bool(section and isinstance(config.get(section), dict) and config[section].get(project))
+
+
+def discover(config, scope):
+    protocol.read_scope(scope)
+    return {"host": config["host"], "observed_at": protocol.now(), "read_version": protocol.READ_VERSION,
+            "read_scope": scope, "capabilities": {project: {capability: {
+                "configured": _configured(config, project, capability),
+                "implementation_version": protocol.PROJECT_CAPABILITIES[capability]["implementation_version"]}
+                for capability in scope["capabilities"]} for project in scope["projects"]}}
+
+
+def _project_read(config, project, capability, deadline):
+    observation = lambda status, reason=None, **fields: protocol.capability_observation(capability, status, reason, **fields)
+    if not _configured(config, project, capability):
+        return observation("not_configured", "not_configured")
+    _read_budget(deadline)
+    if capability == "release":
+        paths = config["projects"][project]
+        if not isinstance(paths, list) or not 1 <= len(paths) <= 4 or any(not isinstance(path, str) for path in paths):
+            raise ValueError("invalid fixed project manifest mapping")
+        selected = {}
+        for path in paths:
+            _read_budget(deadline)
+            try:
+                manifest = json.loads(read(path))
+            except FileNotFoundError:
+                return observation("not_found", "resource_not_found")
+            if not isinstance(manifest, dict):
+                raise ValueError("invalid fixed project manifest")
+            for key, value in manifest.items():
+                field = "release_status" if key == "status" else key
+                if field in protocol.PROJECT_CAPABILITIES[capability]["outputs"] and isinstance(value, (str, bool, int)) and len(str(value)) <= 150:
+                    selected[field] = value[:12] if field in {"source_revision", "source", "image"} and isinstance(value, str) else value
+        return observation("observed", **selected) if selected else observation("unavailable", "observation_unavailable")
+    if capability == "http_health":
+        url = config["health"][project]
+        parsed = urlsplit(url)
+        if parsed.hostname not in {"127.0.0.1", "tg.promptinvest.club"} or parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+            raise ValueError("health endpoint outside fixed policy")
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+        try:
+            with opener.open(url, timeout=_read_budget(deadline)) as response:
+                fields = {"http_status": response.status}
+                if parsed.hostname == "127.0.0.1":
+                    raw = response.read(8193)
+                    if len(raw) > 8192:
+                        raise ValueError("project health response too large")
+                    body = json.loads(raw)
+                    if not isinstance(body, dict):
+                        raise ValueError("invalid project health response")
+                    fields["health"] = {key: value for key, value in body.items() if key in {"status", "database", "delivery", "intake"} and isinstance(value, (str, bool, int)) and len(str(value)) < 100}
+                return observation("observed", **fields)
+        except urllib.error.HTTPError as exc:
+            return observation("observed", http_status=exc.code)
+    if capability == "containers":
+        names = config["containers"][project]
+        if not isinstance(names, list) or not 1 <= len(names) <= 4 or any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", name) for name in names):
+            raise ValueError("invalid fixed project container mapping")
+        values = {}
+        docker = "/usr/bin/docker" if Path("/usr/bin/docker").exists() else "/snap/bin/docker"
+        for name in names:
+            try:
+                state = json.loads(command([docker, "inspect", "--format={{json .State}}", name], timeout=_read_budget(deadline)))
+                if not isinstance(state, dict):
+                    raise ValueError("invalid container observation")
+                selected = {key: state[key] for key in ("Status", "Running", "Restarting", "OOMKilled", "StartedAt") if key in state}
+                if isinstance(state.get("Health"), dict):
+                    selected["health"] = state["Health"].get("Status", "unknown")
+                selected["image_id"] = command([docker, "inspect", "--format={{.Image}}", name], timeout=_read_budget(deadline)).strip().removeprefix("sha256:")[:12]
+                values[name] = selected
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                values[name] = {"available": False}
+        return observation("observed", containers=values)
+    if capability == "runtime":
+        mapping = config["project_services"][project]
+        if isinstance(mapping, list):
+            mapping = {unit: "unknown" for unit in mapping}
+        if not isinstance(mapping, dict) or not 1 <= len(mapping) <= 8:
+            raise ValueError("invalid fixed project unit mapping")
+        values = {}
+        for unit, expected in mapping.items():
+            if not isinstance(unit, str) or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,80}\.(?:service|timer)", unit) or expected not in {"active", "idle", "disabled", "standby", "unknown"}:
+                raise ValueError("invalid fixed project unit policy")
+            try:
+                # Fixed unit_state has a five-second command bound. Check the
+                # shared budget before every unit; no unselected unit is read.
+                _read_budget(deadline)
+                state = unit_state(unit, timeout=_read_budget(deadline))
+                state["expected_state"] = expected
+                values[unit] = state
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                values[unit] = {"available": False, "expected_state": expected}
+        return observation("observed", units=values)
+    return observation("not_configured", "not_configured")
+
+
+def inspect_scoped(config, facets, scope):
+    protocol.read_scope(scope)
+    if scope["kind"] == "projects" and facets != ["projects"]:
+        raise ValueError("project scope cannot inspect host-wide metadata")
+    if scope["kind"] == "host" and "projects" in facets:
+        raise ValueError("host scope cannot inspect project metadata")
+    if scope["kind"] != "host" and "projects" not in facets:
+        raise ValueError("project facet missing")
+    # Infrastructure observations are only collected on explicit host/all scope.
+    out = inspect(config, [facet for facet in facets if facet != "projects"])
+    out["read_scope"] = scope
+    if "projects" in facets:
+        deadline = time.monotonic() + 30
+        out["projects"] = {}
+        for project in scope["projects"]:
+            out["projects"][project] = {}
+            for capability in scope["capabilities"]:
+                try:
+                    value = _project_read(config, project, capability, deadline)
+                except subprocess.TimeoutExpired:
+                    value = protocol.capability_observation(capability, "unavailable", "time_limit")
+                except (OSError, ValueError, TypeError, AttributeError):
+                    value = protocol.capability_observation(capability, "unavailable", "observation_unavailable")
+                out["projects"][project][capability] = value
+    return protocol.scoped_host_result(out, config["host"], scope, facets)
+
 def restart(config, request):
     if set(request) != {"operation", "service", "fingerprint", "token", "expires"}:
         raise ValueError("invalid restart fields")
@@ -235,9 +370,15 @@ def restart(config, request):
 
 
 def run(config, request):
+    if request.get("operation") == "capabilities":
+        if set(request) != {"operation", "read_scope"}:
+            raise ValueError("invalid capability discovery")
+        return discover(config, request["read_scope"])
     if request.get("operation") == "inspect":
-        if set(request) != {"operation", "facets"} or not isinstance(request["facets"], list) or not set(request["facets"]) <= protocol.FACETS:
+        if set(request) not in ({"operation", "facets"}, {"operation", "facets", "read_scope"}) or not isinstance(request["facets"], list) or not set(request["facets"]) <= protocol.FACETS:
             raise ValueError("invalid inspection")
+        if "read_scope" in request:
+            return inspect_scoped(config, request["facets"], request["read_scope"])
         return inspect(config, request["facets"])
     if request.get("operation") == "restart":
         return restart(config, request)

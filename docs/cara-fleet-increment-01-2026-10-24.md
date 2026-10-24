@@ -92,3 +92,17 @@ foreground requests; budgets, model configuration and providers are unchanged.
 Eighteen focused isolated Linux cases pass, including foreground access while a
 background request is blocked and database/error/cancellation boundaries. Durable
 fleet phase integration, queue rollout and production acceptance remain pending.
+## October 24 - Closed project-read contracts and dispatch adapter
+
+CF-05 adds a separate versioned read scope with canonical project IDs and a closed
+capability registry. Selected projects derive their full configured host union;
+project-only reads collect only their root-mapped files, containers and components.
+The executor discovers the scoped gateway contract before reading and reports a
+capability gap on older gateways, with no broad legacy retry. Existing host/all
+observations and the exact worker-restart card/wire retain their original meaning.
+
+Release, application checks, containers, runtime components, verified backups and
+development evidence stay distinct. Missing backup/development adapters return
+not-configured; process activity does not establish project health or progress.
+Thirty-two isolated Linux contract/dispatch cases pass. Runtime composition,
+production gateway binding and full acceptance remain pending; CF-05 is partial.

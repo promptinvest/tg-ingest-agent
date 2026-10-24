@@ -92,3 +92,5 @@ revision and recovery backups. Facts do not change gateway transport authority.
 This increment adds no timer: operators must review/export source changes and
 record publication lag explicitly. Do not report a source date as a live probe.
 Fleet inference preparation and settlement must run on the SQLite owner thread. Persist the phase and reservation before dispatch, retain unknown usage, and pump cancellation until accounting settles. Never reconstruct/resend a started paid phase after restart. Qualify the exact integrated source before activation; the primitive alone does not close CF-04.
+
+Project-read activation requires exact source/hash and root mapping checks for each selected gateway. Discovery must advertise the reviewed read version before collection; an older or unmapped gateway returns its specific capability gap. Never retry as legacy all-project inspection. Root policy alone maps canonical project IDs to fixed resources. Do not infer backup success, development progress or client-route health from timers, containers or release manifests. Preserve the original restart contract and all sandbox denial checks.

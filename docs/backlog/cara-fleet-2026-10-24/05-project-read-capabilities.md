@@ -81,3 +81,18 @@ Update BOTH CARA.md and SOLUTION.md, relevant ADR/backlog status and operator do
 
 Full handoff, source map, sanitized production evidence, bootstrap facts and semantic regression corpus:
 https://github.com/promptinvest/tg-ingest-agent/tree/main/docs/backlog/cara-fleet-2026-10-24
+
+## October 24 - Closed project-read contracts and dispatch adapter
+
+CF-05 adds a separate versioned read scope with canonical project IDs and a closed
+capability registry. Selected projects derive their full configured host union;
+project-only reads collect only their root-mapped files, containers and components.
+The executor discovers the scoped gateway contract before reading and reports a
+capability gap on older gateways, with no broad legacy retry. Existing host/all
+observations and the exact worker-restart card/wire retain their original meaning.
+
+Release, application checks, containers, runtime components, verified backups and
+development evidence stay distinct. Missing backup/development adapters return
+not-configured; process activity does not establish project health or progress.
+Thirty-two isolated Linux contract/dispatch cases pass. Runtime composition,
+production gateway binding and full acceptance remain pending; CF-05 is partial.

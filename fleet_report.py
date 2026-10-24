@@ -16,11 +16,69 @@ def stamp(value):
         return "?"
 
 
+def _project_summary(capability, state):
+    status = state.get("status", "unavailable")
+    gaps = {"release": ("запись релиза", "release record"), "http_health": ("проверка приложения", "application health check"),
+            "containers": ("контейнеры", "containers"), "runtime": ("компоненты", "runtime components"),
+            "backups": ("проверенные результаты бэкапов", "verified backup results"),
+            "development": ("репозиторий, CI и задачи", "repository, CI and issues")}
+    ru, en = gaps[capability]
+    if status != "observed":
+        suffix_ru, suffix_en = {"not_configured": ("не подключены", "not connected"), "not_found": ("не найдены", "not found"),
+                               "recorded": ("только датированная запись", "dated record only")}.get(status, ("недоступны", "unavailable"))
+        if state.get("reason") == "gateway_contract_unavailable":
+            suffix_ru, suffix_en = "шлюз не поддерживает выбранную проверку", "gateway does not support the selected read"
+        return status, ru + ": " + suffix_ru, en + ": " + suffix_en
+    if capability == "release":
+        parts = [title + " " + str(state[key]) for key, title in (("build_version", "build"), ("source_revision", "source"), ("release_status", "status"), ("installed_at", "installed"), ("verified_at", "verified")) if key in state]
+        return status, "Запись релиза: " + "; ".join(parts), "Release record: " + "; ".join(parts)
+    if capability == "http_health":
+        code = state.get("http_status")
+        health = state.get("health", {})
+        parts = ["HTTP " + str(code)] + [key + "=" + str(value) for key, value in health.items()]
+        failed = (type(code) is int and code >= 400) or any(value is False or str(value).lower() in {"failed", "unhealthy", "error", "down", "false", "not_ready"} for value in health.values())
+        return status, ("Ошибка проверки приложения: " if failed else "Проверки приложения: ") + "; ".join(parts), ("Application health failure: " if failed else "Application checks: ") + "; ".join(parts)
+    if capability == "containers":
+        containers = state.get("containers", {})
+        known = [item for item in containers.values() if isinstance(item, dict) and item.get("available") is not False and type(item.get("Running")) is bool]
+        if not known:
+            return "unavailable", "состояния контейнеров неизвестны", "container states unknown"
+        running = sum(item["Running"] for item in known)
+        detail = f"running {running}/{len(known)} observed; {len(containers)} configured"
+        exceptions = [name + ": " + ("OOMKilled" if item.get("OOMKilled") is True else "health=" + str(item.get("health"))) for name, item in containers.items() if isinstance(item, dict) and (item.get("OOMKilled") is True or item.get("health") in {"unhealthy", "starting"})]
+        detail += ("; " + "; ".join(exceptions)) if exceptions else ""
+        return status, "Контейнеры: " + detail, "Containers: " + detail
+    if capability == "runtime":
+        parts_ru, parts_en = [], []
+        for unit, item in state.get("units", {}).items():
+            if item.get("available") is False or item.get("LoadState") not in {"loaded", "not-found"}:
+                r, e = "не проверено", "unavailable"
+            elif item.get("LoadState") == "not-found":
+                r, e = "не найден", "not found"
+            elif item.get("ActiveState") == "active":
+                r = e = "active"
+            elif item.get("ActiveState") == "failed" or item.get("Result") not in {None, "", "success"}:
+                r = e = "failed"
+            elif item.get("ActiveState") == "inactive" and (item.get("expected_state") in {"idle", "disabled", "standby"} or (item.get("Type") == "oneshot" and item.get("Result") == "success")):
+                r, e = "ожидаемый простой/отключение", "expected idle/disabled/standby"
+            else:
+                r, e = "inactive; ожидаемое состояние неизвестно", "inactive; expected state unknown"
+            parts_ru.append(unit + ": " + r); parts_en.append(unit + ": " + e)
+        return status, "; ".join(parts_ru), "; ".join(parts_en)
+    return "not_configured", ru + ": не подключены", en + ": not connected"
+
 def build(result, inventory, plan, history=()):
+    scope = result.get("read_scope") or plan.get("read_scope")
+    if scope is not None:
+        protocol.read_scope(scope)
+    selected_projects = scope["projects"] if scope is not None else (plan.get("projects") or None)
     report = {"version": 1, "hosts": list(plan["hosts"]), "observed_at": result["observed_at"],
               "focus": plan.get("focus", ["overview"]), "facets": plan["facets"],
             "observations": {}, "findings": {}, "coverage": {}, "records": {
-                p: dict(v) for p, v in inventory["projects"].items() if set(v["hosts"]) & set(plan["hosts"])}}
+                p: dict(v) for p, v in inventory["projects"].items() if set(v["hosts"]) & set(plan["hosts"]) and (selected_projects is None or p in selected_projects)}}
+
+    if scope is not None:
+        report["read_scope"] = scope
 
     def add(host, field, status, value, ru, en, kind="measurement", window=None, at=None):
         key = "O" + str(len(report["observations"]) + 1)
@@ -35,7 +93,7 @@ def build(result, inventory, plan, history=()):
     for host in report["hosts"]:
         raw = result["hosts"].get(host, {})
         coverage = report["coverage"][host] = {"label": inventory["hosts"][host]["label"],
-            "role": inventory["hosts"][host]["role"], "findings": []}
+            "role": inventory["hosts"][host]["role"] if selected_projects is None else "selected project host", "findings": []}
         def emit(*args, **kwargs):
             key = add(host, *args, **kwargs)
             coverage["findings"].append(key)
@@ -95,8 +153,21 @@ def build(result, inventory, plan, history=()):
                         en += "; " + e + ": " + ", ".join(units)
                 emit("services", "observed" if states and not unknown else "unavailable", {"active": active, "not_found": absent, "unavailable": unknown, "inactive": inactive}, ru, en)
             elif facet == "projects":
-                expected = {p for p, v in inventory["projects"].items() if host in v["hosts"]}
-                for project in sorted(expected | set(data)):
+                expected = {p for p, v in inventory["projects"].items() if host in v["hosts"] and (selected_projects is None or p in selected_projects)}
+                if scope is not None:
+                    for project in sorted(expected):
+                        label = inventory["projects"][project]["label"]
+                        states = data.get(project, {})
+                        for capability in scope["capabilities"]:
+                            state = states.get(capability, {}) if isinstance(states, dict) else {}
+                            status, ru, en = _project_summary(capability, state)
+                            key = add(host, "projects." + project + "." + capability, status, state,
+                                      label + ": " + ru, label + ": " + en,
+                                      "measurement" if status == "observed" else "gap", at=state.get("observed_at"))
+                            report["observations"][key].update(project=project, capability=capability, implementation_version=state.get("implementation_version"))
+                            coverage["findings"].append(key)
+                    continue
+                for project in sorted(expected | (set(data) if selected_projects is None else set())):
                     state = data.get(project)
                     label = inventory["projects"].get(project, {}).get("label", project)
                     if not isinstance(state, dict) or not state:
@@ -153,7 +224,7 @@ def build(result, inventory, plan, history=()):
                      "record", at=record["recorded_at"])
         for focus, ru, en in (("backups", "свежие результаты бэкапов не подключены; наличие таймера не доказывает успешный бэкап", "fresh backup results are not connected; a timer does not prove a successful backup"),
                               ("progress", "репозиторий, CI и задачи не подключены; состояние разработки неизвестно", "repository, CI and issues are not connected; development progress is unknown")):
-            if focus in report["focus"]:
+            if focus in report["focus"] and not (scope is not None and ({"backups": "backups", "progress": "development"}[focus] in scope["capabilities"])):
                 emit("capability." + focus, "not_configured", None, ru, en, "gap")
         if "trend" in report["focus"] or "memory" in report["focus"] or "cpu" in report["focus"]:
             prior = [r for r in history if host in r.get("hosts", {})]
@@ -199,8 +270,9 @@ def selection(value, report):
     if not isinstance(checks, list) or len(checks) > 24:
         raise ValueError("invalid next checks")
     allowed = []
+    allowed_facets = {"projects"} if report.get("read_scope", {}).get("kind") == "projects" else protocol.FACETS
     for item in checks:
-        if isinstance(item, dict) and set(item) == {"host", "facet"} and item["host"] in report["hosts"] and isinstance(item["facet"], str) and item["facet"] in protocol.FACETS:
+        if isinstance(item, dict) and set(item) == {"host", "facet"} and item["host"] in report["hosts"] and isinstance(item["facet"], str) and item["facet"] in allowed_facets:
             allowed.append(item)
     # Proposed exploration is separate from factual claims. Refuse unsupported
     # checks, record the gap, and retain independently validated findings.
