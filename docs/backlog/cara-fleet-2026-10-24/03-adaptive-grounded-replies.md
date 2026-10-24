@@ -149,3 +149,15 @@ authority and model budgets. Focused actual Agent/runtime/catalog/relevance
 regressions pass in isolated Linux. Fresh full/CI/model/installed release gates
 remain required; every package stays open, production `99037c5` / MCP disabled.
 [Increment 09](../../cara-fleet-increment-09-2026-10-24.md).
+
+
+## Increment 11 requested runtime fields
+
+Manual review of a formally passing answer finds unrelated healthy internals,
+resource gaps and repeated timestamps in a requested concise application reply.
+Add optional closed semantic answer_fields and typed presentation within existing
+project/runtime scope. Preserve full evidence and original legacy/no-field/full
+reports, requested failures/gaps/dates, model/production budgets and authority.
+A real-model field-presence pass alone cannot close business acceptance. New
+semantic, reply, source, actual-model and original installed/release checks remain
+required; production99037c5/MCP disabled, packages open. [Increment 11](../../cara-fleet-increment-11-2026-10-24.md).

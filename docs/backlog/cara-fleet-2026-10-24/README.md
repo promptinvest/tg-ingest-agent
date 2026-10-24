@@ -1,5 +1,15 @@
 # Cara fleet and project development backlog — October 24, 2026
 
+## Increment 11 business review and runtime fields
+
+Source9dd727e passes complete Linux/CI and a formal model cohort, but manual
+review rejects its dense runtime reply to a concise three-field question.
+Closed semantic answer_fields and typed scoped presentation address that gap;
+all original evidence and legacy/full-detail behavior remain. New-source full,
+model, compatibility and installed acceptance are pending; no package is complete.
+[Increment 11](../../cara-fleet-increment-11-2026-10-24.md).
+
+
 ## Increment 10 collection review
 
 A source review finds a remaining CF-02 footprint defect in `9505c60`: a new

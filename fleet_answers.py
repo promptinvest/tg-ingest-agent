@@ -2,6 +2,7 @@
 import copy
 import answer_policy
 import fleet_report
+import fleet_project_report
 
 
 def _relevant(field, focus):
@@ -26,6 +27,35 @@ def _exception(observation):
     return any(word in value for word in ("'failed'", "'unhealthy'", "'oomkilled': true", "'status': false"))
 
 
+def _project_projection(report, fields, lang, detail):
+    """Change display only; retain original IDs, observations and full findings."""
+    projected, handled = {}, set()
+    for key, item in report["observations"].items():
+        if item.get("capability") != "runtime":
+            continue
+        requested = list(fields)
+        existing_metrics = any(other.get("host") == item.get("host") and other.get("project") == item.get("project")
+                               and other.get("capability") == "project_metrics"
+                               for other in report["observations"].values())
+        if existing_metrics and "project_metrics" in requested:
+            requested.remove("project_metrics")
+        if not requested:
+            # The existing separately typed load gap is the complete answer.
+            if item.get("capability") == "runtime" and item.get("project"):
+                handled.add((item["host"], item["project"]))
+                projected[key] = ""
+            continue
+        text = fleet_project_report.render(item, requested, lang, detail)
+        if text is not None:
+            project = item["project"]
+            handled.add((item["host"], project))
+            label = report["records"][project]["label"]
+            projected[key] = label + ": " + text if text else ""
+    excluded = {key for key, item in report["observations"].items()
+                if (item.get("host"), item.get("project")) in handled and item.get("capability") == "project_metrics"
+                and "project_metrics" not in fields}
+    return projected, excluded
+
 def render(report, decision, plan, lang="en", conn=None):
     """Retain the full report; display requested coverage and relevant exceptions.
 
@@ -34,9 +64,17 @@ def render(report, decision, plan, lang="en", conn=None):
     """
     selected = fleet_report.selection(decision, report) if decision is not None else dict(highlights=[], hypotheses=[], next_checks=[])
     detail = plan.get("detail") or (answer_policy.default_detail(conn) if conn is not None else "concise")
+    fields = plan.get("answer_fields", report.get("answer_fields"))
+    fields = fleet_project_report.validate_answer_fields(fields) if fields is not None else None
+    projected, excluded = _project_projection(report, fields, lang, detail) if fields is not None else ({}, set())
     if detail == "detailed":
-        # Original exhaustive coverage remains available on explicit request.
-        detailed_report = copy.deepcopy(report) if plan.get("presentation") == "table" else report
+        # Absent semantic fields retains the exact original exhaustive path.
+        detailed_report = copy.deepcopy(report) if plan.get("presentation") == "table" or fields is not None else report
+        if fields is not None:
+            for coverage in detailed_report["coverage"].values():
+                coverage["findings"] = [key for key in coverage["findings"] if key not in excluded and projected.get(key) != ""]
+            for key, text in projected.items():
+                detailed_report["findings"][key]["ru" if lang == "ru" else "en"] = text
         return fleet_report.render(detailed_report, dict(selected, highlights=[]), lang, presentation=plan.get("presentation"))
     field, ru = ("ru", True) if lang == "ru" else ("en", False)
     focus = set(report.get("focus", ["overview"]))
@@ -62,7 +100,8 @@ def render(report, decision, plan, lang="en", conn=None):
         for key, item in report["observations"].items():
             if item["host"] == host and _relevant(item["field"], focus) and _exception(item) and key not in keys:
                 keys.append(key)
-        values = list(dict.fromkeys(report["findings"][key][field] for key in keys))
+        keys = [key for key in keys if key not in excluded and projected.get(key) != ""]
+        values = list(dict.fromkeys(projected.get(key, report["findings"][key][field]) for key in keys))
         if not values:
             values = ["нет сведений по запрошенной проверке" if ru else "requested evidence is unavailable"]
         label = coverage["label"]

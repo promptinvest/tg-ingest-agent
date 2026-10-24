@@ -1,5 +1,22 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 11 runtime subfield obligations
+
+A composite runtime finding prevents the concise renderer from answering only
+the requested generation/reserves/day-budget question. Formal field-presence
+checks passed while manual business review rejected the unrelated diagnostics.
+Preserve that distinction and every original response/charge.
+
+Add closed presentation-only answer_fields selected by the existing semantic
+planner, retained within canonical project/runtime context and rendered from the
+complete typed observation. Unknown fields/scopes fail closed; no authority,
+transport, inference stage, model or production budget changes. Legacy no-field
+and full-detail behavior remains; field-scoped detail preserves requested facts,
+source dates, uncertainty and material failures. Current-source qualification
+and guarded installed acceptance remain pending; production99037c5/MCP disabled,
+packages open. [Increment 11](docs/cara-fleet-increment-11-2026-10-24.md).
+
+
 ## October 24 - Increment 10 semantic host scope
 
 A memory-only model plan can omit optional read_scope. The legacy base validator

@@ -199,6 +199,10 @@ def build(result, inventory, plan, history=()):
             "observations": {}, "findings": {}, "coverage": {}, "records": {
                 p: dict(v) for p, v in inventory["projects"].items() if set(v["hosts"]) & set(plan["hosts"]) and (selected_projects is None or p in selected_projects)}}
 
+    if "answer_fields" in plan:
+        from fleet_project_report import validate_answer_fields
+        report["answer_fields"] = validate_answer_fields(plan["answer_fields"])
+
     if scope is not None:
         report["read_scope"] = scope
 

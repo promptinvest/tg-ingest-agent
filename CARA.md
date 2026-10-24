@@ -1,5 +1,20 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 11 requested application fields
+
+Manual review finds that a formally passing runtime answer can still violate
+requested brevity: one composite observation exposes unrelated healthy internals
+and repeated dates. The existing planner now selects optional closed answer_fields
+for project-runtime replies; code renders requested values, source dates/gaps and
+material exceptions from validated evidence. No extra model call or host read.
+
+Legacy replies without these obligations and explicit full reports keep their
+existing behavior. Full evidence remains retained. Exact semantic/context/wire,
+reply compatibility, whole-source Linux/CI, bounded actual answers and installed
+release gates remain required. Production stays accepted99037c5/MCP disabled;
+all packages remain open. [Increment 11](docs/cara-fleet-increment-11-2026-10-24.md).
+
+
 ## October 24 - Increment 10 host-only metric reads
 
 Current-source review finds a collection defect beneath the correct concise

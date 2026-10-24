@@ -7,6 +7,7 @@ cards remain on their existing path. No MCP dependency or new transport exists.
 import copy
 
 import fleet_protocol as protocol
+import fleet_project_report
 import llm
 
 STYLE = {"presentation": frozenset({"prose", "list", "table", "names"}),
@@ -45,6 +46,22 @@ def _inherited_scope(plan, previous, explicit_focus):
     return copy.deepcopy(scope)
 
 
+def _inherited_answer_fields(plan, previous, explicit_focus, answer_mode):
+    """Only a format-only correction can retain canonical field obligations."""
+    if (answer_mode != "reformat" or plan.get("scope") != "inherit" or not previous
+            or "answer_fields" not in previous
+            or not protocol.read_contract_compatible(previous.get("read_contract_hash"))):
+        return None
+    if explicit_focus and set(explicit_focus) != {"overview"} and set(explicit_focus) != set(previous.get("focus", [])):
+        return None
+    previous_scope = protocol.read_scope(previous.get("read_scope"))
+    if (plan.get("read_scope") != previous_scope
+            or set(plan["hosts"]) != set(previous.get("hosts", []))
+            or set(plan.get("projects", [])) != set(previous.get("projects", []))):
+        return None
+    return fleet_project_report.validate_answer_fields(previous["answer_fields"])
+
+
 class ProjectReadMixin:
     def _fleet_planning_messages(self, question, inventory, previous, lang, error=""):
         messages = super()._fleet_planning_messages(question, inventory, previous, lang, error)
@@ -69,7 +86,24 @@ class ProjectReadMixin:
             "A self-contained named project asking for a concise/table/dated answer still uses "
             "answer_mode:inspect and scope:explicit; these presentation words do not imply reformat. "
             "Without valid prior scope never inherit; clarify a genuinely missing target instead. "
-            "Generation/reserves/daily budget requests select runtime, not host resources. "
+            "Generation/reserves/daily budget requests select runtime, focus:[projects], not host resources. "
+            "Optional answer_fields is an ordered unique JSON array of 1..9 of "
+            + "|".join(fleet_project_report.ANSWER_FIELD_ORDER) + ". It selects reply content from an already "
+            "selected project runtime observation, never capabilities, extra reads or authority. "
+            "answer_fields IDs are not focus values: keep the existing focus enum unchanged; runtime is a capability, "
+            "not a focus. Use focus:[projects] for a narrow application-state question. "
+            "These answer_fields describe application monitor/business data. application_health means application/Postgres "
+            "health, never authenticated proxy protocol/route health or connection summaries. For proxy protocol, route "
+            "or connection questions ordinarily omit answer_fields and use the existing typed runtime observations; "
+            "only an actual request for unsupported application fields receives their specific evidence gaps. "
+            "For supported monitor business questions include only the requested answer_fields: for generation, "
+            "reserves and daily budget use [generation,reserves,day_budget], retaining their evidence dates and "
+            "material gaps. day_budget is the daily limit, never an inferred spend or remaining balance. "
+            "Select project_metrics only for an actual project load/traffic/CPU/RAM/disk question; do not add it "
+            "to generation/reserves/budget questions. Omit unrequested app health, unfinished work, release and "
+            "monitor internals from a narrow reply. A detailed request adds relevant detail to the selected fields; "
+            "a genuinely broad runtime overview can omit answer_fields. A format-only correction keeps the same "
+            "field obligations; a new question or named target selects its own fields. "
             "Fresh checks use answer_mode:inspect (the default). "
             "Optional presentation is prose|list|table|names and detail is concise|detailed; choose the owner's explicit "
             "format/detail first, then confirmed preference, concise by default. Formatting corrections retain prior "
@@ -85,6 +119,8 @@ class ProjectReadMixin:
         if answer_mode not in {"inspect", "reformat"}:
             raise ValueError("invalid evidence reuse mode")
         read_scope = value.pop("read_scope", None)
+        answer_fields = (fleet_project_report.validate_answer_fields(value.pop("answer_fields"))
+                         if "answer_fields" in value else None)
         styles = {}
         for key, allowed in STYLE.items():
             if key in value:
@@ -118,6 +154,8 @@ class ProjectReadMixin:
                 raise ValueError("reformat requires the canonical prior read scope")
             plan["answer_mode"] = "reformat"
         if plan.get("operation") != "inspect" or plan.get("clarification"):
+            if answer_fields is not None:
+                raise ValueError("answer fields require a resolved project runtime read")
             return plan
         if read_scope is None:
             read_scope = _inherited_scope(plan, previous, explicit_focus)
@@ -132,6 +170,8 @@ class ProjectReadMixin:
             read_scope = {"version": protocol.READ_VERSION, "kind": "host",
                           "projects": [], "capabilities": []}
         if read_scope is None:
+            if answer_fields is not None:
+                raise ValueError("answer fields require a resolved project runtime read")
             return plan  # Preserve supported legacy and explicit broad diagnostics.
         if read_scope["kind"] == "projects":
             # Complete configured coverage of a multi-host project is code-owned.
@@ -154,11 +194,17 @@ class ProjectReadMixin:
         protocol.read_scope(read_scope, inventory, plan["hosts"])
         plan["read_scope"] = read_scope
         plan["read_contract_hash"] = contract_hash()
+        if answer_fields is None:
+            answer_fields = _inherited_answer_fields(plan, previous, explicit_focus, answer_mode)
+        if answer_fields is not None:
+            if read_scope["kind"] not in {"projects", "all_projects"} or "runtime" not in read_scope["capabilities"]:
+                raise ValueError("answer fields require a resolved project runtime read")
+            plan["answer_fields"] = answer_fields
         return plan
 
     def _fleet_context_frame(self, question, plan, inventory, previous=None, update=None):
         frame = super()._fleet_context_frame(question, plan, inventory, previous=previous, update=update)
-        for key in ("read_scope", "read_contract_hash", *STYLE):
+        for key in ("read_scope", "read_contract_hash", "answer_fields", *STYLE):
             if key in plan:
                 frame[key] = copy.deepcopy(plan[key])
         return frame

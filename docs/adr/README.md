@@ -43,7 +43,7 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 | [ADR-0030](ADR-0030-evidence-bound-procedural-learning.md) | Evidence-bound procedural learning inside Cara | Phase D | owner go 2026-10-13 | Implemented and deployed 7de363c |
 | [ADR-0031](ADR-0031-natural-language-fleet-management.md) | Natural-language fleet investigations with a restricted executor | Phase D | owner go 2026-10-23 | Implemented and deployed fb20e4d |
 | [ADR-0032](ADR-0032-code-owned-fleet-findings.md) | Owner-bound fleet scope and code-owned findings | Phase D | owner go 2026-10-23 | Implemented and deployed e925af3 |
-| [ADR-0033](ADR-0033-fleet-knowledge-and-project-capability-backlog.md) | Fleet knowledge, adaptive answers and project capability backlog | Follow-up roadmap | ADR-0031/0032; six business packages plus downstream MCP | Accepted 2026-10-24; business baseline accepted; project 03, MCP 04 and resource 05 published; 06 published/full qualification failed; 08 published as 9566d1b/full Linux+CI passed; model scope/relevance findings; 09 planner guidance candidate; packages open |
+| [ADR-0033](ADR-0033-fleet-knowledge-and-project-capability-backlog.md) | Fleet knowledge, adaptive answers and project capability backlog | Follow-up roadmap | ADR-0031/0032; six business packages plus downstream MCP | Accepted 2026-10-24; business baseline accepted; source9dd727e full Linux/CI and formal model pass; manual reply review rejected; increment11 scoped runtime fields candidate; packages open |
 
 ## Phases
 
@@ -60,3 +60,7 @@ two-stage routing, a second LLM provider, typed dataclass Config, HTTP keep-aliv
 October 24 increment 10: ADR-0033 records the new narrow host-scope correction
 and additional paired negative business evidence. Full/model/installed gates
 remain open; [increment record](../cara-fleet-increment-10-2026-10-24.md).
+
+October24 increment11: typed runtime answer-field obligations address the manual
+business rejection of a formally passing dense reply; original evidence, legacy
+reports and every qualification/release gate remain. Packages stay open.
