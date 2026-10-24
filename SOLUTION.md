@@ -4,8 +4,9 @@
 
 The first complete qualification of source `12a47d7` failed two fixture checks:
 a previous full-revision display expectation and a conditional-expression cleanup
-in the new legacy-history fixture rejected by the repository test-hygiene rule. Linux normal: 2,769 tests, two failures, nine baseline
-skips, 139.409 s; shuffled not reached. CI has the same two failures. Failed
+in the new legacy-history fixture rejected by the repository test-hygiene rule.
+The full offline Linux normal run and CI failed those two checks; shuffled was
+not reached. Exact historical totals remain in the dated release record. Failed
 source/archive/logs remain; none is replaced by a focused passing checkpoint.
 
 Correct only the explicit 12-character display expectation and replace the
@@ -21,6 +22,13 @@ accounted model and actual installation/backups/parity/sandbox/readiness/monitor
 recovery acceptance are pending. Production remains accepted `99037c5` / build
 `f54906e304fe`, MCP disabled; no CF package is complete.
 [Increment 07 correction record](docs/cara-fleet-increment-07-2026-10-24.md).
+
+Published correction source `38b7d1` then failed CI 40094842974 on the standing
+specification guard: a hard-coded historical suite total had been copied into
+the rolling primary specs. The earlier two fixtures pass. Keep exact totals in
+the dated release record and use "the full offline Linux normal run" here.
+No application, test, guard, model or budget change; fresh full qualification
+and all installed/release gates remain pending.
 
 ## October 24 - Increment 06 compatibility and proof candidate
 
@@ -149,7 +157,7 @@ The optional MCP facts client uses one bounded background slot and the same
 code-owned answer cells, provenance, format and policy as internal facts. Owner
 updates and reminders stay responsive. A recovered phase uses equivalent checked
 local facts without resubmitting stdio. Default remains disabled; production is
-still accepted99037c5. MCP creation/Tasks/cancellation and full acceptance remain
+still accepted 99037c5. MCP creation/Tasks/cancellation and full acceptance remain
 open. [Candidate and qualification limits](docs/cara-fleet-increment-02-2026-10-24.md).
 
 ## October 24 - Typed project evidence candidate

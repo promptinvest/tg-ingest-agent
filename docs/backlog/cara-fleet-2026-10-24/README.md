@@ -89,7 +89,7 @@ Earlier checkpoint sections retain their historical status.
 ## Increment 03 published project checkpoint
 
 The typed project-read candidate extends published `8f50282`; production remains the
-accepted99037c5 business baseline. It adds fixed existing-observer/route projections,
+accepted 99037c5 business baseline. It adds fixed existing-observer/route projections,
 manual reviewed public-GitHub development export/install, detailed tables/metric
 clarity and exact historical read-contract compatibility. No new monitor/probe,
 schedule, account permission, model/provider, budget or project effect.
@@ -279,3 +279,13 @@ executing cancellation are explicit gaps. Original47+15 specifications remain
 unchanged and the crosswalk distinguishes active cases from unqualified gaps.
 Focused Linux passes do not replace full release and actual-model qualification.
 See [increment02](../../cara-fleet-increment-02-2026-10-24.md); all packages stay open.
+
+## Increment 07 documentation-only follow-up
+
+Published `38b7d1` passes the two corrected fixtures but CI 40094842974 fails the
+standing documentation guard: a historical suite total appeared in the rolling
+primary specifications. Use the full offline Linux normal run description there
+and retain exact historical totals in the dated increment 07 record. No guard,
+assertion, application, model, budget or authorization changes. The failed
+artifacts remain; fresh full/model/installed/deployment acceptance is pending.
+Production remains accepted 99037c5/MCP disabled; every package stays open.

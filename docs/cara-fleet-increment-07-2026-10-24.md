@@ -96,3 +96,32 @@ bounded-session, paused, single-use release process. A failed check requires
 forward containment on current source/data with preserved evidence. Never replay
 controllers, historical updates, unknown effects or ambiguous delivery. No package
 completion or installed acceptance follows from this fixture correction alone.
+
+## Subsequent documentation-guard correction
+
+Published fixture-correction source
+`38b7d1e31738be1685e84cfc91c3d74afc2dee9b` passed the two previously failing
+fixture checks, but [CI 40094842974](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40094842974)
+failed the standing `OpsArtifactHardening20260726Tests.test_no_spec_carries_a_hard_coded_test_count`:
+2,769 tests / 78.026 s, one failure, 62 optional/non-root skips. The rolling
+CARA/SOLUTION specifications had copied the historical full-suite total; the
+existing guard deliberately reserves changing suite totals for dated records.
+Its expression matched the suffix of the comma-formatted total. This was a
+documentation failure, not another application or fixture behavior failure.
+
+Describe the full offline Linux normal run in the rolling specifications and
+keep exact historical totals in this dated record. Preserve README, the standing
+guard, all test assertions, runtime/model/provider/budget bytes and previous
+failed artifacts. The separate exact-source Linux run and subsequent full/model/
+installed/deployment qualification must retain their own actual outcomes; no
+passing full or shuffled result is inferred here. Production remains accepted
+99037c5/build f54906e304fe, MCP disabled; all packages remain open.
+
+The exact unchanged standing documentation and conditional-expression hygiene
+guards pass together: 2 PASS / 2.624 s in fresh network-isolated Linux with an
+empty environment. Both executed with no skips against the published38 source
+plus the corrected working CARA/SOLUTION and unchanged README; the scratch
+checkout's source hashes remain unchanged. Retained log SHA256:
+`662bac7d13395c0b33bebac7552f287688d685baef91468d42179f31d109ae8c`.
+This focused result does not qualify the next complete source. No application,
+test, model or budget change accompanies this documentation-only follow-up.

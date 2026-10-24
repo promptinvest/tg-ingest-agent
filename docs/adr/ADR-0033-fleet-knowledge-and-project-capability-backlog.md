@@ -193,3 +193,13 @@ do not qualify the next whole source. Final full/model/CI and original installed
 operator release gates remain pending; source/archive/operator/window UNSELECTED.
 Production stays accepted `99037c5`, MCP disabled, all packages open.
 [Increment 07](../cara-fleet-increment-07-2026-10-24.md).
+
+## Increment 07 subsequent documentation guard
+
+Published correction `38b7d1` passes the two earlier fixtures but fails CI
+40094842974 on the unchanged standing rule against hard-coded suite totals in
+rolling specifications. Move only that historical count wording out of CARA and
+SOLUTION; exact results remain in the dated increment 07 record. README, tests,
+all runtime/model/budget/authority behavior and failed artifacts stay unchanged.
+Fresh exact-source full/model/installed/release acceptance remains pending;
+production stays accepted 99037c5 with MCP disabled, all packages open.

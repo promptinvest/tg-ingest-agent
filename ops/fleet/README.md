@@ -496,7 +496,7 @@ archive/operator/window remain UNSELECTED. Require full normal/shuffled/pinnedli
 CI, bounded accounted model answers, exact real service namespace/groups/stdio/
 secret denial, fixed source bindings, checked online/stopped backups/original
 parity, loaded-source readiness, monitor/alert/retention/neighbors/recovery and
-fresh once-only guarded acceptance. Production remains accepted99037c5, MCP
+fresh once-only guarded acceptance. Production remains accepted 99037c5, MCP
 disabled, all packages open. [Increment 06](../../docs/cara-fleet-increment-06-2026-10-24.md).
 
 ## Increment 07 fixture correction and failed full qualification
@@ -522,3 +522,13 @@ recovery and guarded acceptance remain required. Production remains accepted
 99037c5/MCPdisabled; all packages open. Next source/archive/operator/window:
 UNSELECTED. No paid call, live effect, purge, Telegram test or deployment occurred
 for this correction. [Increment 07](../../docs/cara-fleet-increment-07-2026-10-24.md).
+
+### Published increment 07 documentation-guard follow-up
+
+Source 38b7d1 passes both earlier fixture checks; CI 40094842974 then fails the
+unchanged standing guard against hard-coded suite totals in rolling specs.
+Correct CARA/SOLUTION wording only and keep exact historical results in the
+increment 07 record. Do not relax the guard or replay the failed verifier. No
+application/test/model/budget change or live action accompanies this correction.
+Require fresh complete-source qualification and every existing installed/release
+gate. Production remains accepted 99037c5/MCP disabled; packages remain open.
