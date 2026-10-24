@@ -84,3 +84,4 @@ foreground requests; budgets, model configuration and providers are unchanged.
 Eighteen focused isolated Linux cases pass, including foreground access while a
 background request is blocked and database/error/cancellation boundaries. Durable
 fleet phase integration, queue rollout and production acceptance remain pending.
+Integrated business candidate: local obligations/semantic formats, durable nonblocking phases, queue starts/cancellation, shared lookup and typed content lifecycle are implemented. Focused Linux evidence and remaining model/release gates are in [the increment record](../../cara-fleet-increment-01-2026-10-24.md). No package is complete or deployed yet.

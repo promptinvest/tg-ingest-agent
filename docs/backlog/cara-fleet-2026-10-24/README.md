@@ -146,3 +146,5 @@ completion polling. CF-01 facts contract/export work proceeds independently.
 Neither unit fixtures nor protocol checks close any package; the preserved 47+15
 specifications retain all original assertions and independent acceptance criteria.
 CF-01 contract/publisher: 53 schema/history and 17 exporter/publication Linux cases pass. Reviewed source-hash export and root-only sanitized installation are implemented; real publication, synchronization operations and full acceptance remain pending. No package is complete.
+
+Integrated business candidate: local obligations/semantic formats, durable nonblocking phases, queue starts/cancellation, shared lookup and typed content lifecycle are implemented. Focused Linux evidence and remaining model/release gates are in [the increment record](../../cara-fleet-increment-01-2026-10-24.md). No package is complete or deployed yet.

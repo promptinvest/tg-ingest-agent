@@ -46,3 +46,5 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
 - 2026-10-24: descriptive answer obligations and presentation share one validated query contract. Model plans choose fields/format; typed facts own every cell and no factual model prose is admitted. Thirty-four Linux cases pass; semantic model/full-dispatch acceptance remains separate.
 
 - 2026-10-24: offline facts-only MCP adapter/client preserves shared cells/provenance and trusted caller scope;27 Linux cases pass. It is neither installed/enabled nor a durable/project interface. CF-01–06 still have independent gates; A2A and writes remain excluded.
+
+- 2026-10-24: integrated local catalog/semantic formats and question-aligned rendering, owner-thread durable inference, source-bound executor queue/start/cancellation, shared read-only lookup and typed fleet content lifecycle. ADR-0032's factual/scope/evidence safeguards remain; its exhaustive ordinary presentation is replaced only in the new concise path, with explicit full detail retained. Exact combined release/actual-model gates remain pending; no package completion.

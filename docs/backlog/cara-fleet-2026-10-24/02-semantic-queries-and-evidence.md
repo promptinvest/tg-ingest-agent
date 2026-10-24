@@ -96,3 +96,4 @@ Thirty-four isolated Linux query cases pass, including frozen obligations from
 17 catalog specifications in the unchanged original corpus. This is contract
 qualification, not a claim that free-form model behavior or all 47+15 scenarios pass.
 Full-dispatch integration and actual-model/release acceptance remain separate gates.
+Integrated business candidate: local obligations/semantic formats, durable nonblocking phases, queue starts/cancellation, shared lookup and typed content lifecycle are implemented. Focused Linux evidence and remaining model/release gates are in [the increment record](../../cara-fleet-increment-01-2026-10-24.md). No package is complete or deployed yet.

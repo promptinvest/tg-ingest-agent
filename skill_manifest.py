@@ -38,6 +38,11 @@ TASK_TOOLS = {
         "writes_state": False, "destructive": False,
         "requires_confirmation": False, "allowed_proactive": False,
     },
+    "fleet.lookup": {
+        "risk": "read_only", "uses_llm": False, "external_network": False,
+        "writes_state": False, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
     "source.fetch": {
         "risk": "network_read", "uses_llm": False, "external_network": True,
         "writes_state": False, "destructive": False,

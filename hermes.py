@@ -180,7 +180,8 @@ class HermesMixin:
                         f" -> {len(context)} notes",
                         data={"scores": [round(c.get("score") or 0.0, 3) for c in semantic],
                               "keyword": len(keyword), "floor": self.cfg.ask_min_score})
-            hint = persona.boss_preference_hint(self.conn)
+            import answer_policy
+            hint = answer_policy.hint(self.conn)
             answer = llm.chat_profile(self.cfg, self.conn, "ask",
                                       knowledge.build_ask_messages(question, context, hint),
                                       profile="ask_grounded")

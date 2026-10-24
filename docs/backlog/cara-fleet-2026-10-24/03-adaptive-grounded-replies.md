@@ -83,3 +83,5 @@ https://github.com/promptinvest/tg-ingest-agent/tree/main/docs/backlog/cara-flee
 
 CF-03 cleanup increment in progress; adaptive replies and qualification remain.
 See [increment 01](../../cara-fleet-increment-01-2026-10-24.md). Original acceptance criteria remain required.
+
+Integrated business candidate: local obligations/semantic formats, durable nonblocking phases, queue starts/cancellation, shared lookup and typed content lifecycle are implemented. Focused Linux evidence and remaining model/release gates are in [the increment record](../../cara-fleet-increment-01-2026-10-24.md). No package is complete or deployed yet.

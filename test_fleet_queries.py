@@ -396,6 +396,27 @@ def re_cyrillic(text):
     return any("а" <= character.casefold() <= "я" for character in text)
 
 
+class SemanticRelationNames(unittest.TestCase):
+    def setUp(self):
+        self.document = fixture()
+
+    def test_semantic_names_relationship_resolves_exact_targets_without_host_label(self):
+        plan = planned(self.document, ["host-a"], ["hosted_projects"], presentation="names")
+        self.assertEqual(set(plan["subjects"]), {"project-alpha", "project-beta"})
+        self.assertEqual(plan["fields"], ["label"])
+        answer = "\n".join(queries.render(self.document, plan))
+        self.assertIn("Project Alpha", answer)
+        self.assertIn("Project Beta", answer)
+        self.assertNotIn("Example application host", answer)
+
+    def test_names_relationship_keeps_partial_catalog_and_unknown_gaps(self):
+        plan = planned(self.document, ["host-c"], ["hosted_projects"], presentation="names")
+        self.assertEqual(plan["fields"], ["hosted_projects"])
+        self.assertEqual(plan["presentation"], "list")
+        answer = "\n".join(queries.render(self.document, plan))
+        self.assertIn("catalog", answer)
+        self.assertNotIn("only project", answer)
+
 if __name__ == "__main__":
     unittest.main()
 

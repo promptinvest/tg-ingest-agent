@@ -98,3 +98,28 @@ Project-read activation requires exact source/hash and root mapping checks for e
 Qualify catalog answers by required entities/fields, dates, unknowns and zero host inspections. A successful model/tool call is insufficient. Retain the original question and canonical owner scope for corrections; assistant prose and unsupported completeness claims cannot provide authority. Keep all 47 original and 15 additional public specifications unchanged.
 
 The offline MCP facts adapter is not activated by source installation. Any later activation requires root-owned caller/facts configuration, unprivileged runtime/denial checks, bounded nonblocking client integration and parity against requested answers. Discovery/version negotiation alone does not qualify a business requirement or permit SSH/effects. Never advertise durable/project/Tasks support before its lifecycle and acceptance exist.
+
+### Integrated business candidate release gates
+
+Freeze the exact source before full normal/shuffled Linux and pinned CI gates.
+Retain all qualification failures. Actual-model receipts must check requested
+fields/entities/format and grounded final answers, with existing accounting and a
+bounded aggregate cap; no Telegram sends, live effects or owner-update replay.
+Do not run an old controller or use a mixed dirty stage as a published artifact.
+
+Upgrade all selected root-owned scoped gateways from the exact verified package,
+preserving keys/sudo/wrappers/policy and every existing denial. Install only the
+reviewed sanitized facts export. After application files are installed, restart the
+separate executor quiescently and verify its loaded source/PID/readiness hash before
+activating new queue lifecycle. Retain legacy receipt/card compatibility. Confirm
+actual results directory ownership is the executor and Cara cannot write/replace
+it or its protected ancestors. No maintenance effect is a release demonstration.
+
+Set CARA_FLEET_CONTENT_LIFECYCLE=true for this installed package and record this
+single intended environment addition; all preexisting environment values and other
+applications/monitor/alert/retention identities remain pinned. An absent setting
+keeps never-installed defaults; malformed values refuse startup. Keep it true if
+investigation is later disabled, so dormant content copies remain in typed purge.
+Purge validation uses isolated fixtures only. Keep consumed tokens indefinitely.
+Use the original backup/stopped-data-parity/recovery/readiness/runtime gates and a
+fresh one-use active-session source-bound controller. Do not enable MCP yet.

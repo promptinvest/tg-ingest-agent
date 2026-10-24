@@ -117,6 +117,13 @@ TOOLS = {
         output_paths=(("reminders", "confirmed_local"),),
         output_limit=96000,
     ),
+    "fleet.lookup": _spec(
+        "fleet.lookup", "Read published fleet and project facts", "read_only",
+        required=("query", "fields"), bound=("query",),
+        optional=("subjects", "scope", "presentation", "detail", "lang"),
+        output_schema="fleet.lookup/v1",
+        output_paths=(("lookup", "confirmed_local"),), output_limit=96000,
+    ),
     "source.fetch": _spec(
         "source.fetch", "Read a supplied URL", "network_read",
         required=("url",), bound=("url",),
@@ -249,6 +256,12 @@ def validate_input(spec, value):
                                         "note_no")}
     elif spec.id == "reminders.read":
         out = {}
+    elif spec.id == "fleet.lookup":
+        import fleet_broker
+        try:
+            out = fleet_broker.validate_input(out)
+        except ValueError as exc:
+            raise ToolInputError(str(exc)) from exc
     elif spec.id == "source.fetch":
         url = _bounded_text(out.get("url"), 2048, "url")
         try:
@@ -360,6 +373,12 @@ def validate_output(spec, data, evidence):
             _text_output(row["due_utc"], 80)
             if row["recurrence"] not in {"none", "daily", "weekly"}:
                 raise ToolOutputError("reminders.read: invalid recurrence")
+    elif spec.id == "fleet.lookup":
+        import fleet_broker
+        try:
+            fleet_broker.validate_shape(value["lookup"])
+        except ValueError as exc:
+            raise ToolOutputError(str(exc)) from exc
     elif spec.id == "source.fetch":
         row = value["document"]
         _exact_dict(row, {"url", "title", "text"})

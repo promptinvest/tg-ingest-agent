@@ -169,6 +169,21 @@ def validate_plan(value, document, previous=None):
     if not plan["subjects"] or not plan["fields"]:
         raise ValueError("catalog plan has no answer obligations")
     if plan["presentation"] == "names" and plan["fields"] != ["label"]:
+        relation_fields = set(plan["fields"]) & {"hosted_projects", "project_hosts", "dependencies"}
+        if len(relation_fields) == 1 and set(plan["fields"]) <= relation_fields | {"label"}:
+            relation_field = next(iter(relation_fields))
+            relation_cells = [_relation_cell(document, known[identity], relation_field) for identity in plan["subjects"]]
+            # A model may express "project names on this host" as a relationship
+            # obligation. Resolve it in code; never erase unknown/partial coverage.
+            if all(cell["status"] == "recorded" and cell["completeness"] == "complete" for cell in relation_cells):
+                targets = list(dict.fromkeys(item["id"] for cell in relation_cells for item in cell["value"]))
+                if targets:
+                    plan.update(subjects=targets, fields=["label"], scope="explicit")
+                else:
+                    plan["presentation"] = "list"  # preserve the supported empty relationship
+            else:
+                plan["presentation"] = "list"  # preserve the precise relationship gap
+    if plan["presentation"] == "names" and plan["fields"] != ["label"]:
         raise ValueError("names-only format would erase requested facts")
     return plan
 

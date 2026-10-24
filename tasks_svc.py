@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import common
+import fleet_lifecycle
 import learning
 import improvement
 import llm
@@ -849,6 +850,10 @@ class TasksMixin:
 
     def purge_task_external_state(self, purge_nonce, timeout_seconds=5):
         """Remove task-derived files after the exact scope=all DB purge."""
+        if fleet_lifecycle.needs_external_cleanup(self.conn, purge_nonce):
+            hook = getattr(self, "purge_fleet_external_state", None)
+            if not callable(hook) or not hook(purge_nonce, timeout_seconds=timeout_seconds):
+                return False
         cleanup_ok = True
         # The worker purges its complete spool only after its current child has
         # ended. Publishing this marker after the DB commit prevents a crash
@@ -985,6 +990,10 @@ class TasksMixin:
                     log(f"pending task purge recovery deferred: {exc}")
                     return False
             if isinstance(authorized, dict) and authorized.get("phase") == "prepared":
+                if authorized.get("fleet_phase") or authorized.get("fleet_quiescence"):
+                    hook = getattr(self, "abort_fleet_purge", None)
+                    if not callable(hook) or not hook(authorized["nonce"]):
+                        return False
                 # The DB transaction never committed; no worker marker was
                 # published, so ordinary task processing is still intact.
                 store.kv_set(self.conn, "task_purge_authorization", "")

@@ -17,7 +17,7 @@ def frame(question, plan, inventory, previous=None, update=None):
 
 
 def recent(conn, chat_id, text=""):
-    row = conn.execute("SELECT * FROM fleet_requests WHERE chat_id=? AND state IN ('done','queued','ready','approval') ORDER BY created_at DESC LIMIT 1", (chat_id,)).fetchone()
+    row = conn.execute("SELECT * FROM fleet_requests WHERE chat_id=? AND state IN ('done','queued','inspection_started','ready','approval','planning_queued','planning_started','planning_completed','planning_consumed','synthesis_queued','synthesis_started','synthesis_completed','synthesis_consumed') ORDER BY created_at DESC LIMIT 1", (chat_id,)).fetchone()
     if not row or not -30 <= protocol.age(row["created_at"]) < 7200:
         return {}
     payload = json.loads(row["payload"])

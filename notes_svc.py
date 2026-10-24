@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import events
+import fleet_lifecycle
 import ingest
 import journals
 import llm
@@ -556,6 +557,10 @@ class NotesMixin:
             "learning_lessons": ("правил обучения" if ru else "learned procedures"),
             "updates_scrubbed": ("служебных копий входящих сообщений" if ru else
                                  "raw copies of incoming messages"),
+            "fleet_requests": ("запросов о флоте" if ru else "fleet requests"),
+            "fleet_events": ("событий/отчётов флота" if ru else "fleet events/reports"),
+            "fleet_context_bindings": ("привязок контекста флота" if ru else "fleet context bindings"),
+            "fleet_transport_copies": ("транспортных файлов флота" if ru else "fleet transport files"),
             "assistant_tasks": ("задач Cara" if ru else "Cara tasks"),
             "task_artifacts": ("файлов задач" if ru else "task artifacts"),
             "task_feedback": ("отзывов о задачах" if ru else "task feedback rows"),
@@ -577,7 +582,16 @@ class NotesMixin:
             cat = info.get("category") or "?"
             parts = [f"  • {info['messages']} " + ("записей дневника «" if ru else
                      "entries of the journal \"") + f"{cat}»"]
+        if any(info.get(key) for key in fleet_lifecycle.PREVIEW_KEYS):
+            parts.append("  • Бюджеты, настройки, рабочие факты, маркеры использованных разрешений и служебная готовность сохраняются. История релизов и проверенные резервные копии остаются; политика бэкапов не меняется." if ru else "  • Budgets, preferences, operational facts, consumed authorization markers and readiness remain. Release evidence and checked backups remain under the existing backup policy.")
         return "\n".join(parts)
+
+    def _content_purge_preview(self, scope, category=None):
+        info = store.purge_preview(self.conn, scope, category)
+        hook = getattr(self, "fleet_purge_preview", None)
+        if scope == "all" and callable(hook):
+            info.update(fleet_lifecycle._counts(hook()))
+        return info
 
     def do_purge(self, chat_id, lang, params):
         scope = str(params.get("scope") or "").strip().lower()
@@ -593,7 +607,7 @@ class NotesMixin:
             scope = "journal"
         elif scope == "journal" and not store.is_journal(self.conn, category):
             scope = "category"
-        info = store.purge_preview(self.conn, scope, category)
+        info = self._content_purge_preview(scope, category)
         # Every key the preview can DISCLOSE belongs here: this guard decides
         # whether a disclosed effect happens at all, so a destructive effect it
         # cannot see (the scope-'all' inbox scrub) would be skipped on exactly
@@ -606,7 +620,8 @@ class NotesMixin:
                                          "assistant_tasks", "task_artifacts",
                                          "task_feedback", "evaluation_cases",
                                          "evaluation_runs",
-                                         "improvement_proposals", "learning_lessons")):
+                                         "improvement_proposals", "learning_lessons",
+                                         *fleet_lifecycle.PREVIEW_KEYS)):
             self.reply(chat_id, T(lang, "purge_nothing"), record=False)
             return
         if scope in ("category", "journal"):
@@ -635,10 +650,13 @@ class NotesMixin:
         payload = pending["payload"]
         store.pending_clear(self.conn, chat_id)
         if text.strip().casefold() != str(payload.get("phrase") or "").strip().casefold():
+            cancel = getattr(self, "cancel_fleet_purge", None)
+            if payload.get("fleet_purge_nonce") and callable(cancel):
+                cancel(payload["fleet_purge_nonce"])
             self.reply(chat_id, T(lang, "purge_cancelled"), record=False)
             return
-        actual = store.purge_preview(
-            self.conn, payload["scope"], payload.get("category"))
+        actual = self._content_purge_preview(
+            payload["scope"], payload.get("category"))
         compare_actual = dict(actual)
         if (payload["scope"] == "all"
                 and getattr(self, "_current_update_id", None) is not None):
@@ -660,7 +678,8 @@ class NotesMixin:
             store.pending_set(
                 self.conn, chat_id, "purge",
                 {"scope": payload["scope"], "category": payload.get("category"),
-                 "phrase": phrase, "anticipated": anticipated}, ttl_seconds=300)
+                 "phrase": phrase, "anticipated": anticipated,
+                 **({"fleet_purge_nonce": payload["fleet_purge_nonce"]} if payload.get("fleet_purge_nonce") else {})}, ttl_seconds=300)
             self.reply(
                 chat_id, T(lang, "purge_preview",
                                 impact=self._purge_impact_text(lang, anticipated),
@@ -683,10 +702,35 @@ class NotesMixin:
                      "a durable deletion marker. Please retry."),
                     record=False)
                 return
-        info, paths = store.purge_execute(
-            self.conn, payload["scope"], payload.get("category"),
-            task_purge_nonce=purge_nonce)
-        if payload["scope"] == "all" and getattr(self, "_current_update_id", None) is not None:
+        hook = getattr(self, "prepare_fleet_purge", None)
+        if payload["scope"] == "all" and callable(hook):
+            try:
+                state = hook(chat_id, lang, purge_nonce, compare_actual)
+            except (fleet_lifecycle.FleetLifecycleError, OSError, ValueError, RuntimeError):
+                self.reply(chat_id, "Fleet purge is safely held; acknowledgement is unavailable. Content is preserved."
+                           if lang != "ru" else "Очистка флота безопасно приостановлена: подтверждение пока недоступно. Содержимое сохранено.", record=False)
+                return
+            if state != "ready":
+                if state == "pending":
+                    self.reply(chat_id, "Purge is waiting for fleet work to stop and model accounting to settle. Content is preserved."
+                               if lang != "ru" else "Очистка ждёт остановки работы с флотом и завершения учёта модели. Содержимое сохранено.", record=False)
+                return
+        return self._complete_content_purge(chat_id, lang, payload["scope"], payload.get("category"), purge_nonce)
+
+    def _complete_content_purge(self, chat_id, lang, scope, category, purge_nonce, *, scrub_update=True):
+        """Shared durable continuation; never replays the owner's inbound update."""
+        payload = {"scope": scope, "category": category}
+        try:
+            info, paths = store.purge_execute(
+                self.conn, scope, category, task_purge_nonce=purge_nonce)
+        except fleet_lifecycle.FleetLifecycleError:
+            self.reply(chat_id,
+                       "Очистка не начата: работа с флотом ещё не подтвердила безопасное удаление. Содержимое сохранено."
+                       if lang == "ru" else
+                       "Purge was not started: fleet work has not yet acknowledged safe deletion. Content is preserved.",
+                       record=False)
+            return
+        if scrub_update and payload["scope"] == "all" and getattr(self, "_current_update_id", None) is not None:
             self.conn.execute(
                 "UPDATE telegram_updates SET payload = '{}', last_error = NULL,"
                 " status = 'done', updated_at = ?"

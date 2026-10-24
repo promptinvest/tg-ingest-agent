@@ -1651,3 +1651,37 @@ Twenty-seven isolated Linux checks pass. This is an offline facts-only increment
 no production endpoint/client is enabled, no investigation/project API or Tasks is
 advertised, and no new content ledger exists. Durable read parity, unprivileged
 installation, owner-loop responsiveness and complete CF-07 acceptance remain open.
+## October 24 - Integrated fleet business candidate (not yet deployed)
+
+The current candidate routes published address/provider/placement facts to local
+obligations, uses the existing budgeted planner for free-form RU/EN fields/format,
+and combines catalog and selected live answers without broadening project scope.
+Known facts remain available during executor/model outages. Corrections retain
+canonical owner scope; runtime formatting can reuse retained evidence with its
+original timestamp and no extra host probe. Meaningful names survive cleanup.
+
+Model transport runs outside the owner loop with durable source/revision/reservation
+bindings, unknown-paid no-resend recovery and foreground capacity. Exact executor
+readiness enables separate queue/start deadlines and cancellation receipts; legacy
+uncancelled envelopes/cards remain compatible. A typed all-content purge now counts
+fleet content/copies, quiesces transport/model work, renews changed previews and
+recovers by the same nonce. Budgets, preferences, facts, backup/release evidence and
+consumed effect markers are retained. An explicit installed lifecycle setting keeps
+this coverage when fleet investigation is disabled; malformed settings fail closed.
+
+Shared explanatory guidance honors confirmed preferences/current requested detail.
+Ordinary fleet replies show question-relevant evidence and material gaps; explicit
+detail retains full reports/page receipts. The shared task broker gains only local
+fleet.lookup, with canonical owner authority, actual-facts revalidation, useful
+answers and existing immutable receipts. A narrow validated projection preserves
+structural hashes while rejecting secret-shaped free text; legacy redaction stays.
+
+Focused Linux evidence includes 25 original-corpus/parity business tests, 36 query,
+26 broker, 28 lifecycle, 17 executor queue and 12 queue-client cases, alongside
+existing fleet/task/backup checks. The 47+15 source specifications are unchanged.
+Actual-model qualification exposed a valid relation-names plan, now resolved in
+code without hiding partial/unknown relations; fresh qualification is pending.
+Full exact-source normal/shuffled tests, CI, private facts/gateway publication,
+backups/runtime/sandbox checks and guarded deployment are still required. No CF
+package is complete. Advanced project adapters and durable MCP reads remain later
+independent increments; MCP is not enabled by this candidate.

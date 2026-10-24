@@ -42,6 +42,7 @@ import journals
 import knowledge
 import llm
 import inference_io
+import worker_client
 import voice_svc
 import media
 import media_svc
@@ -65,6 +66,7 @@ import storage
 import store
 import sysinfo
 import fleet
+import fleet_lifecycle_svc
 import task_runner
 import tasks_svc
 import texts
@@ -196,7 +198,7 @@ _LIST_REPLACING_ACTIONS = frozenset({
 })
 
 
-class Agent(fleet.FleetMixin, learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseMixin, issue_digest.IssueDigestMixin, voice_svc.VoiceMixin, tasks_svc.TasksMixin, hermes.HermesMixin,
+class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.LearningMixin, media_svc.MediaMixin, converse_svc.ConverseMixin, issue_digest.IssueDigestMixin, voice_svc.VoiceMixin, tasks_svc.TasksMixin, hermes.HermesMixin,
             reminders_svc.ReminderMixin, notes_svc.NotesMixin):
     def __init__(self, cfg):
         # Fail fast if a router action lacks a manifest policy (P0.1: the
@@ -814,8 +816,12 @@ class Agent(fleet.FleetMixin, learning.LearningMixin, media_svc.MediaMixin, conv
     )
 
     def check_assistant_tasks(self):
+        try:
+            self.check_fleet_content_purge()
+            self.recover_pending_task_purge(timeout_seconds=0.1)
+        except (ValueError, OSError, worker_client.WorkerError) as exc:
+            log_warn("fleet content recovery remains held: " + type(exc).__name__)
         self.check_fleet_requests()
-        self.recover_pending_task_purge(timeout_seconds=0.1)
         task_runner.expire_approvals(self.conn)
         self.retry_task_deliveries()
         return task_runner.tick(self, self.conn)
@@ -967,9 +973,9 @@ class Agent(fleet.FleetMixin, learning.LearningMixin, media_svc.MediaMixin, conv
         if getattr(self.cfg, "fleet_enabled", False):
             try:
                 pending = self.conn.execute(
-                    "SELECT 1 FROM fleet_requests WHERE state IN "
-                    "('preparing','queued','executing','ready',"
-                    "'approval_sending','delivering','analysis_started') LIMIT 1"
+                    "SELECT 1 FROM fleet_requests WHERE state IN ("
+                    + ",".join("?" for _ in fleet.PENDING_STATES) + ") LIMIT 1",
+                    fleet.PENDING_STATES
                 ).fetchone()
             except sqlite3.Error as exc:
                 # Reading pending work must not add an unguarded SQLite failure
@@ -982,6 +988,7 @@ class Agent(fleet.FleetMixin, learning.LearningMixin, media_svc.MediaMixin, conv
         return self.cfg.poll_timeout
 
     def run(self):
+        self.fleet_async = True
         self.voice_async = True
         try:
             tg_call(self.cfg.token, "deleteWebhook", {"drop_pending_updates": False})

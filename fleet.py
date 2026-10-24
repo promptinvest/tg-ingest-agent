@@ -9,12 +9,20 @@ from types import SimpleNamespace
 import fleet_protocol as protocol
 import fleet_context
 import fleet_report
+import fleet_answers
+import fleet_async
+import fleet_project
+import fleet_lifecycle
+import fleet_catalog
+import fleet_queue
 import llm
 import store
 import tasking
 import worker_client
 
 SCHEMA = protocol.SCHEMA
+PENDING_STATES = ("preparing", "queued", "inspection_started", "executing", "ready", "approval_sending",
+                  "delivering", "analysis_started") + fleet_async.STATES
 _context_recent = fleet_context.recent
 
 
@@ -114,7 +122,7 @@ def submission_binding(update, step):
     return {"job_id": f"w_{update}_{step}_{nonce}", "nonce": nonce}
 
 
-def submit(cfg, update, step, operation, binding=None):
+def submit(cfg, update, step, operation, binding=None, lifecycle=None):
     """Publish structural IDs/hashes verbatim; the research client redacts hashes."""
     directory = Path(spool(cfg).task_worker_spool) / "requests"
     pending = list(directory.glob("w_*.json"))
@@ -128,6 +136,10 @@ def submit(cfg, update, step, operation, binding=None):
                 "step_id": step, "tool": "fleet." + operation["operation"],
                 "input": operation, "input_hash": protocol.digest(operation),
                 "policy_version": protocol.VERSION, "implementation_version": protocol.VERSION}
+    if lifecycle is not None:
+        if fleet_queue.readiness(spool(cfg)) is None:
+            raise fleet_queue.QueueError("fleet lifecycle executor is unavailable")
+        envelope["lifecycle"] = fleet_queue.validate_lifecycle(lifecycle)
     worker_client._atomic_publish(directory, job + ".json", protocol.canonical(envelope).encode())
     return {"job_id": job, "nonce": nonce}
 
@@ -270,7 +282,7 @@ def plan_investigation(cfg, conn, question, inventory, context, lang):
     raise ValueError(error or "invalid fleet plan")
 
 
-class FleetMixin:
+class _FleetCore:
     def do_local_vps_stats(self, chat_id, lang):
         import sysinfo
         answer = sysinfo.format_report(sysinfo.collect(str(self.cfg.db_path.parent)), lang, self.media_bytes())
@@ -317,6 +329,137 @@ class FleetMixin:
             answer += ", ".join(key.upper() + " — " + inventory["hosts"][key]["label"] for key in (hosts or inventory["hosts"])) + "."
         return hosts, answer
 
+    def _fleet_inspect_operation(self, plan, inventory):
+        return {"operation": "inspect", "hosts": plan["hosts"], "facets": plan["facets"],
+                "inventory_hash": protocol.digest(inventory)}
+
+    def _fleet_context_frame(self, question, plan, inventory, previous=None, update=None):
+        return fleet_context.frame(question, plan, inventory, previous, update)
+
+    def _fleet_additional_operation(self, payload, checks, inventory):
+        return {"operation": "inspect", "hosts": sorted({check["host"] for check in checks}),
+                "facets": sorted({check["facet"] for check in checks}),
+                "inventory_hash": protocol.digest(inventory)}
+
+    def _fleet_worker_binding(self, row, payload):
+        operation = payload["operation"]
+        expected = dict(payload["binding"], task_id=row["source_update"],
+                        step_id=payload.get("inspection_step", 1) if operation["operation"] == "inspect" else 2,
+                        tool="fleet." + operation["operation"], input_hash=protocol.digest(operation),
+                        policy_version=protocol.VERSION, implementation_version=protocol.VERSION)
+        if payload.get("executor_binding") not in (None, expected):
+            raise fleet_queue.QueueError("fleet executor request binding changed")
+        return expected
+
+    def _fleet_submit_operation(self, row, payload, operation, step, state, event):
+        binding = submission_binding(row["source_update"], step)
+        submitted_at = protocol.now()
+        executor = spool(self.cfg)
+        ready = fleet_queue.readiness(executor)
+        lifecycle = fleet_queue.lifecycle(executor, now=submitted_at) if ready is not None else None
+        if payload.get("binding"):
+            payload.setdefault("executor_history", []).append({
+                key: payload[key] for key in ("binding", "operation", "submitted_at", "executor_binding",
+                                             "executor_lifecycle", "executor_started", "executor_contract")
+                if key in payload})
+        for key in ("executor_lifecycle", "executor_started", "executor_status", "executor_cancel", "executor_contract"):
+            payload.pop(key, None)
+        payload.update(binding=binding, operation=operation, submitted_at=submitted_at)
+        expected = dict(binding, task_id=row["source_update"], step_id=step,
+                        tool="fleet." + operation["operation"], input_hash=protocol.digest(operation),
+                        policy_version=protocol.VERSION, implementation_version=protocol.VERSION)
+        payload["executor_binding"] = expected
+        if lifecycle is not None:
+            payload["executor_lifecycle"] = lifecycle
+            payload["executor_contract"] = {key: ready[key] for key in (
+                "contract_hash", "implementation_hash", "pid", "started_at")}
+        # The exact nonce/input/source phase is durable BEFORE publication. A
+        # crash after this boundary is never repaired by resubmitting the job.
+        self._fleet_save(row, state, payload, event)
+        if lifecycle is None:
+            submit(self.cfg, row["source_update"], step, operation, binding=binding)
+        else:
+            submit(self.cfg, row["source_update"], step, operation, binding=binding, lifecycle=lifecycle)
+
+    def _fleet_cancel_executor(self, row, payload, reason):
+        if not payload.get("executor_lifecycle") or not payload.get("binding"):
+            return False
+        fleet_queue.cancel(spool(self.cfg), **payload["binding"])
+        payload["executor_cancel"] = {"requested_at": protocol.now(), "reason": reason}
+        return True
+
+    def _fleet_observe_executor_start(self, row, payload):
+        lifecycle = payload.get("executor_lifecycle")
+        if lifecycle is None:
+            return None
+        fleet_queue.validate_lifecycle(lifecycle)
+        started = fleet_queue.poll_started(spool(self.cfg), lifecycle=lifecycle,
+                                           **self._fleet_worker_binding(row, payload))
+        previous = payload.get("executor_started")
+        if previous is not None and started != previous:
+            raise fleet_queue.QueueError("fleet started receipt disappeared or changed")
+        if started is not None and previous is None:
+            payload["executor_started"] = started
+            state = "inspection_started" if payload["operation"]["operation"] == "inspect" else "executing"
+            self._fleet_save(row, state, payload, "executor_start_observed")
+        return started
+
+    def _fleet_terminal_executor_status(self, row, payload, error):
+        # worker_client.poll MUST first verify all binding/hash fields. Only
+        # its typed terminal failures are eligible for this additional check.
+        states = {"queue_expired", "execution_expired", "execution_interrupted"}
+        state = "cancelled" if str(error) == "worker job was cancelled" else str(error)
+        if state not in states | {"cancelled"} or not payload.get("executor_lifecycle"):
+            return None
+        expected = self._fleet_worker_binding(row, payload)
+        path = Path(spool(self.cfg).task_worker_spool) / "results" / (expected["job_id"] + ".json")
+        raw = worker_client._read_regular_nofollow(path, protocol.MAX_BYTES)
+        if raw is None:
+            raise fleet_queue.QueueError("fleet terminal receipt disappeared")
+        receipt = json.loads(raw)
+        fields = set(expected) | {"version", "lifecycle", "status", "error", "result", "result_hash"}
+        if (not isinstance(receipt, dict) or set(receipt) != fields or receipt.get("version") != 1
+                or any(receipt.get(key) != value for key, value in expected.items())
+                or receipt.get("lifecycle") != payload["executor_lifecycle"]
+                or receipt.get("status") != ("cancelled" if state == "cancelled" else "error")
+                or receipt.get("error") != state or receipt.get("result") != {"state": state}
+                or receipt.get("result_hash") != protocol.digest(receipt["result"])):
+            raise fleet_queue.QueueError("fleet terminal receipt mismatch")
+        return state
+
+    def _fleet_finish_executor_gap(self, row, payload, status, notify=True):
+        payload["executor_status"] = {"state": status, "observed_at": protocol.now()}
+        uncertain = (payload["operation"]["operation"] == "restart"
+                     and status not in {"queue_expired", "cancelled"})
+        state = "ambiguous" if uncertain else ("cancelled" if status == "cancelled" else "failed")
+        self._fleet_save(row, state, payload, "executor_" + status + "_no_replay")
+        if not notify:
+            return
+        en = {"queue_expired": "The check expired while waiting for the executor; no execution was confirmed.",
+              "queue_timeout": "The check reached its waiting deadline without a confirmed start. Cancellation was requested.",
+              "execution_expired": "The started check reached its execution deadline without a complete confirmed result.",
+              "execution_timeout": "The started check has no confirmed result at its execution deadline. Cancellation was requested.",
+              "execution_interrupted": "The executor stopped after starting this check. I will not repeat it automatically.",
+              "cancelled": "The executor confirmed cancellation of this check."}
+        ru = ("\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u043d\u0435 \u0434\u043e\u0436\u0434\u0430\u043b\u0430\u0441\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u0438; \u0437\u0430\u043f\u0443\u0441\u043a \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0451\u043d."
+              if status.startswith("queue_") else
+              "\u0417\u0430\u043f\u0443\u0449\u0435\u043d\u043d\u0430\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u043d\u0435 \u0434\u0430\u043b\u0430 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0451\u043d\u043d\u043e\u0433\u043e \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u0430."
+              if status != "cancelled" else
+              "\u0418\u0441\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043b \u043e\u0442\u043c\u0435\u043d\u0443 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438.")
+        self.reply(row["chat_id"], ru if payload["lang"] == "ru" else en[status])
+
+    def _fleet_executor_wait_expired(self, row, payload):
+        lifecycle = payload.get("executor_lifecycle")
+        if lifecycle is None:
+            return False
+        started = payload.get("executor_started")
+        deadline = started["execution_expires_at"] if started else lifecycle["queue_expires_at"]
+        if protocol.age(deadline) < 0:
+            return False
+        self._fleet_cancel_executor(row, payload, "execution_deadline" if started else "queue_deadline")
+        self._fleet_finish_executor_gap(row, payload, "execution_timeout" if started else "queue_timeout")
+        return True
+
     def _fleet_save(self, row, state, payload, event):
         encoded = protocol.canonical(payload)
         self.conn.execute("UPDATE fleet_requests SET state=?,payload=?,updated_at=? WHERE id=?",
@@ -329,6 +472,9 @@ class FleetMixin:
         return fleet_context.recent(self.conn, chat_id, text)
 
     def do_fleet(self, chat_id, lang, text, msg_id=None, allow_maintenance=False, view_override=None):
+        if fleet_lifecycle.admission_paused(self.conn):
+            self.reply(chat_id, "Fleet work is paused while the confirmed content purge settles." if lang != "ru" else "Проверки флота приостановлены на время подтверждённого удаления содержимого.")
+            return
         if not getattr(self.cfg, "fleet_enabled", False):
             self.reply(chat_id, "Управление флотом пока не подключено." if lang == "ru" else "Fleet access is not connected yet.")
             return
@@ -340,7 +486,12 @@ class FleetMixin:
         existing = self.conn.execute("SELECT * FROM fleet_requests WHERE chat_id=? AND source_update=?", (chat_id, update)).fetchone()
         if existing:
             return
-        if self.conn.execute("SELECT COUNT(*) FROM fleet_requests WHERE state IN ('queued','executing','ready')").fetchone()[0] >= 8:
+        if view_override is None and self._fleet_try_catalog_direct(chat_id, lang, text, msg_id, update):
+            return
+        active = ("queued", "inspection_started", "executing", "ready") + fleet_async.STATES
+        if self.conn.execute(
+                "SELECT COUNT(*) FROM fleet_requests WHERE state IN ("
+                + ",".join("?" for _ in active) + ")", active).fetchone()[0] >= 8:
             self.reply(chat_id, "Дождёмся текущих проверок." if lang == "ru" else "Let's finish the current checks first.")
             return
         try:
@@ -355,7 +506,7 @@ class FleetMixin:
                 payload = {"question": text, "source_hash": tasking.source_hash(text), "lang": lang,
                            "plan": {"hosts": hosts}, "catalog_hash": protocol.digest(inventory),
                            "kind": view, "cost": 0, "model_calls": 0, "answer": answer,
-                           "context": fleet_context.frame(text, {"hosts": hosts, "facets": []}, inventory, update=update)}
+                           "context": self._fleet_context_frame(text, {"hosts": hosts, "facets": []}, inventory, update=update)}
                 request_id = secrets.token_hex(16)
                 self.conn.execute("INSERT INTO fleet_requests VALUES(?,?,?,?,?,?,?)", (request_id, chat_id, update, "delivering", protocol.canonical(payload), protocol.now(), protocol.now()))
                 self.conn.commit()
@@ -368,6 +519,10 @@ class FleetMixin:
                 self._fleet_save(row, "done", payload, "inventory_view_delivered")
                 return
             previous = self._fleet_recent(chat_id, text)
+            if getattr(self, "fleet_async", False):
+                self._fleet_begin_async(chat_id, lang, text, msg_id, allow_maintenance,
+                                        update, inventory, previous)
+                return
             plan, cost, model_calls = plan_investigation(self.cfg, self.conn, text, inventory, previous, lang)
             if plan["operation"] == "restart" and not allow_maintenance:
                 raise ValueError("a read-only route cannot request maintenance")
@@ -378,16 +533,14 @@ class FleetMixin:
                 return
             payload = {"question": text, "source_hash": tasking.source_hash(text), "lang": lang,
                        "plan": plan, "catalog_hash": protocol.digest(inventory), "cost": cost, "model_calls": model_calls,
-                       "context": fleet_context.frame(text, plan, inventory, previous, update)}
+                       "context": self._fleet_context_frame(text, plan, inventory, previous, update)}
             request_id = secrets.token_hex(16)
             self.conn.execute("INSERT INTO fleet_requests VALUES(?,?,?,?,?,?,?)",
                               (request_id, chat_id, update, "preparing", protocol.canonical(payload), protocol.now(), protocol.now()))
             self.conn.commit()
             row = self.conn.execute("SELECT * FROM fleet_requests WHERE id=?", (request_id,)).fetchone()
-            operation = {"operation": "inspect", "hosts": plan["hosts"], "facets": plan["facets"],
-                         "inventory_hash": payload["catalog_hash"]}
-            binding = submit(self.cfg, update, 1, operation)
-            payload.update(binding=binding, operation=operation, submitted_at=protocol.now())
+            operation = self._fleet_inspect_operation(plan, inventory)
+            self._fleet_submit_operation(row, payload, operation, 1, "preparing", "inspection_submission_bound")
             self._fleet_save(row, "queued", payload, "inspection_queued")
             self.reply(chat_id, "Проверяю флот; вернусь с результатами." if lang == "ru" else "I'm checking the fleet and will return with the findings.", reply_to=msg_id)
         except (ValueError, OSError, llm.LLMError, llm.BudgetExceeded, worker_client.WorkerError):
@@ -474,20 +627,61 @@ class FleetMixin:
             # Persist the exact restart binding before publishing, so an
             # interruption never leaves the DB pointing at the old inspection.
             operation = payload["approval"]
-            binding = submission_binding(row["source_update"], 2)
-            payload.update(binding=binding, operation=operation, submitted_at=protocol.now())
-            self._fleet_save(row, "executing", payload, "owner_approved")
-            submit(self.cfg, row["source_update"], 2, operation, binding=binding)
+            self._fleet_submit_operation(row, payload, operation, 2, "executing", "owner_approved")
             self._fleet_save(row, "executing", payload, "maintenance_submitted")
             self._fleet_notice(callback_id, chat_id, "Started / выполняю")
         except (ValueError, OSError, worker_client.WorkerError):
             self._fleet_save(row, "ambiguous", payload, "approval_or_execution_unavailable")
             self._fleet_notice(callback_id, chat_id, "Check state / проверь состояние")
 
+    def _fleet_after_analysis(self, row, payload, report, decision):
+        lang = payload["lang"]
+        # One bounded additional read for selected, previously absent facets.
+        checks = [c for c in (decision or {}).get("next_checks", [])
+                  if c["facet"] not in payload["result"]["hosts"].get(c["host"], {})]
+        if checks and not payload.get("inspection_step") and payload["model_calls"] < getattr(self.cfg, "task_model_call_limit", 4) and payload["cost"] < self.cfg.task_cost_limit_usd:
+            worker_client.acknowledge(spool(self.cfg), payload["binding"]["job_id"])
+            op = self._fleet_additional_operation(payload, checks, catalog(self.cfg))
+            payload["inspection_step"] = 3
+            payload["plan"]["facets"] = sorted(set(payload["plan"]["facets"]) | set(op["facets"]))
+            self._fleet_submit_operation(row, payload, op, 3, "queued", "additional_inspection_bound")
+            return True
+        pages = [tasking.redact_derived_text(page) for page in fleet_answers.render(
+            report, decision, payload["plan"], lang, self.conn)]
+        if decision is None:
+            pages[0] = ("Измерения получены; автоматический разбор недоступен.\n" if lang == "ru" else "Measurements received; automatic analysis is unavailable.\n") + pages[0]
+        payload["answer_pages"] = pages
+        answer = "\n\n".join(pages)
+        payload["answer"] = answer
+        self._fleet_deliver_result(row, payload)
+        return False
+
+    def _fleet_deliver_result(self, row, payload):
+        if payload.get("catalog_answer_pages") and not payload.get("catalog_combined"):
+            payload["answer_pages"] = payload["catalog_answer_pages"] + payload.get("answer_pages", [payload["answer"]])
+            payload["answer"] = "\n\n".join(payload["answer_pages"])
+            payload["catalog_combined"] = True
+        self._fleet_save(row, "delivering", payload, "result_delivery_started")
+        message_ids = []
+        for page in payload.get("answer_pages", [payload["answer"]]):
+            sent = self.reply(row["chat_id"], page)
+            if not isinstance(sent, dict) or type(sent.get("message_id")) is not int:
+                raise ValueError("result delivery ambiguous")
+            message_ids.append(sent["message_id"])
+            payload["result_messages"] = list(message_ids)
+            self._fleet_save(row, "delivering", payload, "result_page_delivered")
+        payload["result_message"] = message_ids[-1]
+        self._fleet_save(row, "done", payload, "result_delivered")
+        if payload.get("binding"):
+            worker_client.acknowledge(spool(self.cfg), payload["binding"]["job_id"])
+
     def check_fleet_requests(self):
+        if fleet_lifecycle.admission_paused(self.conn):
+            return 0
         if not getattr(self.cfg, "fleet_enabled", False):
             return 0
-        rows = self.conn.execute("SELECT * FROM fleet_requests WHERE state IN ('preparing','queued','executing','ready','approval_sending','delivering','analysis_started') ORDER BY updated_at LIMIT 2").fetchall()
+        inference_count = self._fleet_check_inference()
+        rows = self.conn.execute("SELECT * FROM fleet_requests WHERE state IN ('preparing','queued','inspection_started','executing','ready','approval_sending','delivering','analysis_started') ORDER BY updated_at LIMIT 16").fetchall()
         for row in rows:
             payload = json.loads(row["payload"])
             lang = payload["lang"]
@@ -496,17 +690,31 @@ class FleetMixin:
                     self._fleet_save(row, "ambiguous", payload, "delivery_interrupted_no_replay")
                     continue
                 operation = payload["operation"]
+                if payload.get("version") == 2 and operation["operation"] == "inspect":
+                    if not self._fleet_request_authority_current(row, payload):
+                        self._fleet_fail_async(row, payload, ValueError("request authority changed"), notify=False)
+                        continue
                 source = store.assistant_task_source(self.conn, row["chat_id"], row["source_update"])
                 if source is None or tasking.source_hash(source["text"]) != payload["source_hash"]:
                     raise ValueError("owner request changed")
-                result = worker_client.poll(spool(self.cfg), **payload["binding"], task_id=row["source_update"],
-                    step_id=payload.get("inspection_step", 1) if operation["operation"] == "inspect" else 2, tool="fleet." + operation["operation"],
-                    input_hash=protocol.digest(operation), policy_version=protocol.VERSION, implementation_version=protocol.VERSION)
+                self._fleet_observe_executor_start(row, payload)
+                try:
+                    result = worker_client.poll(spool(self.cfg), **self._fleet_worker_binding(row, payload))
+                except worker_client.WorkerError as exc:
+                    terminal = self._fleet_terminal_executor_status(row, payload, exc)
+                    if terminal is None:
+                        raise
+                    self._fleet_finish_executor_gap(row, payload, terminal)
+                    continue
                 if result is None:
-                    if protocol.age(payload["submitted_at"]) > 240:
+                    if self._fleet_executor_wait_expired(row, payload):
+                        continue
+                    if not payload.get("executor_lifecycle") and protocol.age(payload["submitted_at"]) > 240:
                         self._fleet_save(row, "ambiguous" if row["state"] == "executing" else "failed", payload, "executor_timeout_no_retry")
                         self.reply(row["chat_id"], "Нет подтверждённого результата; нужна новая проверка." if lang == "ru" else "No confirmed result is available; a fresh check is needed.")
                     continue
+                if payload.get("executor_lifecycle") and payload.get("executor_started") is None:
+                    raise fleet_queue.QueueError("fleet result lacks a verified start receipt")
                 if operation["operation"] == "restart":
                     if result.get("outcome") not in {"succeeded", "failed", "ambiguous"}:
                         raise ValueError("invalid maintenance outcome")
@@ -514,7 +722,10 @@ class FleetMixin:
                     answer = (("Результат перезапуска: " if lang == "ru" else "Restart outcome: ") + result["outcome"]
                               + " · " + operation["host"] + " / " + operation["service"])
                 else:
-                    result = protocol.result(result, operation["hosts"])
+                    if "read_scope" in operation:
+                        result = protocol.result(result, operation["hosts"], read_scope=operation["read_scope"])
+                    else:
+                        result = protocol.result(result, operation["hosts"])
                     if payload.get("inspection_step") == 3:
                         prior = payload["result"]
                         for host, values in result["hosts"].items():
@@ -541,6 +752,9 @@ class FleetMixin:
                     report = fleet_report.build(payload["result"], inventory, payload["plan"],
                                                 historical_results(self.conn, row["chat_id"], payload["plan"]["hosts"]))
                     payload["report"] = report
+                    if getattr(self, "fleet_async", False):
+                        self._fleet_queue_synthesis(row, payload, inventory)
+                        continue
                     self._fleet_save(row, "analysis_started", payload, "analysis_started_no_automatic_replay")
                     decision = None
                     try:
@@ -555,39 +769,17 @@ class FleetMixin:
                         payload["selection"] = decision
                     except (ValueError, llm.LLMError, llm.BudgetExceeded) as exc:
                         payload["analysis_gap"] = str(exc)[:160] if isinstance(exc, ValueError) else type(exc).__name__
-                    # One bounded additional read for selected, previously absent facets.
-                    checks = [c for c in (decision or {}).get("next_checks", [])
-                              if c["facet"] not in payload["result"]["hosts"].get(c["host"], {})]
-                    if checks and not payload.get("inspection_step") and payload["model_calls"] < getattr(self.cfg, "task_model_call_limit", 4) and payload["cost"] < self.cfg.task_cost_limit_usd:
-                        worker_client.acknowledge(spool(self.cfg), payload["binding"]["job_id"])
-                        op = {"operation": "inspect", "hosts": sorted({c["host"] for c in checks}),
-                              "facets": sorted({c["facet"] for c in checks}), "inventory_hash": payload["catalog_hash"]}
-                        binding = submission_binding(row["source_update"], 3)
-                        payload.update(operation=op, binding=binding, inspection_step=3, submitted_at=protocol.now())
-                        payload["plan"]["facets"] = sorted(set(payload["plan"]["facets"]) | set(op["facets"]))
-                        self._fleet_save(row, "queued", payload, "additional_inspection_bound")
-                        submit(self.cfg, row["source_update"], 3, op, binding=binding)
-                        continue
-                    pages = [tasking.redact_derived_text(page) for page in fleet_report.render(report, decision, lang)]
-                    if decision is None:
-                        pages[0] = ("Измерения получены; автоматический разбор недоступен.\n" if lang == "ru" else "Measurements received; automatic analysis is unavailable.\n") + pages[0]
-                    payload["answer_pages"] = pages
-                    answer = "\n\n".join(pages)
+                    self._fleet_after_analysis(row, payload, report, decision)
+                    continue
                 payload["answer"] = answer
-                self._fleet_save(row, "delivering", payload, "result_delivery_started")
-                message_ids = []
-                for page in payload.get("answer_pages", [payload["answer"]]):
-                    sent = self.reply(row["chat_id"], page)
-                    if not isinstance(sent, dict) or type(sent.get("message_id")) is not int:
-                        raise ValueError("result delivery ambiguous")
-                    message_ids.append(sent["message_id"])
-                    payload["result_messages"] = list(message_ids)
-                    self._fleet_save(row, "delivering", payload, "result_page_delivered")
-                payload["result_message"] = message_ids[-1]
-                self._fleet_save(row, "done", payload, "result_delivered")
-                worker_client.acknowledge(spool(self.cfg), payload["binding"]["job_id"])
+                self._fleet_deliver_result(row, payload)
             except (ValueError, OSError, worker_client.WorkerError):
+                self._fleet_cancel_executor(row, payload, "result_or_binding_unavailable")
                 current = self.conn.execute("SELECT state FROM fleet_requests WHERE id=?", (row["id"],)).fetchone()[0]
                 self._fleet_save(row, "ambiguous" if current in {"executing", "delivering"} else "failed", payload, "observation_or_delivery_unavailable")
                 self.reply(row["chat_id"], "Нет достоверного результата; нужна новая проверка." if lang == "ru" else "I have no reliable result; a fresh investigation is needed.")
-        return len(rows)
+        return len(rows) + inference_count
+
+
+class FleetMixin(fleet_catalog.CatalogMixin, fleet_project.ProjectReadMixin, fleet_async.AsyncMixin, _FleetCore):
+    """Compose descriptive answers, scoped reads and durable I/O over legacy core."""

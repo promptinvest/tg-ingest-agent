@@ -340,6 +340,8 @@ def _synthesize(cfg, conn, task, step, inputs):
         "make a neutral recommendation with explicit tradeoffs. If evidence is "
         "insufficient, say so instead of inventing."
     )
+    import answer_policy
+    system += "\n" + answer_policy.hint(conn)
     user = (
         "<user_question>\n"
         + common.neutralize_untrusted(inputs.get("question") or task["objective"])
@@ -701,6 +703,9 @@ def _execute_read_or_draft(cfg, conn, task, step, inputs, input_hash):
         return _knowledge_read(conn, task, step, inputs)
     if tool == "reminders.read":
         return _reminders_read(conn, task, step, inputs)
+    if tool == "fleet.lookup":
+        import fleet_broker
+        return fleet_broker.execute(cfg, conn, task, step, inputs)
     if tool == "source.fetch":
         return _source_fetch(cfg, conn, task, step, inputs)
     if tool == "web.search":
@@ -963,6 +968,9 @@ def _render_task_result(receipts, lang="en"):
                 lines.append(
                     f"• {item.get('due_utc')} — "
                     f"{tasking.redact_derived_text(item.get('title'))[:200]}")
+        elif receipt["tool"] == "fleet.lookup":
+            lookup = value.get("lookup") or {}
+            lines.extend(lookup.get("pages") or [])
         elif receipt["tool"] not in {"web.search", "source.fetch", "artifact.markdown"}:
             if ru:
                 lines.append(f"Шаг {receipt['tool']} выполнен.")
@@ -1033,6 +1041,11 @@ def run_task(agent, conn, task_id, max_steps=1):
             status, summary, data, evidence, artifact_id, effect_id = (
                 _execute_read_or_draft(
                     agent.cfg, conn, task, step, inputs, digest))
+            if spec.id == "fleet.lookup":
+                import fleet_broker
+                fleet_broker.validate_result(
+                    agent.cfg, conn, task, step, inputs, status, summary,
+                    data, evidence, artifact_id, effect_id)
             # Only success/partial receipts are immutable. Transient/terminal
             # failures stay on the step so a later resume cannot conflict with
             # the stable effect-idempotency key.

@@ -58,6 +58,9 @@ class ProjectReadMixin:
             "Capabilities are distinct: release is installed release evidence; http_health is application checks; "
             "containers/runtime are process/component evidence; backups/development can remain not configured. "
             "Process activity cannot prove application readiness, client traffic, verified backups or development completion. "
+            "For a correction or format/detail-only follow-up use answer_mode:reformat with scope:inherit; "
+            "reuse prior evidence without another host read, keeping its original timestamp and gaps. "
+            "Fresh checks use answer_mode:inspect (the default). "
             "Optional presentation is prose|list|table|names and detail is concise|detailed; choose the owner's explicit "
             "format/detail first, then confirmed preference, concise by default. Formatting corrections retain prior "
             "project/capability obligations and need no new evidence. Never alter the exact maintenance confirmation contract."
@@ -68,6 +71,9 @@ class ProjectReadMixin:
         value = copy.deepcopy(raw) if isinstance(raw, dict) else llm.parse_llm_json(raw)
         if not isinstance(value, dict):
             raise ValueError("invalid runtime project plan")
+        answer_mode = value.pop("answer_mode", "inspect")
+        if answer_mode not in {"inspect", "reformat"}:
+            raise ValueError("invalid evidence reuse mode")
         read_scope = value.pop("read_scope", None)
         styles = {}
         for key, allowed in STYLE.items():
@@ -97,6 +103,10 @@ class ProjectReadMixin:
             value["projects"] = list(previous["projects"])
         plan = super()._fleet_validate_planning(protocol.canonical(value), inventory, previous)
         plan.update(styles)
+        if answer_mode == "reformat":
+            if plan.get("operation") != "inspect" or plan.get("scope") != "inherit":
+                raise ValueError("reformat requires the canonical prior read scope")
+            plan["answer_mode"] = "reformat"
         if plan.get("operation") != "inspect" or plan.get("clarification"):
             return plan
         if read_scope is None:

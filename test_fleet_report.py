@@ -9,6 +9,7 @@ import fleet_context
 import fleet_host
 import fleet_protocol as protocol
 import fleet_report as report
+import fleet_answers
 import worker_client
 import test_fleet as base
 
@@ -267,7 +268,7 @@ class PipelineContracts(unittest.TestCase):
     def test_partial_page_delivery_is_ambiguous_and_never_replayed(self):
         row = self.start()
         response = {"version": protocol.VERSION, "observed_at": protocol.now(), "hosts": {"pd": {"host": "pd", "observed_at": protocol.now(), "projects": {}}}}
-        with mock.patch.object(worker_client, "poll", return_value=response), mock.patch.object(fleet.llm, "chat_profile", side_effect=ValueError), mock.patch.object(report, "render", return_value=["page one", "page two"]), mock.patch.object(self.agent, "reply", side_effect=[{"message_id": 900}, None, {"message_id": 901}]) as send:
+        with mock.patch.object(worker_client, "poll", return_value=response), mock.patch.object(fleet.llm, "chat_profile", side_effect=ValueError), mock.patch.object(fleet_answers, "render", return_value=["page one", "page two"]), mock.patch.object(self.agent, "reply", side_effect=[{"message_id": 900}, None, {"message_id": 901}]) as send:
             self.agent.check_fleet_requests()
             count = send.call_count
             self.agent.check_fleet_requests()

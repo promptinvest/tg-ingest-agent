@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 
 import fleet_protocol as protocol
+import fleet_queue
+import fleet_lifecycle
 import worker_client
 
 ROOT = Path("/var/lib/cara-fleet")
@@ -61,26 +63,63 @@ def remote(transport, host, request):
     return value
 
 
-def inspect(catalog, transport, request):
+def inspect(catalog, transport, request, control=None):
+    def observe(host, operation):
+        if control is not None:
+            control.check()
+        return remote(transport, host, operation)
+    if "read_scope" in request:
+        protocol.request(request, catalog)
+        scope = request["read_scope"]
+        hosts = {}
+        def scoped_one(host):
+            selected = protocol.scope_for_host(scope, catalog, host)
+            try:
+                discovery = observe(host, {"operation": "capabilities", "read_scope": selected})
+                protocol.read_discovery(discovery, host, selected)
+                value = observe(host, {"operation": "inspect", "facets": request["facets"], "read_scope": selected})
+                protocol.scoped_host_result(value, host, selected, request["facets"])
+                return host, value
+            except (fleet_queue.QueueCancelled, fleet_queue.QueueExpired):
+                raise
+            except Exception:
+                # An old/refusing gateway is a scoped capability gap. Never retry
+                # as a legacy inspection, which would collect colocated projects.
+                value = {"host": host, "observed_at": protocol.now(), "read_scope": selected}
+                for facet in request["facets"]:
+                    value[facet] = ({project: {capability: protocol.capability_observation(capability, "unavailable", "gateway_contract_unavailable")
+                                              for capability in selected["capabilities"]} for project in selected["projects"]}
+                                    if facet == "projects" else {"available": False})
+                return host, value
+        with concurrent.futures.ThreadPoolExecutor(max_workers=fleet_queue.MAX_HOST_TRANSPORTS) as pool:
+            for host, value in pool.map(scoped_one, request["hosts"]):
+                hosts[host] = value
+        return {"version": protocol.VERSION, "observed_at": protocol.now(), "hosts": hosts, "read_scope": scope}
     hosts = {}
     def one(host):
         try:
-            value = remote(transport, host, {"operation": "inspect", "facets": request["facets"]})
+            value = observe(host, {"operation": "inspect", "facets": request["facets"]})
             if (value.get("host") != host or not -30 <= protocol.age(value.get("observed_at")) <= 90):
                 raise ValueError("host identity/freshness mismatch")
             return host, value
+        except (fleet_queue.QueueCancelled, fleet_queue.QueueExpired):
+            raise
         except Exception:
             return host, {"available": False, "reason": "unreachable or observation unavailable"}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=fleet_queue.MAX_HOST_TRANSPORTS) as pool:
         for host, value in pool.map(one, request["hosts"]):
             hosts[host] = value
     return {"version": protocol.VERSION, "observed_at": protocol.now(), "hosts": hosts}
 
 
-def execute(catalog, transport, request, state_root=ROOT):
+def execute(catalog, transport, request, state_root=ROOT, control=None):
     protocol.request(request, catalog)
+    if control is not None:
+        control.check()
     if request["operation"] == "inspect":
-        return inspect(catalog, transport, request)
+        if control is None:
+            return inspect(catalog, transport, request)
+        return inspect(catalog, transport, request, control=control)
     consumed = state_root / "consumed"
     consumed.mkdir(mode=0o700, parents=True, exist_ok=True)
     marker = consumed / request["token"]
@@ -93,6 +132,9 @@ def execute(catalog, transport, request, state_root=ROOT):
         handle.flush()
         os.fsync(handle.fileno())
     worker_client._fsync_dir(consumed)
+    if control is not None:
+        control.check()
+        control.effect_dispatched = True
     try:
         return remote(transport, request["host"], {k: v for k, v in request.items()
                       if k not in {"host", "inventory_hash"}})
@@ -100,23 +142,39 @@ def execute(catalog, transport, request, state_root=ROOT):
         return {"outcome": "ambiguous", "reason": "connection lost; inspect before another action"}
 
 
+def _queue_order(path):
+    try:
+        return path.lstat().st_mtime_ns, path.name
+    except OSError:
+        return float("inf"), path.name
+
+
 def run_once(root=ROOT, config=CONFIG):
     catalog = protocol.inventory(load(config / "inventory.json"))
     transport = load(config / "transport.json")
-    # Transport copies can expire after durable database consumption. Authorization
-    # consumption markers remain indefinitely so an effect can never be replayed.
-    for old in list((root / "spool" / "results").glob("w_*.json"))[:200]:
-        if not (root / "spool" / "requests" / old.name).exists() and time.time() - old.stat().st_mtime > 86400:
+    spool = root / "spool"
+    fleet_queue.publish_ready(spool)
+    if fleet_lifecycle.executor_gate(spool):
+        return
+    # A started sidecar belongs to the ORIGINAL request. Keep it while that
+    # request exists, even when the sidecar itself is more than one day old.
+    for old in list((spool / "results").glob("w_*.json"))[:200]:
+        request_name = old.name.replace(".started.json", ".json")
+        if not (spool / "requests" / request_name).exists() and time.time() - old.stat().st_mtime > 86400:
             old.unlink()
-    for path in sorted((root / "spool" / "requests").glob("w_*.json"))[:20]:
+    paths = sorted((spool / "requests").glob("w_*.json"), key=_queue_order)[:20]
+    for path in paths:
+        if fleet_lifecycle.executor_gate(spool):
+            return
         if not re.fullmatch(r"w_[0-9]+_[0-9]+_[a-f0-9]{32}\.json", path.name):
             continue
-        destination = root / "spool" / "results" / path.name
+        destination = spool / "results" / path.name
         if destination.exists():
             continue
         try:
             envelope = load(path)
-            if (set(envelope) != {"version", "job_id", "nonce", "task_id", "step_id", "tool", "input", "input_hash", "policy_version", "implementation_version"}
+            fields = {"version", "job_id", "nonce", "task_id", "step_id", "tool", "input", "input_hash", "policy_version", "implementation_version"}
+            if (set(envelope) not in (fields, fields | {"lifecycle"})
                     or envelope["version"] != 1 or envelope["job_id"] + ".json" != path.name
                     or envelope["policy_version"] != protocol.VERSION
                     or envelope["implementation_version"] != protocol.VERSION
@@ -124,15 +182,50 @@ def run_once(root=ROOT, config=CONFIG):
                     or protocol.digest(envelope["input"]) != envelope["input_hash"]
                     or not protocol.TOKEN.fullmatch(envelope["nonce"])):
                 raise ValueError("invalid executor request")
-            result = execute(catalog, transport, envelope["input"], root)
-            reply = {k: v for k, v in envelope.items() if k != "input"}
-            reply.update(status="ok", result=result, result_hash=protocol.digest(result))
+            control = None
+            reply = None
+            if "lifecycle" in envelope:
+                protocol.request(envelope["input"], catalog)
+                fleet_queue.validate_lifecycle(envelope["lifecycle"])
+                started = fleet_queue.read_started(spool, fleet_queue.binding(envelope), envelope["lifecycle"])
+                if started is not None:
+                    # A previous executor stopped after durable start. Never
+                    # reconstruct and run that unknown operation a second time.
+                    reply = fleet_queue.terminal(envelope, "execution_interrupted")
+                else:
+                    state = fleet_queue.queue_state(spool, envelope)
+                    if state != "queued":
+                        reply = fleet_queue.terminal(envelope, state)
+                    else:
+                        control = fleet_queue.Control(spool, envelope)
+                        fleet_queue.publish_started(spool, envelope)
+            if "lifecycle" not in envelope and fleet_queue.cancelled(spool, envelope):
+                # Legacy envelopes keep their original wire contract, but a
+                # nonce-bound cancellation must prevent any new dispatch too.
+                reply = fleet_queue.terminal(envelope, "cancelled")
+            if reply is None:
+                try:
+                    if control is None:
+                        result = execute(catalog, transport, envelope["input"], root)
+                    else:
+                        result = execute(catalog, transport, envelope["input"], root, control=control)
+                        # A dispatched maintenance operation reports its actual
+                        # outcome; a late cancel cannot truthfully undo it.
+                        if not control.effect_dispatched:
+                            control.check()
+                    reply = {k: v for k, v in envelope.items() if k != "input"}
+                    reply.update(status="ok", result=result, result_hash=protocol.digest(result))
+                except fleet_queue.QueueCancelled:
+                    reply = fleet_queue.terminal(envelope, "cancelled")
+                except fleet_queue.QueueExpired:
+                    reply = fleet_queue.terminal(envelope, "execution_expired")
             body = protocol.canonical(reply).encode()
             if len(body) > protocol.MAX_BYTES:
                 raise ValueError("result too large")
             worker_client._atomic_publish(destination.parent, destination.name, body)
         except Exception:
-            # Do not execute a malformed request; it times out with an honest gap.
+            # Malformed requests/receipts never run or get silently rewritten.
+            # The owner records a bounded unavailable/timeout and does not replay.
             continue
 
 

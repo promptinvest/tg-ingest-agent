@@ -1,4 +1,5 @@
 """ConverseMixin: methods moved verbatim from Agent; its public interface is preserved."""
+import answer_policy
 import ast
 import json
 import re
@@ -166,7 +167,7 @@ class ConverseMixin:
         """Live context for the conversation prompt: time of day (boss's, and
         Cara's own if her timezone differs), the review schedule, open threads,
         her active reminders, and any reaction the boss just left (surfaced once)."""
-        parts = []
+        parts = [answer_policy.hint(self.conn)]
         if getattr(self.cfg, "fleet_enabled", False):
             import fleet
             parts.append(fleet.conversation_inventory(self.cfg))

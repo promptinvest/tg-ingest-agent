@@ -517,6 +517,11 @@ def load_config(env=None):
     cfg = Config()
     cfg.fleet_enabled = (env.get("CARA_FLEET_ENABLED") or "false").strip().lower() == "true"
     cfg.fleet_inventory = "/etc/cara-fleet/inventory.json"
+    fleet_lifecycle_flag = str(env.get("CARA_FLEET_CONTENT_LIFECYCLE", "false")).strip().lower()
+    if fleet_lifecycle_flag not in {"true", "false"}:
+        raise SystemExit("CARA_FLEET_CONTENT_LIFECYCLE must be true or false")
+    cfg.fleet_content_lifecycle = fleet_lifecycle_flag == "true"
+    cfg.fleet_facts = "/etc/cara-fleet/facts/current.json"
     cfg.fleet_spool = "/var/lib/cara-fleet/spool"
     cfg.token = (env.get("TELEGRAM_BOT_TOKEN") or "").strip()
     if not cfg.token:

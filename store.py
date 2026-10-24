@@ -21,6 +21,7 @@ import common
 import tasking
 import tool_broker
 import fleet_protocol
+import fleet_lifecycle
 
 SCHEMA = fleet_protocol.SCHEMA + """
 CREATE TABLE IF NOT EXISTS kv (
@@ -3917,6 +3918,7 @@ def purge_preview(conn, scope, category=None):
         learning_count = count("SELECT COUNT(*) FROM learning_lessons")
         if learning_count:
             info["learning_lessons"] = learning_count
+        info.update(fleet_lifecycle.db_preview(conn))
     elif scope == "category":
         info["messages"] = len(_messages_in_category(conn, category))
         info["category"] = category
@@ -3951,6 +3953,10 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
     """Run the purge. Returns (summary_dict, media_paths_to_unlink).
     Preserves llm_usage and preferences in every scope."""
     info = purge_preview(conn, scope, category)
+    if scope == "all":
+        # Fail before ANY content mutation until fleet transports/accounting
+        # have acknowledged the same durable typed-purge nonce.
+        fleet_lifecycle.require_quiescence(conn, task_purge_nonce)
     paths = []
     if scope == "all":
         paths = [r["local_path"] for r in
@@ -3961,6 +3967,7 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
         paths.extend(
             r["patch_path"] for r in conn.execute(
                 "SELECT patch_path FROM mentor_cycles WHERE patch_path IS NOT NULL"))
+        fleet_lifecycle.delete_db_content(conn, task_purge_nonce)
         # Improvement/evaluation rows can contain redacted boss corrections and
         # task-derived evidence. Delete them explicitly; task children then
         # cascade from assistant_tasks.
@@ -4015,9 +4022,8 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
             conn.execute(
                 "INSERT INTO kv(key,value) VALUES('task_purge_authorization',?)"
                 " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (json.dumps({
-                    "nonce": str(task_purge_nonce), "phase": "db_committed",
-                }, sort_keys=True),),
+                (json.dumps(fleet_lifecycle.committed_authorization(
+                    conn, str(task_purge_nonce)), sort_keys=True),),
             )
     elif scope == "category":
         ids = _messages_in_category(conn, category)
@@ -5215,8 +5221,12 @@ def task_receipt_create(conn, step, *, input_hash, status, summary, data,
     if status not in {"ok", "partial"}:
         raise ValueError("only successful or partial outcomes are immutable receipts")
     safe_summary = tasking.redact_derived_text(summary)[:1000]
-    safe_data = json.loads(tasking.redact_derived_text(_task_json(data)))
-    safe_evidence = json.loads(tasking.redact_derived_text(_task_json(list(evidence))))
+    if step["tool"] == "fleet.lookup":
+        import fleet_broker
+        safe_data, safe_evidence = fleet_broker.safe_receipt(data, list(evidence))
+    else:
+        safe_data = json.loads(tasking.redact_derived_text(_task_json(data)))
+        safe_evidence = json.loads(tasking.redact_derived_text(_task_json(list(evidence))))
     spec = tool_broker.get_spec(step["tool"])
     tool_broker.validate_output(spec, safe_data, safe_evidence)
     material = f"{step['idempotency_key']}:{input_hash}:{status}"
