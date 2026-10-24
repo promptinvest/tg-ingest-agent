@@ -551,6 +551,45 @@ def _resource_unsettled(ledger, resources, name, unit):
         return True
 
 
+def _legacy_resource_unsettled(ledger, unit):
+    """Preserved pre-resource token history cannot silently authorize overlap.
+
+    Old gateways had no per-unit hold. Interpret their existing closed token
+    shapes without migrating, refreshing or removing any original evidence.
+    """
+    total = 0
+    try:
+        with os.scandir(ledger) as entries:
+            for index, entry in enumerate(entries):
+                if index >= 4096:
+                    return True
+                if entry.name == "resources":
+                    continue
+                if not re.fullmatch(r"[a-f0-9]{32}\.json", entry.name):
+                    return True
+                info = entry.stat(follow_symlinks=False)
+                total += info.st_size
+                if total > 4 * 1024 * 1024:
+                    return True
+                receipt = _resource_json(ledger, entry.name)
+                if not isinstance(receipt, dict):
+                    return True
+                service = receipt.get("service")
+                if not isinstance(service, str) or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,80}\.service", service):
+                    return True
+                if _resource_completed(receipt, service):
+                    continue
+                if set(receipt) == {"state", "at", "service"} and receipt["state"] == "executing":
+                    protocol.age(receipt["at"])
+                elif set(receipt) != {"outcome", "service"} or receipt["outcome"] != "ambiguous":
+                    return True
+                if service == unit:
+                    return True
+        return False
+    except (OSError, ValueError, UnicodeError, TypeError):
+        return True
+
+
 @contextlib.contextmanager
 def _restart_resource_lock(unit):
     ledger = _resource_directory()
@@ -584,7 +623,8 @@ def _restart_under_lock(unit, request, ledger, resources, resource_name):
     token = request["token"]
     if _resource_consumed(ledger, token):
         return {"outcome": "ambiguous", "reason": "authorization already consumed"}
-    if _resource_unsettled(ledger, resources, resource_name, unit):
+    if (_resource_unsettled(ledger, resources, resource_name, unit)
+            or _legacy_resource_unsettled(ledger, unit)):
         return {"outcome": "failed", "service": unit, "reason": "resource_unknown"}
     if fingerprint(unit) != request["fingerprint"]:
         raise ValueError("service changed; fresh approval required")

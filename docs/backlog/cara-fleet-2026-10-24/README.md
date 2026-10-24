@@ -3,7 +3,28 @@
 Status: Implementation authorized October 24, 2026; work in progress. No package is complete.
 Parent tracker: [CF-00 / issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
 
-## Increment 05 current checkpoint
+## Increment 06 current checkpoint
+
+Published increment05 `fca4ac4` is followed by a narrow compatibility/proof
+candidate: protect the existing restart from unresolved legacy host markers and
+keep typed development revisions useful after final redaction. No new effect,
+write tool, account, model/provider, budget or MCP dependency is introduced.
+
+Network-isolated focused Linux passes 103 legacy/resource/fleet/poll/wait cases
+in 6.298 s, three additional process-crash cases in 0.052 s, and 26 shared/wire/
+Agent parity cases in 8.465 s. Original 47 + 15 JSON bytes and seven original poll
+tests remain unchanged. These separate overlapping receipts establish specific
+business assertions; they do not establish a unique full-suite total, actual
+model behavior or installed/operator acceptance.
+
+Final exact source/full/model/CI, authenticated bindings/stdio/service readiness,
+complete host-ledger preservation and original guarded release checks remain
+pending. Source/archive/operator/window: UNSELECTED. Production stays accepted
+`99037c5`, MCP disabled; no package is complete. CF-01 through CF-06 retain their
+independent business criteria. [Increment 06](../../cara-fleet-increment-06-2026-10-24.md).
+Earlier checkpoint sections retain their historical status.
+
+## Increment 05 published source checkpoint
 
 Published durable-MCP/task source `319dd95` is followed by a separate CF-06
 existing-effect compatibility candidate. The existing approved restart gains

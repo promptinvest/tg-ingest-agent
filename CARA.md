@@ -1,5 +1,33 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 06 compatibility and acceptance proofs
+
+Published restart-resource source `fca4ac4` is followed by a narrow compatibility
+candidate. Old executing, ambiguous or unsafe host token evidence now blocks a
+fresh restart even when no modern resource hold exists. A valid known final
+receipt permits a later fresh approval; consumed tokens stay consumed. The
+bounded read-only legacy scan never migrates, refreshes or clears old evidence.
+
+Project development answers now show a useful 12-character repository revision
+through final cleanup, including when CI is disconnected. Full typed revisions
+and global secret protection remain. No new capability, effect, MCP write, model,
+provider or budget is added.
+
+Focused network-isolated Linux passes 103 legacy/resource/fleet/poll/wait cases
+in 6.298 s, three extra real-process crash boundaries in 0.052 s and 26 MCP business
+parity cases in 8.465 s. Original seven poll tests and 47 + 15 specification bytes
+remain intact. Real Agent tests hold planning/synthesis for 90 logical seconds and
+two simultaneous completions while owner updates/reminders continue. All nineteen
+catalog cases retain their original assertions through internal/enabled paths;
+fresh selected-project and retained adapter parity keep useful dates/scope/gaps.
+These are separate focused receipts, not a unique full-suite total or model proof.
+
+Final exact full/model/CI, source bindings, service identity/stdio/readiness,
+complete protected host-ledger preservation and guarded release remain pending.
+Source/archive/operator/window: UNSELECTED. Production remains accepted `99037c5`
+/ build `f54906e304fe`, MCP disabled; every package remains open.
+[Increment 06 evidence and remaining acceptance](docs/cara-fleet-increment-06-2026-10-24.md).
+
 ## October 24 - Increment 05 existing-restart resource guard candidate
 
 The existing approved worker restart now has a per-unit host lock. A different

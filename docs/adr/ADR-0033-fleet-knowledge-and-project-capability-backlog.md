@@ -145,3 +145,31 @@ ledger protection, backups/parity/readiness and operator
 acceptance remain pending. Source/archive/operator/window are UNSELECTED.
 Production stays accepted `99037c5`, MCP disabled, and all packages remain open.
 [Increment 05](../cara-fleet-increment-05-2026-10-24.md).
+
+## Increment 06 compatibility and acceptance-proof checkpoint
+
+An unresolved legacy host token must protect the existing resource even when it
+predates modern resource holds. Read bounded legacy history under the existing
+unit lock before fingerprint/new token/effect; executing/ambiguous same-unit or
+malformed/unsafe/unscoped evidence fails closed. Valid known final outcomes allow
+fresh sequential approval; valid other-unit records stay independent. Preserve
+all historical bytes/inodes/times. No migration, expiry clearance or new effect.
+
+Preserve complete typed repository revisions but display the existing safe
+12-character prefix so final secret redaction cannot erase useful progress data
+when CI is disconnected. Keep global credential patterns unchanged.
+
+Network-isolated Linux passes 103 legacy/resource/original-fleet/poll/wait cases
+in 6.298 s, three extra real-process crash boundaries in 0.052 s and 26 business
+parity cases in 8.465 s. Original seven poll assertions and 47 + 15 specification
+bytes remain intact. New actual Agent fake-clock tests cover held90-second
+planning/synthesis and simultaneous completions. Nineteen original catalog
+cases retain their assertions through both paths, with fresh scoped and retained
+project evidence parity. These focused receipts overlap and are not a full or
+actual-model release receipt.
+
+Published base `fca4ac4` has CI success independently of this candidate. Exact
+source/archive/operator/window remain UNSELECTED; full/model/CI, actual source/
+stdio/service identity, complete host-ledger backup/preservation and original
+release gates remain pending. Production stays accepted `99037c5`, MCP disabled;
+all package criteria remain open. [Increment 06](../cara-fleet-increment-06-2026-10-24.md).

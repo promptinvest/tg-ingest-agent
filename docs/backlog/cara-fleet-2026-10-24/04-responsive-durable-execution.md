@@ -122,3 +122,25 @@ passes 45 tests in 22.201 s in isolated Linux; failed originals remain. Final
 all-phase/accounting/capacity/recovery and exact full/model/installed readiness
 remain pending. No package completion or MCP prerequisite.
 [Increment 04](../../cara-fleet-increment-04-2026-10-24.md).
+
+## Increment 06 logical-timing acceptance proof
+
+The actual Agent.run, update batching/dispatch, scheduler and due-reminder paths
+now have three additional synchronization/fake-clock assertions: planner held
+90 logical seconds, synthesis held 90 logical seconds, and two reports ready at
+the same logical instant followed by two held background syntheses. Existing
+single background transport and paid counts remain. Owner updates/reminders
+continue within two logical seconds; ready phases are consumed within one pending
+poll, then normal 50-second idle polling returns. No 90-second wall-clock sleep.
+
+The original seven polling tests are byte-identical; the new tests live separately
+in test_fleet_responsiveness_waits.py. Their corrected combined 10-case run passes
+in 1.015 s. A later 103-case legacy/resource/fleet/poll/wait run passes in 6.298 s,
+including those ten. The earlier filename collision/pre-correction fixture is
+retained; no original assertion was removed or published in a weakened form.
+
+This closes the specific deterministic logical-timing/simultaneous-completion
+coverage gap, not full CF-04 acceptance. Final all-phase/accounting/capacity/
+recovery, actual model and exact-source full/CI/installed release remain required.
+Production remains accepted `99037c5`, MCP disabled; all packages stay open.
+[Increment 06](../../cara-fleet-increment-06-2026-10-24.md).

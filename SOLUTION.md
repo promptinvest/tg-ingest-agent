@@ -1,5 +1,35 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 06 compatibility and proof candidate
+
+The existing host restart checks legacy token history under the same per-unit
+lock before fingerprint/effect. Executing/ambiguous same-unit records without a
+modern hold block fresh tokens. Malformed, unsafe or unscoped history fails
+closed; valid other-unit history stays independent. Known final receipts allow
+fresh sequential approval without rewriting old bytes/inodes/times. The scan is
+bounded to 4,096 entries, 4 MiB total and 16 KiB per record, and never migrates or
+expires authority by time. Source/card/fingerprint/expiry/double-token rules stay.
+
+The project renderer abbreviates only the typed repository display revision to
+12 characters, matching the existing CI reference style. Its complete typed
+revision remains; global credential redaction is unchanged. An actual Agent
+answer with disconnected CI proves useful revision visibility and precise gaps.
+
+Separate Linux focused receipts pass 103 cases / 6.298 s, three additional real
+fork/exit crash boundaries / 0.052 s, and 26 internal/MCP business parity cases /
+8.465 s. Corrected original-seven plus new-three fake-clock responsiveness cases
+also pass together; 90 logical seconds and simultaneous completions preserve
+owner/reminder progress and two-second pending cadence without a wall-clock wait.
+Original tests/specification bytes remain. No combined unique/full/model/live
+acceptance is inferred from these overlapping component receipts.
+
+Full normal/shuffled/CI/accounted-model, actual protected sources/stdio/service
+identity, full host-ledger backup/preservation, original data/backup/runtime/
+sandbox/monitor/recovery and operator acceptance remain pending. Exact source/
+archive/operator/window: UNSELECTED. Published base is `fca4ac4`; production remains
+accepted `99037c5` / build `f54906e304fe`, MCP disabled, all package criteria open.
+[Increment 06 contracts and release gates](docs/cara-fleet-increment-06-2026-10-24.md).
+
 ## October 24 - Increment 05 per-resource restart candidate
 
 fleet_host protects the existing allowlisted restart with a nonblocking fcntl

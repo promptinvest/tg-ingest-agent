@@ -69,7 +69,7 @@ def _dated_project_summary(capability, state, ru=False):
         repository = state["repository"]
         parts.append(repository["name"])
         if repository["status"] == "recorded":
-            parts.append("revision " + repository["revision"] + " (" + stamp(repository["captured_at"]) + ")")
+            parts.append("revision " + repository["revision"][:12] + " (" + stamp(repository["captured_at"]) + ")")
             if repository.get("last_commit_at"):
                 parts.append(("последний коммит " if ru else "last commit ") + stamp(repository["last_commit_at"]))
         ci = state["ci"]

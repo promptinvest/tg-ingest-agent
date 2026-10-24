@@ -451,3 +451,50 @@ checked backups/stopped parity, readiness, monitor/alert/recovery/neighbors and
 fresh one-use release acceptance. Keep production accepted `99037c5` and MCP
 disabled until the exact new package passes. All CF packages remain open.
 [Increment 05 release record](../../docs/cara-fleet-increment-05-2026-10-24.md).
+
+## Increment 06 compatibility and proof qualification
+
+Keep original host token history in place when updating the gateway. Under the
+existing unit lock the candidate reads at most 4,096 entries/4 MiB total/16 KiB
+per record before fingerprint/new host-token/effect. An unresolved same-unit
+legacy record blocks fresh tokens without requiring a modern resource hold.
+Malformed/unsafe/unscoped records fail closed; valid other-unit evidence remains
+independent. A known final receipt allows a later fresh approval. Old tokens keep
+their duplicate/ambiguous meaning. Do not rewrite/migrate/refresh old markers,
+clear by time/fingerprint or add a force/clear-unknown tool.
+
+The repository display prefix is 12 characters from the validated typed revision.
+Full revision/provenance remain in evidence; global secret scrubbing is unchanged.
+The actual CI-disconnected Agent path must show that prefix with a precise CI gap.
+
+Retain separate focused evidence: 103 legacy/resource/fleet/poll/wait tests pass
+6.298 s, three early real-process crash boundaries pass 0.052 s, and 26 internal/
+MCP parity tests pass 8.465 s. The original seven poll tests remain byte-exact;
+new logical90-second/simultaneous-completion cases are in the separate waits
+module. Catalog parity reuses the original19 assertions through both Agent paths;
+fresh selected-project and retained adapter parity preserve dates/scope/gaps.
+These overlapping checkpoints are not a full frozen-source or actual-model gate.
+Keep the retained fixture failures and unlaunched intermediate preparations.
+
+Before any fresh gateway update, bind complete host-ledger presence/absence and
+all existing file metadata/hashes, including consumed tokens and resource state,
+to the reviewed source/operator inputs. Preserve checked root-only backup bytes
+and manifests across source/policy replacement and read-only probes. Fixed sudo/
+keys/wrapper/relay checks alone do not establish ledger preservation. Discovery/
+project/legacy read probes must not create restart resource artifacts. No host
+restore API, ledger deletion/recreation, old-token replay or live restart trial
+is authorized as verification.
+
+Pin the supported stdlib client/server protocol pair separately from application
+capabilities: MCP 2026-07-28 only; no SDK dependency or unqualified legacy-version
+fallback. Official discovery/stdio references were rechecked October24; real
+isolated stdio tests qualify this pair, not every external client. Tasks is
+unsupported and A2A/new writes remain outside scope; base async still works.
+
+Published base fca4ac4 CI is separate from candidate qualification. Final source/
+archive/operator/window remain UNSELECTED. Require full normal/shuffled/pinnedlint/
+CI, bounded accounted model answers, exact real service namespace/groups/stdio/
+secret denial, fixed source bindings, checked online/stopped backups/original
+parity, loaded-source readiness, monitor/alert/retention/neighbors/recovery and
+fresh once-only guarded acceptance. Production remains accepted99037c5, MCP
+disabled, all packages open. [Increment 06](../../docs/cara-fleet-increment-06-2026-10-24.md).

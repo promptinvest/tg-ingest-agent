@@ -164,3 +164,28 @@ acceptance remain open.
 No live restart or purge is used as a demonstration. Exact source/archive/operator/
 window: UNSELECTED; production remains accepted `99037c5`, MCP disabled.
 [Increment 05](../../cara-fleet-increment-05-2026-10-24.md).
+
+## Increment 06 legacy and crash-boundary compatibility
+
+The same locked restart boundary now checks old token history before fingerprint
+or effect. Legacy executing/ambiguous same-unit records block a new token even
+without a modern resource hold. Known final receipts permit a fresh sequential
+approval; valid other-unit history is independent. Malformed/unsafe/unscoped
+history fails closed under 4,096-entry/4-MiB-total/16-KiB-record bounds, without
+rewriting, migrating, refreshing or deleting old evidence. Time/fingerprint/new
+approval cannot clear an unknown result. No new clear/effect API is added.
+
+Thirteen new legacy tests plus 20 resource, 60 existing fleet and ten original/
+new polling cases pass 103 tests in 6.298 s in isolated Linux. Three separate real
+fork/os._exit fixtures pass in 0.052 s at durable-hold-before-token, durable-token-
+before-dispatch and effect-complete-before-final-receipt boundaries. New tokens
+remain blocked without another fingerprint/effect/token; consumed originals stay
+ambiguous and evidence bytes remain. Existing known-final-receipt reconciliation
+and checked application-backup/purge/tombstone assertions are retained.
+
+Normal DB backup does not stand for host-ledger recovery. Actual gateway release
+must preserve complete protected host token/resource state and explicit absence,
+with checked backups/full manifests and no rollback/recreation. That operator gate
+and final full/model/CI/installed/sandbox/lifecycle acceptance remain pending.
+No live maintenance or purge demonstration. Production remains accepted `99037c5`,
+MCP disabled, all packages open. [Increment 06](../../cara-fleet-increment-06-2026-10-24.md).
