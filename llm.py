@@ -279,11 +279,13 @@ _FIXED_MODEL_TEMPERATURES = {
 }
 
 
-def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
-         timeout=None, meta=None):
-    """Budget-guarded chat completion; logs usage; returns content string.
-    `meta`, when a dict is passed, receives `finish_reason` (ADR-0014: a
-    json_required profile retries a length-cut answer instead of benching)."""
+def prepare_chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
+                 timeout=None, meta=None):
+    """Reserve/build on the SQLite owner thread; contains no network wait.
+
+    Keep this object in memory. Persist only the caller's phase binding and
+    reservation ID before dispatch, never its credential-bearing request.
+    """
     # The single longest thing this process does is wait on a model. Mark progress
     # HERE rather than only between updates: with failover a routed turn is
     # 2 models x 2 attempts x LLM_TIMEOUT, and no watchdog budget can cover that.
@@ -323,37 +325,61 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
     started = time.monotonic()
     if skill != "healthcheck":
         store.kv_set(conn, f"model_chat_success:{model}", "")
+    return {"request": request, "reserved": reserved, "model": model,
+            "messages": messages, "skill": skill, "started": started,
+            "timeout": timeout or cfg.llm_timeout}
+
+
+def transport_chat(prepared):
+    """Network-only half. Never accepts a connection or persists a result."""
+    return inference_io.json_request(
+        urlopen, prepared["request"], prepared["timeout"], LLMError)
+
+
+def finish_chat(cfg, conn, prepared, data=None, error=None, meta=None):
+    """Accept/meter one transport outcome on the SQLite owner thread."""
+    reserved, model = prepared["reserved"], prepared["model"]
+    messages, skill = prepared["messages"], prepared["skill"]
+    started, kind = prepared["started"], "chat"
     try:
-        data = inference_io.json_request(urlopen, request, timeout or cfg.llm_timeout, LLMError)
+        if error is not None:
+            raise error
     except LLMError as exc:
         if conn is not None and getattr(exc, "request_not_sent", False):
             call_budget.settle(conn, reserved, "rejected_" + kind)
+        if not getattr(exc, "request_not_sent", False):
+            exc.usage_unknown = True
         raise
     except HTTPError as exc:
         if conn is not None:
             call_budget.rejected(conn, reserved, kind, exc.code)
-        raise LLMError(
+        wrapped = LLMError(
             _redacted_http_error(exc, cfg.do_key),
-            transient=exc.code in {408, 425, 429} or exc.code >= 500) from exc
+            transient=exc.code in {408, 425, 429} or exc.code >= 500)
+        wrapped.usage_unknown = not (400 <= exc.code < 500 and exc.code not in (408, 425, 429))
+        raise wrapped from exc
     except URLError as exc:
-        raise LLMError(
-            f"inference request failed: {exc.reason}", transient=True) from exc
+        wrapped = LLMError(f"inference request failed: {exc.reason}", transient=True)
+        wrapped.usage_unknown = True
+        raise wrapped from exc
     except OSError as exc:
         # A read-timeout during response.read() raises a bare socket.timeout/
         # TimeoutError (NOT a URLError) — wrap it so callers' except LLMError sees it.
-        raise LLMError(
-            f"inference request failed: {exc}", transient=True) from exc
+        wrapped = LLMError(f"inference request failed: {exc}", transient=True)
+        wrapped.usage_unknown = True
+        raise wrapped from exc
     except (http.client.HTTPException, UnicodeDecodeError) as exc:
         # A connection cut mid-body raises IncompleteRead (an HTTPException, NOT an
         # OSError); a body truncated inside a multibyte char (Cyrillic!) raises
         # UnicodeDecodeError. Unwrapped, either bypasses failover/cooldown entirely
         # and re-runs the whole update's side effects on retry.
-        raise LLMError(
-            f"inference response truncated/malformed: {exc!r}",
-            transient=True) from exc
+        wrapped = LLMError(f"inference response truncated/malformed: {exc!r}", transient=True)
+        wrapped.usage_unknown = True
+        raise wrapped from exc
     except json.JSONDecodeError as exc:
-        raise LLMError(
-            "inference response was not valid JSON", transient=True) from exc
+        wrapped = LLMError("inference response was not valid JSON", transient=True)
+        wrapped.usage_unknown = True
+        raise wrapped from exc
     elapsed = max(0.0, time.monotonic() - started)
     choices = data.get("choices") or []
     content = str((choices[0].get("message") or {}).get("content") or "") if choices else ""
@@ -401,6 +427,18 @@ def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
     if skill != "healthcheck" and content.strip():
         store.kv_set(conn, f"model_chat_success:{model}", store._now())
     return content
+
+
+def chat(cfg, conn, skill, messages, max_tokens=300, model=None, temperature=0,
+         timeout=None, meta=None):
+    """Budget-guarded synchronous composition of the shared chat gateway."""
+    prepared = prepare_chat(cfg, conn, skill, messages, max_tokens, model,
+                            temperature, timeout, meta)
+    try:
+        data = transport_chat(prepared)
+    except Exception as exc:
+        return finish_chat(cfg, conn, prepared, error=exc, meta=meta)
+    return finish_chat(cfg, conn, prepared, data=data, meta=meta)
 
 
 def model_ok(cfg, conn, model, timeout=None):
@@ -692,7 +730,8 @@ def _is_transient_llm_error(msg):
     return "timeout" in m or "timed out" in m
 
 
-def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_required=None):
+def profile_steps(cfg, conn, skill, messages, *, profile, max_tokens=None,
+                  json_required=None, retry_unknown=True):
     """Budget-guarded chat with model failover and cooldowns. Tries the
     profile's primary then fallbacks, skipping models on active cooldown. A transient
     overload (429/5xx/timeout) gets ONE quick same-model retry before failover and only
@@ -735,8 +774,9 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
                 raise LLMError("turn deadline exceeded", transient=True)
             meta = {}
             try:
-                content = chat(cfg, conn, skill, messages, max_tokens=cap, model=model,
-                               temperature=temp, timeout=min(prof_timeout or cfg.llm_timeout, remaining), meta=meta)
+                content = yield {"kind": "chat", "options": {
+                    "max_tokens": cap, "model": model, "temperature": temp,
+                    "timeout": min(prof_timeout or cfg.llm_timeout, remaining), "meta": meta}}
                 # A length-cut answer on a json_required profile is not a broken
                 # model: retry the SAME model once with a doubled cap, never bench.
                 if (jr and meta.get("finish_reason") == "length" and attempt == 0
@@ -752,10 +792,12 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
             except BudgetExceeded:
                 raise  # budget hard-stop sits above failover
             except LLMError as exc:
+                if not retry_unknown and getattr(exc, "usage_unknown", False):
+                    raise  # Ambiguous paid async work is never repeated automatically.
                 last_exc = exc
                 transient = _is_transient_llm_error(str(exc))
                 if transient and attempt == 0 and not all_benched:
-                    time.sleep(0.8)      # a 'Platform overloaded' 429 usually clears in ~1s
+                    yield {"kind": "delay", "seconds": 0.8}
                     continue             # retry the SAME (preferred) model once
                 # Bench only briefly for a transient blip; a hard error gets the full cooldown.
                 cd = min(cfg.llm_fallback_cooldown, 20) if transient else cfg.llm_fallback_cooldown
@@ -803,6 +845,30 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
                   "failed_models": list(dict.fromkeys(failed_models))},
         )
     raise last_exc or LLMError(f"profile {profile}: all models failed")
+
+
+def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_required=None):
+    """Drive the shared failover policy synchronously for existing skills."""
+    steps = profile_steps(cfg, conn, skill, messages, profile=profile,
+                          max_tokens=max_tokens, json_required=json_required)
+    operation = next(steps)
+    while True:
+        try:
+            if operation["kind"] == "delay":
+                time.sleep(operation["seconds"])
+                result = None
+            else:
+                result = chat(cfg, conn, skill, messages, **operation["options"])
+        except Exception as exc:
+            try:
+                operation = steps.throw(exc)
+            except StopIteration as finished:
+                return finished.value
+        else:
+            try:
+                operation = steps.send(result)
+            except StopIteration as finished:
+                return finished.value
 
 
 def embed(cfg, conn, skill, texts):

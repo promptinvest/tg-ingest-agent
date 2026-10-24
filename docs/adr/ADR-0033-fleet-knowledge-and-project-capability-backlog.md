@@ -38,3 +38,5 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
 - 2026-10-24: owner requested implementing, testing, publishing and deploying the complete backlog. First independent cleanup/completion-poll increments begin; no package completion or release is inferred. Existing authority and compatibility gates remain.
 
 - 2026-10-24: CF-01 descriptive contract and reviewed source-hash exporter implemented, with separate root-only sealed-export installation and retained history. Seventy focused Linux cases pass; production publication and full acceptance remain pending. Facts confer no execution authority.
+
+- 2026-10-24: shared LLM preparation/transport/settlement supports a bounded owner-thread profile pump; one background slot preserves foreground capacity. Eighteen Linux cases pass. Durable integration/release acceptance remain pending; no increased model or budget authority.

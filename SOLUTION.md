@@ -1598,3 +1598,16 @@ Root-owned Linux installation atomically retains the last good revision and rece
 The contract/publisher pass 70 focused isolated Linux tests. Publication, periodic
 source-change review and production installation are still pending; no package is
 complete and no new schedule is installed. See the incremental runbook and backlog.
+## October 24 - Budgeted nonblocking fleet inference primitive
+
+The shared LLM client now separates owner-thread preparation/accounting from bounded
+connection-free transport. A fleet profile pump reuses the existing profile retry,
+failover, cooldown and JSON/length policy without blocking the owner loop. Immutable
+source/input/inventory/facts/capability bindings and a persisted reservation callback
+precede paid transport. Unknown paid outcomes are settled conservatively and are not
+resent. One background transport leaves one of the unchanged two global slots for
+foreground requests; budgets, model configuration and providers are unchanged.
+
+Eighteen focused isolated Linux cases pass, including foreground access while a
+background request is blocked and database/error/cancellation boundaries. Durable
+fleet phase integration, queue rollout and production acceptance remain pending.

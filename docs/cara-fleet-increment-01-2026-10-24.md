@@ -79,3 +79,16 @@ The later combined integration check passed those cases again; installer checks
 remain a separate gate. No new fact artifact is installed in production yet.
 Source synchronization is an explicit review/export/status workflow at this stage,
 not a claim of an automatic scheduler. No CF-01 completion is claimed.
+## October 24 - Budgeted nonblocking fleet inference primitive
+
+The shared LLM client now separates owner-thread preparation/accounting from bounded
+connection-free transport. A fleet profile pump reuses the existing profile retry,
+failover, cooldown and JSON/length policy without blocking the owner loop. Immutable
+source/input/inventory/facts/capability bindings and a persisted reservation callback
+precede paid transport. Unknown paid outcomes are settled conservatively and are not
+resent. One background transport leaves one of the unchanged two global slots for
+foreground requests; budgets, model configuration and providers are unchanged.
+
+Eighteen focused isolated Linux cases pass, including foreground access while a
+background request is blocked and database/error/cancellation boundaries. Durable
+fleet phase integration, queue rollout and production acceptance remain pending.

@@ -91,3 +91,4 @@ revision and recovery backups. Facts do not change gateway transport authority.
 
 This increment adds no timer: operators must review/export source changes and
 record publication lag explicitly. Do not report a source date as a live probe.
+Fleet inference preparation and settlement must run on the SQLite owner thread. Persist the phase and reservation before dispatch, retain unknown usage, and pump cancellation until accounting settles. Never reconstruct/resend a started paid phase after restart. Qualify the exact integrated source before activation; the primitive alone does not close CF-04.
