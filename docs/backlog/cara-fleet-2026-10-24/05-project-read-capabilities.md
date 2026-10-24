@@ -103,3 +103,12 @@ Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
 Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
 and scoped-read gates. This is an incremental business baseline; no full package
 completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).
+
+## October 24 - Typed evidence implementation candidate
+
+Fixed-policy application health, backup results and repository/CI/issues now have
+strict opt-in projections with source dates, version discovery, freshness and
+specific gaps. The manual backup publisher reads existing jobs without triggering
+operations. Legacy wire limits and host/all behavior remain exact. Focused Linux
+checks pass; authenticated source installation, full release and package acceptance
+remain pending. See [increment02](../../cara-fleet-increment-02-2026-10-24.md).

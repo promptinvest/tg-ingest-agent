@@ -1,5 +1,19 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Typed project evidence candidate
+
+Project-only reads can opt into strict application-health, dated backup and
+repository/CI/issue projections through fixed root-owned policy. They retain
+source dates, stale/failed attempts, restore coverage and missing fields. Process
+activity, host totals, CI success and closed issues do not imply project load,
+end-user health, deployment or completion. Legacy collection limits and formats
+remain compatible. A manual read-only backup-evidence publisher observes existing
+jobs; it starts no backup, timer or restore.
+
+Focused isolated Linux checks pass. Exact combined release, authenticated source
+binding and production acceptance remain pending. Production stays on accepted
+source99037c5; CF-05 remains open. [Candidate and release gates](docs/cara-fleet-increment-02-2026-10-24.md).
+
 ## October 24 - Grounded fleet business release accepted
 
 Source `99037c5`, build `f54906e304fe`, was accepted at 10:46:31 UTC.

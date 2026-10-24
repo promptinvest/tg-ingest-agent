@@ -57,3 +57,9 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
   gates pass. Retained operator failures required fresh guarded continuations;
   no completed controller/installer/gateway replay. MCP remains disabled and no
   package-completion claim is made. See the increment release record.
+
+- 2026-10-24: opt-in typed application/backup/development observations preserve
+  fixed-resource authority, implementation discovery, provenance and explicit
+  source gaps. A manual read-only maintenance-job publisher provides backup
+  evidence without starting operations. Legacy protocol limits remain exact;
+  authenticated binding and complete release acceptance are pending.

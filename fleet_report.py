@@ -16,8 +16,77 @@ def stamp(value):
         return "?"
 
 
+def _project_gaps(gaps, ru=False):
+    reasons = {
+        "not_exposed": ("не раскрыто источником", "not exposed by source"),
+        "not_connected": ("не подключено", "not connected"),
+        "not_configured": ("не настроено", "not configured"),
+        "stale": ("данные устарели", "stale evidence"),
+        "no_success_recorded": ("нет успешного результата", "no success recorded"),
+        "latest_attempt_failed": ("последняя попытка завершилась ошибкой", "latest attempt failed"),
+        "latest_attempt_pending": ("последняя попытка ещё не завершена", "latest attempt pending"),
+        "latest_backup_not_restore_verified": ("последний записанный бэкап не проверен восстановлением", "latest recorded backup lacks matching restore verification"),
+        "partial_coverage": ("неполная выборка", "partial coverage"),
+        "ci_does_not_cover_head": ("CI не покрывает записанную ревизию", "CI does not cover recorded revision")}
+    labels = {"generation": ("генерация", "generation"), "reserves": ("резервы", "reserves"),
+              "target": ("целевой запас", "target"), "day_budget": ("дневной бюджет", "day budget"),
+              "snapshot": ("снимок источника", "source snapshot"), "repository": ("репозиторий", "repository"),
+              "ci": ("CI", "CI"), "issues": ("задачи", "issues"), "ci_revision": ("ревизия CI", "CI revision"),
+              "backup": ("бэкап", "backup"), "restore": ("восстановление", "restore"),
+              "backup_latest_attempt": ("последний запуск бэкапа", "latest backup attempt"),
+              "restore_latest_attempt": ("последняя проверка восстановления", "latest restore attempt"),
+              "latest_backup_restore": ("покрытие восстановления", "restore coverage")}
+    index = 0 if ru else 1
+    return "; ".join(labels.get(key, (key, key))[index] + ": " + reasons.get(reason, (reason, reason))[index]
+                     for key, reason in gaps.items())
+
+
+def _dated_project_summary(capability, state, ru=False):
+    parts = [("Датированные результаты бэкапов" if ru else "Dated backup results") if capability == "backups" else
+             ("Датированный снимок разработки" if ru else "Dated development snapshot")]
+    parts.append(("источник выгружен " if ru else "source exported ") + stamp(state["exported_at"]))
+    parts.append(("прочитан " if ru else "read ") + stamp(state["observed_at"]))
+    if capability == "backups":
+        backup, restore = state["backup"], state["restore"]
+        if backup is not None:
+            parts.append(("успешный бэкап " if ru else "successful backup ") + stamp(backup["finished_at"]) +
+                         "; encrypted=" + str(backup["encrypted"]).lower() + "; offsite=" + backup["offsite"] +
+                         "; " + str(backup["compressed_bytes"]) + " bytes")
+        if restore is not None:
+            coverage = (("последний записанный бэкап" if ru else "latest recorded backup") if restore["coverage"] == "latest_recorded_backup" else
+                        ("другой/неизвестный бэкап" if ru else "different/unknown backup"))
+            parts.append(("проверка восстановления " if ru else "restore verification ") + stamp(restore["finished_at"]) +
+                         "; integrity=ok; " + coverage)
+        for kind, attempt in state["latest_attempts"].items():
+            parts.append(("последняя попытка " if ru else "latest attempt ") + kind + "=" + attempt["status"] +
+                         " (" + stamp(attempt["finished_at"] or attempt["created_at"]) + ")")
+    else:
+        repository = state["repository"]
+        parts.append(repository["name"])
+        if repository["status"] == "recorded":
+            parts.append("revision " + repository["revision"] + " (" + stamp(repository["captured_at"]) + ")")
+            if repository.get("last_commit_at"):
+                parts.append(("последний коммит " if ru else "last commit ") + stamp(repository["last_commit_at"]))
+        ci = state["ci"]
+        if ci["status"] == "recorded":
+            parts.append("CI " + stamp(ci["captured_at"]) + ": " + (", ".join(
+                "#" + str(item["run_id"]) + " " + (item["conclusion"] or item["status"]) +
+                " @" + item["revision"][:12] for item in ci["items"]) or ("запусков в выборке нет" if ru else "no runs in sample")))
+        issues = state["issues"]
+        if issues["status"] == "recorded":
+            parts.append(("задачи " if ru else "issues ") + stamp(issues["captured_at"]) + ": " + (", ".join(
+                "#" + str(item["number"]) + " " + item["title"] + " (" + item["state"] + ")" for item in issues["items"]) or
+                ("в выборке нет" if ru else "none in sample")))
+    if state["gaps"]:
+        parts.append(_project_gaps(state["gaps"], ru))
+    return "; ".join(parts)
+
+
 def _project_summary(capability, state):
     status = state.get("status", "unavailable")
+    adapter = protocol.adapter_kind(capability, state.get("implementation_version"))
+    if adapter in {"backups", "development"} and status == "recorded":
+        return status, _dated_project_summary(capability, state, True), _dated_project_summary(capability, state)
     gaps = {"release": ("запись релиза", "release record"), "http_health": ("проверка приложения", "application health check"),
             "containers": ("контейнеры", "containers"), "runtime": ("компоненты", "runtime components"),
             "backups": ("проверенные результаты бэкапов", "verified backup results"),
@@ -37,7 +106,13 @@ def _project_summary(capability, state):
         health = state.get("health", {})
         parts = ["HTTP " + str(code)] + [key + "=" + str(value) for key, value in health.items()]
         failed = (type(code) is int and code >= 400) or any(value is False or str(value).lower() in {"failed", "unhealthy", "error", "down", "false", "not_ready"} for value in health.values())
-        return status, ("Ошибка проверки приложения: " if failed else "Проверки приложения: ") + "; ".join(parts), ("Application health failure: " if failed else "Application checks: ") + "; ".join(parts)
+        if adapter == "daily_lingo_http":
+            failed = failed or any(value in {"degraded", "stalled"} for value in health.values())
+            parts += [key + ": " + str(seconds) + "s since progress" for key, seconds in state["worker_progress"].items()]
+            detail_ru, detail_en = _project_gaps(state["gaps"], True), _project_gaps(state["gaps"])
+        else:
+            detail_ru = detail_en = ""
+        return status, ("Ошибка проверки приложения: " if failed else "Проверки приложения: ") + "; ".join(parts + ([detail_ru] if detail_ru else [])), ("Application health failure: " if failed else "Application checks: ") + "; ".join(parts + ([detail_en] if detail_en else []))
     if capability == "containers":
         containers = state.get("containers", {})
         known = [item for item in containers.values() if isinstance(item, dict) and item.get("available") is not False and type(item.get("Running")) is bool]
@@ -163,8 +238,21 @@ def build(result, inventory, plan, history=()):
                             status, ru, en = _project_summary(capability, state)
                             key = add(host, "projects." + project + "." + capability, status, state,
                                       label + ": " + ru, label + ": " + en,
-                                      "measurement" if status == "observed" else "gap", at=state.get("observed_at"))
+                                      "record" if status == "recorded" else "measurement" if status == "observed" else "gap", at=state.get("observed_at"))
                             report["observations"][key].update(project=project, capability=capability, implementation_version=state.get("implementation_version"))
+                            adapter = protocol.adapter_kind(capability, state.get("implementation_version"))
+                            if adapter:
+                                report["observations"][key].update(source=protocol.project_adapters.ADAPTERS[adapter]["source"],
+                                    source_id=state.get("source_id"), source_exported_at=state.get("exported_at"))
+                            coverage["findings"].append(key)
+                        for focus in set(report["focus"]) & {"resources", "cpu", "memory", "disk", "trend"}:
+                            field = {"resources": "resources.project_metrics", "cpu": "resources.cpu_percent",
+                                     "memory": "resources.memory_used_percent", "disk": "resources.disk_used_percent",
+                                     "trend": "history.project_metrics"}[focus]
+                            key = add(host, field, "not_configured", None,
+                                      label + ": метрики запросов/трафика и нагрузки CPU/RAM/диска проекта не подключены; состояние компонентов и общие метрики хоста не показывают нагрузку этого проекта",
+                                      label + ": project request/traffic and CPU/RAM/disk usage metrics are not connected; component state and host totals do not establish this project's load", "gap")
+                            report["observations"][key].update(project=project, capability="project_metrics")
                             coverage["findings"].append(key)
                     continue
                 for project in sorted(expected | (set(data) if selected_projects is None else set())):

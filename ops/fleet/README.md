@@ -143,3 +143,27 @@ Discover selected capabilities before writing verification expectations. An empt
 binding is not configured; do not assert a live observation from it or disguise
 the gap. Qualify configured reads individually and retain their full timestamps.
 A protocol-success result alone does not qualify the requested business answer.
+
+## Typed project source installation and refresh
+
+Project adapters are opt-in additions to protected project_adapters policy. Pin
+project/capability, exact implementation version and fixed source_id/path/max age;
+for development also bind the exact repository. Model input supplies none of these.
+Install the adapter module before enabling its policy; verify discovery and actual
+selected-project response as the real executor/gateway identity. Never broaden to
+host/all collection when a source or implementation is unavailable.
+
+The backup publisher is a manual root operator command:
+`python3 -B /opt/tg-ingest-agent/fleet_project_publish.py --policy /etc/cara-fleet-backup-publisher.json`.
+Its protected policy schema is cara-fleet-backup-publisher-policy/v1, with only
+schema,database_path,database_uid,output_path,project_id,source_id,max_age_seconds.
+Provision protected root-owned output ancestry and review the configured existing
+jobs database/UID before invocation. Test actual UID/PATH/cwd and configured source;
+no timer or backup operation is installed. Python isolated mode is not yet supported
+for this publisher; do not claim a tested -I invocation.
+
+Retain last good protected output on failure; never relabel its capture timestamp.
+A failed/newer backup attempt, incomplete restore coverage, stale snapshot or CI run
+that does not cover repository head stays explicit in final answers. Capture and
+root-bind development snapshots separately through the existing approved account.
+Keep all real bindings, private receipts and bootstrap data outside public Git.

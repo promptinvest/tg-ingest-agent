@@ -12,6 +12,9 @@ from urllib.parse import urlsplit
 from pathlib import Path
 
 import fleet_protocol as protocol
+import fleet_project_adapters as project_adapters
+
+HEALTH_HOSTS = frozenset({"127.0.0.1", "tg.promptinvest.club"})
 
 CONFIG = Path("/etc/cara-fleet-host.json")
 LEDGER = Path("/var/lib/cara-fleet-host")
@@ -137,7 +140,7 @@ def projects(config):
     for name, url in config.get("health", {}).items():
         project = values.setdefault(name, {})
         parsed = urlsplit(url)
-        if parsed.hostname not in {"127.0.0.1", "tg.promptinvest.club"} or parsed.scheme not in {"http", "https"}:
+        if parsed.hostname not in HEALTH_HOSTS or parsed.scheme not in {"http", "https"}:
             raise ValueError("health endpoint outside policy")
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -200,7 +203,50 @@ def _read_budget(deadline):
     return min(5, remaining)
 
 
+def _adapter_policy(config, project, capability):
+    """Only operator configuration selects an implementation or fixed resource."""
+    policies = config.get("project_adapters", {})
+    if not isinstance(policies, dict):
+        raise ValueError("invalid fixed project adapter policy")
+    selected = policies.get(project, {})
+    if not isinstance(selected, dict):
+        raise ValueError("invalid fixed project adapter mapping")
+    if capability not in selected:
+        return None
+    policy = selected[capability]
+    kind = {"http_health": "daily_lingo_http", "backups": "backups", "development": "development"}.get(capability)
+    if kind is None or not isinstance(policy, dict) or policy.get("adapter") != project_adapters.ADAPTERS[kind]["implementation_version"]:
+        raise ValueError("unsupported fixed project adapter")
+    if kind == "daily_lingo_http":
+        if set(policy) != {"adapter"}:
+            raise ValueError("application adapter cannot supply resources")
+    else:
+        project_adapters.binding(policy, kind)
+    return kind, policy
+
+
+def _project_version(config, project, capability):
+    selected = _adapter_policy(config, project, capability)
+    return (project_adapters.ADAPTERS[selected[0]]["implementation_version"] if selected else
+            protocol.PROJECT_CAPABILITIES[capability]["implementation_version"])
+
+
+def _project_gap(config, project, capability, reason):
+    try:
+        selected = _adapter_policy(config, project, capability)
+    except (ValueError, TypeError):
+        selected = None
+    if selected:
+        return {"status": "unavailable", "observed_at": protocol.now(),
+                "implementation_version": project_adapters.ADAPTERS[selected[0]]["implementation_version"],
+                "reason": "observation_unavailable"}
+    return protocol.capability_observation(capability, "unavailable", reason)
+
+
 def _configured(config, project, capability):
+    selected = _adapter_policy(config, project, capability)
+    if selected and selected[0] in {"backups", "development"}:
+        return True
     section = {"release": "projects", "http_health": "health", "containers": "containers", "runtime": "project_services"}.get(capability)
     return bool(section and isinstance(config.get(section), dict) and config[section].get(project))
 
@@ -210,15 +256,22 @@ def discover(config, scope):
     return {"host": config["host"], "observed_at": protocol.now(), "read_version": protocol.READ_VERSION,
             "read_scope": scope, "capabilities": {project: {capability: {
                 "configured": _configured(config, project, capability),
-                "implementation_version": protocol.PROJECT_CAPABILITIES[capability]["implementation_version"]}
+                "implementation_version": _project_version(config, project, capability)}
                 for capability in scope["capabilities"]} for project in scope["projects"]}}
 
 
 def _project_read(config, project, capability, deadline):
     observation = lambda status, reason=None, **fields: protocol.capability_observation(capability, status, reason, **fields)
     if not _configured(config, project, capability):
+        selected = _adapter_policy(config, project, capability)
+        if selected:
+            return {"status": "not_configured", "reason": "not_configured", "observed_at": protocol.now(),
+                    "implementation_version": project_adapters.ADAPTERS[selected[0]]["implementation_version"]}
         return observation("not_configured", "not_configured")
     _read_budget(deadline)
+    selected_adapter = _adapter_policy(config, project, capability)
+    if selected_adapter and selected_adapter[0] in {"backups", "development"}:
+        return project_adapters.read_bound(selected_adapter[0], selected_adapter[1], project, protocol.now())
     if capability == "release":
         paths = config["projects"][project]
         if not isinstance(paths, list) or not 1 <= len(paths) <= 4 or any(not isinstance(path, str) for path in paths):
@@ -240,14 +293,34 @@ def _project_read(config, project, capability, deadline):
     if capability == "http_health":
         url = config["health"][project]
         parsed = urlsplit(url)
-        if parsed.hostname not in {"127.0.0.1", "tg.promptinvest.club"} or parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+        if parsed.hostname not in HEALTH_HOSTS or parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
             raise ValueError("health endpoint outside fixed policy")
+        if selected_adapter and parsed.hostname != "127.0.0.1":
+            raise ValueError("application adapter requires its fixed loopback source")
+        def application_projection(response, status):
+            raw = response.read(8193)
+            if len(raw) > 8192:
+                raise ValueError("project health response too large")
+            def pairs(items):
+                value = {}
+                for key, item in items:
+                    if key in value:
+                        raise ValueError("duplicate application health field")
+                    value[key] = item
+                return value
+            body = json.loads(raw, object_pairs_hook=pairs,
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("invalid application number")))
+            return {"status": "observed", "observed_at": protocol.now(),
+                    "implementation_version": project_adapters.ADAPTERS["daily_lingo_http"]["implementation_version"],
+                    **project_adapters.daily_lingo_health(body, status)}
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):
                 return None
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         try:
             with opener.open(url, timeout=_read_budget(deadline)) as response:
+                if selected_adapter:
+                    return application_projection(response, response.status)
                 fields = {"http_status": response.status}
                 if parsed.hostname == "127.0.0.1":
                     raw = response.read(8193)
@@ -259,6 +332,11 @@ def _project_read(config, project, capability, deadline):
                     fields["health"] = {key: value for key, value in body.items() if key in {"status", "database", "delivery", "intake"} and isinstance(value, (str, bool, int)) and len(str(value)) < 100}
                 return observation("observed", **fields)
         except urllib.error.HTTPError as exc:
+            if selected_adapter:
+                try:
+                    return application_projection(exc, exc.code)
+                finally:
+                    exc.close()
             return observation("observed", http_status=exc.code)
     if capability == "containers":
         names = config["containers"][project]
@@ -322,9 +400,9 @@ def inspect_scoped(config, facets, scope):
                 try:
                     value = _project_read(config, project, capability, deadline)
                 except subprocess.TimeoutExpired:
-                    value = protocol.capability_observation(capability, "unavailable", "time_limit")
-                except (OSError, ValueError, TypeError, AttributeError):
-                    value = protocol.capability_observation(capability, "unavailable", "observation_unavailable")
+                    value = _project_gap(config, project, capability, "time_limit")
+                except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+                    value = _project_gap(config, project, capability, "observation_unavailable")
                 out["projects"][project][capability] = value
     return protocol.scoped_host_result(out, config["host"], scope, facets)
 
@@ -392,7 +470,7 @@ def main():
         if len(incoming) > 4096:
             raise ValueError("request too large")
         result = run(config, json.loads(incoming))
-        protocol.safe_tree(result)
+        protocol.transport_value(result)
         print(protocol.canonical(result))
     except Exception:
         # No command, environment, path, or protected error details leave the host.

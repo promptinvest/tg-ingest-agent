@@ -156,3 +156,12 @@ scoped reads and lifecycle coverage are live. All original release/preservation
 gates pass; retained operator failures/continuations and exact evidence are in the
 [increment record](../../cara-fleet-increment-01-2026-10-24.md). MCP remains disabled.
 No package is complete; independent project/shared-task/client increments continue.
+
+## October 24 - Typed evidence implementation candidate
+
+Fixed-policy application health, backup results and repository/CI/issues now have
+strict opt-in projections with source dates, version discovery, freshness and
+specific gaps. The manual backup publisher reads existing jobs without triggering
+operations. Legacy wire limits and host/all behavior remain exact. Focused Linux
+checks pass; authenticated source installation, full release and package acceptance
+remain pending. See [increment02](../../cara-fleet-increment-02-2026-10-24.md).

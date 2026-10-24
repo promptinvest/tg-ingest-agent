@@ -56,10 +56,13 @@ def remote(transport, host, request):
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                           timeout=55, check=False,
                           env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
-    if done.returncode or len(done.stdout) > 10000:
+    # Only an explicit scoped project inspection can carry strict adapter
+    # subdocuments. Legacy and discovery transports retain their 10000 cap.
+    maximum = protocol.MAX_BYTES if request.get("operation") == "inspect" and "read_scope" in request else 10000
+    if done.returncode or len(done.stdout) > maximum:
         raise ValueError("host unavailable or operation refused")
     value = json.loads(done.stdout)
-    protocol.safe_tree(value)
+    protocol.transport_value(value)
     return value
 
 
@@ -74,11 +77,13 @@ def inspect(catalog, transport, request, control=None):
         hosts = {}
         def scoped_one(host):
             selected = protocol.scope_for_host(scope, catalog, host)
+            discovered = None
             try:
                 discovery = observe(host, {"operation": "capabilities", "read_scope": selected})
                 protocol.read_discovery(discovery, host, selected)
+                discovered = discovery["capabilities"]
                 value = observe(host, {"operation": "inspect", "facets": request["facets"], "read_scope": selected})
-                protocol.scoped_host_result(value, host, selected, request["facets"])
+                protocol.scoped_host_result(value, host, selected, request["facets"], expected_capabilities=discovered)
                 return host, value
             except (fleet_queue.QueueCancelled, fleet_queue.QueueExpired):
                 raise
@@ -86,8 +91,12 @@ def inspect(catalog, transport, request, control=None):
                 # An old/refusing gateway is a scoped capability gap. Never retry
                 # as a legacy inspection, which would collect colocated projects.
                 value = {"host": host, "observed_at": protocol.now(), "read_scope": selected}
+                def gap(project, capability):
+                    version = discovered[project][capability]["implementation_version"] if discovered else protocol.PROJECT_CAPABILITIES[capability]["implementation_version"]
+                    reason = "observation_unavailable" if protocol.adapter_kind(capability, version) else "gateway_contract_unavailable"
+                    return protocol.capability_observation(capability, "unavailable", reason, implementation_version=version)
                 for facet in request["facets"]:
-                    value[facet] = ({project: {capability: protocol.capability_observation(capability, "unavailable", "gateway_contract_unavailable")
+                    value[facet] = ({project: {capability: gap(project, capability)
                                               for capability in selected["capabilities"]} for project in selected["projects"]}
                                     if facet == "projects" else {"available": False})
                 return host, value

@@ -1,9 +1,12 @@
 """Closed, versioned fleet requests. Model output is never an address or command."""
+import copy
 import hashlib
 import json
 import math
 import re
 from datetime import datetime, timezone
+
+import fleet_project_adapters as project_adapters
 
 VERSION = "cara-fleet/v1"
 MAX_BYTES = 60000
@@ -139,15 +142,41 @@ PROJECT_CAPABILITIES = {
     "backups": {"implementation_version": "project-backups-gap/v1", "outputs": []},
     "development": {"implementation_version": "project-development-gap/v1", "outputs": []},
 }
+# New implementations are explicit alternatives, never a mutation of a legacy
+# capability payload. Only root gateway bindings select these adapters.
+_ADAPTER_KIND = {"http_health": "daily_lingo_http", "backups": "backups", "development": "development"}
+
+
+def adapter_kind(capability, implementation_version):
+    kind = _ADAPTER_KIND.get(capability)
+    return kind if kind and implementation_version == project_adapters.ADAPTERS[kind]["implementation_version"] else None
+
+
+def capability_implementation(capability, implementation_version):
+    if capability not in PROJECT_CAPABILITIES:
+        raise ValueError("unknown project capability")
+    if implementation_version == PROJECT_CAPABILITIES[capability]["implementation_version"]:
+        return PROJECT_CAPABILITIES[capability]
+    kind = adapter_kind(capability, implementation_version)
+    if kind is None:
+        raise ValueError("unknown project capability implementation")
+    return project_adapters.ADAPTERS[kind]
+
+
 READ_STATUSES = frozenset({"observed", "unavailable", "not_found", "not_configured", "recorded"})
 READ_REASONS = frozenset({"not_configured", "observation_unavailable", "resource_not_found", "gateway_contract_unavailable", "time_limit"})
 
 
 def capability_contract():
     """Transport-independent allowlisted reads; no model-supplied resource inputs."""
-    return {name: dict(spec, outputs=list(spec["outputs"]), inputs=[], policy_version=READ_VERSION, location="host-gateway",
+    values = {name: dict(spec, outputs=list(spec["outputs"]), inputs=[], policy_version=READ_VERSION, location="host-gateway",
                        freshness_seconds=90, window_seconds=None, command_timeout_seconds=5, request_timeout_seconds=30, maximum_bytes=10000, maximum_source_bytes=65536,
                        redaction="fixed-field-allowlist") for name, spec in PROJECT_CAPABILITIES.items()}
+    for capability, kind in _ADAPTER_KIND.items():
+        values[capability]["supported_implementations"] = {
+            PROJECT_CAPABILITIES[capability]["implementation_version"]: list(PROJECT_CAPABILITIES[capability]["outputs"]),
+            project_adapters.ADAPTERS[kind]["implementation_version"]: list(project_adapters.ADAPTERS[kind]["outputs"])}
+    return values
 
 
 def read_scope(value, catalog=None, hosts=None):
@@ -200,6 +229,10 @@ def capability_observation(capability, status, reason=None, **fields):
 
 
 def _capability_payload(capability, observation):
+    kind = adapter_kind(capability, observation.get("implementation_version"))
+    if kind is not None:
+        project_adapters.validate_observation(kind, observation)
+        return
     fields = set(observation) - {"status", "observed_at", "implementation_version", "reason"}
     if observation["status"] != "observed":
         if fields:
@@ -237,7 +270,7 @@ def _capability_payload(capability, observation):
     else:
         raise ValueError("unconnected capability cannot claim observed evidence")
 
-def scoped_host_result(value, host, scope, facets):
+def scoped_host_result(value, host, scope, facets, expected_capabilities=None):
     """Reject broad/mismatched gateway output before it enters a durable receipt."""
     read_scope(scope)
     if (not isinstance(value, dict) or set(value) != {"host", "observed_at", "read_scope", *facets}
@@ -247,17 +280,22 @@ def scoped_host_result(value, host, scope, facets):
         projects = value["projects"]
         if not isinstance(projects, dict) or set(projects) != set(scope["projects"]):
             raise ValueError("scoped project result mismatch")
-        for project in projects.values():
+        for project_id, project in projects.items():
             if not isinstance(project, dict) or set(project) != set(scope["capabilities"]):
                 raise ValueError("scoped capability result mismatch")
             for capability, observation in project.items():
-                allowed = {"status", "observed_at", "implementation_version", "reason", *PROJECT_CAPABILITIES[capability]["outputs"]}
+                if not isinstance(observation, dict):
+                    raise ValueError("invalid scoped capability observation")
+                spec = capability_implementation(capability, observation.get("implementation_version"))
+                allowed = {"status", "observed_at", "implementation_version", "reason", *spec["outputs"]}
+                if expected_capabilities is not None and observation.get("implementation_version") != expected_capabilities[project_id][capability]["implementation_version"]:
+                    raise ValueError("project implementation differs from discovery")
                 if (not isinstance(observation, dict) or not {"status", "observed_at", "implementation_version"} <= set(observation) or set(observation) - allowed
-                        or not isinstance(observation["status"], str) or observation["status"] not in READ_STATUSES or observation["implementation_version"] != PROJECT_CAPABILITIES[capability]["implementation_version"]
+                        or not isinstance(observation["status"], str) or observation["status"] not in READ_STATUSES
                         or not -30 <= age(observation["observed_at"]) <= 90 or ("reason" in observation and observation["reason"] not in READ_REASONS)):
                     raise ValueError("invalid scoped capability observation")
                 _capability_payload(capability, observation)
-    safe_tree(value)
+    _scoped_safe_tree(value)
     return value
 
 
@@ -271,23 +309,28 @@ def read_discovery(value, host, scope):
         if not isinstance(project, dict) or set(project) != set(scope["capabilities"]):
             raise ValueError("invalid gateway capability discovery")
         for capability, metadata in project.items():
-            if not isinstance(metadata, dict) or set(metadata) != {"configured", "implementation_version"} or type(metadata["configured"]) is not bool or metadata["implementation_version"] != PROJECT_CAPABILITIES[capability]["implementation_version"]:
+            if not isinstance(metadata, dict) or set(metadata) != {"configured", "implementation_version"} or type(metadata["configured"]) is not bool:
                 raise ValueError("unsupported gateway capability version")
+            capability_implementation(capability, metadata["implementation_version"])
     safe_tree(value)
     return value
 
 def safe_tree(value, depth=0):
-    """Host replies contain structured measurements, never arbitrary log prose."""
-    if depth > 8:
+    """Legacy host values retain their exact eight-level structural bound."""
+    return _bounded_tree(value, depth, 8)
+
+
+def _bounded_tree(value, depth, maximum):
+    if depth > maximum:
         raise ValueError("fleet result too deep")
     if isinstance(value, dict):
         if len(value) > 40:
             raise ValueError("fleet object too large")
-        return {str(k)[:80]: safe_tree(v, depth + 1) for k, v in value.items()}
+        return {str(k)[:80]: _bounded_tree(v, depth + 1, maximum) for k, v in value.items()}
     if isinstance(value, list):
         if len(value) > 24:
             raise ValueError("fleet list too large")
-        return [safe_tree(v, depth + 1) for v in value]
+        return [_bounded_tree(v, depth + 1, maximum) for v in value]
     if isinstance(value, str):
         if len(value) > 200:
             raise ValueError("fleet string too long")
@@ -297,6 +340,41 @@ def safe_tree(value, depth=0):
     if type(value) is float and math.isfinite(value):
         return value
     raise ValueError("invalid fleet value")
+
+
+def _scoped_safe_tree(value):
+    """Twelve levels only for strict new adapter payloads; legacy stays eight.
+
+    Adapter payloads have already passed exact semantic validators. Mask only
+    those known implementation subtrees for the original depth check; arbitrary
+    legacy facets/objects never inherit a looser bound.
+    """
+    _bounded_tree(value, 0, 12)
+    masked = copy.deepcopy(value)
+    hosts = masked["hosts"].values() if "hosts" in masked else [masked]
+    for host in hosts:
+        for project in host.get("projects", {}).values():
+            for capability, observation in list(project.items()):
+                if adapter_kind(capability, observation.get("implementation_version")):
+                    project[capability] = {key: observation[key] for key in ("status", "observed_at", "implementation_version")}
+    safe_tree(masked)
+    return value
+
+
+def transport_value(value):
+    """Validate a scoped transport reply before relaxing any legacy bound."""
+    if isinstance(value, dict) and "read_scope" in value:
+        scope = read_scope(value["read_scope"])
+        if "read_version" in value:
+            return read_discovery(value, value.get("host"), scope)
+        facets = [key for key in value if key not in {"host", "observed_at", "read_scope"}]
+        if not set(facets) <= FACETS or not isinstance(value.get("host"), str) or not ID.fullmatch(value["host"]):
+            raise ValueError("invalid scoped transport shape")
+        scoped_host_result(value, value["host"], scope, facets)
+        if len(canonical(value).encode()) > MAX_BYTES:
+            raise ValueError("scoped transport reply too large")
+        return value
+    return safe_tree(value)
 
 
 def result(value, expected, read_scope=None):
@@ -322,7 +400,10 @@ def result(value, expected, read_scope=None):
             if not set(facets) <= FACETS or (read_scope["kind"] == "projects" and facets != ["projects"]) or (read_scope["kind"] == "host" and "projects" in facets):
                 raise ValueError("scoped result includes unrelated host facets")
             scoped_host_result(raw, host, selected, facets)
-    safe_tree(value)
+    if read_scope is not None:
+        _scoped_safe_tree(value)
+    else:
+        safe_tree(value)
     if len(canonical(value).encode()) > MAX_BYTES:
         raise ValueError("fleet result too large")
     return value
