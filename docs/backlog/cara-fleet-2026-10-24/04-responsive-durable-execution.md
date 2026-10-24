@@ -1,9 +1,28 @@
 # CF-04 — Responsive durable planning, synthesis and fleet queues
 
-- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
+- Status: Implemented, deployed and functionally accepted October24, 2026.
 - Priority: P1; can proceed independently of knowledge work.
 - Dependencies: none; coordinate CF-02/CF-03 contracts.
 - Size: Large; split completion wakeup, asynchronous inference and queue lifecycle.
+
+## Accepted implementation - October24
+
+Actual-loop synchronized fake-clock tests show owner/reminder progress during held
+planning/synthesis/protocol waits, bounded queues and prompt completion polling.
+Durable recovery preserves accounting and honest ambiguity. Accepted installed source
+matches; no production latency percentile is claimed.
+
+Application acceptance completed 20:56:22 UTC; separate forward facts revision 2
+was accepted 21:06:13 UTC on October24 for source `eb0b9ad`. All original criteria
+below have separate finite-evidence PASS decisions in the
+[release record](../../cara-fleet-release-2026-10-24.md). Actual installed source,
+reader namespace, six preserved gateways and exact 60 catalog cells pass.
+
+G1-G6 pass. Final public docs/issues and CI are synchronized at the final head
+before the separate manual development refresh; its receipt remains private.
+No later refresh success is asserted here. The original scope/problem text and
+dated checkpoints below describe the review baseline; their acceptance bullets
+and historical assertions remain unchanged.
 
 ## Verified timing and sources
 

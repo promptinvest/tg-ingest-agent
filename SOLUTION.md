@@ -1,5 +1,40 @@
 # Cara — Solution Specification
 
+## October 24 - Fleet and project release accepted
+
+Application acceptance completed **2026-10-24 20:56:22 UTC** for source
+`eb0b9ad`; the installed and loaded modules match the qualified source. Separate
+forward facts revision 2 was accepted **21:06:13 UTC**. CF-01-CF-07 and all 71
+unchanged original functional criteria have separate evidence-based acceptance
+decisions. The [dated release record](docs/cara-fleet-release-2026-10-24.md)
+contains verification totals, finite business qualification, costs and limits.
+
+Known descriptive facts avoid host inspection. The existing budgeted semantic
+planner selects requested entities, fields, scope and reply form; grounded output
+preserves meaningful names, preferences, corrections, source dates and gaps.
+Durable execution keeps owner/reminder work responsive. Project reads distinguish
+placement, application/route/backup evidence and repository/CI/issue progress.
+Shared authority, resource exclusion, content lifecycle and checked recovery
+preserve existing behavior, source history, budgets/models and unrelated services.
+
+Accepted checks include strict nonroot namespace readiness, preserved gateways,
+typed scoped reads, health, current/last-good facts and once-only normal notice.
+The final continuation carries completed installer, publisher, marking and restart
+evidence without replay. Original prestart data parity and backups remain retained;
+later ordinary activity and existing telemetry retention have a separate exact
+finite forward review, not an assertion of unchanged live row hashes.
+
+The supported optional MCP pair is stdlib/2026-07-28 local stdio with base async
+reads. Tasks is unsupported; A2A, other transport/SDK guarantees and new writes
+remain deferred. CF-01-CF-06 work independently of MCP availability. Facts and
+development synchronization remain reviewed manual workflows, without a new timer.
+
+Final public documentation, justified issue states and CI are synchronized at the
+final public head before a separate reviewed manual development-source refresh.
+Its dated acceptance is retained privately; a receipt-only public commit would
+move the head just captured. This record does not assert later refresh success.
+Dated checkpoints below retain their historical status.
+
 ## October 24 - Increment 12 - stale and partial development evidence
 
 Development adapters retain complete:false, but a single gaps field records

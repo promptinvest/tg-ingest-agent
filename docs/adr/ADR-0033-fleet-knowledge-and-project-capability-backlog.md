@@ -1,8 +1,31 @@
 # ADR-0033: Fleet knowledge and project capability development backlog
 
-- Status: Accepted for implementation October 24, 2026; packages in progress.
+- Status: Accepted and implemented; CF-01-CF-07 deployed/functionally accepted October24, 2026.
 - Owner request: create a backlog for further development after a fleet behavior/architecture review.
-- Implementation authorization: no implementation is claimed by this planning record.
+- Implementation authorization: October24 owner request to implement, test, publish and deploy, under the standing implementation-includes-deployment rule; no separate hash-specific approval is claimed.
+
+## Accepted implementation - October24
+
+Qualified source `eb0b9ad` reached application acceptance20:56:22 UTC and separate
+forward facts revision 2 acceptance21:06:13 UTC. All71 unchanged original criteria
+and seven packages have separate evidence-based functional acceptance decisions.
+Installed source, nonroot readiness, preserved gateway authority, typed scoped
+reads, last-good facts and original source/evidence dates pass. The
+[dated release record](../cara-fleet-release-2026-10-24.md) separates source/test,
+finite model/manual and actual installed results, costs and limitations.
+
+Completed installation, gateway updates, source publications, marking and final
+restart are retained without replay. Fresh paused backups and original prestart
+parity remain preserved. Later ordinary database activity/telemetry retention has
+an exact finite review, not a future startup/deletion allowance. Normal release
+notice is once/one attempt. No manual maintenance demonstration supplied acceptance.
+
+Final public docs/issues and CI are synchronized at the final head before the
+separate reviewed manual development-source refresh. Its acceptance stays private;
+this checkpoint does not claim that later operation succeeded. Optional MCP is
+the qualified stdlib/2026-07-28 stdio pair; Tasks is unsupported, A2A/new writes
+and other transport/SDK combinations remain deferred. Manual facts/development
+publication adds no timer. Earlier context/checkpoints remain historical.
 
 ## Context and direction
 

@@ -1,9 +1,28 @@
 # CF-06 — Governed task capabilities and fleet content lifecycle
 
-- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
+- Status: Implemented, deployed and functionally accepted October24, 2026.
 - Priority: P2 for lifecycle integration; required P1 gate before adding broader project effects.
 - Depends on CF-04/CF-05 contracts for execution integration. Purge analysis/fixtures can start independently.
 - Size: Large; separate lifecycle/purge, read-broker adapter and existing-effect compatibility increments.
+
+## Accepted implementation - October24
+
+Shared registry/authority, durable resource exclusion and at-most-once effect
+ambiguity, legacy cards, disclosed content lifecycle and checked backups pass original
+isolated regressions and accepted installed/preservation gates. No production
+purge/effect demonstration or new runbook authority was introduced.
+
+Application acceptance completed 20:56:22 UTC; separate forward facts revision 2
+was accepted 21:06:13 UTC on October24 for source `eb0b9ad`. All original criteria
+below have separate finite-evidence PASS decisions in the
+[release record](../../cara-fleet-release-2026-10-24.md). Actual installed source,
+reader namespace, six preserved gateways and exact 60 catalog cells pass.
+
+G1-G6 pass. Final public docs/issues and CI are synchronized at the final head
+before the separate manual development refresh; its receipt remains private.
+No later refresh success is asserted here. The original scope/problem text and
+dated checkpoints below describe the review baseline; their acceptance bullets
+and historical assertions remain unchanged.
 
 ## Problem and source evidence
 

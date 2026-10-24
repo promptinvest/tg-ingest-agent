@@ -1,9 +1,28 @@
 # CF-03 — Adaptive grounded replies, corrections and safe cleanup
 
-- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
+- Status: Implemented, deployed and functionally accepted October24, 2026.
 - Priority: P1.
 - Depends on CF-02's answer contract; the sanitizer fix and shared style review can start independently.
 - Size: Medium; cleanup, response contract and real-model qualification are separate increments.
+
+## Accepted implementation - October24
+
+Requested brevity/detail/tables and meaningful names are preserved. Typed selected
+facts, dates and gaps bound replies and corrections; counterfactual/cleanup/legacy
+full-report assertions remain intact. Five actual useful answers support the stated
+finite cohort.
+
+Application acceptance completed 20:56:22 UTC; separate forward facts revision 2
+was accepted 21:06:13 UTC on October24 for source `eb0b9ad`. All original criteria
+below have separate finite-evidence PASS decisions in the
+[release record](../../cara-fleet-release-2026-10-24.md). Actual installed source,
+reader namespace, six preserved gateways and exact 60 catalog cells pass.
+
+G1-G6 pass. Final public docs/issues and CI are synchronized at the final head
+before the separate manual development refresh; its receipt remains private.
+No later refresh success is asserted here. The original scope/problem text and
+dated checkpoints below describe the review baseline; their acceptance bullets
+and historical assertions remain unchanged.
 
 ## Owner intent and verified failures
 

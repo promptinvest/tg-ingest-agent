@@ -1,5 +1,37 @@
 # Cara fleet integration
 
+## Accepted release and manual follow-through
+
+Source `eb0b9ad` reached application acceptance **October24 20:56:22 UTC** and
+separate forward facts revision 2 acceptance **21:06:13 UTC**. All71 original
+functional criteria and seven packages are accepted. The
+[dated record](../../docs/cara-fleet-release-2026-10-24.md) separates source,
+finite model/manual and actual installed evidence and its limits.
+
+Accepted checks retain installed/loaded 89 source, actual nonroot reader namespace,
+all 60 authenticated catalog cells, one fresh private MCP fixture, three health
+samples and final protected preservation. Normal release notice is sent once in
+one attempt. Six completed gateway updates, original source publications and
+mark/final-restart evidence are carried without replay. Fresh paused forward
+backups and original prestart 54 parity remain retained; reviewed later activity
+is not asserted to have identical live row hashes.
+
+Readiness requires two stable matching nonroot identities within one original
+deadline before strict namespace predicates. With systemd Type=simple, start can
+return before credentials/exec settle; root never qualifies as readiness. Strict
+account/policy/source checks remain. Native installer/verifier bodies and bounds
+stay unchanged; only those two exact release-command environments resolve the
+needed system administration tools, with installer prerequisite guards first.
+Other operator command environments do not change. Completed one-shot steps and
+failed controllers must not be replayed.
+
+Synchronize final public docs, justified issue states and CI at the final head
+before the separate reviewed manual development-source refresh. Its receipt stays
+private, without a receipt-only commit moving the captured head. No later refresh
+success is asserted here. Tasks is unsupported; A2A/new writes and other
+unqualified transport/SDK combinations remain deferred. No source timer is added.
+Dated checkpoints below retain their historical meaning.
+
 Owner-approved first release: natural RU/EN investigations across the six monitored
 hosts, project-state evidence, follow-up context and available historical receipts.
 The only initial write runbook restarts `cara-worker.service` on PD after exact
@@ -82,9 +114,18 @@ Never copy the raw KB or source register to the server or public repository.
 
 After exact-source qualification, stage only the sanitized export under a protected
 root-owned path. Create the destination with root ownership, no group/world writes,
-and read access for the existing assistant group. Run as root:
-`python3 fleet_facts_publish.py install-export --artifact <sanitized-export>
---directory <protected-facts-directory>`. Fixture artifacts, untrusted ancestors,
+and read access for the existing facts-reader group. Derive that group from the
+accepted facts files/directories and verify membership/readability under the actual
+main process UID, primary/supplementary groups and mount namespace. Do not infer a
+reader GID from the service UID or assume a numeric account/group value.
+
+Before any publisher-created artifact, pointer or receipt, the reviewed root
+operator must enter that verified reader EGID, clear supplementary groups and set
+umask027 while retaining root ownership authority. Then call the installed fixed publisher:
+`python3 -B /opt/tg-ingest-agent/fleet_facts_publish.py install-export
+--artifact <sanitized-export> --directory <protected-facts-directory>`.
+Require every new file to be root-owned with mode0640 and that reader group. Fixture artifacts,
+untrusted ancestors,
 tampered integrity and history rewrites are refused. Retain the receipt and verify
 its revision/current integrity using the service identity. Preserve the previous
 revision and recovery backups. Facts do not change gateway transport authority.
@@ -154,7 +195,7 @@ selected-project response as the real executor/gateway identity. Never broaden t
 host/all collection when a source or implementation is unavailable.
 
 The backup publisher is a manual root operator command:
-`python3 -B /opt/tg-ingest-agent/fleet_project_publish.py --policy /etc/cara-fleet-backup-publisher.json`.
+`python3 -B /opt/tg-ingest-agent/fleet_project_publish.py --policy /etc/cara-fleet/backup-publisher.json`.
 Its protected policy schema is cara-fleet-backup-publisher-policy/v1, with only
 schema,database_path,database_uid,output_path,project_id,source_id,max_age_seconds.
 Provision protected root-owned output ancestry and review the configured existing
@@ -385,6 +426,44 @@ Use a fresh bounded-session one-use controller and atomic watched-file publicati
 Never replay failed/completed controllers, historical updates or unknown paid work.
 No manual Telegram sends or live maintenance demonstration.
 
+### Final public-state development refresh
+
+Complete and accept application recovery and the separate forward facts
+publication first. Publish final documentation and independently justified issue
+decisions, then freeze the final public head. Verify that its 89 installed Python
+module bytes are identical to the accepted application; a docs revision is not a
+new deployment or operational-health observation.
+
+Use a new exclusive reviewed capture, never an old one-shot entry point. The fixed
+public repository/branch, selected issues 1-8, source identity/output and 86400-second
+age bound stay unchanged. Capture 13 bounded source records: repository, branch
+before, commit, Actions page1 with at most 6 runs, issues 1-8, branch after. An
+independent final public-repository recheck is the 14th GET. Refuse moved/private
+repository identity, a changed head, oversized bodies/capture or an unstable
+capture window. Preserve actual commit/Actions/issue dates and actual states;
+never borrow successful CI from a different revision or close issues for a gate.
+Selected CI/issue coverage remains partial even if all eight selected issues close.
+
+Back up current policy/output bytes and metadata, bind both to the accepted
+publication, then review the new capture/policy/export hashes. Only the fixed
+development publisher policy and sanitized output may change. Use the existing
+hash-qualified exporter and installed publisher with the explicit selected
+policy path, preserving UID/GID/mode and all 89 modules, facts/history, environment,
+budgets, neighboring apps and monitors. Policy/output are separately guarded
+files: after a partial/unknown replacement preserve actual before/after state and
+leave acceptance pending; do not retry blindly, backdate or roll back.
+
+Qualify one existing selected-project development read under the actual service
+identity/namespace. Persist its exact job/nonce/input/source binding before
+submission, consume only that terminal typed result and acknowledge that request
+through the existing API. Verify its request residue is gone while preserving
+normal result history. Do not fabricate owner conversation rows or acknowledge an
+unrelated historical probe. Keep the separate development-refresh receipt and
+final head/issue-state evidence privately and report reviewed hashes separately;
+do not add a public commit or change the facts source merely to store this receipt.
+No timer, account, automatic refresh, service restart, paid model or Telegram
+message is added.
+
 ### Post-acceptance descriptive publication
 
 Keep accepted facts revision 1 until a new checked publication succeeds. After
@@ -394,6 +473,21 @@ changed source digests move; preserve other registered hashes and actual evidenc
 check dates. Keep status/lag in its existing operator CLI, without new query
 fields or self-referential publication-receipt content. Do not claim revision 2
 or current source hashes before the successful receipt. No new timer/schedule.
+
+Before the one forward publication, retain a protected full before-manifest,
+reviewed sealed export and exclusive intent. Preserve revision1 and all immutable
+history. Derive plans from the exact accepted authorization, preserving subjects, fields,
+order, scope and presentation, then regenerate cells/pages under the new artifact
+integrity. Current obligations cover ten host subjects times four fields and five
+projects times four fields:60 cells, not just40 host cells. The descriptive
+registry is distinct from six monitored gateways. Do not choose a synthetic
+subset or reuse old expected hashes. Equal hashes qualify only after recomputing
+against the new artifact.
+After publication, verify current/previous receipt and prior artifact, actual main
+service identity/groups/mount-namespace revision2 readability and internal/MCP parity with zero
+fleet-host/model calls. Keep app acceptance immutable and append a separate facts
+acceptance receipt. No app restart, live failure injection or backward restoration
+is part of this operation; retain any partial result for forward inspection.
 
 ## Increment 05 existing-restart resource qualification
 

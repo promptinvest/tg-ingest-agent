@@ -1,9 +1,29 @@
 # CF-05 — Project-scoped read capabilities
 
-- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
+- Status: Implemented, deployed and functionally accepted October24, 2026.
 - Priority: P1 before broader project operations.
 - Depends on CF-01/CF-02 contracts and CF-04's bounded I/O for integrated release.
 - Size: Large; scope contract and individual adapters are separate reviewable increments.
+
+## Accepted implementation - October24
+
+Typed project-scoped health, backup, route, service and development reads preserve
+exact selection and uncertainty. Nine installed source-bound scoped checks and
+preserved host policy pass. Dated partial development snapshots cannot imply
+unconnected completion. Final public-head synchronization precedes the separate manual
+development refresh.
+
+Application acceptance completed 20:56:22 UTC; separate forward facts revision 2
+was accepted 21:06:13 UTC on October24 for source `eb0b9ad`. All original criteria
+below have separate finite-evidence PASS decisions in the
+[release record](../../cara-fleet-release-2026-10-24.md). Actual installed source,
+reader namespace, six preserved gateways and exact 60 catalog cells pass.
+
+G1-G6 pass. Final public docs/issues and CI are synchronized at the final head
+before the separate manual development refresh; its receipt remains private.
+No later refresh success is asserted here. The original scope/problem text and
+dated checkpoints below describe the review baseline; their acceptance bullets
+and historical assertions remain unchanged.
 
 ## Problem and sources
 

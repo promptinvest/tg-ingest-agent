@@ -1,5 +1,38 @@
 # Cara fleet and project development backlog — October 24, 2026
 
+## Accepted implementation
+
+Source `eb0b9ad` is installed and accepted **October24 20:56:22 UTC**. Separate
+forward facts revision 2 was accepted **21:06:13 UTC**. All seven packages and71
+unchanged original functional criteria have separate reasoned PASS decisions.
+The [dated record](../../cara-fleet-release-2026-10-24.md) maps each criterion and
+separates source/regression, finite model/manual and actual installed evidence.
+
+Canonical normal and shuffled Linux suites each ran 2,846 tests with nine recorded
+archive-checkout skips; all eleven source CI steps passed. The private 375-case
+operator/recovery suite and real package rehearsal passed. Five actual-model
+questions cover nine phases with four exact same-source prompt carries and five
+fresh calls. Aggregate qualification cost including failures isUSD0.179321616
+under the approved USD0.19 qualification-only ceiling. Runtime task cap USD0.15,
+production budgets/models/providers and original reservations are unchanged.
+This is not 62 actual-model scenarios or universal language/latency qualification.
+
+Accepted evidence preserves installed 89 source, six completed gateway updates,
+source publications, protected history and backups. Facts2 keeps all old claims,
+dates and last-good revision1; exact internal/MCP checks cover60 cells across ten
+known host subjects and five projects without host/model calls. Registry subjects
+do not expand monitored or executable targets. No completed installer, updater,
+publisher, marking or final-restart operation is replayed. Original prestart 54
+parity and finite reviewed later database activity remain separate evidence.
+
+Final public docs, justified issue states and CI are synchronized at the final
+head before a separate reviewed manual development-source refresh of that head.
+Its receipt stays private to avoid a receipt/commit loop. No later refresh success
+is asserted here. Facts/development synchronization remains manual. The exact
+supported stdlib/2026-07-28 MCP pair does not gate CF-01-CF-06; Tasks is unsupported,
+A2A/new writes and broader transport/SDK guarantees remain deferred. Dated
+checkpoints below retain their original historical status.
+
 ## Increment 11 business review and runtime fields
 
 Source9dd727e passes complete Linux/CI and a formal model cohort, but manual
@@ -22,7 +55,7 @@ retain all source assertions and original corpus bytes. New-source full/model/
 installed acceptance remains pending; no package is complete.
 [Increment 10](../../cara-fleet-increment-10-2026-10-24.md).
 
-Status: Implementation authorized October 24, 2026; work in progress. No package is complete.
+Status: CF-01-CF-07 implemented, deployed and functionally accepted October24; final public-head synchronization precedes a separate manual source refresh.
 Parent tracker: [CF-00 / issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
 
 ## Increment 07 correction checkpoint

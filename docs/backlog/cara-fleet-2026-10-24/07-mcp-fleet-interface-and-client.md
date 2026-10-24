@@ -1,11 +1,31 @@
 # CF-07 — Reusable MCP fleet interface and Cara client
 
-- Status: Implementation in progress; published facts/retained foundation and durable-client candidate; MCP disabled in production.
+- Status: Implemented, deployed and functionally accepted October24, 2026.
 - Priority: P2 integration. CF-01–CF-06 keep their existing business priorities.
 - Planning: capability and client/server contracts can be designed immediately.
 - Production prerequisites: CF-01/02/03/04 for the facts/client path; the applicable CF-05 adapter for each project-read capability. CF-06 gates any future write exposure, which is outside this package.
 - No CF-01–CF-06 package depends on CF-07, MCP availability or MCP adoption.
 - Size: separate contract, read-only adapter, Cara-client and project-read increments.
+
+## Accepted implementation - October24
+
+Optional qualified stdlib stdio facts/client/project-read path preserves internal
+business parity, scope, responsiveness, shared admission and content lifecycle.
+Source, finite model/manual, protocol and installed evidence are separate. Tasks
+unsupported is allowed; A2A, new project writes and other transports/SDK combinations
+remain outside qualified scope.
+
+Application acceptance completed 20:56:22 UTC; separate forward facts revision 2
+was accepted 21:06:13 UTC on October24 for source `eb0b9ad`. All original criteria
+below have separate finite-evidence PASS decisions in the
+[release record](../../cara-fleet-release-2026-10-24.md). Actual installed source,
+reader namespace, six preserved gateways and exact 60 catalog cells pass.
+
+G1-G6 pass. Final public docs/issues and CI are synchronized at the final head
+before the separate manual development refresh; its receipt remains private.
+No later refresh success is asserted here. The original scope/problem text and
+dated checkpoints below describe the review baseline; their acceptance bullets
+and historical assertions remain unchanged.
 
 ## Business purpose and boundaries
 

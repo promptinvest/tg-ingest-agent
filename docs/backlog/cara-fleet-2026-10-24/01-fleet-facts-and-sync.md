@@ -1,9 +1,28 @@
 # CF-01 — Fleet facts and synchronization
 
-- Status: Implementation in progress; first business release accepted; full package acceptance remains open.
+- Status: Implemented, deployed and functionally accepted October24, 2026.
 - Priority: P1, prerequisite for correct static answers.
 - Dependencies: none; coordinate with CF-02 and CF-05.
 - Size: Large; schema/bootstrap and publication are separate reviewable increments.
+
+## Accepted implementation - October24
+
+Known offline facts, provenance, uncertainty, restrictive lifecycle and forward source
+publication are qualified and readable in accepted revision2. Manual source-
+status/export/publication is explicit; display fields do not grant transport
+authority.
+
+Application acceptance completed 20:56:22 UTC; separate forward facts revision 2
+was accepted 21:06:13 UTC on October24 for source `eb0b9ad`. All original criteria
+below have separate finite-evidence PASS decisions in the
+[release record](../../cara-fleet-release-2026-10-24.md). Actual installed source,
+reader namespace, six preserved gateways and exact 60 catalog cells pass.
+
+G1-G6 pass. Final public docs/issues and CI are synchronized at the final head
+before the separate manual development refresh; its receipt remains private.
+No later refresh success is asserted here. The original scope/problem text and
+dated checkpoints below describe the review baseline; their acceptance bullets
+and historical assertions remain unchanged.
 
 ## Problem and sources
 
