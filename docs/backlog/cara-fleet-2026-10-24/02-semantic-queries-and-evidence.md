@@ -82,3 +82,17 @@ Update BOTH CARA.md and SOLUTION.md, relevant ADR/backlog status and operator do
 
 Full handoff, source map, sanitized production evidence, bootstrap facts and semantic regression corpus:
 https://github.com/promptinvest/tg-ingest-agent/tree/main/docs/backlog/cara-fleet-2026-10-24
+
+## October 24 - Descriptive query and answer obligations
+
+The shared CF-02 catalog query contract lets the existing planner select canonical
+subjects, requested fields, detail and prose/list/table/names presentation. Code
+resolves inherited/all scope and placement relationships, renders every requested
+cell from validated facts, and preserves conflicts, specific unknowns, completeness
+and evidence dates. Model prose cannot supply a fact or execution authority.
+Optional no-model shortcuts provide question-aligned fallback during outages.
+
+Thirty-four isolated Linux query cases pass, including frozen obligations from
+17 catalog specifications in the unchanged original corpus. This is contract
+qualification, not a claim that free-form model behavior or all 47+15 scenarios pass.
+Full-dispatch integration and actual-model/release acceptance remain separate gates.

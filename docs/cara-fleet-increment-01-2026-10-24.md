@@ -106,3 +106,16 @@ development evidence stay distinct. Missing backup/development adapters return
 not-configured; process activity does not establish project health or progress.
 Thirty-two isolated Linux contract/dispatch cases pass. Runtime composition,
 production gateway binding and full acceptance remain pending; CF-05 is partial.
+## October 24 - Descriptive query and answer obligations
+
+The shared CF-02 catalog query contract lets the existing planner select canonical
+subjects, requested fields, detail and prose/list/table/names presentation. Code
+resolves inherited/all scope and placement relationships, renders every requested
+cell from validated facts, and preserves conflicts, specific unknowns, completeness
+and evidence dates. Model prose cannot supply a fact or execution authority.
+Optional no-model shortcuts provide question-aligned fallback during outages.
+
+Thirty-four isolated Linux query cases pass, including frozen obligations from
+17 catalog specifications in the unchanged original corpus. This is contract
+qualification, not a claim that free-form model behavior or all 47+15 scenarios pass.
+Full-dispatch integration and actual-model/release acceptance remain separate gates.

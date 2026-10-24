@@ -42,3 +42,5 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
 - 2026-10-24: shared LLM preparation/transport/settlement supports a bounded owner-thread profile pump; one background slot preserves foreground capacity. Eighteen Linux cases pass. Durable integration/release acceptance remain pending; no increased model or budget authority.
 
 - 2026-10-24: scoped project reads use a separate additive protocol/capability contract. Project-only collection cannot use a broad fallback; code derives multi-host coverage and preserves scope on extra reads. Thirty-two Linux cases pass; gateway rollout and application-specific adapters remain unaccepted.
+
+- 2026-10-24: descriptive answer obligations and presentation share one validated query contract. Model plans choose fields/format; typed facts own every cell and no factual model prose is admitted. Thirty-four Linux cases pass; semantic model/full-dispatch acceptance remains separate.
