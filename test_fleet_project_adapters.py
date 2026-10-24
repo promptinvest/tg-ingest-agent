@@ -419,5 +419,88 @@ class OutputValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             adapters.validate_payload("daily_lingo_http", fields, NOW)
 
+
+
+def actions_development_document():
+    value = development_document()
+    value["schema"] = adapters.DEVELOPMENT_ACTIONS_SCHEMA
+    value["ci"]["source_format"] = adapters.ACTIONS_SOURCE
+    for run in value["ci"]["items"]:
+        run["updated_at"] = run.pop("completed_at")
+    return value
+
+
+class ActionsDevelopmentProjectionTests(unittest.TestCase):
+    def project(self, document=None, age=3600):
+        return adapters.development_actions_snapshot(document or actions_development_document(),
+            PROJECT, SOURCE, REPO, NOW, age)
+
+    def test_legacy_v1_keeps_its_exact_source_and_completion_contract(self):
+        legacy = development_project()
+        self.assertEqual(legacy["implementation_version"], "project-development-snapshot/v1")
+        self.assertIn("completed_at", legacy["ci"]["items"][0])
+        self.assertNotIn("source_format", legacy["ci"])
+        self.assertNotIn("updated_at", legacy["ci"]["items"][0])
+        with self.assertRaises(ValueError):
+            development_project(actions_development_document())
+        with self.assertRaises(ValueError):
+            self.project(development_document())
+
+    def test_explicit_actions_source_dates_validate_without_invented_completion(self):
+        value = self.project()
+        self.assertEqual(value["implementation_version"], "project-development-actions/v1")
+        self.assertEqual(value["ci"]["source_format"], "github-actions-workflow-runs/v1")
+        self.assertEqual(value["ci"]["items"][0]["updated_at"], "2026-10-24T11:45:00Z")
+        self.assertNotIn("completed_at", value["ci"]["items"][0])
+        adapters.validate_observation("development_actions", value)
+        self.assertIn("partial_coverage", value["gaps"].values())
+
+    def test_actual_pending_states_and_cancelled_before_start_remain_distinct(self):
+        for state, conclusion in (("requested", None), ("waiting", None), ("pending", None), ("completed", "cancelled")):
+            document = actions_development_document()
+            document["ci"]["items"][0].update(status=state, conclusion=conclusion, started_at=None)
+            with self.subTest(state=state):
+                value = self.project(document)
+                self.assertEqual(value["ci"]["items"][0]["status"], state)
+                self.assertIsNone(value["ci"]["items"][0]["started_at"])
+                adapters.validate_observation("development_actions", value)
+
+    def test_bad_source_dates_unknown_fields_and_fake_completion_are_rejected(self):
+        for field, value in (("completed_at", "2026-10-24T11:45:00Z"), ("updated_at", None),
+                             ("updated_at", "2026-10-25T11:45:00Z"), ("started_at", "2026-10-24T11:46:00Z"),
+                             ("revision", "b"*64), ("status", "arbitrary")):
+            document = actions_development_document()
+            document["ci"]["items"][0][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                self.project(document)
+
+    def test_unconnected_ci_keeps_repository_and_issue_evidence(self):
+        document = actions_development_document()
+        document["ci"] = {"source_format": adapters.ACTIONS_SOURCE, "status": "not_connected",
+                          "captured_at": None, "items": [], "complete": False}
+        value = self.project(document)
+        self.assertEqual(value["gaps"]["ci"], "not_connected")
+        self.assertEqual(value["repository"]["revision"], REVISION)
+        self.assertEqual(value["issues"]["items"][0]["number"], 7)
+        adapters.validate_observation("development_actions", value)
+
+    def test_read_time_does_not_refresh_source_update_or_commit_dates(self):
+        document = actions_development_document()
+        value = self.project(document, age=60)
+        for field in ("repository", "ci", "issues"):
+            self.assertEqual(value["gaps"][field], "stale")
+        self.assertEqual(value["repository"]["last_commit_at"], document["repository_state"]["last_commit_at"])
+        self.assertEqual(value["ci"]["items"][0]["updated_at"], document["ci"]["items"][0]["updated_at"])
+
+    def test_wrong_head_and_unknown_source_do_not_hide_revision_coverage_gap(self):
+        document = actions_development_document()
+        document["ci"]["items"][0]["revision"] = "b"*40
+        self.assertEqual(self.project(document)["gaps"]["ci_revision"], "ci_does_not_cover_head")
+        document["ci"]["source_format"] = "arbitrary-provider/v1"
+        with self.assertRaises(ValueError):
+            self.project(document)
+
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -100,5 +100,27 @@ class RequestedAnswers(unittest.TestCase):
             self.assertEqual(answer_policy.default_detail(object()), "concise")
 
 
+    def test_explicit_detailed_table_keeps_every_coverage_finding_and_dates(self):
+        evidence, plan = report(["memory"])
+        before = copy.deepcopy(evidence)
+        pages = fleet_answers.render(evidence, None, dict(plan, presentation="table", detail="detailed"))
+        answer = "\n".join(pages)
+        self.assertIn("| Server | Evidence |", answer)
+        for host in evidence["hosts"]:
+            label = evidence["coverage"][host]["label"]
+            self.assertIn("| " + label + " |", answer)
+            for key in evidence["coverage"][host]["findings"]:
+                self.assertIn(evidence["findings"][key]["en"].replace("|", "/").replace("\n", " "), answer)
+        self.assertIn(fleet_report.stamp(evidence["observed_at"]), answer)
+        self.assertIn("These are configured observations", answer)
+        self.assertEqual(evidence, before)
+        self.assertTrue(all(len(page) <= 3700 for page in pages))
+
+    def test_detailed_table_does_not_change_original_detailed_prose(self):
+        evidence, plan = report()
+        detailed = fleet_answers.render(evidence, None, dict(plan, detail="detailed"))
+        self.assertEqual(detailed, fleet_report.render(evidence, dict(highlights=[], hypotheses=[], next_checks=[])))
+        self.assertNotIn("| Server | Evidence |", "\n".join(detailed))
+
 if __name__ == "__main__":
     unittest.main()

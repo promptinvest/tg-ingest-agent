@@ -112,3 +112,24 @@ specific gaps. The manual backup publisher reads existing jobs without triggerin
 operations. Legacy wire limits and host/all behavior remain exact. Focused Linux
 checks pass; authenticated source installation, full release and package acceptance
 remain pending. See [increment02](../../cara-fleet-increment-02-2026-10-24.md).
+
+## Increment 03 project-source checkpoint
+
+Candidate project-daily-lingo-observer/v1 and project-authenticated-proxy-route/v1
+consume existing root-bound monitor evidence without starting its producer. Reserve,
+budget heartbeat/probe and route sample dates, current versus cumulative connection
+metrics, partial coverage and missing/stale proofs stay explicit. Accepted release/
+targets need a separately verified binding. Private source rows/endpoints never
+enter responses; default64 KiB legacy input remains, monitors alone opt into2 MiB.
+
+A manual fixed-public-GitHub export/install path supplies
+project-development-actions/v1. Actions updated_at remains a source update date,
+not completion time; CI/issues remain sampled. Generic development v1, original
+backup/restart contracts and explicitly qualified historical read contracts remain
+compatible.
+
+Project-only focused Linux 201 passes in 0.622 s, including 32 development-publisher,
+46 pure-monitor and 19 integration cases within the total. Actual protected bindings,
+service-identity reads, useful dated answers/gaps, fresh full/model/CI and gateway
+preservation/release acceptance remain pending. No new project effect or MCP
+prerequisite. [Increment 03](../../cara-fleet-increment-03-2026-10-24.md).

@@ -1,4 +1,5 @@
 """Question-aligned presentation of already validated fleet evidence."""
+import copy
 import answer_policy
 import fleet_report
 
@@ -35,7 +36,8 @@ def render(report, decision, plan, lang="en", conn=None):
     detail = plan.get("detail") or (answer_policy.default_detail(conn) if conn is not None else "concise")
     if detail == "detailed":
         # Original exhaustive coverage remains available on explicit request.
-        return fleet_report.render(report, dict(selected, highlights=[]), lang)
+        detailed_report = copy.deepcopy(report) if plan.get("presentation") == "table" else report
+        return fleet_report.render(detailed_report, dict(selected, highlights=[]), lang, presentation=plan.get("presentation"))
     field, ru = ("ru", True) if lang == "ru" else ("en", False)
     focus = set(report.get("focus", ["overview"]))
     lines = []

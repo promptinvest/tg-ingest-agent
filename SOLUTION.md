@@ -1,5 +1,29 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 03 typed project-read candidate
+
+Pure existing-monitor projections are separate from root-bound protected file I/O.
+The observer binds one validated snapshot to its fixed latest pointer and rechecks
+the pointer before publication; proxy collection preserves the inner sample date.
+Only monitor sources opt into a 2 MiB input limit; existing64 KiB reads, v1 payloads
+and legacy wire bounds remain compatible.
+
+The fixed-public-GitHub exporter makes no network call. Exact reviewed
+source/revision/hash policy and root-only atomic install produce the additive
+Actions date contract while retaining last good data. Sampled CI/issues do not
+establish completion or deployment. Detailed tables retain full evidence, and
+only explicitly qualified historical append-only read contracts remain accepted.
+
+Project-only focused Linux 201 passes in 0.622 s. It is not a frozen full release
+receipt. Exact full/model/CI, protected real bindings and installed identity/gates
+remain pending. Source/archive/operator/window: UNSELECTED. Production remains
+accepted `99037c5` / build `f54906e304fe`. Parallel durable MCP/client/15-case-runner changes
+are UNCOMMITTED separate work, with their own upcoming record; MCP remains disabled
+and all CF packages retain independent acceptance.
+
+[Increment 03 contracts and release limits](docs/cara-fleet-increment-03-2026-10-24.md).
+Earlier October24 candidate entries below are retained checkpoints.
+
 ## October 24 - Shared investigations and MCP facts candidate
 
 Durable task steps can wait on one source-bound fleet investigation and finish

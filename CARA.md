@@ -1,5 +1,28 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 03 typed project-read candidate
+
+Selected-project reads can consume existing application observer and authenticated
+proxy-route evidence without starting monitors/probes. Replies retain generation,
+reserve/budget-guard state, sampled route/connection metrics and their dates/gaps.
+Cumulative counters are not active clients or throughput; accepted release/target
+values require a separately verified binding.
+
+A manual fixed-public-GitHub export/install path adds revision, Actions and sampled
+issue evidence. Source update/capture/export/read dates remain distinct; Actions
+updated_at is never an invented completion time. Detailed table requests preserve
+format and full evidence. Exact qualified historical read contracts remain
+compatible; old payloads and limits are unchanged.
+
+Project-only focused Linux 201 passes in 0.622 s, but exact full/model/CI,
+protected real bindings and service-identity readiness remain pending. Target
+source/archive/operator/window: UNSELECTED. Production stays on accepted `99037c5` /
+build `f54906e304fe`; no package is complete. Parallel durable MCP/client/15-case-runner
+work is UNCOMMITTED separate scope; MCP remains disabled.
+
+[Increment 03 behavior, independent criteria and release gates](docs/cara-fleet-increment-03-2026-10-24.md).
+Earlier October24 candidate entries below are retained checkpoints.
+
 ## October 24 - Shared investigations and MCP facts candidate
 
 Durable task steps can wait on one source-bound fleet investigation and finish

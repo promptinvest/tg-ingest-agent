@@ -214,7 +214,7 @@ def _adapter_policy(config, project, capability):
     if capability not in selected:
         return None
     policy = selected[capability]
-    kind = {"http_health": "daily_lingo_http", "backups": "backups", "development": "development"}.get(capability)
+    kind = protocol.adapter_kind(capability, policy.get("adapter")) if isinstance(policy, dict) else None
     if kind is None or not isinstance(policy, dict) or policy.get("adapter") != project_adapters.ADAPTERS[kind]["implementation_version"]:
         raise ValueError("unsupported fixed project adapter")
     if kind == "daily_lingo_http":
@@ -245,7 +245,7 @@ def _project_gap(config, project, capability, reason):
 
 def _configured(config, project, capability):
     selected = _adapter_policy(config, project, capability)
-    if selected and selected[0] in {"backups", "development"}:
+    if selected and selected[0] in {"backups", "development", "development_actions", "daily_lingo_observer", "authenticated_proxy_route"}:
         return True
     section = {"release": "projects", "http_health": "health", "containers": "containers", "runtime": "project_services"}.get(capability)
     return bool(section and isinstance(config.get(section), dict) and config[section].get(project))
@@ -270,7 +270,7 @@ def _project_read(config, project, capability, deadline):
         return observation("not_configured", "not_configured")
     _read_budget(deadline)
     selected_adapter = _adapter_policy(config, project, capability)
-    if selected_adapter and selected_adapter[0] in {"backups", "development"}:
+    if selected_adapter and selected_adapter[0] in {"backups", "development", "development_actions", "daily_lingo_observer", "authenticated_proxy_route"}:
         return project_adapters.read_bound(selected_adapter[0], selected_adapter[1], project, protocol.now())
     if capability == "release":
         paths = config["projects"][project]

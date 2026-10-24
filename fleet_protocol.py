@@ -144,12 +144,12 @@ PROJECT_CAPABILITIES = {
 }
 # New implementations are explicit alternatives, never a mutation of a legacy
 # capability payload. Only root gateway bindings select these adapters.
-_ADAPTER_KIND = {"http_health": "daily_lingo_http", "backups": "backups", "development": "development"}
+_ADAPTER_KIND = {"http_health": ("daily_lingo_http",), "backups": ("backups",), "development": ("development", "development_actions"), "runtime": ("daily_lingo_observer", "authenticated_proxy_route")}
 
 
 def adapter_kind(capability, implementation_version):
-    kind = _ADAPTER_KIND.get(capability)
-    return kind if kind and implementation_version == project_adapters.ADAPTERS[kind]["implementation_version"] else None
+    return next((kind for kind in _ADAPTER_KIND.get(capability, ())
+                 if implementation_version == project_adapters.ADAPTERS[kind]["implementation_version"]), None)
 
 
 def capability_implementation(capability, implementation_version):
@@ -172,11 +172,25 @@ def capability_contract():
     values = {name: dict(spec, outputs=list(spec["outputs"]), inputs=[], policy_version=READ_VERSION, location="host-gateway",
                        freshness_seconds=90, window_seconds=None, command_timeout_seconds=5, request_timeout_seconds=30, maximum_bytes=10000, maximum_source_bytes=65536,
                        redaction="fixed-field-allowlist") for name, spec in PROJECT_CAPABILITIES.items()}
-    for capability, kind in _ADAPTER_KIND.items():
+    for capability, kinds in _ADAPTER_KIND.items():
         values[capability]["supported_implementations"] = {
             PROJECT_CAPABILITIES[capability]["implementation_version"]: list(PROJECT_CAPABILITIES[capability]["outputs"]),
-            project_adapters.ADAPTERS[kind]["implementation_version"]: list(project_adapters.ADAPTERS[kind]["outputs"])}
+            **{project_adapters.ADAPTERS[kind]["implementation_version"]: list(project_adapters.ADAPTERS[kind]["outputs"])
+               for kind in kinds}}
     return values
+
+
+def read_contract_compatible(value):
+    """Accept audited append-only read contracts; all payload/scope guards remain.
+
+    These exact hashes are derived from retained immutable99037c5 and58a60a8
+    source. Unknown hashes never acquire compatibility through a version prefix.
+    """
+    return isinstance(value, str) and value in {
+        digest(capability_contract()),
+        "13dbb6e9ff2ae7734878d5e306f887424b9484518119b10f00e92dad544df4ce",
+        "987718d875c39d4e90bb2cfebc383ec921a20f3926b7a5ee468a456d85789d94",
+    }
 
 
 def read_scope(value, catalog=None, hosts=None):

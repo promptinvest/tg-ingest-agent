@@ -3,6 +3,26 @@
 Status: Implementation authorized October 24, 2026; work in progress. No package is complete.
 Parent tracker: [CF-00 / issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
 
+## Increment 03 current checkpoint
+
+The typed project-read candidate extends published `8f50282`; production remains the
+accepted99037c5 business baseline. It adds fixed existing-observer/route projections,
+manual reviewed public-GitHub development export/install, detailed tables/metric
+clarity and exact historical read-contract compatibility. No new monitor/probe,
+schedule, account permission, model/provider, budget or project effect.
+
+Project-only focused Linux 201 passes in 0.622 s, including manual development
+publication and existing-monitor integration. Exact full/model qualification
+remains separate. The original 47+15
+specification files are unchanged. All 47 have executable source-linked assertions;
+the parallel all 15 lifecycle runner/client work remains UNCOMMITTED separate scope.
+
+Exact target source/archive/operator/window: UNSELECTED. Project-only full/model/CI,
+protected real source bindings, actual service-identity reads and original
+preservation/release gates remain pending. No package is complete or acquires an
+MCP prerequisite. [Independent criteria and release record](../../cara-fleet-increment-03-2026-10-24.md).
+Earlier progress sections retain historical checkpoints.
+
 ## Start here
 
 This directory is the durable developer handoff for the October 24 review of Cara's fleet knowledge, question handling, reply style, responsiveness and architecture for future direct project work. The chat is not required. Read this index, the relevant complete package spec and its linked source/tests before implementing.

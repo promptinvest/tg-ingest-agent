@@ -72,3 +72,23 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
   Full release/model gates and MCP creation/lifecycle qualification remain open.
 
 - 2026-10-24: actual task-plan qualification rejected an invented live catalog field and invalid literal binding. Fleet-only tool descriptions now expose exact closed input meaning; validation is unchanged. Test fixtures explicitly isolate installed facts; runtime defaults remain.
+
+
+## Increment 03 typed project-read decision and checkpoint
+
+Keep monitor parsing pure and fixed privileged file I/O separate. Additive observer/
+route implementations consume existing evidence without starting its producer.
+The manual public-GitHub export/install path preserves Actions source-update dates
+without inventing completion; protected atomic publication retains last good data.
+Detailed tables keep full evidence. Old v1 payloads and only explicitly qualified
+historical append-only read contracts remain compatible.
+
+Project-only focused Linux 201 passes in 0.622 s, including 32 development-publisher,
+46 pure-monitor and 19 integration cases within that total. It is not a full frozen
+release receipt. Freeze and qualify the project source, actual fixed
+bindings/service identity and all original release/preservation gates separately.
+Source/archive/operator/window are UNSELECTED; no package is complete.
+
+Durable MCP/client-intent/cancellation and the completed15-case runner remain
+UNCOMMITTED parallel scope for a separate increment. CF-01 through CF-06 keep their own
+criteria and no MCP prerequisite. See [increment 03](../cara-fleet-increment-03-2026-10-24.md).

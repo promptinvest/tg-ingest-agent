@@ -16,8 +16,12 @@ import re
 import stat
 from datetime import datetime, timezone
 
+import fleet_monitor_adapters as monitors
+
 BACKUP_SCHEMA = "cara-fleet-backup-receipt/v1"
 DEVELOPMENT_SCHEMA = "cara-fleet-development-snapshot/v1"
+DEVELOPMENT_ACTIONS_SCHEMA = "cara-fleet-github-actions-development-snapshot/v1"
+ACTIONS_SOURCE = "github-actions-workflow-runs/v1"
 BACKUP_SOURCE = "cara-maintenance-jobs/v1"
 MAX_SOURCE_BYTES = 65536
 MAX_OUTPUT_BYTES = 10000
@@ -37,7 +41,12 @@ ADAPTERS = {
     "development": {"implementation_version": "project-development-snapshot/v1",
         "outputs": ["source_id", "receipt_sha256", "exported_at", "max_age_seconds", "repository", "ci", "issues", "gaps"],
         "source": DEVELOPMENT_SCHEMA, "maximum_source_bytes": MAX_SOURCE_BYTES, "maximum_bytes": MAX_OUTPUT_BYTES},
+    "development_actions": {"implementation_version": "project-development-actions/v1",
+        "outputs": ["source_id", "receipt_sha256", "exported_at", "max_age_seconds", "repository", "ci", "issues", "gaps"],
+        "source": DEVELOPMENT_ACTIONS_SCHEMA, "maximum_source_bytes": MAX_SOURCE_BYTES, "maximum_bytes": MAX_OUTPUT_BYTES},
 }
+ADAPTERS.update({kind: copy.deepcopy(monitors.ADAPTERS[kind])
+                 for kind in ("daily_lingo_observer", "authenticated_proxy_route")})
 
 
 def _fields(value, fields):
@@ -354,26 +363,34 @@ def development_snapshot(document, project, source_id, repository, observed_at, 
 
 def binding(value, kind):
     """Validate a ROOT configuration entry, never an LLM/tool argument schema."""
-    required = {"adapter", "path", "source_id", "max_age_seconds"} | ({"repository"} if kind == "development" else set())
+    if kind in monitors.ADAPTERS:
+        if not isinstance(value, dict) or value.get("adapter") != ADAPTERS[kind]["implementation_version"]:
+            raise ValueError("unknown fixed monitor adapter")
+        value = copy.deepcopy(value)
+        monitors.validate_binding(kind, {key: item for key, item in value.items() if key != "adapter"})
+        return value
+    required = {"adapter", "path", "source_id", "max_age_seconds"} | ({"repository"} if kind in {"development", "development_actions"} else set())
     _fields(value, required)
-    if kind not in {"backups", "development"} or value["adapter"] != ADAPTERS[kind]["implementation_version"]:
+    if kind not in {"backups", "development", "development_actions"} or value["adapter"] != ADAPTERS[kind]["implementation_version"]:
         raise ValueError("unknown fixed project adapter")
     _identifier(value["source_id"]); _integer(value["max_age_seconds"], 1, 31 * 86400)
     path = value["path"]
     if not isinstance(path, str) or not Path(path).is_absolute() or path.startswith(("//", "\\\\")) or len(path) > 512 or re.search(r"[\x00-\x1f\x7f]", path):
         raise ValueError("fixed local absolute source path required")
-    if kind == "development" and (not isinstance(value["repository"], str) or not REPOSITORY.fullmatch(value["repository"])):
+    if kind in {"development", "development_actions"} and (not isinstance(value["repository"], str) or not REPOSITORY.fullmatch(value["repository"])):
         raise ValueError("fixed repository binding required")
     return value
 
 
-def _read_fixed_json(path):
+def _read_fixed_json(path, maximum_bytes=MAX_SOURCE_BYTES):
     """Bounded, root-owned regular file; no FIFOs, symlinks or writable ancestry.
 
     Descriptor-relative opens bind every checked directory to the actual read.
     A sticky root-owned parent (e.g. /tmp) is acceptable, but every child directory
     and the final file must independently satisfy ownership/mode checks.
     """
+    if type(maximum_bytes) is not int or not 1 <= maximum_bytes <= monitors.MAX_SOURCE_BYTES:
+        raise ValueError("invalid fixed project source limit")
     if os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
         raise ValueError("protected local project channel unavailable")
     path = Path(path)
@@ -391,18 +408,18 @@ def _read_fixed_json(path):
             info = os.fstat(descriptor)
             if info.st_uid != 0 or (info.st_mode & 0o022 and not (not leaf and info.st_mode & stat.S_ISVTX)):
                 raise ValueError("untrusted fixed project source")
-            if leaf and (not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SOURCE_BYTES):
+            if leaf and (not stat.S_ISREG(info.st_mode) or info.st_size > maximum_bytes):
                 raise ValueError("invalid fixed project source file")
         before = os.fstat(descriptor)
         raw = bytearray()
-        while len(raw) <= MAX_SOURCE_BYTES:
-            chunk = os.read(descriptor, min(8192, MAX_SOURCE_BYTES + 1 - len(raw)))
+        while len(raw) <= maximum_bytes:
+            chunk = os.read(descriptor, min(8192, maximum_bytes + 1 - len(raw)))
             if not chunk:
                 break
             raw.extend(chunk)
         after = os.fstat(descriptor)
         stamp = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
-        if len(raw) > MAX_SOURCE_BYTES or len(raw) != before.st_size or stamp(before) != stamp(after):
+        if len(raw) > maximum_bytes or len(raw) != before.st_size or stamp(before) != stamp(after):
             raise ValueError("project source changed or exceeded limit")
         def pairs(items):
             value = {}
@@ -418,13 +435,40 @@ def _read_fixed_json(path):
             os.close(descriptor)
 
 
+def _read_monitor(kind, policy, observed_at):
+    """Read only fixed monitor evidence, with no discovery or source refresh.
+
+    A snapshot leaf is derived solely from a validated timestamp token. An
+    atomic latest-pointer replacement during the read produces a typed gap;
+    no retry chooses a different snapshot or broadens the requested source.
+    """
+    source_binding = {key: item for key, item in policy.items() if key != "adapter"}
+    maximum = ADAPTERS[kind]["maximum_source_bytes"]
+    if kind == "authenticated_proxy_route":
+        source = _read_fixed_json(policy["path"], maximum_bytes=maximum)
+        return monitors.authenticated_proxy_route(source, binding=source_binding,
+            observed_at=observed_at, source_path=policy["path"])
+    latest = _read_fixed_json(policy["latest_path"], maximum_bytes=maximum)
+    stamp = latest.get("snapshot") if isinstance(latest, dict) else None
+    if not isinstance(stamp, str) or not monitors.STAMP.fullmatch(stamp):
+        raise ValueError("invalid fixed observer snapshot reference")
+    datetime.strptime(stamp, "%Y%m%dT%H%M%S%fZ")
+    snapshot_path = policy["snapshot_root"] + "/" + stamp + ".json"
+    snapshot = _read_fixed_json(snapshot_path, maximum_bytes=maximum)
+    current = _read_fixed_json(policy["latest_path"], maximum_bytes=maximum)
+    if _canonical(latest) != _canonical(current):
+        raise ValueError("fixed observer pointer changed during read")
+    return monitors.daily_lingo_observer(latest, snapshot, binding=source_binding,
+        observed_at=observed_at, source_paths={"latest": policy["latest_path"], "snapshot": snapshot_path})
+
+
 def read_bound(kind, config, project, observed_at=None):
     """Read one preselected trusted binding; source failures never expose paths.
 
     Missing source configuration, missing file and invalid/unavailable content are
     distinct. No fallback can inspect another resource, project or account.
     """
-    if kind not in {"backups", "development"}:
+    if kind not in {"backups", "development", "development_actions"} | set(monitors.ADAPTERS):
         raise ValueError("unsupported fixed project adapter")
     _identifier(project)
     observed_at = observed_at or datetime.now(timezone.utc).isoformat()
@@ -433,10 +477,13 @@ def read_bound(kind, config, project, observed_at=None):
         return _base(kind, observed_at, "not_configured", "not_configured")
     try:
         policy = binding(config, kind)
+        if kind in monitors.ADAPTERS:
+            return _read_monitor(kind, policy, observed_at)
         source = _read_fixed_json(policy["path"])
         if kind == "backups":
             return backup_receipt(source, project, policy["source_id"], observed_at, policy["max_age_seconds"])
-        return development_snapshot(source, project, policy["source_id"], policy["repository"], observed_at, policy["max_age_seconds"])
+        reader = development_actions_snapshot if kind == "development_actions" else development_snapshot
+        return reader(source, project, policy["source_id"], policy["repository"], observed_at, policy["max_age_seconds"])
     except FileNotFoundError:
         return _base(kind, observed_at, "not_found", "resource_not_found")
     except (OSError, ValueError, TypeError, AttributeError, UnicodeError, RecursionError):
@@ -454,6 +501,10 @@ def validate_payload(kind, value, observed_at):
     if kind not in ADAPTERS:
         raise ValueError("unknown project adapter payload")
     _fields(value, ADAPTERS[kind]["outputs"])
+    if kind in monitors.ADAPTERS:
+        monitors.validate_observation(kind, {"status": "recorded", "implementation_version": ADAPTERS[kind]["implementation_version"],
+                                             "observed_at": observed_at, **value})
+        return value
     now = _time(observed_at)
     if kind == "daily_lingo_http":
         health, progress = value["health"], value["worker_progress"]
@@ -471,11 +522,11 @@ def validate_payload(kind, value, observed_at):
     exported = _time(value["exported_at"])
     if (exported - now).total_seconds() > 60:
         raise ValueError("project receipt capture is in the future")
-    if kind == "development":
+    if kind in {"development", "development_actions"}:
         repository = value["repository"]
         if not isinstance(repository, dict) or "name" not in repository:
             raise ValueError("invalid repository projection")
-        document = {"schema": DEVELOPMENT_SCHEMA, "project_id": "projection", "source_id": value["source_id"],
+        document = {"schema": DEVELOPMENT_ACTIONS_SCHEMA if kind == "development_actions" else DEVELOPMENT_SCHEMA, "project_id": "projection", "source_id": value["source_id"],
                     "exported_at": value["exported_at"], "repository": repository["name"]}
         for key in ("repository", "ci", "issues"):
             source = value[key]
@@ -483,6 +534,8 @@ def validate_payload(kind, value, observed_at):
                 raise ValueError("invalid development projection")
             state = source.get("status")
             keys = {"status", "captured_at"} | ({"name"} if key == "repository" else set())
+            if kind == "development_actions" and key == "ci":
+                keys.add("source_format")
             if state == "recorded":
                 keys |= {"revision", "last_commit_at"} if key == "repository" else {"items", "complete"}
             _fields(source, keys)
@@ -490,7 +543,8 @@ def validate_payload(kind, value, observed_at):
             if state == "not_connected":
                 selected.update({"revision": None, "last_commit_at": None} if key == "repository" else {"items": [], "complete": False})
             document["repository_state" if key == "repository" else key] = selected
-        expected = development_snapshot(document, "projection", value["source_id"], repository["name"], observed_at, value["max_age_seconds"])
+        reader = development_actions_snapshot if kind == "development_actions" else development_snapshot
+        expected = reader(document, "projection", value["source_id"], repository["name"], observed_at, value["max_age_seconds"])
         fields = {field: expected[field] for field in ADAPTERS[kind]["outputs"]}
         fields["receipt_sha256"] = value["receipt_sha256"]
         if fields != value:
@@ -550,6 +604,8 @@ def validate_payload(kind, value, observed_at):
 
 def validate_observation(kind, value):
     """Validate one new adapter observation before shared receipt persistence."""
+    if kind in monitors.ADAPTERS:
+        return monitors.validate_observation(kind, value)
     if kind not in ADAPTERS or not isinstance(value, dict):
         raise ValueError("unknown project adapter observation")
     base = {"status", "implementation_version", "observed_at"}
@@ -565,4 +621,63 @@ def validate_observation(kind, value):
         return value
     _fields(value, base | set(ADAPTERS[kind]["outputs"]))
     validate_payload(kind, {field: value[field] for field in ADAPTERS[kind]["outputs"]}, value["observed_at"])
+    return _bounded(value)
+
+
+def development_actions_snapshot(document, project, source_id, repository, observed_at, max_age_seconds):
+    """GitHub Actions source dates, without inventing workflow completion time.
+
+    Actions reports run_started_at and updated_at. A completed status is an API
+    observation; updated_at is never a completed_at timestamp. The older generic
+    development contract remains independent and continues requiring its dates.
+    """
+    now, exported = _snapshot_header(document, DEVELOPMENT_ACTIONS_SCHEMA, project, source_id, observed_at, max_age_seconds,
+        {"schema", "project_id", "source_id", "exported_at", "repository", "repository_state", "ci", "issues"})
+    # Reuse the existing repository/issues validators, with no fabricated CI.
+    shared = copy.deepcopy(document)
+    shared["schema"] = DEVELOPMENT_SCHEMA
+    shared["ci"] = {"status": "not_connected", "captured_at": None, "items": [], "complete": False}
+    value = development_snapshot(shared, project, source_id, repository, observed_at, max_age_seconds)
+    value["implementation_version"] = ADAPTERS["development_actions"]["implementation_version"]
+    value["receipt_sha256"] = hashlib.sha256(_canonical(document).encode()).hexdigest()
+    value["gaps"].pop("ci", None)
+    source = document["ci"]
+    _fields(source, {"source_format", "status", "captured_at", "items", "complete"})
+    if source["source_format"] != ACTIONS_SOURCE:
+        raise ValueError("unsupported CI source format")
+    state = _enum(source["status"], {"recorded", "not_connected"})
+    value["ci"] = {"source_format": ACTIONS_SOURCE, "status": state, "captured_at": source["captured_at"]}
+    if state == "not_connected":
+        if source["captured_at"] is not None or source["items"] != [] or source["complete"] is not False:
+            raise ValueError("unconnected Actions source carries observations")
+        value["gaps"]["ci"] = "not_connected"
+        return _bounded(value)
+    captured = _date(source["captured_at"], exported, now)
+    if (now - captured).total_seconds() > max_age_seconds:
+        value["gaps"]["ci"] = "stale"
+    if type(source["complete"]) is not bool or not isinstance(source["items"], list) or len(source["items"]) > 6:
+        raise ValueError("invalid Actions coverage")
+    items, seen = [], set()
+    for item in source["items"]:
+        _fields(item, {"run_id", "revision", "status", "conclusion", "started_at", "updated_at"})
+        identity = _integer(item["run_id"], 1)
+        if identity in seen or not isinstance(item["revision"], str) or not re.fullmatch(r"[a-f0-9]{40}", item["revision"]):
+            raise ValueError("invalid Actions run identity/revision")
+        state = _enum(item["status"], {"queued", "in_progress", "completed", "requested", "waiting", "pending"})
+        if state == "completed":
+            _enum(item["conclusion"], {"success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required", "stale"})
+        elif item["conclusion"] is not None:
+            raise ValueError("unfinished Actions run carries conclusion")
+        updated = _date(item["updated_at"], captured, now)
+        started = _date(item["started_at"], captured, now) if item["started_at"] is not None else None
+        if started is not None and started > updated:
+            raise ValueError("Actions update predates its recorded start")
+        seen.add(identity)
+        items.append(copy.deepcopy(item))
+    value["ci"].update(items=items, complete=source["complete"])
+    if not source["complete"] and "ci" not in value["gaps"]:
+        value["gaps"]["ci"] = "partial_coverage"
+    head = value["repository"].get("revision")
+    if head is None or not any(item["revision"] == head for item in items):
+        value["gaps"]["ci_revision"] = "ci_does_not_cover_head"
     return _bounded(value)

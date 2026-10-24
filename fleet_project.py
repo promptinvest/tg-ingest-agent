@@ -33,7 +33,7 @@ def focused_capabilities(focus):
 def _inherited_scope(plan, previous, explicit_focus):
     if plan.get("scope") != "inherit" or not previous or "read_scope" not in previous:
         return None
-    if previous.get("read_contract_hash") != contract_hash():
+    if not protocol.read_contract_compatible(previous.get("read_contract_hash")):
         raise ValueError("project read capability contract changed")
     scope = protocol.read_scope(previous["read_scope"])
     if scope["kind"] == "projects" and set(scope["projects"]) != set(plan.get("projects", [])):
@@ -56,7 +56,9 @@ class ProjectReadMixin:
             "host resources/services/errors or colocated projects. all_projects requires an explicit all-project request. "
             "A host scope has projects:[] and capabilities:[]. No paths, URLs, unit names or commands. "
             "Capabilities are distinct: release is installed release evidence; http_health is application checks; "
-            "containers/runtime are process/component evidence; backups/development can remain not configured. "
+            "containers are process evidence; runtime is an installed component/application observation, including "
+            "existing generation/reserve/budget or authenticated-route/connection summaries when configured. "
+            "backups and development are dated evidence; any capability can remain not configured. "
             "Process activity cannot prove application readiness, client traffic, verified backups or development completion. "
             "For a correction or format/detail-only follow-up use answer_mode:reformat with scope:inherit; "
             "reuse prior evidence without another host read, keeping its original timestamp and gaps. "
@@ -149,7 +151,7 @@ class ProjectReadMixin:
     def _fleet_inspect_operation(self, plan, inventory):
         if "read_scope" not in plan:
             return super()._fleet_inspect_operation(plan, inventory)
-        if plan.get("read_contract_hash") != contract_hash():
+        if not protocol.read_contract_compatible(plan.get("read_contract_hash")):
             raise ValueError("project read capability contract changed before submission")
         scope = protocol.read_scope(plan["read_scope"], inventory, plan["hosts"])
         return protocol.scoped_inspection(inventory, plan["hosts"], scope["projects"], scope["capabilities"],

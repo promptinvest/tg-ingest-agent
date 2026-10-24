@@ -194,3 +194,101 @@ paid replay. Purge must settle both ordinary phases and MCP slot before deletion
 late pages cannot recreate content. No manual Telegram qualification messages.
 
 Full offline tests must bind synthetic/absent scratch facts paths; a root stage can otherwise read the installed descriptive publication even with networking disabled. Keep production facts and root bindings outside fixtures. Failed actual model plans remain accounted evidence and never bypass validators; correct the fleet contract and qualify a fresh bounded attempt.
+
+
+## Increment 03: existing monitor sources and public development capture
+
+The [increment 03 candidate](../../docs/cara-fleet-increment-03-2026-10-24.md) is not
+a deployment receipt. Its target source/archive/operator/window remain UNSELECTED.
+Complete the exact-source/full/model and original preservation gates before
+installing a binding or enabling a path. Keep real values and receipts private.
+
+### Existing monitor readers
+
+Bind only the reviewed runtime implementation under the selected project's
+project_adapters entry. The outer adapter is an exact implementation version;
+all other keys must pass fleet_monitor_adapters.validate_binding. Discovery
+validates policy without reading a source. The existing root gateway reads the
+files; no producer-UID exception or permission relaxation is needed.
+
+For project-daily-lingo-observer/v1, bind source_id, fixed latest_path/snapshot_root,
+image, manifest_sha256, step5_receipt_sha256, max_age_seconds and
+budget_max_age_seconds. Optional accepted_release needs its verified release,
+image/manifest/readiness identity and optional exact targets. Do not infer these
+values from a container or a review-time document. Read current project release
+instructions before creating that private binding.
+
+The reader opens only latest, snapshots/<validated timestamp>.json and latest
+again. Changed pointer, missing file or invalid release/read-only/date proof
+produces a typed gap; there is no scan/retry into history. It strips profiles,
+jobs, assignments and private errors. Generation, reserve, budget heartbeat/probe,
+capture/collection and read dates retain distinct meanings. A ceiling is not
+actual spend or evidence that generation completed.
+
+For project-authenticated-proxy-route/v1, bind one fixed path, source_kind
+host/collector, source_id, role, source_sha256, approved profile modes/metric kinds,
+max_age_seconds and, where reviewed, expected_boot_id/route binding. A collector
+selects only the bound host. Verify the existing monitor source and sample date;
+do not refresh it for a release demonstration. Current connections and cumulative
+connection counters must remain labelled separately. Missing/stale/failed protocol
+or route proof cannot establish client-route health.
+
+Only these monitor reads opt into the 2 MiB source bound; default protected source
+reads stay64 KiB. Outputs stay10 KiB. Retain root ownership/non-writable ancestry,
+no-symlink regular-file checks and the actual service's existing permissions.
+Qualify selected project isolation, discovery version, source/read dates and final
+useful answers under the real gateway/service identity. No new monitor, probe,
+timer, generation, alert or notification is part of installation.
+
+### Fixed public GitHub development export
+
+Use the existing authenticated operator connector to read only the policy-bound
+public repository, simple branch, exact revision, bounded Actions page and selected
+issue numbers. Do not use broad account discovery or copy credentials into a capture.
+First read repository and branch, then the exact commit, matching Actions runs and
+selected issues, then the branch again within the bounded capture window. Recheck
+the same repository endpoint's public visibility/name at the end and retain that
+operator review privately. A moved head or changed visibility requires fresh review,
+not a permissive exporter fallback.
+
+The raw private capture schema is cara-fleet-github-capture/v1. Each exact-URL record
+has url,captured_at,sha256,value. Records are repository,branch_before,commit,actions,
+issues and branch_after. The policy cara-fleet-development-publisher-policy/v1 pins
+project_id,source_id,repository,ref,revision,capture_sha256,source_sha256s,output_path,
+max_age_seconds and sorted issue_numbers. source_sha256s has repository,
+branch_before,commit,actions,branch_after and issue-<number> for each selected issue.
+Digests bind canonical reviewed JSON, not raw HTTP bytes or a GitHub signature.
+No app/exporter network access or remote authenticity claim is implied.
+
+Export to a new private staged artifact with:
+`python3 -B fleet_development_publish.py export --policy <private-policy> --capture <private-capture>`.
+The sealed sanitized envelope goes to stdout; stage/verify it atomically. Copy
+only the reviewed sanitized artifact and protected capture-specific policy to the
+operator destination. Never install raw GitHub responses in the app, publish them
+as fixtures or print private raw input in logs.
+
+After qualification, install as root with:
+`python3 -B /opt/tg-ingest-agent/fleet_development_publish.py install-export --policy <protected-policy> --artifact <protected-export>`.
+Both inputs and destination ancestry must be protected, root-owned and unlinked.
+The destination cannot be either input. An exact unchanged snapshot is idempotent;
+source/policy/revision mismatch, rollback dates and same-date conflicts preserve
+last good output. Keep the publication receipt and existing backup/recovery policy.
+For ambiguous-after-replacement exit2, inspect the current publication and
+durability evidence; never automatically roll back or repeat.
+
+Bind the installed source as project-development-actions/v1 only after validating
+the exact repository/source/max age and service-identity read. Existing generic
+project-development-snapshot/v1 remains valid independently. Display Actions
+updated_at as source updated, and issue updated_at as an issue source date.
+Completion time is not present merely because status=completed. CI/head mismatch,
+stale captures, missing sources and partial CI/issues coverage remain explicit.
+There is no schedule: later source changes require another reviewed capture,
+policy/export and forward installation. A model answer cannot refresh the source.
+
+### Parallel MCP work remains outside increment 03
+
+Durable base admission/client-intent/cancellation changes and the all 15 source-case
+runner are UNCOMMITTED parallel work. Do not enable them from the project-read
+checkpoint or infer live readiness. Their own coherent specifications, exact-source
+qualification, same-UID stdio/policy and lifecycle gates are required separately.
+MCP remains disabled. Existing independent package criteria remain unchanged.

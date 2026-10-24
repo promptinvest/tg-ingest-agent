@@ -79,7 +79,10 @@ class ProjectAdapterIntegrationTests(unittest.TestCase):
         for capability, kind in (("http_health", "daily_lingo_http"), ("backups", "backups"), ("development", "development")):
             old = protocol.PROJECT_CAPABILITIES[capability]["implementation_version"]
             new = adapters.ADAPTERS[kind]["implementation_version"]
-            self.assertEqual(set(contract[capability]["supported_implementations"]), {old, new})
+            expected = {old, new}
+            if capability == "development":
+                expected.add(adapters.ADAPTERS["development_actions"]["implementation_version"])
+            self.assertEqual(set(contract[capability]["supported_implementations"]), expected)
             self.assertEqual(protocol.capability_implementation(capability, new)["outputs"], adapters.ADAPTERS[kind]["outputs"])
             with self.assertRaises(ValueError):
                 protocol.capability_implementation(capability, "unknown/v99")
@@ -238,6 +241,20 @@ class ProjectAdapterIntegrationTests(unittest.TestCase):
         state["issues"]["items"][0]["environment"] = "SYNTHETIC_SECRET"
         with self.assertRaises(ValueError):
             protocol.result(bad, request["hosts"], read_scope=request["read_scope"])
+
+    def test_detailed_backup_answer_keeps_success_receipt_and_specific_gaps_without_blanket_denial(self):
+        self.documents = {"/protected/alpha-backup.json": fixture.backup_document()}
+        self.documents["/protected/alpha-backup.json"]["jobs"].append(fixture.job(status="failed", created="2026-10-24T11:45:00Z", finished="2026-10-24T11:50:00Z"))
+        request = operation(("backups",))
+        value = self.full_read(request)
+        plan = dict(self.plan(request, ("backups",)), detail="detailed", presentation="table")
+        report = fleet_report.build(value, scoped.inventory(), plan)
+        answer = "\n".join(fleet_answers.render(report, None, plan))
+        self.assertIn("successful backup 2026-10-24 11:30:00 UTC", answer)
+        self.assertIn("restore verification 2026-10-24 11:40:00 UTC", answer)
+        self.assertIn("latest attempt backup=failed", answer)
+        self.assertIn("Recorded evidence retains its own dates and scope", answer)
+        self.assertNotIn("do not establish complete application health, successful backups", answer)
 
     def test_project_load_question_gets_project_metrics_gap_without_host_cpu_substitution(self):
         request = operation(("runtime",))

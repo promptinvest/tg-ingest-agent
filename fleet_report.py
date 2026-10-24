@@ -36,6 +36,11 @@ def _project_gaps(gaps, ru=False):
               "backup_latest_attempt": ("последний запуск бэкапа", "latest backup attempt"),
               "restore_latest_attempt": ("последняя проверка восстановления", "latest restore attempt"),
               "latest_backup_restore": ("покрытие восстановления", "restore coverage")}
+    reasons.update({"monitor_inactive": ("монитор не активен", "monitor inactive"),
+                    "binding_or_route_unverified": ("маршрут не подтвержден", "route not verified")})
+    labels.update({"budget_guard": ("бюджетный монитор", "budget guard"), "accepted_release": ("принятый релиз", "accepted release"),
+                   "observer": ("наблюдение приложения", "application observation"), "protocol_observation": ("проверка протокола", "protocol observation"),
+                   "route": ("маршрут", "route"), "collector": ("кэш наблюдений", "observation cache")})
     index = 0 if ru else 1
     return "; ".join(labels.get(key, (key, key))[index] + ": " + reasons.get(reason, (reason, reason))[index]
                      for key, reason in gaps.items())
@@ -71,21 +76,63 @@ def _dated_project_summary(capability, state, ru=False):
         if ci["status"] == "recorded":
             parts.append("CI " + stamp(ci["captured_at"]) + ": " + (", ".join(
                 "#" + str(item["run_id"]) + " " + (item["conclusion"] or item["status"]) +
-                " @" + item["revision"][:12] for item in ci["items"]) or ("запусков в выборке нет" if ru else "no runs in sample")))
+                " @" + item["revision"][:12] + (("; источник обновлен " if ru else "; source updated ") + stamp(item["updated_at"]) if "updated_at" in item else "") for item in ci["items"]) or ("запусков в выборке нет" if ru else "no runs in sample")))
         issues = state["issues"]
         if issues["status"] == "recorded":
             parts.append(("задачи " if ru else "issues ") + stamp(issues["captured_at"]) + ": " + (", ".join(
-                "#" + str(item["number"]) + " " + item["title"] + " (" + item["state"] + ")" for item in issues["items"]) or
+                "#" + str(item["number"]) + " " + item["title"] + " (" + item["state"] + "); " + ("источник обновлен " if ru else "source updated ") + stamp(item["updated_at"]) for item in issues["items"]) or
                 ("в выборке нет" if ru else "none in sample")))
     if state["gaps"]:
         parts.append(_project_gaps(state["gaps"], ru))
     return "; ".join(parts)
 
 
+def _monitor_project_summary(kind, state, ru=False):
+    """Only validated fixed-source fields; keep every sub-observation dated."""
+    parts = [("Датированное наблюдение" if ru else "Dated monitor observation") + " " + stamp(state["source_observed_at"])]
+    if not state["fresh"]:
+        parts.append("устаревшее наблюдение" if ru else "stale observation")
+    if kind == "daily_lingo_observer":
+        generation = state["generation"]
+        parts.append(("генерация " if ru else "generation ") + ("enabled" if generation["enabled"] else "paused") +
+                     " @" + stamp(generation["as_of"]))
+        reserves = state["reserves"]
+        parts.append(("резервы " if ru else "reserves ") + ", ".join(cell + "=" + str(count) for cell, count in reserves["cells"].items()) +
+                     " @" + stamp(reserves["as_of"]))
+        if state["target"] is not None:
+            parts.append(("проверенные цели " if ru else "verified targets ") + ", ".join(cell + "=" + str(count) for cell, count in state["target"]["cells"].items()) +
+                         " @" + stamp(state["target"]["verified_at"]))
+        guard = state["budget_guard"]
+        if guard is not None:
+            parts.append(("бюджетный монитор " if ru else "budget guard ") + ("active" if guard["active"] else "inactive") +
+                         "; USD" + str(guard["daily_limit_usd"]) + "/UTC day; " + str(guard["outcome"]) +
+                         "; probe " + stamp(guard["probe_at"]) + "; heartbeat " + stamp(guard["heartbeat_at"]))
+        parts.extend(key + "=" + str(value) for key, value in state["application"].items())
+        if state["accepted_release"] is not None:
+            release = state["accepted_release"]
+            parts.append(("принятый релиз " if ru else "accepted release ") + release["revision"][:12] + " @" + stamp(release["accepted_at"]))
+    else:
+        parts.append(("аутентифицированная проверка " if ru else "authenticated protocol sample ") + state["health"])
+        if state["collected_at"] is not None:
+            parts.append(("кэш собран " if ru else "cache collected ") + stamp(state["collected_at"]))
+        for name, item in state["profiles"].items():
+            metric = ("connection_counter (cumulative)" if item["metric"] == "connection_counter" else "current_connections (point-in-time)")
+            parts.append(name + ": protocol=" + ("verified" if item["protocol_verified"] else "failed") +
+                         "; " + metric + "=" + str(item["metric_value"]) + "; metrics=" + item["metrics_status"])
+        if state["route"] is not None:
+            parts.append(("маршрут " if ru else "route ") + state["route"]["status"] + " @" + stamp(state["route"]["as_of"]))
+        parts.append("Счётчик соединений не показывает скорость, пропускную способность или число уникальных клиентов." if ru else
+                     "A connection counter does not establish a rate, throughput or unique client count.")
+    if state["gaps"]:
+        parts.append(_project_gaps(state["gaps"], ru))
+    return "; ".join(parts)
+
 def _project_summary(capability, state):
     status = state.get("status", "unavailable")
     adapter = protocol.adapter_kind(capability, state.get("implementation_version"))
-    if adapter in {"backups", "development"} and status == "recorded":
+    if adapter in {"daily_lingo_observer", "authenticated_proxy_route"} and status == "recorded":
+        return status, _monitor_project_summary(adapter, state, True), _monitor_project_summary(adapter, state)
+    if adapter in {"backups", "development", "development_actions"} and status == "recorded":
         return status, _dated_project_summary(capability, state, True), _dated_project_summary(capability, state)
     gaps = {"release": ("запись релиза", "release record"), "http_health": ("проверка приложения", "application health check"),
             "containers": ("контейнеры", "containers"), "runtime": ("компоненты", "runtime components"),
@@ -243,15 +290,23 @@ def build(result, inventory, plan, history=()):
                             adapter = protocol.adapter_kind(capability, state.get("implementation_version"))
                             if adapter:
                                 report["observations"][key].update(source=protocol.project_adapters.ADAPTERS[adapter]["source"],
-                                    source_id=state.get("source_id"), source_exported_at=state.get("exported_at"))
+                                    source_id=state.get("source_id"), source_exported_at=state.get("exported_at"), source_observed_at=state.get("source_observed_at"))
                             coverage["findings"].append(key)
                         for focus in set(report["focus"]) & {"resources", "cpu", "memory", "disk", "trend"}:
                             field = {"resources": "resources.project_metrics", "cpu": "resources.cpu_percent",
                                      "memory": "resources.memory_used_percent", "disk": "resources.disk_used_percent",
                                      "trend": "history.project_metrics"}[focus]
+                            runtime = states.get("runtime", {}) if isinstance(states, dict) else {}
+                            recorded_proxy = (runtime.get("status") == "recorded" and protocol.adapter_kind(
+                                "runtime", runtime.get("implementation_version")) == "authenticated_proxy_route")
+                            if recorded_proxy:
+                                ru_gap = "\u043e\u0442\u0434\u0435\u043b\u044c\u043d\u044b\u0435 \u043c\u0435\u0442\u0440\u0438\u043a\u0438 CPU/RAM/\u0434\u0438\u0441\u043a\u0430 \u0438 \u0441\u043a\u043e\u0440\u043e\u0441\u0442\u0438 \u0442\u0440\u0430\u0444\u0438\u043a\u0430 \u043f\u0440\u043e\u0435\u043a\u0442\u0430 \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u044b; \u0441\u043d\u0438\u043c\u043e\u043a \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0439 \u0438 \u043d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0439 \u0441\u0447\u0451\u0442\u0447\u0438\u043a \u043d\u0435 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u044e\u0442 \u044d\u0442\u0443 \u043d\u0430\u0433\u0440\u0443\u0437\u043a\u0443 \u0438\u043b\u0438 \u0443\u043d\u0438\u043a\u0430\u043b\u044c\u043d\u044b\u0445 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u0439"
+                                en_gap = "project CPU/RAM/disk usage and traffic throughput metrics are not connected; sampled connections and cumulative counters do not establish that load or unique users"
+                            else:
+                                ru_gap = "\u043c\u0435\u0442\u0440\u0438\u043a\u0438 \u0437\u0430\u043f\u0440\u043e\u0441\u043e\u0432/\u0442\u0440\u0430\u0444\u0438\u043a\u0430 \u0438 \u043d\u0430\u0433\u0440\u0443\u0437\u043a\u0438 CPU/RAM/\u0434\u0438\u0441\u043a\u0430 \u043f\u0440\u043e\u0435\u043a\u0442\u0430 \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u044b; \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043a\u043e\u043c\u043f\u043e\u043d\u0435\u043d\u0442\u043e\u0432 \u0438 \u043e\u0431\u0449\u0438\u0435 \u043c\u0435\u0442\u0440\u0438\u043a\u0438 \u0445\u043e\u0441\u0442\u0430 \u043d\u0435 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u044e\u0442 \u043d\u0430\u0433\u0440\u0443\u0437\u043a\u0443 \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u043e\u0435\u043a\u0442\u0430"
+                                en_gap = "project request/traffic and CPU/RAM/disk usage metrics are not connected; component state and host totals do not establish this project's load"
                             key = add(host, field, "not_configured", None,
-                                      label + ": метрики запросов/трафика и нагрузки CPU/RAM/диска проекта не подключены; состояние компонентов и общие метрики хоста не показывают нагрузку этого проекта",
-                                      label + ": project request/traffic and CPU/RAM/disk usage metrics are not connected; component state and host totals do not establish this project's load", "gap")
+                                      label + ": " + ru_gap, label + ": " + en_gap, "gap")
                             report["observations"][key].update(project=project, capability="project_metrics")
                             coverage["findings"].append(key)
                     continue
@@ -385,17 +440,24 @@ def messages(question, report, lang):
             {"role": "user", "content": protocol.canonical({"question": question, "report": report, "available_hypotheses": allowed})}]
 
 
-def render(report, decision=None, lang="en"):
+def render(report, decision=None, lang="en", presentation=None):
     """Coverage precedes optional highlights. Split at line boundaries; never drop a host."""
     decision = selection(decision, report) if decision is not None else {"highlights": [], "hypotheses": [], "next_checks": []}
     ru = lang == "ru"
     field = "ru" if ru else "en"
     lines = [("Проверила " if ru else "Checked ") + str(len(report["hosts"])) + (" VPS. " if ru else " VPSs. ") + stamp(report["observed_at"])]
+    if presentation == "table":
+        lines.extend(["| " + ("\u0421\u0435\u0440\u0432\u0435\u0440 | \u0424\u0430\u043a\u0442\u044b" if ru else "Server | Evidence") + " |", "| --- | --- |"])
     for host in report["hosts"]:
         item = report["coverage"][host]
-        lines.append("\n" + host.upper() + " — " + item["label"])
+        if presentation != "table":
+            lines.append("\n" + host.upper() + " \u2014 " + item["label"])
         for key in item["findings"]:
-            lines.append("• " + report["findings"][key][field])
+            finding = report["findings"][key][field]
+            if presentation == "table":
+                lines.append("| " + item["label"].replace("|", "/") + " | " + finding.replace("|", "/").replace("\n", " ") + " |")
+            else:
+                lines.append("\u2022 " + finding)
     highlights = list(dict.fromkeys(decision["highlights"]))
     if highlights:
         lines.append("\n" + ("Что выделяется:" if ru else "Highlights:"))
@@ -409,7 +471,14 @@ def render(report, decision=None, lang="en"):
         lines.append(("Гипотеза — " if ru else "Hypothesis — ") + item["host"].upper() + ": " + basis + ". " + HYPOTHESES[item["kind"]][1 if ru else 2])
     if report.get("rejected_optional_checks"):
         lines.append("Часть предложенных дополнительных проверок недоступна или выходит за выбранные серверы; они не выполнялись." if ru else "Some proposed additional checks are unavailable or outside the selected hosts; they were not executed.")
-    lines.append("\n" + ("Это проверка настроенных наблюдений в указанный момент; она не подтверждает полное здоровье приложений, успешность бэкапов или отсутствие прошлых сбоев." if ru else "These are configured observations at the stated time; they do not establish complete application health, successful backups or absence of earlier incidents."))
+    recorded_project = report.get("read_scope", {}).get("kind") in {"projects", "all_projects"} and any(
+        item.get("status") == "recorded" and item.get("capability") in {"runtime", "backups", "development"}
+        for item in report["observations"].values())
+    if recorded_project:
+        lines.append("\n" + ("\u0417\u0430\u043f\u0438\u0441\u0430\u043d\u043d\u044b\u0435 \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u044b \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u044e\u0442 \u0441\u0432\u043e\u0438 \u0434\u0430\u0442\u044b \u0438 \u043e\u0431\u043b\u0430\u0441\u0442\u044c \u043f\u043e\u043a\u0440\u044b\u0442\u0438\u044f; \u0443\u043a\u0430\u0437\u0430\u043d\u043d\u044b\u0435 \u043f\u0440\u043e\u0431\u0435\u043b\u044b \u043e\u0441\u0442\u0430\u044e\u0442\u0441\u044f \u043d\u0435\u043f\u0440\u043e\u0432\u0435\u0440\u0435\u043d\u043d\u044b\u043c\u0438." if ru else
+                             "Recorded evidence retains its own dates and scope; the stated gaps remain unverified."))
+    else:
+        lines.append("\n" + ("Это проверка настроенных наблюдений в указанный момент; она не подтверждает полное здоровье приложений, успешность бэкапов или отсутствие прошлых сбоев." if ru else "These are configured observations at the stated time; they do not establish complete application health, successful backups or absence of earlier incidents."))
     pages, current = [], ""
     for line in lines:
         # Individual bounded host summaries may still exceed one Telegram page.

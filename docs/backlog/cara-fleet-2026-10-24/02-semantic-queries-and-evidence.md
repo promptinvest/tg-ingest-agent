@@ -105,3 +105,15 @@ Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
 Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
 and scoped-read gates. This is an incremental business baseline; no full package
 completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).
+
+## Increment 03 project-read checkpoint
+
+Candidate plans consume existing observer/route and reviewed public-development
+evidence. Runtime summary meaning is explicit; proxy connection metrics cannot be
+replaced by host CPU, and CI/issue state cannot establish completion. Local catalog
+obligations and selected-project enforcement remain independent of MCP.
+
+Project-only focused Linux 201 passes in 0.622 s. Fresh bounded RU/EN/paraphrase/context/
+correction and final requested-answer qualification, exact full/CI and protected
+real bindings/release gates remain pending. Original47+15 specifications are
+unchanged. No CF-02 completion. [Increment 03](../../cara-fleet-increment-03-2026-10-24.md).
