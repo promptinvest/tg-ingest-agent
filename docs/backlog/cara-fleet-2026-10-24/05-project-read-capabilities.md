@@ -57,9 +57,17 @@ For Daily Lingo source work, read that repository's current AGENTS.md, release p
 
 Out of scope: starting backups/probes as actions, deployments, generation, paid trials, protocol traffic changes, new notifications, general shell or repository writes.
 
+## Reusable capabilities for CF-07 (downstream, nonblocking)
+
+Keep this package's project-read behavior, adapter scope and acceptance criteria intact. Expose its qualified reads through a small transport-independent capability API usable by Cara's internal path and a later MCP adapter. Share validation, project scope, typed evidence, freshness and gaps; avoid a duplicate implementation.
+
+This API expresses project/business capabilities, not MCP wire messages or SDK types. No MCP server, client, SDK, transport or CF-07 completion is a prerequisite for CF-05. Individual business adapters can ship as soon as their own existing gates pass.
+
+CF-07 consumes each adapter only after that adapter is ready. Missing MCP support cannot make a working project read unavailable. Protocol conformance does not replace application-outcome, selected-project isolation or original regression qualification.
+
 ## Tracking
 
-Parent roadmap: [#7](https://github.com/promptinvest/tg-ingest-agent/issues/7). Blocked by: [#1](https://github.com/promptinvest/tg-ingest-agent/issues/1), [#2](https://github.com/promptinvest/tg-ingest-agent/issues/2), [#4](https://github.com/promptinvest/tg-ingest-agent/issues/4). Blocks: [#6](https://github.com/promptinvest/tg-ingest-agent/issues/6). Track the partial-independent increments described above separately; no dependency implies new runtime permission.
+Parent roadmap: [#7](https://github.com/promptinvest/tg-ingest-agent/issues/7). Blocked by: [#1](https://github.com/promptinvest/tg-ingest-agent/issues/1), [#2](https://github.com/promptinvest/tg-ingest-agent/issues/2), [#4](https://github.com/promptinvest/tg-ingest-agent/issues/4). Blocks: [#6](https://github.com/promptinvest/tg-ingest-agent/issues/6); supplies qualified project reads to [CF-07/#8](https://github.com/promptinvest/tg-ingest-agent/issues/8) downstream. CF-05 is not blocked by CF-07. Track the partial-independent increments described above separately; no dependency implies new runtime permission.
 
 ## Development contract
 

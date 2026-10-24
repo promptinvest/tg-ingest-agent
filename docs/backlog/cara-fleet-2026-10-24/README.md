@@ -5,7 +5,7 @@ Parent tracker: [CF-00 / issue #7](https://github.com/promptinvest/tg-ingest-age
 
 ## Start here
 
-This directory is the durable developer handoff for the October24 review of Cara's fleet knowledge, question handling, reply style, responsiveness and architecture for future direct project work. The chat is not required. Read this index, the relevant complete package spec and its linked source/tests before implementing.
+This directory is the durable developer handoff for the October 24 review of Cara's fleet knowledge, question handling, reply style, responsiveness and architecture for future direct project work. The chat is not required. Read this index, the relevant complete package spec and its linked source/tests before implementing.
 
 Canonical code repository: promptinvest/tg-ingest-agent; use its independent checkout, not the Daily Lingo application or the archived mixed workspace. Read [AGENTS.md](../../../AGENTS.md), the full [CLAUDE.md](../../../CLAUDE.md), [CARA.md](../../../CARA.md), [SOLUTION.md](../../../SOLUTION.md) and [ADR backlog](../../adr/README.md).
 
@@ -22,9 +22,27 @@ The owner explicitly clarified: Cara can use her LLM for free-form queries to un
 - Keep grounding, scope, freshness and effect permissions enforced independently from natural-language freedom.
 - Preserve working behavior outside the approved change.
 
-The current request is to create a backlog for further development. All six packages remain Proposed. It does not itself start implementation, grant a new runbook/account connection, create schedules, authorize paid evaluation/corpus work or deploy software. When the owner later requests implementation, the standing implementation-includes-deployment rule applies within that scope, with all original checks; do not invent a separate hash/window approval requirement.
+The current request is to create a backlog for further development. All seven packages remain Proposed. It does not itself start implementation, grant a new runbook/account connection, create schedules, authorize paid evaluation/corpus work or deploy software. When the owner later requests implementation, the standing implementation-includes-deployment rule applies within that scope, with all original checks; do not invent a separate hash/window approval requirement.
 
 No missing product decision blocks offline work on these specifications. Routine module/interface choices belong to the developer under these invariants. A materially broader behavior or authority change follows the owner's existing approval rule. Operator secrets/access and independently verified real deployment inputs remain outside public source control.
+
+## Business goals and preservation gate
+
+The backlog exists to help the owner understand and manage his fleet and projects through ordinary conversation. The owner explicitly requested that adding MCP preserve the existing business purposes and goals. MCP is a downstream integration serving those outcomes.
+
+| Owner outcome | Required acceptance |
+|---|---|
+| Get known facts without unnecessary checks | Address/provider/location/project-placement answers use published facts with zero host inspections, including when MCP or the executor is unavailable. Unknowns remain specific. |
+| Ask naturally | The existing budgeted LLM interprets RU/EN wording, context and requested format; exact phrases and fixed templates remain optional shortcuts. |
+| Receive useful project information | Requested fields and project outcomes are answered with relevant evidence, exceptions and uncertainty; service/process output cannot substitute for the answer. |
+| Control detail and corrections | Confirmed preferences apply across explanatory paths; names, short/detailed/table requests and legitimate correction scope survive every integration path. |
+| Keep using Cara during work | Owner updates and reminders remain responsive during slow models, tools, queues and backend outages. |
+| Manage individual projects safely | Deployment, current operation and development progress remain distinct; reads stay within selected projects and installed capabilities; future actions retain reviewed authority/recovery. |
+| Retain working capabilities | Notes, reminders, calendar, journals, speech, research, memory, budgets, history, backups and confirmations preserve behavior outside explicitly approved changes. |
+
+CF-01–CF-06 keep their original priorities, dependencies, scope and definitions of done. None depends on CF-07, MCP availability or protocol adoption. Their fixes may be implemented, qualified and released without MCP. Report those business milestones separately from interface readiness.
+
+Preserve the original 47 regression specifications. Run applicable cases through internal and MCP paths and keep unrelated baseline cases passing. Add protocol/failure cases separately; successful discovery, connection or tool execution cannot close a business requirement whose requested answer or authorized outcome is wrong.
 
 ## Work packages
 
@@ -36,6 +54,7 @@ No missing product decision blocks offline work on these specifications. Routine
 | [CF-04 / #4](https://github.com/promptinvest/tg-ingest-agent/issues/4) | P1 | [Responsive model work, completion handling and queue lifecycle](04-responsive-durable-execution.md) | none; coordinate CF-02/03 | Large; separate wakeup/inference/queue increments |
 | [CF-05 / #5](https://github.com/promptinvest/tg-ingest-agent/issues/5) | P1 | [Project-scoped read adapters and operational meaning](05-project-read-capabilities.md) | CF-01/02/04 | Large; one read adapter per increment |
 | [CF-06 / #6](https://github.com/promptinvest/tg-ingest-agent/issues/6) | P2; gate before broader writes | [Shared capability/effect and content lifecycle](06-governed-capabilities-and-lifecycle.md) | CF-04/05; purge fixtures can start independently | Large; staged compatibility migration |
+| [CF-07 / #8](https://github.com/promptinvest/tg-ingest-agent/issues/8) | P2 downstream integration | [Read-only MCP interface and Cara client](07-mcp-fleet-interface-and-client.md) | design now; facts/client after CF-01–04; project reads after relevant CF-05 adapters; CF-06 gates future writes | Staged adapter/client increments |
 
 Top immediate outcomes: CF-01 supplies missing known facts; CF-02 prevents unnecessary investigations and wrong answers; CF-03 makes replies useful and preserves names. CF-04 runs in parallel because polling/model latency affects every later integration.
 
@@ -44,6 +63,7 @@ Suggested sequence:
 2. Integrate CF-02 semantic plans with CF-01 facts; CF-03 consumes those obligations and CF-04's nonblocking inference path.
 3. Stabilize project IDs/read protocol and deliver CF-05 adapters individually. CF-02 validates project selection/answer filtering independently; end-to-end collection isolation is a combined CF-02/05 integration gate.
 4. Complete CF-06 shared lifecycle and effect-readiness gates before adding new project writes.
+5. Design CF-07 contracts in parallel without delaying these packages; deliver its read-only facts/client path after CF-01–04, and expose relevant CF-05 reads as ready. MCP never gates the original business milestones. A2A and wider clients/transports remain future scoped work.
 
 Keep increments independently reviewable, roughly one to three development days where feasible. These are planning sizes, not delivery promises. Do not implement a whole-runtime rewrite to complete one package.
 
@@ -79,16 +99,17 @@ ADR-0032's evidence/scope safeguards stay intact. CF-03 deliberately proposes ch
 
 - [bootstrap-facts.json](bootstrap-facts.json): explicitly synthetic proposed facts shape, example unknowns, distinct address types, project colocation and lifecycle exclusions. Documentation-only addresses; never install as real config.
 - [regression-cases.json](regression-cases.json):47 machine-readable test specifications. They are not an implemented runner or a claim of passing tests.
+- [mcp-regression-cases.json](mcp-regression-cases.json): 15 additional MCP interface/business-parity specifications. They extend, and do not replace, the original 47.
 - [review-evidence.json](review-evidence.json): code baseline and failure-to-package mapping without fleet identity data.
 
-The corpus covers flexible RU/EN catalog wording, address/provider tables, host/project context, static-plus-live requests, unavailable sources, stale/conflicting evidence, application-versus-process health, backup receipts, expected idle units, corrections/preferences, emphasis cleanup, false cited claims, async responsiveness, queue deadlines, recovery and purge.
+The original corpus covers flexible RU/EN catalog wording, address/provider tables, host/project context, static-plus-live requests, unavailable sources, stale/conflicting evidence, application-versus-process health, backup receipts, expected idle units, corrections/preferences, emphasis cleanup, false cited claims, async responsiveness, queue deadlines, recovery and purge.
 
 Assert semantic obligations and tool selection, not one exact sentence. Use frozen facts/observations/model outputs for deterministic regressions, fake clocks and synchronization for scheduling. Add held-out paraphrases and bounded accounted actual-model qualification for model behavior during an authorized implementation. Mocks and “no raw JSON” checks alone do not qualify natural replies.
 
 Relevant suites: test_fleet.py, test_fleet_report.py, test_assistant.py, test_tasking.py, test_task_runtime.py, test_gateway.py and test_backup.py.
 
 Current required checks are defined by CLAUDE.md, deploy.sh, verify-cara-runtime.sh and .github/workflows/test.yml. At this review baseline:
-- CI compiles Python, runs pinned Ruff0.17.1 F821/F822/F823, normal and seed20261007 shuffled run_tests.py, shell syntax and shellcheck.
+- CI compiles Python, runs pinned Ruff 0.17.1 F821/F822/F823, normal and seed 20261007 shuffled run_tests.py, shell syntax and shellcheck.
 - Linux test stage uses the service distro interpreter and optional package behavior that CI alone does not cover. Use deploy.sh --test for tests only when appropriate to the authorized task.
 - Tests must stay off the OneDrive-synced working checkout. Do not install/restart to run a unit fixture.
 - Release gates include current exact-source checks, runtime/sandbox/spool denial, original data parity, recoverable backups and preservation of other applications/monitors/alerts.

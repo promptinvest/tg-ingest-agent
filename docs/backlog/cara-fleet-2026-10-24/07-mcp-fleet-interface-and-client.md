@@ -1,0 +1,125 @@
+# CF-07 — Reusable MCP fleet interface and Cara client
+
+- Status: Proposed; backlog update only. No interface is installed or enabled.
+- Priority: P2 integration. CF-01–CF-06 keep their existing business priorities.
+- Planning: capability and client/server contracts can be designed immediately.
+- Production prerequisites: CF-01/02/03/04 for the facts/client path; the applicable CF-05 adapter for each project-read capability. CF-06 gates any future write exposure, which is outside this package.
+- No CF-01–CF-06 package depends on CF-07, MCP availability or MCP adoption.
+- Size: separate contract, read-only adapter, Cara-client and project-read increments.
+
+## Business purpose and boundaries
+
+Give Cara and future approved clients a standard way to reuse established fleet knowledge and project observations. The owner explicitly requires preservation of the existing backlog's business functionality and goals.
+
+The primary outcomes remain: answer known facts without host probes; understand natural questions and requested format using the existing budgeted LLM; give direct useful answers; preserve responsiveness; distinguish project operation from development progress; and expand project work under existing authority/recovery rules.
+
+MCP discovery, connection and successful tool calls are transport checks. They do not satisfy a requested-answer or project-outcome criterion. This work cannot replace or postpone CF-01–CF-06, weaken their acceptance criteria, or require a protocol migration before shipping their fixes.
+
+This package is part of the proposed roadmap; optional means Cara can operate with the MCP runtime path disabled, not that the item silently disappears from the roadmap. A2A stays deferred until a concrete independent project agent needs delegated goals.
+
+## Architecture and source map
+
+Use a thin adapter over the same capability implementation that supports Cara's internal path:
+
+    Cara / authorized client -> MCP adapter -> shared capability API
+    Cara internal path -> the same shared capability API
+    Shared capability API -> local CF-01 facts (catalog; zero host inspections)
+    Shared capability API -> existing durable executor/spool -> restricted gateways (live reads)
+
+Extend the existing fleet/capability modules; do not replace the bot, router, knowledge system, task runtime or host gateways. Prefer a central local interface over per-host MCP servers. Preserve pinned SSH, root-owned gateway policy and the separate credential-owning executor. The research worker remains networkless.
+
+Inspect fleet.py:331-592, fleet_protocol.py:47-120, cara_fleet.py:64-133, fleet_host.py, tool_broker.py:99/193, skill_manifest.py and task_runner.py. Bounded I/O/accounting patterns are in voice_svc.py, inference_io.py and call_budget.py; durable requests/evidence/backup in worker_client.py, store.py and backup.py. Line numbers refer to the original review baseline and may move.
+
+Keep Cara's core stdlib behavior compatible. Any selected MCP SDK and transitive dependencies belong in an isolated, pinned adapter environment unless a later explicit implementation design justifies a core change. No new model/provider or model call inside the fleet server is required.
+
+## Initial read interface
+
+Expose only compiled, allowlisted capabilities whose implementation is installed and qualified:
+
+| Proposed interface | Source / meaning | Required behavior |
+|---|---|---|
+| Fleet/project resource or fleet_lookup tool | CF-01 descriptive facts, relationships and completeness | Zero host inspections; source/date/conflict/unknown metadata preserved |
+| project_observe | Applicable CF-05 project capability | Validated project scope; only requested observations; explicit freshness |
+| investigation_start | CF-04 bounded durable read request | Return a request handle without blocking Cara; no project state mutation |
+| investigation_status / investigation_result | The same durable request/evidence | Caller-bound access, honest phase/status, timestamps/windows and retained uncertainty |
+
+Names above are proposed application API names, not claims that these tools already exist. Schema/policy and permission rules are shared with the internal path. A stable resource or equivalent lookup tool may support a client's feature set without changing meaning.
+
+Read-only refers to protected project/business state: ordinary durable job/evidence/accounting records are still required. Do not expose maintenance/restart, deployment, cleanup, backup-start, generation, project-database modification, repository write or messaging tools in CF-07. Preserve the currently supported approved restart path unchanged; do not expose it through MCP as a demonstration.
+
+## Protocol, client and transport contracts
+
+Record and pin the MCP protocol/SDK combinations actually supported. The verified reference at planning time is MCP 2026-07-28; recheck official specifications and actual SDK/client compatibility before implementation. Do not silently fall back to a version that loses scope, freshness, authorization or result semantics.
+
+Keep MCP protocol version separate from application capability/schema/policy versions. Version/capability discovery is not permission to import arbitrary tools or instructions into Cara's closed action set. Check returned schemas and capability identity against the reviewed manifest.
+
+Initial transport is local stdio through an unprivileged adapter, preserving the existing fleet boundary. A future private HTTP or remote-client deployment needs an explicitly scoped client authentication/authorization and deployment design; no public listener or per-VPS server is part of this package.
+
+Preserve caller identity and allowed project/read scope from trusted client policy, never from a model-supplied principal or approved flag. Never pass SSH keys, privileged transport configuration, application secrets or an unrestricted inherited environment to the adapter.
+
+Return bounded structured observations and sources, not a new owner-facing diagnostic report. Cara's existing LLM/planner and shared reply policy choose relevant evidence and natural presentation. No extra synthesis/model call is added merely to translate protocol envelopes.
+
+## Asynchronous work and conservative outcomes
+
+Before investigation_start, the client durably creates a caller-bound idempotency key. The server binds that key to the trusted principal, input hash and capability/policy revisions, returning the same durable handle for a matching retry and rejecting conflicting reuse. This allows reconciliation when the initial response is lost before the client learns the server handle.
+
+Map calls to CF-04's existing durable read jobs, with request/phase identity, nonce/input hash, owner-source binding, capability/policy revision, project scope, deadline, timestamps and windows. Do not create a competing MCP execution ledger or persistent transcript store.
+
+Base start/status/result operations must work without MCP Tasks. If Tasks support is selected, explicitly negotiate it and map its handles/statuses to the same durable jobs. Protocol cancellation is a request; do not claim that a real operation stopped until its lifecycle confirms it.
+
+On timeout/disconnect, reconcile by durable request identity before retrying or changing transport. One logical request cannot become two investigations, two paid calls or duplicate deliveries. Bound per-client and aggregate calls, queueing, output and deadlines under the existing budgets/concurrency policy.
+
+Authentication alone never establishes owner approval for an effect. A future write interface requires CF-06, an explicitly scoped owner-requested operation, exact reviewed authority/confirmation and that application's release/containment rules. A protocol task, resource, tool annotation or client-supplied approval flag grants none of these.
+
+## Business continuity and migration
+
+MCP disabled, incompatible or unavailable must leave the established internal capability path and ordinary Cara functions operational. Preserve an equivalent internal read path and the local last-good descriptive facts needed for known-fact answers.
+
+Fallback is allowed only with equivalent target scope, provenance, freshness and policy; reuse the existing durable request after ambiguous submission. If equivalent current observation is unavailable, give a specific observation gap. Never substitute unrelated host scans, stale current-health claims or generic technical dumps.
+
+Preserve prior request/event/receipt interpretation, cards, approvals, history, budgets, notes, reminders, calendar, journals, speech, research, memory and checked backups. No new adapter-owned content persistence or hidden retention. Use existing records and integrate with the applicable content/purge policy; CF-06's remaining lifecycle obligations remain tracked separately.
+
+## Delivery increments and dependencies
+
+1. Contract design can start now: define shared capability/client boundary, version matrix, allowed tools and internal/MCP parity fixtures. This does not block any original package.
+2. Facts/client MVP after CF-01/02/03/04: local read-only interface and explicit Cara client integration; facts work during MCP outage. Keep owner language and detail preferences intact.
+3. Project-read increments after relevant CF-05 adapters: expose them one at a time, with scoped freshness and the same business assertions as internal calls. A missing adapter remains a capability gap, not a prerequisite to publishing unrelated fixes.
+4. Wider clients/transports and write exposure are future scoped work. Write exposure additionally requires CF-06. They are not part of CF-07's read-only definition of done.
+
+## Acceptance criteria
+
+- Retain all 47 original regression specifications and original package definitions of done. Run applicable business cases through both paths; unrelated transactional/lifecycle cases still pass unchanged.
+- Catalog lookup through either path makes zero SSH calls and supplies requested facts or field-specific unknown/conflict. MCP outage still permits known-fact answers.
+- Cara's free-form RU/EN meaning, context, requested tables/detail, concise preferences, corrections and required entities remain correct; protocol JSON never substitutes for the answer.
+- Only selected project observations are collected/reported. Server discovery does not broaden project or host scope.
+- Slow/failed protocol/model/tool work does not block owner updates or reminders, and does not reintroduce the normal idle-poll delay.
+- Disabled/incompatible MCP preserves baseline flows and equivalent internal reads; no automatic downgrade of policy/freshness/schema.
+- Reconnect/fallback uses one logical investigation/request and cannot duplicate paid work or result delivery.
+- Unnegotiated Tasks support is not required for the base asynchronous path; optional Tasks map to the same durable record.
+- Unapproved principal/project, unknown tool/schema, injected server instructions and model approval flags cannot expand reads or grant effects.
+- No maintenance/write tools are exposed; existing exact approvals and secret/sandbox boundaries remain unchanged.
+- Adapter cancellation, late results and existing lifecycle handling remain truthful; no hidden persistent content or content recreation after applicable purge.
+- Business acceptance, protocol compatibility and operational release evidence are recorded separately. Protocol tests alone cannot close CF-07.
+
+Use [mcp-regression-cases.json](https://github.com/promptinvest/tg-ingest-agent/blob/main/docs/backlog/cara-fleet-2026-10-24/mcp-regression-cases.json) for additional interface/parity scenarios and [regression-cases.json](https://github.com/promptinvest/tg-ingest-agent/blob/main/docs/backlog/cara-fleet-2026-10-24/regression-cases.json) for the preserved original business corpus. These are test specifications, not implemented tests or passing qualification.
+
+## Implementation and verification
+
+Extend existing fleet, gateway, task and assistant suites; add focused MCP client/server contract tests in an isolated Linux stage. Use synthetic local peers and documentation-only facts. A later implementation's real-model/release qualification follows existing authorization/budget gates, not an unbounded new evaluation.
+
+Update CARA.md, SOLUTION.md, the ADR/backlog, installed-source/runtime checks and the operator runbook in the same implementing change. Preserve all original release, backup, stopped-data parity, monitor/alert and other-application checks. Public tests/issues contain no real fleet identities or operational secrets.
+
+## Primary protocol references
+
+Verified October 24, 2026; pin the implementation's tested versions separately:
+- [MCP specification](https://modelcontextprotocol.io/specification/2026-07-28): resources and tools with version/capability contracts.
+- [Standard transports](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports): stdio and Streamable HTTP bindings.
+- [Optional Tasks extension](https://modelcontextprotocol.io/extensions/tasks/overview): durable asynchronous handles and explicitly supported capabilities.
+
+## Tracking and authority
+
+Tracker: [CF-07 / #8](https://github.com/promptinvest/tg-ingest-agent/issues/8).
+Parent roadmap: https://github.com/promptinvest/tg-ingest-agent/issues/7.
+Upstream facts/client production phase: [CF-01/#1](https://github.com/promptinvest/tg-ingest-agent/issues/1), [CF-02/#2](https://github.com/promptinvest/tg-ingest-agent/issues/2), [CF-03/#3](https://github.com/promptinvest/tg-ingest-agent/issues/3), [CF-04/#4](https://github.com/promptinvest/tg-ingest-agent/issues/4). Project-read phase also consumes relevant [CF-05/#5](https://github.com/promptinvest/tg-ingest-agent/issues/5) adapters. [CF-06/#6](https://github.com/promptinvest/tg-ingest-agent/issues/6) gates future out-of-scope write exposure. CF-01–CF-06 acquire no reverse dependency on this interface.
+
+This owner request updates the backlog only. A subsequent implementation request follows the standing implementation-includes-deployment rule within its scope and original gates. This planning update authorizes no runtime interface, new client/account, live check, effect or paid qualification.

@@ -61,6 +61,14 @@ Inspect tool_broker.py, task_runner.py, tasking.py, runtime.py, fleet.py, fleet_
 
 Out of scope: authorizing any new project write, deleting live data for validation, retroactive history changes or executing historical deployment helpers.
 
+## Shared policy for future interface consumers (nonblocking)
+
+Preserve this package's original task/effect and content-lifecycle obligations. Keep the authoritative capability policy, source/approval bindings, resource locks, attempts, receipts and recovery callable through a transport-independent internal API. A later MCP consumer uses the same rules; it does not create another approval or execution system.
+
+CF-06 has no dependency on CF-07 or MCP adoption. Its internal business/safety/lifecycle improvements can ship without a protocol interface. CF-07's initial read-only scope does not expose the existing restart or any new project effect.
+
+Any later write exposure requires this package's qualified authority foundation plus the particular owner-requested operation, reviewed runbook and application release/recovery rules. Authentication, tool annotations, tasks and model/client approval flags cannot substitute for those requirements. Reuse disclosed storage/lifecycle rather than adding hidden interface transcripts.
+
 ## Tracking
 
 Parent roadmap: [#7](https://github.com/promptinvest/tg-ingest-agent/issues/7). Blocked by: [#4](https://github.com/promptinvest/tg-ingest-agent/issues/4), [#5](https://github.com/promptinvest/tg-ingest-agent/issues/5). Blocks: none. Track the partial-independent increments described above separately; no dependency implies new runtime permission.

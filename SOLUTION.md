@@ -5,8 +5,11 @@
 A [self-contained developer backlog](docs/backlog/cara-fleet-2026-10-24/README.md)
 records six work packages for synchronized descriptive facts, semantic query modes,
 adaptive grounded LLM replies, responsiveness, project read adapters and governed
-capability/content lifecycle. It includes dependencies, compatibility/release gates
-and 47 synthetic regression specifications, including missing-model fallbacks,
+capability/content lifecycle. A seventh downstream package adds a proposed read-only
+MCP interface and Cara client, while the original six business packages keep their
+priorities and independent completion gates. It includes dependencies, compatibility/release gates
+and the original 47 synthetic regression specifications plus 15 MCP/parity scenarios,
+including missing-model fallbacks,
 shared style and mixed emphasis/gesture cleanup. The owner explicitly permits LLM
 interpretation of free-form questions and appropriate reply format; known facts
 must not require host probes.
