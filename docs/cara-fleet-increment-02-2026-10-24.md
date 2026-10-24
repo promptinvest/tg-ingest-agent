@@ -123,3 +123,19 @@ weakened to accept regressions. No release has occurred for this increment.
 ## Retained full-gate failure for3197bff
 
 CI40088187924 failed the old broker assertion that fleet.investigate must be absent. The implemented retained task read now has dedicated waiting/accounting/receipt/recovery tests. Its exact network-read manifest contract replaces only that obsolete absence assertion; fleet execute/restart/deploy remain absent. All runtime bytes are unchanged by this correction. The failed exact-source Linux attempt and CI log remain; fresh full gates are required.
+
+## Further retained qualification findings
+
+The exact09950c3 Linux normal run caught five fixture failures after real facts
+were installed: old fixtures omitted fleet_facts and read the host's publication.
+The test helpers now bind an absent scratch facts path, retaining every original
+answer assertion and all application defaults. No production facts are test data.
+
+The first accounted next-increment qualification passed both RU/EN catalog answers
+through the MCP shared peer, then rejected an actual task plan with invented live
+catalog fields, rewritten query and invalid binding arrays. Cost USD0.009982032;
+aggregate USD0.04695216. The failed request is retained and not replayed. Fleet-only
+planner descriptions now state exact fields/array shape, full literal query binding
+and the investigation's existing answer delivery. Validators are unchanged; fresh
+bounded model qualification and full gates remain required. This is model-backed
+answer qualification, separate from real same-UID stdio readiness.

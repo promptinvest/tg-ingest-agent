@@ -212,7 +212,7 @@ class Agent(fleet.FleetMixin):
     def __init__(self, conn, root):
         self.conn = conn
         self.cfg = SimpleNamespace(fleet_enabled=True, fleet_spool=str(root / "spool"),
-                                   fleet_inventory=str(root / "inventory.json"), task_cost_limit_usd=0.15)
+                                   fleet_inventory=str(root / "inventory.json"), fleet_facts=str(root / "absent-facts.json"), task_cost_limit_usd=0.15)
         self._current_update_id = 1
         self.messages = []
     def reply(self, chat, text, **kwargs):

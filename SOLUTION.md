@@ -1736,3 +1736,5 @@ independent increments; MCP is not enabled by this candidate.
 The exact-source full gate for76ecf87 passed the remaining suite and failed the unchanged config-catalogue check because the new lifecycle setting was missing from the environment example (nine unchanged skips). The correction documents its defaultfalse and installedtrue semantics only; Python runtime and model prompts are byte-identical. The original archive/log/failure and successful six-case model receipt are retained. Fresh full gates remain required; no assertion or runtime guard is relaxed.
 
 The shared registry regression asserts the admitted source-bound read and its exact risk, budgeted-model and delivery contract; effect tools remain absent. The retained old unimplemented-read expectation was corrected after full-gate failure, without changing runtime behavior.
+
+Fleet task planning now describes the closed catalog field array, full literal investigation clause and existing grounded answer contract. Invalid model selectors remain rejected. Offline fixture helpers explicitly isolate facts from installed production publications; application defaults are unchanged.

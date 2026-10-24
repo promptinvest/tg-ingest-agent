@@ -45,5 +45,7 @@ def make_config(**overrides):
             runtime_root / "cara-mentor-runner" / "spool"),
     }
     env.update(overrides)
-    return common.load_config(env)
+    cfg = common.load_config(env)
+    cfg.fleet_facts = str(runtime_root / 'cara-fleet' / 'facts' / 'current.json')
+    return cfg
 

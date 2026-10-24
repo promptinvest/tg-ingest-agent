@@ -70,3 +70,5 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
   bounded asynchronous slot with equivalent internal recovery. Shared retained
   reads remain read-only at the API; no OS-level DB-write denial is inferred.
   Full release/model gates and MCP creation/lifecycle qualification remain open.
+
+- 2026-10-24: actual task-plan qualification rejected an invented live catalog field and invalid literal binding. Fleet-only tool descriptions now expose exact closed input meaning; validation is unchanged. Test fixtures explicitly isolate installed facts; runtime defaults remain.

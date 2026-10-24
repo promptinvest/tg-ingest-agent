@@ -106,3 +106,9 @@ executing cancellation are explicit gaps. Original47+15 specifications remain
 unchanged and the crosswalk distinguishes active cases from unqualified gaps.
 Focused Linux passes do not replace full release and actual-model qualification.
 See [increment02](../../cara-fleet-increment-02-2026-10-24.md); all packages stay open.
+
+The retained first actual task-plan qualification rejected invented runtime catalog
+fields and rewritten source. Fleet-only planner guidance is now explicit; validators
+and budgets remain unchanged. Old fixture defaults are isolated from installed
+facts without changing app defaults or original answer assertions. The failed paid
+attempt and full-gate logs remain; fresh qualification is required.

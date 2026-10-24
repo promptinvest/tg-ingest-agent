@@ -192,3 +192,5 @@ cursor qualification. Durable MCP creation, Tasks, writes and A2A are absent. Ta
 waiting uses existing task/fleet records; unknown-started reads reconcile without
 paid replay. Purge must settle both ordinary phases and MCP slot before deletion;
 late pages cannot recreate content. No manual Telegram qualification messages.
+
+Full offline tests must bind synthetic/absent scratch facts paths; a root stage can otherwise read the installed descriptive publication even with networking disabled. Keep production facts and root bindings outside fixtures. Failed actual model plans remain accounted evidence and never bypass validators; correct the fleet contract and qualify a fresh bounded attempt.
