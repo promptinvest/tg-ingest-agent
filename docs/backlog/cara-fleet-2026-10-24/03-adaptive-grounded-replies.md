@@ -136,3 +136,16 @@ poll/wait/exact-hygiene run passes 104/ 7.342 s; fresh whole-source/full/model/C
 and original installed/operator release remain required. Production stays
 accepted `99037c5`, MCP disabled; no package completion.
 [Increment 07](../../cara-fleet-increment-07-2026-10-24.md).
+
+## Increment 09 operational scope and minimal focus
+
+The accounted `9566d1b` model cohort fails phase 8 despite Linux/CI success: a new
+named-project dated-observation question requests inheritance with no canonical
+prior. An earlier memory answer passed weak relevance assertions; review finds
+unrequested broad diagnostics. Strict rejection and all charges remain retained.
+Clarify operational explicit/inherited scope and minimum metric focus, preserving
+local catalog prior inheritance, valid broad reports, validators/renderers/age,
+authority and model budgets. Focused actual Agent/runtime/catalog/relevance
+regressions pass in isolated Linux. Fresh full/CI/model/installed release gates
+remain required; every package stays open, production `99037c5` / MCP disabled.
+[Increment 09](../../cara-fleet-increment-09-2026-10-24.md).

@@ -303,3 +303,20 @@ Linux task/source/hygiene checks pass. Fresh full/CI/model/installed acceptance
 is required; source/archive/operator/window UNSELECTED, all packages open,
 production accepted `99037c5`/MCP disabled.
 [Increment 08](../../cara-fleet-increment-08-2026-10-24.md).
+
+## Increment 09 scope and relevance checkpoint
+
+Published `9566d1b` passes Linux/CI but the model cohort fails phase 8, requesting
+operational inheritance without a valid prior for a new named-project question.
+Review finds an earlier narrow memory answer passed overly weak relevance
+assertions while containing a broad dump. Preserve both findings and accounting;
+there is no accepted full model cohort.
+
+Planner-only guidance separates latest dated evidence from conversational prior,
+keeps new named targets explicit and genuine inheritance source-bound, preserves
+the separate local catalog prior contract, and uses minimum metric focus without
+changing valid broad-resource semantics. Focused isolated actual Agent/runtime/
+relevance and catalog checks pass. Validators/renderers/age/models/budgets stay
+unchanged. Fresh full/CI/model/installed acceptance remains required; all packages
+open, production `99037c5` / MCP disabled; source/archive/operator/window UNSELECTED.
+[Increment 09](../../cara-fleet-increment-09-2026-10-24.md).

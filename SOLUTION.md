@@ -1,5 +1,29 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 09 operational context and minimal focus
+
+Complete Linux/CI passes for published `9566d1b` do not establish a passing model
+cohort. Its eighth phase selects inheritance for a self-contained named-project
+application question without canonical prior; the validator rejects it safely.
+A review of an earlier memory answer also finds unrelated CPU/disk/project detail
+that the former model assertions missed. Keep the failure, weak-assertion review
+and accounted usage; do not claim every recorded model pass met the business need.
+
+Clarify operational planning only: evidence recency is not conversational scope;
+a new named target selects explicit scope, while genuine follow-up/reformatting
+inherits only valid canonical prior. Preserve the separate local catalog prior
+contract. Single-metric questions use the specific focus without an umbrella
+resources/overview hint; legitimate broad/multi-metric reports stay compatible.
+Strict validators, renderers, source-age rules, inference attempts, models,
+providers, budgets, source authority and effects remain unchanged.
+
+Actual Agent/project-only runtime and dated RU answer, genuine inheritance,
+source edits/expiry, narrow-versus-broad memory and catalog regressions pass in
+isolated Linux. New-source full/CI/model and installed/release acceptance remains
+pending. Production stays accepted `99037c5`, MCP disabled; all packages open.
+Next source/archive/operator/window: UNSELECTED.
+[Increment 09 record](docs/cara-fleet-increment-09-2026-10-24.md).
+
 ## October 24 - Increment 08 task admission prompt contract
 
 The published `8cbf06f` CI succeeds, including normal/shuffled and lint gates.

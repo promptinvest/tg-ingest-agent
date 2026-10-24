@@ -49,7 +49,10 @@ class ProjectReadMixin:
     def _fleet_planning_messages(self, question, inventory, previous, lang, error=""):
         messages = super()._fleet_planning_messages(question, inventory, previous, lang, error)
         messages[0]["content"] += (
-            "\nFor a runtime request about selected project(s), include their canonical projects IDs. "
+            "\nFor a runtime request about selected project(s), include their canonical projects IDs "
+            "and facets:[projects]. A self-contained named-project request uses scope:explicit, "
+            "including requests for the latest recorded/dated application observation. "
+            "Evidence recency never supplies conversational prior scope. "
             "Optional read_scope is {version:'" + protocol.READ_VERSION + "',kind:'host'|'projects'|'all_projects',"
             "projects:[canonical project IDs],capabilities:[" + ",".join(protocol.PROJECT_CAPABILITIES) + "]}. "
             "A projects read collects only those projects, over their configured hosts; never collect unrelated "
@@ -60,8 +63,13 @@ class ProjectReadMixin:
             "existing generation/reserve/budget or authenticated-route/connection summaries when configured. "
             "backups and development are dated evidence; any capability can remain not configured. "
             "Process activity cannot prove application readiness, client traffic, verified backups or development completion. "
-            "For a correction or format/detail-only follow-up use answer_mode:reformat with scope:inherit; "
+            "Only with a valid nonempty canonical prior investigation, a genuine correction or "
+            "format/detail-only follow-up uses answer_mode:reformat with scope:inherit; "
             "reuse prior evidence without another host read, keeping its original timestamp and gaps. "
+            "A self-contained named project asking for a concise/table/dated answer still uses "
+            "answer_mode:inspect and scope:explicit; these presentation words do not imply reformat. "
+            "Without valid prior scope never inherit; clarify a genuinely missing target instead. "
+            "Generation/reserves/daily budget requests select runtime, not host resources. "
             "Fresh checks use answer_mode:inspect (the default). "
             "Optional presentation is prose|list|table|names and detail is concise|detailed; choose the owner's explicit "
             "format/detail first, then confirmed preference, concise by default. Formatting corrections retain prior "

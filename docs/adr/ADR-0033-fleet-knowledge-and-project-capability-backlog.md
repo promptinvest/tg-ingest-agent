@@ -221,3 +221,20 @@ source authority and approvals. Focused isolated task/source/hygiene checks pass
 fresh exact-source full/CI/model and installed/release gates remain required.
 Production stays accepted `99037c5` with MCP disabled; packages remain open.
 [Increment 08](../cara-fleet-increment-08-2026-10-24.md).
+
+## Increment 09 operational inheritance and relevance guidance
+
+Published `9566d1b` passes complete Linux/CI but fails actual-model phase 8:
+a self-contained named project asking about latest dated application evidence
+selects inherit with no canonical prior. Strict validation rejects it; preserve
+failed output/accounting. Review also finds a broad memory answer had passed
+former weak relevance assertions despite unrequested CPU/disk/project detail.
+
+Clarify only the two operational planner message functions: named standalone
+requests use explicit scope; evidence recency grants no conversation inheritance;
+genuine follow-ups/reformatting require canonical prior. Keep local catalog
+prior_catalog inheritance independent. Narrow metrics use specific focus;
+resources/overview remains available for legitimate broad questions. No validator,
+renderer, age, tool, model, budget or authority change. Final focused isolated
+scope/runtime/catalog/relevance checks pass; full/model/installed/release gates
+remain open. Production `99037c5` / MCP disabled. [Increment 09](../cara-fleet-increment-09-2026-10-24.md).

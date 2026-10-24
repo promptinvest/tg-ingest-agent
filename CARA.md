@@ -1,5 +1,27 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 09 investigation scope and focus guidance
+
+Published `9566d1b` passes complete Linux and CI checks, but its actual-model
+cohort stops at the eighth phase. A self-contained named-project question about
+its latest dated observation incorrectly requests conversational inheritance
+with no valid prior. Strict validation refuses it; no project read is admitted.
+Earlier recorded model passes also used weak memory-relevance assertions: review
+found a broad CPU/disk/project dump despite a memory-only question. Failed raw
+outputs, the review and all charges remain; no whole cohort is accepted.
+
+Operational planner guidance now separates evidence dates from conversation:
+a new named-target request is explicit; inheritance/reformatting needs a genuine
+reference to valid canonical prior scope. The local catalog prior contract stays
+separate. Narrow memory requests select memory focus alone; broad resource and
+multi-metric requests retain their existing semantics. Validators, renderers,
+source age, authority, tools, retries, models and budgets remain unchanged.
+Focused isolated Linux scope/runtime/catalog/relevance checks pass. Fresh exact
+full/CI/model and installed/release gates remain required; all packages stay open.
+Production remains accepted `99037c5` / build `f54906e304fe`, MCP disabled.
+Next source/archive/operator/window: UNSELECTED.
+[Increment 09 failure, review and evidence](docs/cara-fleet-increment-09-2026-10-24.md).
+
 ## October 24 - Increment 08 task planner guidance
 
 Published `8cbf06f` passes CI, including normal/shuffled regressions and lint.

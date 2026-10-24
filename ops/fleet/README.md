@@ -548,3 +548,22 @@ live task, host effect, Telegram test or model retry accompanies this source
 increment. Compare original corpus bytes from canonical archives; working-copy
 line endings are a separate representation. Production remains accepted `99037c5`,
 MCP disabled; all packages open. [Increment 08](../../docs/cara-fleet-increment-08-2026-10-24.md).
+
+## Increment 09 planner scope and focus release gate
+
+Source `9566d1b` passes full Linux/CI but fails the eighth accounted model phase:
+no canonical prior exists for its requested operational inheritance. The
+validator rejects before a project read. An earlier recorded memory-answer pass
+used weak relevance checks; review finds unrelated broad diagnostics. Retain
+failed raw output, review, usage and all previous receipts; no accepted full
+model cohort or deployment follows.
+
+Planner guidance now requires explicit scope for a self-contained named target,
+separates evidence time from conversation references, preserves genuine prior
+and local catalog inheritance, and avoids umbrella resource focus for a narrow
+metric. No validator, renderer, source-age or inference-budget change. Focused
+isolated checks pass, but fresh exact whole-source full/CI/model and every
+existing protected source/identity/backup/parity/readiness/monitor/recovery gate
+remain required. No controller replay, model retry, host effect or live message
+is introduced. Production `99037c5` / MCP disabled; all packages open.
+[Increment 09](../../docs/cara-fleet-increment-09-2026-10-24.md).
