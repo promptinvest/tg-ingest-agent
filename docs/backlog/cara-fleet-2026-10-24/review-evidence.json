@@ -1,0 +1,100 @@
+{
+  "schema": "cara-fleet-review-public/v1",
+  "review_date": "2026-10-24",
+  "context": "Public-safe code-level review; no real hosts, transcripts, operator paths or secrets. Synthetic fixtures are intentionally separate from private production evidence.",
+  "baseline": {
+    "repository": "promptinvest/tg-ingest-agent",
+    "reviewed_documentation_commit": "afacec85602aa5c7a6d141201f3e2d78c698b8f9",
+    "reviewed_runtime_source_commit": "e925af390f52d4efa973619c4ab8e6b6320af8c1",
+    "note": "Historical review baseline. Refresh current checkout/instructions before implementation."
+  },
+  "findings": [
+    {
+      "id": "F01",
+      "problem": "Narrow list word-order shortcut; no general catalog question mode",
+      "source": [
+        "fleet.py:21",
+        "fleet.py:194",
+        "fleet_protocol.py:47"
+      ],
+      "packages": [
+        "CF-01",
+        "CF-02"
+      ]
+    },
+    {
+      "id": "F02",
+      "problem": "Required requested fields not checked; diagnostics substitute for identity/provider/project answers",
+      "source": [
+        "fleet_report.py:184"
+      ],
+      "packages": [
+        "CF-02",
+        "CF-03"
+      ]
+    },
+    {
+      "id": "F03",
+      "problem": "Mandatory diagnostic renderer bypasses normal presentation preferences",
+      "source": [
+        "fleet_report.py:228",
+        "fleet.py:550"
+      ],
+      "packages": [
+        "CF-03"
+      ]
+    },
+    {
+      "id": "F04",
+      "problem": "Asterisk cleanup deletes emphasized names",
+      "source": [
+        "converse_svc.py:25"
+      ],
+      "reproduction": {
+        "input": "Project: **Project Alpha**.",
+        "current_output": "Project: **."
+      },
+      "packages": [
+        "CF-03"
+      ]
+    },
+    {
+      "id": "F05",
+      "problem": "Pending fleet result does not shorten normal polling; synchronous model I/O blocks owner thread",
+      "source": [
+        "tg_ingest_agent.py:1007",
+        "fleet.py:371",
+        "fleet.py:550"
+      ],
+      "packages": [
+        "CF-04"
+      ]
+    },
+    {
+      "id": "F06",
+      "problem": "Project scope disappears between planner, transport and host rendering",
+      "source": [
+        "fleet_protocol.py:104",
+        "fleet_host.py:109",
+        "fleet_report.py:98"
+      ],
+      "packages": [
+        "CF-05"
+      ]
+    },
+    {
+      "id": "F07",
+      "problem": "Queued/start deadlines not separate; broader task contracts and fleet content lifecycle incomplete",
+      "source": [
+        "cara_fleet.py:103",
+        "fleet.py:505",
+        "tool_broker.py:193",
+        "store.py:3955"
+      ],
+      "packages": [
+        "CF-04",
+        "CF-06"
+      ]
+    }
+  ]
+}

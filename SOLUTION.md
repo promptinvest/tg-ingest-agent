@@ -1,5 +1,20 @@
 # Cara — Solution Specification
 
+## October 24 - Fleet and project development backlog (proposed)
+
+A [self-contained developer backlog](docs/backlog/cara-fleet-2026-10-24/README.md)
+records six work packages for synchronized descriptive facts, semantic query modes,
+adaptive grounded LLM replies, responsiveness, project read adapters and governed
+capability/content lifecycle. It includes dependencies, compatibility/release gates
+and 47 synthetic regression specifications. The owner explicitly permits LLM
+interpretation of free-form questions and appropriate reply format; known facts
+must not require host probes.
+
+This is planning only. Current runtime behavior, permissions and accepted releases
+remain unchanged; no implementation or deployment is claimed. See
+[ADR-0033](docs/adr/ADR-0033-fleet-knowledge-and-project-capability-backlog.md) and
+[tracking issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
+
 ## October 23 - Fleet evidence/report architecture accepted
 
 Fleet investigations persist explicit owner-bound host/project/check scope.

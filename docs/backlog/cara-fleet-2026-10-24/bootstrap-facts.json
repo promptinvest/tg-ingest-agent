@@ -1,0 +1,364 @@
+{
+  "schema": "cara-fleet-facts/proposed-v1",
+  "fixture_only": true,
+  "revision": 1,
+  "generated_at": "2026-10-24T00:00:00Z",
+  "sources": [
+    {
+      "id": "fixture-source-current",
+      "kind": "synthetic-current-record",
+      "recorded_at": "2026-10-20",
+      "description": "Fictional authoritative configuration; no real fleet data."
+    },
+    {
+      "id": "fixture-source-old",
+      "kind": "synthetic-historical-record",
+      "recorded_at": "2026-07-01",
+      "description": "Fictional superseded history for conflict and lifecycle tests."
+    }
+  ],
+  "subjects": [
+    {
+      "id": "host-a",
+      "kind": "host",
+      "label": "Example application host"
+    },
+    {
+      "id": "host-b",
+      "kind": "host",
+      "label": "Example edge host"
+    },
+    {
+      "id": "host-c",
+      "kind": "host",
+      "label": "Example observer host"
+    },
+    {
+      "id": "host-old",
+      "kind": "host",
+      "label": "Retired fixture"
+    },
+    {
+      "id": "host-unverified",
+      "kind": "host",
+      "label": "Unverified fixture"
+    },
+    {
+      "id": "project-alpha",
+      "kind": "project",
+      "label": "Project Alpha"
+    },
+    {
+      "id": "project-beta",
+      "kind": "project",
+      "label": "Project Beta"
+    },
+    {
+      "id": "project-mesh",
+      "kind": "project",
+      "label": "Example Mesh"
+    }
+  ],
+  "facts": [
+    {
+      "fact_id": "fact-1",
+      "subject_id": "host-a",
+      "predicate": "public_ipv4",
+      "value": "192.0.2.10",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-2",
+      "subject_id": "host-a",
+      "predicate": "provider",
+      "value": "ExampleCloud",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-3",
+      "subject_id": "host-a",
+      "predicate": "region",
+      "value": "Test region A",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-4",
+      "subject_id": "host-b",
+      "predicate": "public_ipv4",
+      "value": "198.51.100.20",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-5",
+      "subject_id": "host-b",
+      "predicate": "provider",
+      "value": "ExampleHost",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-6",
+      "subject_id": "host-b",
+      "predicate": "region",
+      "value": "Test region B",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-7",
+      "subject_id": "host-c",
+      "predicate": "public_ipv4",
+      "value": "203.0.113.30",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-8",
+      "subject_id": "host-c",
+      "predicate": "outbound_ipv4",
+      "value": "203.0.113.31",
+      "status": "recorded",
+      "evidence_at": "2026-06-01",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-9",
+      "subject_id": "host-c",
+      "predicate": "provider",
+      "value": null,
+      "status": "unknown",
+      "evidence_at": null,
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-10",
+      "subject_id": "host-c",
+      "predicate": "region",
+      "value": null,
+      "status": "unknown",
+      "evidence_at": null,
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-11",
+      "subject_id": "project-alpha",
+      "predicate": "purpose",
+      "value": "Fictional application for grounded answer tests.",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-12",
+      "subject_id": "project-beta",
+      "predicate": "purpose",
+      "value": "Fictional second application colocated on the same fixture host.",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-13",
+      "subject_id": "host-a",
+      "predicate": "lifecycle",
+      "value": "active",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-14",
+      "subject_id": "host-b",
+      "predicate": "lifecycle",
+      "value": "active",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-15",
+      "subject_id": "host-c",
+      "predicate": "lifecycle",
+      "value": "active",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-16",
+      "subject_id": "host-old",
+      "predicate": "lifecycle",
+      "value": "retired",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-17",
+      "subject_id": "host-unverified",
+      "predicate": "lifecycle",
+      "value": "unverified",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-18",
+      "subject_id": "project-alpha",
+      "predicate": "lifecycle",
+      "value": "deployed",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-19",
+      "subject_id": "project-beta",
+      "predicate": "lifecycle",
+      "value": "deployed",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "fact_id": "fact-20",
+      "subject_id": "project-mesh",
+      "predicate": "lifecycle",
+      "value": "deployed",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "subject_id": "project-alpha",
+      "predicate": "hosted_on",
+      "object_id": "host-a",
+      "source_ids": [
+        "fixture-source-current"
+      ],
+      "relation_id": "relation-1",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "supersedes": [],
+      "conflicts": []
+    },
+    {
+      "subject_id": "project-beta",
+      "predicate": "hosted_on",
+      "object_id": "host-a",
+      "source_ids": [
+        "fixture-source-current"
+      ],
+      "relation_id": "relation-2",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "supersedes": [],
+      "conflicts": []
+    },
+    {
+      "subject_id": "project-mesh",
+      "predicate": "hosted_on",
+      "object_id": "host-b",
+      "source_ids": [
+        "fixture-source-current"
+      ],
+      "relation_id": "relation-3",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "supersedes": [],
+      "conflicts": []
+    },
+    {
+      "subject_id": "project-mesh",
+      "predicate": "hosted_on",
+      "object_id": "host-c",
+      "source_ids": [
+        "fixture-source-current"
+      ],
+      "relation_id": "relation-4",
+      "status": "recorded",
+      "evidence_at": "2026-10-20",
+      "supersedes": [],
+      "conflicts": []
+    }
+  ],
+  "completeness": [
+    {
+      "claim_id": "completeness-1",
+      "scope": {
+        "subject_id": "host-a",
+        "predicate": "hosted_projects"
+      },
+      "status": "complete",
+      "evidence_at": "2026-10-20",
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    },
+    {
+      "claim_id": "completeness-2",
+      "scope": {
+        "subject_id": "host-b",
+        "predicate": "hosted_projects"
+      },
+      "status": "unknown",
+      "evidence_at": null,
+      "source_ids": [
+        "fixture-source-current"
+      ]
+    }
+  ]
+}
