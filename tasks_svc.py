@@ -384,6 +384,9 @@ class TasksMixin:
                 if step["status"] == "waiting_worker" and step["worker_job_id"]:
                     task_runner.worker_client.request_cancel(
                         self.cfg, step["worker_job_id"])
+                elif step["status"] == "waiting_fleet":
+                    import fleet_investigation
+                    fleet_investigation.cancel_task(self, store.assistant_task_get(self.conn, task_id, chat_id), step)
         elif status == "cancelled":
             summary = task_runner.render_partial_summary(
                 self.conn, task_id, "Task cancelled.")

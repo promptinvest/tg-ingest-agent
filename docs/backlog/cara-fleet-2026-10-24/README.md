@@ -165,3 +165,14 @@ specific gaps. The manual backup publisher reads existing jobs without triggerin
 operations. Legacy wire limits and host/all behavior remain exact. Focused Linux
 checks pass; authenticated source installation, full release and package acceptance
 remain pending. See [increment02](../../cara-fleet-increment-02-2026-10-24.md).
+
+## October 24 - Shared task and optional MCP facts candidate
+
+Existing task steps now wait on a retained source-bound fleet read with original
+call/cost reservations, one immutable receipt and existing task delivery. Shared
+retained status/result and a nonblocking optional MCP facts path preserve owner,
+source, freshness and purge policy. Default MCP remains disabled; creation/Tasks/
+executing cancellation are explicit gaps. Original47+15 specifications remain
+unchanged and the crosswalk distinguishes active cases from unqualified gaps.
+Focused Linux passes do not replace full release and actual-model qualification.
+See [increment02](../../cara-fleet-increment-02-2026-10-24.md); all packages stay open.

@@ -61,3 +61,61 @@ No manual Telegram messages, historical replay, paid corpus or live maintenance.
 No CF package is complete. Rich Daily Lingo observer and authenticated proxy-route
 sources remain follow-up adapters; runtime health, placement and development stay
 distinct. MCP and task integration have separate acceptance below as implemented.
+
+## Shared retained task investigations
+
+The existing fleet ledger owns one durable retained read per canonical owner
+source and deterministic caller key. Duplicate matching admission returns that
+same handle; conflicting reuse fails. It produces no fleet Telegram delivery.
+The original task step waits in waiting_fleet using existing columns, then records
+one immutable task receipt and uses existing task delivery. Independent reminder
+approval remains pending and cannot be satisfied by fleet evidence.
+
+Every actual fleet transport/fallback reserves the original task call/cost limits
+atomically before dispatch, using the original usage identity, and reconciles once.
+Unknown started work remains conservatively accounted and is not retried. Recovery,
+source edits, cancellation, missing admission, changed authority and typed purge
+retain original fences. Checked queued/unknown SQLite backup restores pass.
+
+Shared status/result reads use canonical owner source, current permissions and
+retained timestamps. Explicit references must be in the question; implicit scope
+requires the immediately previous owner turn. Effect/card payloads are refused.
+Only exact typed request/evidence identities bypass secret-shaped-ID redaction;
+free text still rejects or masks credential-shaped content.
+
+## Optional MCP facts and retained reads
+
+Pin the tested local stdio protocol2026-07-28 independently from application schema
+and policy versions. The adapter and client use shared cells/scope/provenance;
+there is no SDK or model/provider change. An optional root policy enables existing
+retained status/result/project observations through a bounded read-only SQLite API,
+with committed WAL visibility, source/purge/age fences and cursor revalidation.
+No OS-level database write denial is claimed merely from that API: the child runs
+under its actual configured unprivileged identity and inherited sandbox.
+
+Cara's facts client persists phase/nonce/source/facts/policy bindings before work,
+then uses one nonblocking background stdio slot. Owner stats/reminders continue.
+Changed source/revision/policy or purge suppresses late results. Restarted phases
+use equivalent scope-checked internal facts, never resubmit stdio. Authority denial
+is not an outage fallback. The default remains disabled. First production enablement
+must qualify actual same-UID stdio and can omit retained-read policy entirely.
+
+No MCP durable creation, Tasks, execution cancellation, write or A2A is advertised.
+The retained task bridge is not qualification of those absent protocol operations.
+
+## Business corpus and candidate test evidence
+
+The original47 and additional15 JSON files remain unchanged. A source-linked test
+crosswalk now maps each ID to executable business checks or explicit missing MCP
+lifecycle coverage. Original answers cover requested facts/format, scoped failed
+applications, backup/load/idle/unknown/stale cases, confirmed guidance, responsiveness,
+recovery and purge; an existing fixture is invoked with its original assertions.
+Semantic frozen completions test grounding and presentation, not model quality.
+Synthetic gateway data does not establish live binding or end-user delivery.
+
+The corrected combined525-case isolated run passes with four then-explicit skips;
+the passing enabled-Agent owner-loop test now replaces the async source-case skip.
+Three explicit MCP lifecycle gaps remain. A final exact combined full run, pinned
+lint/CI and new bounded accounted model qualification are required before release.
+Original failed logs and fixture mistakes remain evidence; assertions were not
+weakened to accept regressions. No release has occurred for this increment.

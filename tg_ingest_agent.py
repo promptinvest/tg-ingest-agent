@@ -968,6 +968,8 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     PENDING_WORK_POLL_SECONDS = 2
 
     def _pending_work_poll_timeout(self):
+        if getattr(self, "_fleet_mcp_facts_pending", None):
+            return min(self.PENDING_WORK_POLL_SECONDS, self.cfg.poll_timeout)
         if self.albums or getattr(self, "voice_jobs", {}):
             return self.PENDING_WORK_POLL_SECONDS
         if getattr(self.cfg, "fleet_enabled", False):

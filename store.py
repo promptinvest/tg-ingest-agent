@@ -4696,7 +4696,7 @@ def assistant_task_cancel(conn, task_id, chat_id):
         conn.execute("BEGIN IMMEDIATE")
         active_step = conn.execute(
             "SELECT 1 FROM assistant_task_steps WHERE task_id = ?"
-            " AND status IN ('claimed', 'running', 'waiting_worker') LIMIT 1",
+            " AND status IN ('claimed', 'running', 'waiting_worker', 'waiting_fleet') LIMIT 1",
             (int(task_id),),
         ).fetchone()
         active_effect = conn.execute(
@@ -4908,7 +4908,7 @@ def assistant_task_reclaim_stale(conn):
             " WHERE r.step_id = assistant_task_steps.id"
             " AND r.task_id = assistant_task_steps.task_id LIMIT 1),"
             " finished_at = ?, updated_at = ?"
-            " WHERE status IN ('claimed','running','waiting_worker')"
+            " WHERE status IN ('claimed','running','waiting_worker','waiting_fleet')"
             " AND EXISTS (SELECT 1 FROM tool_receipts r"
             " WHERE r.step_id = assistant_task_steps.id"
             " AND r.task_id = assistant_task_steps.task_id)",
@@ -5167,7 +5167,7 @@ def task_attempt_finish(conn, step_id, status, *, input_hash=None, error=None,
 def assistant_task_step_status(conn, step_id, status, *, error=None, receipt_id=None,
                                approval_id=None, commit=True):
     allowed = {
-        "pending", "claimed", "running", "waiting_worker", "waiting_approval", "succeeded",
+        "pending", "claimed", "running", "waiting_worker", "waiting_fleet", "waiting_approval", "succeeded",
         "blocked", "failed", "cancelled",
     }
     if status not in allowed:
@@ -5179,12 +5179,13 @@ def assistant_task_step_status(conn, step_id, status, *, error=None, receipt_id=
         "claimed": ("pending",),
         "running": ("claimed",),
         "waiting_worker": ("claimed",),
+        "waiting_fleet": ("claimed",),
         "waiting_approval": ("claimed",),
-        "succeeded": ("claimed", "running", "waiting_worker", "waiting_approval"),
-        "blocked": ("pending", "claimed", "running", "waiting_worker",
+        "succeeded": ("claimed", "running", "waiting_worker", "waiting_fleet", "waiting_approval"),
+        "blocked": ("pending", "claimed", "running", "waiting_worker", "waiting_fleet",
                     "waiting_approval", "blocked"),
         "failed": ("claimed", "running", "blocked"),
-        "cancelled": ("pending", "claimed", "running", "waiting_worker",
+        "cancelled": ("pending", "claimed", "running", "waiting_worker", "waiting_fleet",
                       "waiting_approval", "blocked"),
     }
     expected = transitions[status]
@@ -5224,6 +5225,10 @@ def task_receipt_create(conn, step, *, input_hash, status, summary, data,
     if step["tool"] == "fleet.lookup":
         import fleet_broker
         safe_data, safe_evidence = fleet_broker.safe_receipt(data, list(evidence))
+    elif step["tool"] == "fleet.investigate":
+        import fleet_investigation
+        safe_data, safe_evidence = fleet_investigation.safe_task_receipt(
+            data, list(evidence), request_id=step["worker_job_id"])
     else:
         safe_data = json.loads(tasking.redact_derived_text(_task_json(data)))
         safe_evidence = json.loads(tasking.redact_derived_text(_task_json(list(evidence))))

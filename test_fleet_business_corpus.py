@@ -310,5 +310,43 @@ class AdditionalFactsCorpus(unittest.TestCase):
         self.assertNotIn("CPU", "\n".join(result["pages"]))
 
 
+# Curated source-ID crosswalk for release reporting. These addresses identify
+# executed assertions, not qualification receipts; use actual isolated results.
+ORIGINAL_CASE_TESTS = {
+    **{identity: "test_fleet_business_corpus.OriginalCatalogPipeline.test_" + identity.replace("-", "_")
+       for identity in CHOICES},
+    "mixed-catalog-runtime": "test_fleet_business_corpus.OriginalCatalogPipeline.test_mixed_catalog_runtime_preserves_both_requested_answer_obligations",
+    **{identity: "test_fleet_business_corpus.OriginalCleanupCorpus.test_original_cleanup_variants_preserve_names_and_remove_only_narrated_gestures"
+       for identity in ("bold-name-preserved", "single-emphasis-preserved", "mixed-roleplay-emphasis")},
+    **{identity: "test_fleet_business_extended.OriginalRuntimeBusiness.test_" + identity.replace("-", "_")
+       for identity in ("deployment-versus-progress", "runtime-alpha-only", "explicit-diagnostics",
+          "stale-health", "backups-timer-only", "application-vs-container", "proxy-load-vs-host",
+          "inactive-one-shot", "unknown-unit", "short-sample-stability", "false-cited-backup-success")},
+    **{identity: "test_fleet_business_extended.OriginalFactsBusiness.test_" + identity.replace("-", "_")
+       for identity in ("unsupported-only-project", "sync-date-not-evidence", "publish-rollback", "historical-conflict")},
+    **{identity: "test_fleet_business_extended.OriginalOwnerFlowBusiness.test_" + identity.replace("-", "_")
+       for identity in ("brevity-preference", "detail-override", "unrelated-task")},
+    "source-edit": "test_fleet_business_extended.OriginalAsyncBusiness.test_source_edit",
+    "slow-model-responsiveness": "test_fleet_business_extended.OriginalAsyncBusiness.test_slow_model_responsiveness",
+    "pending-completion": "test_fleet_business_extended.OriginalPendingCompletionBusiness.test_pending_completion",
+    "queue-deadlines": "test_fleet_business_extended.OriginalQueueBusiness.test_queue_deadlines",
+    "ambiguous-effect": "test_fleet_business_extended.OriginalEffectRecoveryBusiness.test_ambiguous_effect",
+    "purge-late-output": "test_fleet_business_extended.OriginalPurgeBusiness.test_purge_late_output",
+}
+MCP_CASE_TESTS = {
+    **{identity: "test_fleet_business_corpus.AdditionalFactsCorpus.test_" + identity.replace("-", "_")
+       for identity in ("mcp-catalog-parity", "mcp-outage-known-facts", "mcp-contract-not-business-completion")},
+    "mcp-natural-reply-parity": "test_fleet_business_corpus.AdditionalFactsCorpus.test_mcp_natural_reply_parity_frozen_obligations_all_original_variants",
+    "mcp-disabled-original-flows": "test_fleet_mcp_business.MCPDisabledOriginalBusiness.test_mcp_disabled_original_flows",
+    **{identity: "test_fleet_mcp_business.MCPMeaningAndAuthorityBusiness.test_" + identity.replace("-", "_")
+       for identity in ("mcp-unsupported-version-schema", "mcp-caller-scope", "mcp-discovery-injection", "mcp-no-write-surface")},
+    **{identity: "test_fleet_mcp_business.MCPRetainedBusiness.test_" + identity.replace("-", "_")
+       for identity in ("mcp-project-isolation", "mcp-no-hidden-content")},
+    "mcp-async-responsiveness": "test_fleet_mcp_business.MCPAsyncBusiness.test_mcp_async_responsiveness",
+    **{identity: "test_fleet_mcp_business.MCPUnimplementedBusiness.test_" + identity.replace("-", "_")
+       for identity in ("mcp-reconnect-no-duplicate", "mcp-tasks-optional", "mcp-cancel-truthful")},
+}
+
+
 if __name__ == "__main__":
     unittest.main()

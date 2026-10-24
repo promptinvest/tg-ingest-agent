@@ -14,11 +14,22 @@ from texts import T
 
 
 _ACTIVE = ("preparing", "queued", "inspection_started", "executing", "ready", "approval", "approval_sending",
-           "delivering", "analysis_started") + tuple(name + "_" + phase for name in ("planning", "synthesis")
+           "delivering", "analysis_started", "mcp_facts_queued", "mcp_facts_started") + tuple(name + "_" + phase for name in ("planning", "synthesis")
                                                      for phase in ("queued", "started", "completed", "consumed"))
 
 
 class FleetLifecycleMixin:
+    def _fleet_settle_content_calls(self):
+        self._fleet_mcp_queued_nonces = {}
+        receipt = lifecycle.settle_async_calls(self)
+        slot = getattr(self, "_fleet_mcp_facts_slot", None)
+        if slot is None:
+            return receipt
+        facts_receipt = slot.settle(purge_hold=True)
+        if facts_receipt["pending_calls"] == 0:
+            self._fleet_mcp_facts_pending = None
+        count = receipt["pending_calls"] + facts_receipt["pending_calls"]
+        return {"status": "waiting" if count else "settled", "pending_calls": count}
     def _fleet_content_enabled(self):
         explicit = getattr(self.cfg, "fleet_content_lifecycle", None)
         if explicit is not None and type(explicit) is not bool:
@@ -79,7 +90,7 @@ class FleetLifecycleMixin:
         marks = ",".join("?" for _ in _ACTIVE)
         self.conn.execute("UPDATE fleet_requests SET state=CASE WHEN state IN ('executing','delivering') THEN 'ambiguous' ELSE 'cancelled' END, updated_at=? WHERE state IN (" + marks + ")", (protocol.now(), *_ACTIVE))
         self.conn.commit()
-        async_receipt = lifecycle.settle_async_calls(self)
+        async_receipt = self._fleet_settle_content_calls()
         lifecycle.request_quiescence(self.cfg, nonce, counts)
         ack = lifecycle.executor_ack(self.cfg, nonce, counts)
         if ack is None or async_receipt != {"status": "settled", "pending_calls": 0}:
@@ -141,7 +152,7 @@ class FleetLifecycleMixin:
         if not isinstance(owner, dict) or not owner.get("abort_requested"):
             return False
         counts = {key: n for key, n in owner["confirmed"].items() if key in lifecycle.PREVIEW_KEYS}
-        settled = lifecycle.settle_async_calls(self)
+        settled = self._fleet_settle_content_calls()
         lifecycle.request_quiescence(self.cfg, nonce, counts)
         if settled != {"status": "settled", "pending_calls": 0} or lifecycle.executor_ack(self.cfg, nonce, counts) is None:
             return False

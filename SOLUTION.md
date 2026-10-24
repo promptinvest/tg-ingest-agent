@@ -1,5 +1,20 @@
 # Cara — Solution Specification
 
+## October 24 - Shared investigations and MCP facts candidate
+
+Durable task steps can wait on one source-bound fleet investigation and finish
+through the existing immutable task receipt and task delivery. Actual fleet model
+attempts reserve and reconcile the original task limits; restart, cancellation,
+unknown-paid outcomes and purge cannot readmit work or duplicate delivery. Shared
+status/result reads preserve canonical owner scope and dated retained evidence.
+
+The optional MCP facts client uses one bounded background slot and the same
+code-owned answer cells, provenance, format and policy as internal facts. Owner
+updates and reminders stay responsive. A recovered phase uses equivalent checked
+local facts without resubmitting stdio. Default remains disabled; production is
+still accepted99037c5. MCP creation/Tasks/cancellation and full acceptance remain
+open. [Candidate and qualification limits](docs/cara-fleet-increment-02-2026-10-24.md).
+
 ## October 24 - Typed project evidence candidate
 
 Project-only reads can opt into strict application-health, dated backup and

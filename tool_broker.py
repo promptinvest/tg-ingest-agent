@@ -124,6 +124,24 @@ TOOLS = {
         output_schema="fleet.lookup/v1",
         output_paths=(("lookup", "confirmed_local"),), output_limit=96000,
     ),
+    "fleet.investigate": _spec(
+        "fleet.investigate", "Investigate an owner-bound fleet or project question", "network_read",
+        required=("query",), bound=("query",), uses_llm=True, external_network=True,
+        output_schema="fleet.investigate/v1", output_paths=(("investigation", "confirmed_local"),),
+        output_limit=262144,
+    ),
+    "fleet.status": _spec(
+        "fleet.status", "Read an existing investigation status", "read_only",
+        required=("query",), bound=("query",), optional=("source_update", "lang"),
+        output_schema="fleet.status/v1", output_paths=(("reference", "confirmed_local"),),
+        output_limit=32000,
+    ),
+    "fleet.result": _spec(
+        "fleet.result", "Read an existing recorded investigation answer", "read_only",
+        required=("query",), bound=("query",), optional=("source_update", "lang"),
+        output_schema="fleet.result/v1", output_paths=(("reference", "confirmed_local"),),
+        output_limit=32000,
+    ),
     "source.fetch": _spec(
         "source.fetch", "Read a supplied URL", "network_read",
         required=("url",), bound=("url",),
@@ -262,6 +280,18 @@ def validate_input(spec, value):
             out = fleet_broker.validate_input(out)
         except ValueError as exc:
             raise ToolInputError(str(exc)) from exc
+    elif spec.id == "fleet.investigate":
+        import fleet_investigation
+        try:
+            out = fleet_investigation.validate_task_input(out)
+        except ValueError as exc:
+            raise ToolInputError(str(exc)) from exc
+    elif spec.id in {"fleet.status", "fleet.result"}:
+        import fleet_shared_reads
+        try:
+            out = fleet_shared_reads.validate_input(out)
+        except ValueError as exc:
+            raise ToolInputError(str(exc)) from exc
     elif spec.id == "source.fetch":
         url = _bounded_text(out.get("url"), 2048, "url")
         try:
@@ -377,6 +407,18 @@ def validate_output(spec, data, evidence):
         import fleet_broker
         try:
             fleet_broker.validate_shape(value["lookup"])
+        except ValueError as exc:
+            raise ToolOutputError(str(exc)) from exc
+    elif spec.id == "fleet.investigate":
+        import fleet_investigation
+        try:
+            fleet_investigation.validate_task_output(value["investigation"])
+        except ValueError as exc:
+            raise ToolOutputError(str(exc)) from exc
+    elif spec.id in {"fleet.status", "fleet.result"}:
+        import fleet_shared_reads
+        try:
+            fleet_shared_reads.validate_shape(value["reference"])
         except ValueError as exc:
             raise ToolOutputError(str(exc)) from exc
     elif spec.id == "source.fetch":

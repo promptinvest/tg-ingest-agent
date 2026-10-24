@@ -132,6 +132,8 @@ def validate_plan(value, canonical_source, *, source_time=None, timezone_offset=
         step = _validate_step(
             raw_step, ordinal, prior, canonical_source, canonical_hash,
             normalized["time_context"])
+        if step["tool"] == "fleet.investigate" and any(item["tool"] == "fleet.investigate" for item in normalized["steps"]):
+            raise PlanError("Use one fleet.investigate step for the complete owner fleet clause")
         prior[step["key"]] = step
         normalized["steps"].append(step)
         if step.get("task_due_at") and (
@@ -243,6 +245,8 @@ def _validate_binding(binding, field, input_value, step_key, spec, prior, deps,
             binding, field, input_value, step_key, spec,
             canonical_source, canonical_hash, time_context)
     if source == "step_output":
+        if spec.id == "fleet.investigate":
+            raise PlanError(f"{step_key}.{field} investigation requires a canonical owner span")
         return _validate_step_binding(binding, field, step_key, spec, prior, deps)
     raise PlanError(f"{step_key}.{field} binding source is invalid")
 

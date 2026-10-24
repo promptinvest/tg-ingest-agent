@@ -8,6 +8,7 @@ import answer_policy
 import fleet_lifecycle
 import fleet_context
 import fleet_inference
+import fleet_investigation
 import fleet_protocol as protocol
 import fleet_report
 import llm
@@ -74,6 +75,8 @@ class AsyncMixin:
         return messages
 
     def _fleet_queue_phase(self, row, payload, name, inventory):
+        if fleet_investigation.retained(payload) and not fleet_investigation.current(self, row, payload):
+            raise ValueError("retained admission is no longer current")
         if payload.get("model_calls", 0) >= getattr(self.cfg, "task_model_call_limit", 4):
             raise ValueError("investigation model-call limit reached")
         if payload.get("cost", 0) >= self.cfg.task_cost_limit_usd:
@@ -91,13 +94,21 @@ class AsyncMixin:
                                 input_hash=protocol.digest(self._fleet_phase_messages(payload, inventory)))
         self._fleet_save(row, name + "_queued", payload, "inference_phase_queued")
 
-    def _fleet_begin_async(self, chat_id, lang, text, msg_id, maintenance, update, inventory, previous):
-        request_id = secrets.token_hex(16)
+    def _fleet_begin_async(self, chat_id, lang, text, msg_id, maintenance, update, inventory, previous, *, external_waiter=None, task_waiter=None):
+        request_id = external_waiter["request_id"] if external_waiter is not None else secrets.token_hex(16)
         payload = {"version": 2, "question": text, "source_hash": tasking.source_hash(text),
                    "lang": lang, "prior_scope": previous, "allow_maintenance": bool(maintenance),
                    "catalog_hash": protocol.digest(inventory), "cost": 0, "model_calls": 0,
                    "planning_attempt": 1, "source_message": msg_id,
                    "trace_id": common.current_trace()}
+        if external_waiter is not None:
+            if maintenance:
+                raise ValueError("retained admission cannot authorize maintenance")
+            payload["external_waiter"] = dict(external_waiter)
+            if task_waiter is not None:
+                payload["task_waiter"] = dict(task_waiter)
+            payload["source_hash"] = external_waiter["source_hash"]
+            fleet_investigation._validate(self, {"id": request_id, "chat_id": chat_id, "source_update": update}, payload)
         # Canonical intent is durable before either reservation or transport.
         self.conn.execute("INSERT INTO fleet_requests VALUES(?,?,?,?,?,?,?)",
                           (request_id, chat_id, update, "planning_queued", protocol.canonical(payload),
@@ -105,6 +116,8 @@ class AsyncMixin:
         self.conn.commit()
         row = self.conn.execute("SELECT * FROM fleet_requests WHERE id=?", (request_id,)).fetchone()
         self._fleet_queue_phase(row, payload, "planning", inventory)
+        if external_waiter is not None:
+            return request_id
         self.reply(chat_id, "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0444\u043b\u043e\u0442; \u0432\u0435\u0440\u043d\u0443\u0441\u044c \u0441 \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u0430\u043c\u0438."
                    if lang == "ru" else "I'm checking the fleet and will return with the findings.",
                    reply_to=msg_id)
@@ -112,6 +125,8 @@ class AsyncMixin:
     def _fleet_request_authority_current(self, row, payload, binding=None):
         import fleet
         binding = binding or payload["inference"]["binding"]
+        if fleet_investigation.retained(payload) and not fleet_investigation.current(self, row, payload):
+            return False
         source = store.assistant_task_source(self.conn, row["chat_id"], row["source_update"])
         if source is None or tasking.source_hash(source["text"]) != payload["source_hash"]:
             return False
@@ -154,8 +169,7 @@ class AsyncMixin:
             if not self._fleet_phase_current(fresh, document, bound):
                 raise fleet_inference.StalePhase("fleet request authority changed")
             item = dict(receipt, started_at=protocol.now())
-            document["inference"]["attempts"].append(item)
-            self._fleet_save(fresh, phase["name"] + "_started", document, "inference_dispatch_bound")
+            fleet_investigation.dispatch_bound(self, fresh, document, item)
             if document.get("cost", 0) + self._fleet_phase_cost(document["inference"]) > self.cfg.task_cost_limit_usd:
                 raise ValueError("investigation reservation exceeds its budget")
 
@@ -182,11 +196,12 @@ class AsyncMixin:
             phase["usage_unknown"] = bool(getattr(call.error, "usage_unknown", False))
             if call.error is None:
                 phase["raw"] = call.result
-        self._fleet_save(row, phase["name"] + "_completed", payload, "inference_phase_completed")
+        fleet_investigation.save_accounted(self, row, phase["name"] + "_completed", payload, "inference_phase_completed")
 
     def _fleet_fail_async(self, row, payload, error, notify=True):
         # Persist terminal state before an optional best-effort notice. A crash
         # never turns that notice or a failed paid phase into an automatic replay.
+        notify = notify and not fleet_investigation.retained(payload)
         payload["inference_gap"] = type(error).__name__
         fresh = self.conn.execute("SELECT state FROM fleet_requests WHERE id=?", (row["id"],)).fetchone()
         if fresh is None:
@@ -221,16 +236,19 @@ class AsyncMixin:
         if phase["name"] == "planning":
             if row["state"] != "planning_consumed":
                 if phase.get("error"):
-                    self._fleet_fail_async(row, payload, ValueError("planning unavailable"))
+                    self._fleet_fail_async(row, payload, ValueError("planning unavailable"), notify=fleet_investigation.fallback_allowed(self, row, payload))
                     return
                 try:
                     plan = self._fleet_validate_planning(phase["raw"], inventory, payload.get("prior_scope"))
                     if payload["cost"] > self.cfg.task_cost_limit_usd:
                         raise ValueError("investigation planning budget exceeded")
                 except ValueError as exc:
+                    if fleet_investigation.retained(payload) and fleet_investigation.authority_denied(exc):
+                        self._fleet_fail_async(row, payload, exc, notify=False)
+                        return
                     maximum = max(1, min(2, int(getattr(self.cfg, "task_model_call_limit", 4)) - 1))
                     if payload.get("planning_attempt", 1) >= maximum or payload["cost"] >= self.cfg.task_cost_limit_usd:
-                        self._fleet_fail_async(row, payload, exc)
+                        self._fleet_fail_async(row, payload, exc, notify=fleet_investigation.fallback_allowed(self, row, payload, exc))
                         return
                     payload["planning_error"] = str(exc)[:160]
                     payload["planning_attempt"] = payload.get("planning_attempt", 1) + 1
@@ -272,10 +290,12 @@ class AsyncMixin:
         # Purged/cancelled requests can no longer deliver or recreate content.
         # Settle any in-flight reservation before dropping the in-memory handle.
         for request_id, call in list(calls.items()):
-            row = self.conn.execute("SELECT state FROM fleet_requests WHERE id=?", (request_id,)).fetchone()
+            row = self.conn.execute("SELECT * FROM fleet_requests WHERE id=?", (request_id,)).fetchone()
             if row is None or row["state"] not in STATES:
                 call.cancel()
                 if call.advance():
+                    if row is not None:
+                        fleet_investigation.account_discarded(self, row, json.loads(row["payload"]))
                     calls.pop(request_id, None)
         rows = self.conn.execute("SELECT * FROM fleet_requests WHERE state IN ("
                                  + ",".join("?" for _ in STATES) + ") ORDER BY created_at LIMIT 8", STATES).fetchall()
@@ -285,13 +305,14 @@ class AsyncMixin:
             try:
                 phase = payload.get("inference")
                 if not phase:
-                    self._fleet_fail_async(row, payload, ValueError("incomplete phase receipt"))
+                    self._fleet_fail_async(row, payload, ValueError("incomplete phase receipt"), notify=fleet_investigation.fallback_allowed(self, row, payload))
                     continue
                 if not self._fleet_phase_current(row, payload, phase["binding"]):
                     call = calls.get(row["id"])
                     if call:
                         call.cancel()
                         if call.advance():
+                            fleet_investigation.account_discarded(self, row, payload)
                             calls.pop(row["id"], None)
                     self._fleet_fail_async(row, payload, fleet_inference.StalePhase(), notify=False)
                     continue
@@ -320,5 +341,5 @@ class AsyncMixin:
                 self._fleet_consume_phase(row, json.loads(row["payload"]), inventory)
             except (ValueError, OSError) as exc:
                 self._fleet_fail_async(row, payload, exc,
-                                       notify=not isinstance(exc, fleet_inference.StalePhase))
+                                       notify=not isinstance(exc, fleet_inference.StalePhase) and fleet_investigation.fallback_allowed(self, row, payload, exc))
         return len(rows)

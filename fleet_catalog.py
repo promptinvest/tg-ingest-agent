@@ -5,6 +5,9 @@ import re
 import secrets
 
 import fleet_context
+import fleet_lifecycle
+import fleet_investigation
+import fleet_mcp_client
 import fleet_protocol as protocol
 import fleet_queries as queries
 import fleet_report
@@ -12,6 +15,9 @@ import persona
 import store
 import tasking
 
+
+MCP_FACTS_VERSION = "cara-fleet-mcp-facts-phase/v1"
+MCP_FACTS_STATES = ("mcp_facts_queued", "mcp_facts_started")
 
 CATALOG_WORDS = re.compile(r"\bip(?:v4)?\b|айпи|адрес|address|провайдер|providers?|hosted|размещ|проект", re.I)
 
@@ -146,7 +152,10 @@ class CatalogMixin:
             return {"kind": "catalog_gap", "fields": list(dict.fromkeys(value["fields"])), "clarification": ""}
         return super()._fleet_validate_planning(raw, inventory, self._fleet_runtime_prior(previous, inventory))
 
-    def _fleet_catalog_answer(self, row, payload, plan, facts):
+    def _fleet_catalog_answer(self, row, payload, plan, facts, _mcp_result=None):
+        if plan["kind"] == "catalog" and getattr(self.cfg, "fleet_mcp_enabled", False) is True and _mcp_result is None:
+            self._fleet_queue_mcp_facts(row, payload, plan, facts)
+            return
         if plan["kind"] == "catalog_gap":
             labels = queries._LABELS["ru" if payload["lang"] == "ru" else "en"]
             fields = ", ".join(labels[field] for field in plan["fields"])
@@ -154,14 +163,178 @@ class CatalogMixin:
         else:
             if facts is None or plan.get("facts_integrity") != facts["integrity"]:
                 raise ValueError("descriptive facts changed before answer delivery")
-            pages = queries.render(facts, plan, payload["lang"])
+            pages = (_mcp_result["pages"] if _mcp_result is not None else queries.render(facts, plan, payload["lang"]))
             if plan["kind"] == "catalog":
                 previous = self._fleet_catalog_prior(payload["question"], facts, payload.get("prior_scope", {}))
                 payload["context"] = queries.frame(payload["question"], plan, row["source_update"], previous)
-                payload["answer_obligations"] = queries.cells(facts, plan)
+                payload["answer_obligations"] = (_mcp_result["cells"] if _mcp_result is not None else queries.cells(facts, plan))
             payload["facts_integrity"] = facts["integrity"]
         payload.update(plan=plan, kind="catalog", answer_pages=pages, answer="\n\n".join(pages))
         self._fleet_deliver_result(row, payload)
+
+    def _fleet_mcp_configuration_hash(self):
+        return protocol.digest({"enabled": getattr(self.cfg, "fleet_mcp_enabled", False) is True,
+                                "config": str(getattr(self.cfg, "fleet_mcp_config", "/etc/cara-fleet/mcp-facts.json"))})
+
+    def _fleet_mcp_source_current(self, row, payload):
+        if (not getattr(self.cfg, "fleet_enabled", False) or row["chat_id"] not in getattr(self.cfg, "allowed_chat_ids", ())
+                or fleet_lifecycle.admission_paused(self.conn)):
+            return False
+        source = store.assistant_task_source(self.conn, row["chat_id"], row["source_update"])
+        if source is None or tasking.source_hash(source["text"]) != payload.get("source_hash"):
+            return False
+        if fleet_investigation.retained(payload):
+            return fleet_investigation.current(self, row, payload)
+        return payload.get("question") == source["text"]
+
+    def _fleet_mcp_phase_current(self, row, payload, facts):
+        try:
+            phase = payload["mcp_facts"]
+            fresh = self.conn.execute("SELECT * FROM fleet_requests WHERE id=?", (row["id"],)).fetchone()
+            if fresh is None or fresh["state"] not in MCP_FACTS_STATES or fresh["chat_id"] != row["chat_id"] or fresh["source_update"] != row["source_update"]:
+                return False
+            saved = json.loads(fresh["payload"])
+            expected = {"request_id": row["id"], "source_hash": payload["source_hash"],
+                        "facts_hash": fleet_mcp_client.facts_revision_hash(facts), "policy_version": MCP_FACTS_VERSION}
+            return (getattr(self.cfg, "fleet_mcp_enabled", False) is True
+                    and phase["version"] == MCP_FACTS_VERSION and phase["binding"] == expected
+                    and isinstance(phase["nonce"], str) and re.fullmatch(r"[a-f0-9]{32}", phase["nonce"]) is not None
+                    and phase["plan_hash"] == protocol.digest(payload["plan"])
+                    and payload["plan"].get("kind") == "catalog" and payload["plan"].get("facts_integrity") == facts["integrity"]
+                    and phase["configuration_hash"] == self._fleet_mcp_configuration_hash()
+                    and saved.get("mcp_facts") == phase and saved.get("plan") == payload["plan"]
+                    and saved.get("source_hash") == payload["source_hash"]
+                    and self._fleet_mcp_source_current(fresh, saved))
+        except (ValueError, TypeError, KeyError, OSError):
+            return False
+
+    def _fleet_queue_mcp_facts(self, row, payload, plan, facts):
+        if not self._fleet_mcp_source_current(row, payload):
+            self._fleet_save(row, "cancelled", payload, "mcp_facts_source_unavailable")
+            return
+        if facts is None or plan.get("facts_integrity") != facts["integrity"]:
+            raise ValueError("descriptive facts changed before interface admission")
+        phase = {"version": MCP_FACTS_VERSION, "nonce": secrets.token_hex(16),
+                 "binding": {"request_id": row["id"], "source_hash": payload["source_hash"],
+                             "facts_hash": fleet_mcp_client.facts_revision_hash(facts), "policy_version": MCP_FACTS_VERSION},
+                 "plan_hash": protocol.digest(plan), "configuration_hash": self._fleet_mcp_configuration_hash(),
+                 "queued_at": protocol.now()}
+        payload.update(plan=plan, kind="catalog", mcp_facts=phase)
+        # Durable intent precedes every possible stdio dispatch. Dedicated states
+        # keep the legacy preparing recovery branch from treating this as SSH.
+        self._fleet_save(row, "mcp_facts_queued", payload, "mcp_facts_intent_bound")
+        admitted = getattr(self, "_fleet_mcp_queued_nonces", None)
+        if admitted is None:
+            admitted = self._fleet_mcp_queued_nonces = {}
+        admitted[row["id"]] = phase["nonce"]
+
+    def _fleet_mcp_fail(self, row, payload, reason, *, notify=False):
+        getattr(self, "_fleet_mcp_queued_nonces", {}).pop(row["id"], None)
+        current = self._fleet_mcp_source_current(row, payload)
+        payload.setdefault("mcp_facts", {})["outcome"] = reason
+        payload["mcp_facts"]["completed_at"] = protocol.now()
+        self._fleet_save(row, "failed" if current else "cancelled", payload, "mcp_facts_" + reason)
+        if notify and current and not fleet_investigation.retained(payload):
+            self.reply(row["chat_id"], "Requested facts are outside the configured interface scope." if payload["lang"] != "ru"
+                       else "Запрошенные сведения вне разрешённой области интерфейса.")
+
+    def _fleet_finish_mcp_facts(self, row, payload, facts, result, recovery=False):
+        if not self._fleet_mcp_phase_current(row, payload, facts):
+            self._fleet_mcp_fail(row, payload, "authority_changed")
+            return
+        # Recheck the current root policy before publication as well as dispatch.
+        # An explicit denial can never become an equivalent internal fallback.
+        checked = fleet_mcp_client.internal_fallback(self.cfg, facts, payload["plan"], payload["lang"])
+        if result["cells"] != checked["cells"] or result["pages"] != checked["pages"] or result["facts_integrity"] != facts["integrity"]:
+            raise ValueError("interface answer obligations changed")
+        if not self._fleet_mcp_phase_current(row, payload, queries.load(self.cfg)):
+            self._fleet_mcp_fail(row, payload, "authority_changed")
+            return
+        phase = payload["mcp_facts"]
+        phase.update(outcome=result["path"], reason=result["reason"], completed_at=protocol.now(), recovered_without_resubmit=bool(recovery))
+        self._fleet_save(row, "mcp_facts_started", payload, "mcp_facts_equivalent_answer_ready")
+        self._fleet_catalog_answer(row, payload, payload["plan"], facts, _mcp_result=result)
+
+    def _fleet_check_mcp_facts(self):
+        slot = getattr(self, "_fleet_mcp_facts_slot", None)
+        pending = getattr(self, "_fleet_mcp_facts_pending", None)
+        hold = fleet_lifecycle.admission_paused(self.conn)
+        if pending and slot:
+            row = self.conn.execute("SELECT * FROM fleet_requests WHERE id=?", (pending["request_id"],)).fetchone()
+            try:
+                same = bool(row and row["state"] in MCP_FACTS_STATES and json.loads(row["payload"]).get("mcp_facts", {}).get("nonce") == pending["phase_nonce"])
+            except (ValueError, TypeError, AttributeError):
+                same = False
+            if hold or not same:
+                settled = slot.settle(purge_hold=hold)
+                if settled["pending_calls"] == 0:
+                    self._fleet_mcp_facts_pending = None
+        if hold:
+            return 0
+        rows = self.conn.execute("SELECT * FROM fleet_requests WHERE state IN (?,?) ORDER BY created_at LIMIT 8", MCP_FACTS_STATES).fetchall()
+        for row in rows:
+            payload = json.loads(row["payload"])
+            try:
+                facts = queries.load(self.cfg)
+                if not self._fleet_mcp_phase_current(row, payload, facts):
+                    getattr(self, "_fleet_mcp_queued_nonces", {}).pop(row["id"], None)
+                    pending = getattr(self, "_fleet_mcp_facts_pending", None)
+                    if pending and pending["request_id"] == row["id"]:
+                        self._fleet_mcp_facts_slot.cancel(pending["handle"])
+                    self._fleet_mcp_fail(row, payload, "authority_changed")
+                    continue
+                phase = payload["mcp_facts"]
+                pending = getattr(self, "_fleet_mcp_facts_pending", None)
+                if row["state"] == "mcp_facts_queued" and getattr(self, "_fleet_mcp_queued_nonces", {}).pop(row["id"], None) != phase["nonce"]:
+                    result = fleet_mcp_client.internal_fallback(self.cfg, facts, payload["plan"], payload["lang"])
+                    self._fleet_finish_mcp_facts(row, payload, facts, result, recovery=True)
+                    continue
+                if row["state"] == "mcp_facts_queued":
+                    phase["started_at"] = protocol.now()
+                    self._fleet_save(row, "mcp_facts_started", payload, "mcp_facts_dispatch_intent")
+                    if slot is None:
+                        slot = self._fleet_mcp_facts_slot = fleet_mcp_client.FactsLookupSlot()
+                    started = slot.start(self.cfg, facts, payload["plan"], phase["binding"], payload["lang"])
+                    if started["status"] == "busy":
+                        result = fleet_mcp_client.internal_fallback(self.cfg, facts, payload["plan"], payload["lang"])
+                        self._fleet_finish_mcp_facts(row, payload, facts, result)
+                    else:
+                        self._fleet_mcp_facts_pending = {"request_id": row["id"], "phase_nonce": phase["nonce"], "handle": started["handle"]}
+                    continue
+                if not pending or pending["request_id"] != row["id"] or pending["phase_nonce"] != phase["nonce"]:
+                    # A restarted process has no live handle. Recover from the
+                    # exact local facts/policy; never resubmit an old transport.
+                    result = fleet_mcp_client.internal_fallback(self.cfg, facts, payload["plan"], payload["lang"])
+                    self._fleet_finish_mcp_facts(row, payload, facts, result, recovery=True)
+                    continue
+                outcome = slot.poll(pending["handle"], phase["binding"], facts,
+                                    source_current=self._fleet_mcp_source_current(row, payload))
+                if outcome["status"] == "pending":
+                    continue
+                if outcome.get("settled"):
+                    self._fleet_mcp_facts_pending = None
+                if outcome["status"] == "ready":
+                    self._fleet_finish_mcp_facts(row, payload, facts, outcome["result"])
+                elif outcome["status"] == "unavailable":
+                    result = fleet_mcp_client.internal_fallback(self.cfg, facts, payload["plan"], payload["lang"])
+                    self._fleet_finish_mcp_facts(row, payload, facts, result)
+                else:
+                    self._fleet_mcp_fail(row, payload, "source_or_revision_changed")
+            except fleet_mcp_client.protocol.ScopeDenied:
+                pending = getattr(self, "_fleet_mcp_facts_pending", None)
+                if pending and pending["request_id"] == row["id"] and slot.settle(purge_hold=False)["pending_calls"] == 0:
+                    self._fleet_mcp_facts_pending = None
+                self._fleet_mcp_fail(row, payload, "scope_denied", notify=True)
+            except (ValueError, OSError, TypeError, KeyError):
+                pending = getattr(self, "_fleet_mcp_facts_pending", None)
+                if pending and pending["request_id"] == row["id"]:
+                    slot.cancel(pending["handle"])
+                self._fleet_mcp_fail(row, payload, "observation_unavailable")
+        return len(rows)
+
+    def check_fleet_requests(self):
+        count = self._fleet_check_mcp_facts()
+        return count + super().check_fleet_requests()
 
     def _fleet_try_catalog_direct(self, chat_id, lang, text, msg_id, update):
         plan = route_plan(self.cfg, self.conn, chat_id, text)

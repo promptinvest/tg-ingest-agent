@@ -521,6 +521,15 @@ def load_config(env=None):
     if fleet_lifecycle_flag not in {"true", "false"}:
         raise SystemExit("CARA_FLEET_CONTENT_LIFECYCLE must be true or false")
     cfg.fleet_content_lifecycle = fleet_lifecycle_flag == "true"
+    fleet_mcp_flag = str(env.get("CARA_FLEET_MCP_ENABLED", "false")).strip().lower()
+    if fleet_mcp_flag not in {"true", "false"}:
+        raise SystemExit("CARA_FLEET_MCP_ENABLED must be true or false")
+    cfg.fleet_mcp_enabled = fleet_mcp_flag == "true"
+    fleet_mcp_path = str(env.get("CARA_FLEET_MCP_CONFIG", "/etc/cara-fleet/mcp-facts.json")).strip()
+    if (not fleet_mcp_path.startswith("/") or fleet_mcp_path.startswith("//") or ".." in fleet_mcp_path.split("/")
+            or len(fleet_mcp_path) > 1024 or any(character in fleet_mcp_path for character in "\x00\r\n")):
+        raise SystemExit("CARA_FLEET_MCP_CONFIG must be a fixed local absolute path")
+    cfg.fleet_mcp_config = fleet_mcp_path
     cfg.fleet_facts = "/etc/cara-fleet/facts/current.json"
     cfg.fleet_spool = "/var/lib/cara-fleet/spool"
     cfg.token = (env.get("TELEGRAM_BOT_TOKEN") or "").strip()

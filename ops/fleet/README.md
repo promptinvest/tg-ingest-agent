@@ -167,3 +167,28 @@ A failed/newer backup attempt, incomplete restore coverage, stale snapshot or CI
 that does not cover repository head stays explicit in final answers. Capture and
 root-bind development snapshots separately through the existing approved account.
 Keep all real bindings, private receipts and bootstrap data outside public Git.
+
+## Optional MCP facts readiness
+
+Keep CARA_FLEET_MCP_ENABLED=false until exact-source gates and same-UID readiness
+pass. Provision root-owned, non-writable ancestry and no-symlink config with schema
+cara-fleet-mcp-local/v1, principal, allowed_subjects and facts_path. Facts-only
+activation omits references; tool discovery must then contain exactly fleet_lookup.
+Keep actual subjects/bindings private and include authorized historical descriptive
+subjects without making them executable. Set only the existing reviewed config path
+and true flag in a protected operator drop-in; preserve original application env.
+
+Before and after the real final restart, enter the actual main mount namespace and
+run under the service UID, primary and supplementary groups, with explicit PATH/cwd.
+Call the installed fixed client with real stdio; require path=mcp and
+verified_equivalent_facts plus exact cells/pages versus internal rendering. Fallback
+success alone is insufficient. Verify code/config/facts hashes, zero model/probes,
+source/policy/freshness and denied symlink/untrusted/oversize/version/scope cases.
+Preserve all main/worker/executor secret and write denials. The child inherits the
+unprivileged service sandbox; do not relax it or infer extra OS read-only isolation.
+
+Retained reads require separately reviewed policy and same-UID WAL/source/purge/
+cursor qualification. Durable MCP creation, Tasks, writes and A2A are absent. Task
+waiting uses existing task/fleet records; unknown-started reads reconcile without
+paid replay. Purge must settle both ordinary phases and MCP slot before deletion;
+late pages cannot recreate content. No manual Telegram qualification messages.

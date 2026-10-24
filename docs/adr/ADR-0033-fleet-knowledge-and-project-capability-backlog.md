@@ -63,3 +63,10 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
   source gaps. A manual read-only maintenance-job publisher provides backup
   evidence without starting operations. Legacy protocol limits remain exact;
   authenticated binding and complete release acceptance are pending.
+
+- 2026-10-24: retained investigations reuse existing fleet/task rows, durable
+  original-budget reservations and one task receipt/delivery. Source/authority,
+  cancellation, unknown-paid and purge fences remain. Optional MCP facts uses a
+  bounded asynchronous slot with equivalent internal recovery. Shared retained
+  reads remain read-only at the API; no OS-level DB-write denial is inferred.
+  Full release/model gates and MCP creation/lifecycle qualification remain open.

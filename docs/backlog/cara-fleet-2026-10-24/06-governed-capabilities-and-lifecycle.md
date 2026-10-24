@@ -95,3 +95,14 @@ Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
 Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
 and scoped-read gates. This is an incremental business baseline; no full package
 completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).
+
+## October 24 - Shared task and optional MCP facts candidate
+
+Existing task steps now wait on a retained source-bound fleet read with original
+call/cost reservations, one immutable receipt and existing task delivery. Shared
+retained status/result and a nonblocking optional MCP facts path preserve owner,
+source, freshness and purge policy. Default MCP remains disabled; creation/Tasks/
+executing cancellation are explicit gaps. Original47+15 specifications remain
+unchanged and the crosswalk distinguishes active cases from unqualified gaps.
+Focused Linux passes do not replace full release and actual-model qualification.
+See [increment02](../../cara-fleet-increment-02-2026-10-24.md); all packages stay open.

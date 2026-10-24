@@ -706,6 +706,9 @@ def _execute_read_or_draft(cfg, conn, task, step, inputs, input_hash):
     if tool == "fleet.lookup":
         import fleet_broker
         return fleet_broker.execute(cfg, conn, task, step, inputs)
+    if tool in {"fleet.status", "fleet.result"}:
+        import fleet_shared_reads
+        return fleet_shared_reads.execute(cfg, conn, task, step, inputs)
     if tool == "source.fetch":
         return _source_fetch(cfg, conn, task, step, inputs)
     if tool == "web.search":
@@ -971,6 +974,12 @@ def _render_task_result(receipts, lang="en"):
         elif receipt["tool"] == "fleet.lookup":
             lookup = value.get("lookup") or {}
             lines.extend(lookup.get("pages") or [])
+        elif receipt["tool"] == "fleet.investigate":
+            investigation = value.get("investigation") or {}
+            lines.extend(investigation.get("pages") or [])
+        elif receipt["tool"] in {"fleet.status", "fleet.result"}:
+            reference = value.get("reference") or {}
+            lines.extend(reference.get("pages") or [])
         elif receipt["tool"] not in {"web.search", "source.fetch", "artifact.markdown"}:
             if ru:
                 lines.append(f"Шаг {receipt['tool']} выполнен.")
@@ -1037,6 +1046,10 @@ def run_task(agent, conn, task_id, max_steps=1):
                 store.task_attempt_finish(
                     conn, step["id"], "waiting", input_hash=digest)
                 return {"status": "waiting_worker", "step_id": step["id"]}
+            if spec.id == "fleet.investigate":
+                import fleet_investigation
+                fleet_investigation.start_task(agent, conn, task, step, inputs)
+                return {"status": "waiting_fleet", "step_id": step["id"]}
             store.assistant_task_step_status(conn, step["id"], "running")
             status, summary, data, evidence, artifact_id, effect_id = (
                 _execute_read_or_draft(
@@ -1044,6 +1057,11 @@ def run_task(agent, conn, task_id, max_steps=1):
             if spec.id == "fleet.lookup":
                 import fleet_broker
                 fleet_broker.validate_result(
+                    agent.cfg, conn, task, step, inputs, status, summary,
+                    data, evidence, artifact_id, effect_id)
+            if spec.id in {"fleet.status", "fleet.result"}:
+                import fleet_shared_reads
+                fleet_shared_reads.validate_result(
                     agent.cfg, conn, task, step, inputs, status, summary,
                     data, evidence, artifact_id, effect_id)
             # Only success/partial receipts are immutable. Transient/terminal
@@ -1124,6 +1142,102 @@ def run_task(agent, conn, task_id, max_steps=1):
                 conn, step["id"], "blocked", error=repr(exc))
             return {"status": _finish_task_if_settled(agent, conn, task_id)}
     return {"status": _finish_task_if_settled(agent, conn, task_id)}
+
+
+def poll_fleet_results(agent, conn):
+    """Consume each retained read once; polling never claims/resubmits a step."""
+    import fleet_investigation as investigation
+    import fleet_lifecycle
+    if fleet_lifecycle.admission_paused(conn):
+        return 0
+    rows = conn.execute("SELECT s.* FROM assistant_task_steps s WHERE s.status='waiting_fleet' ORDER BY s.worker_submitted_at,s.id LIMIT 8").fetchall()
+    handled = 0
+    for step in rows:
+        task = store.assistant_task_get(conn, step["task_id"])
+        if task is None:
+            continue
+        row = conn.execute("SELECT * FROM fleet_requests WHERE id=?", (step["worker_job_id"],)).fetchone()
+        payload = json.loads(row["payload"]) if row else None
+        try:
+            _source_for_task(conn, task)
+            valid = investigation.task_reference_current(agent, task, step) and (row is None or investigation.task_current(agent, row, payload))
+        except TaskBlocked:
+            valid = False
+        stopping = task["status"] not in {"planned", "running", "waiting_approval"} or not valid
+        if stopping and row is not None and investigation.task_reference_current(agent, task, step):
+            investigation.cancel_task(agent, task, step)
+        # A cancelled/edited source cannot publish a receipt while its original
+        # transport is still unconfirmed. The fleet pump settles the same handle.
+        if step["worker_job_id"] in getattr(agent, "_fleet_inference_calls", {}):
+            continue
+        if row is not None:
+            row = conn.execute("SELECT * FROM fleet_requests WHERE id=?", (step["worker_job_id"],)).fetchone()
+            if row is None:
+                continue
+            payload = json.loads(row["payload"])
+            investigation.reconcile_task_usage(agent, row, payload)
+        if stopping:
+            cancelled = task["status"] in {"cancel_requested", "cancelled"}
+            error = "Task cancellation settled" if cancelled else "Investigation source or task authority changed"
+            store.task_attempt_finish(conn, step["id"], "cancelled" if cancelled else "blocked", error=error, commit=False)
+            store.assistant_task_step_status(conn, step["id"], "cancelled" if cancelled else "blocked", error=error, commit=False)
+            conn.commit()
+            if cancelled:
+                active = conn.execute("SELECT 1 FROM assistant_task_steps WHERE task_id=? AND status IN ('claimed','running','waiting_worker','waiting_fleet') LIMIT 1", (task["id"],)).fetchone()
+                effect = conn.execute("SELECT 1 FROM task_approvals WHERE task_id=? AND status IN ('executing','ambiguous') LIMIT 1", (task["id"],)).fetchone()
+                if not active and not effect:
+                    store.assistant_task_set_status(conn, task["id"], "cancelled")
+                    _finalize_cancelled(agent, conn, task["id"], "Task cancelled.")
+            else:
+                _finish_task_if_settled(agent, conn, task["id"])
+            handled += 1
+            continue
+        if row is not None and row["state"] not in investigation.TERMINAL:
+            continue
+        try:
+            inputs = resolve_inputs(conn, task, step)
+            if _input_hash(inputs) != step["worker_input_hash"]:
+                raise TaskBlocked("Investigation input binding changed")
+            spec = tool_broker.get_spec(step["tool"])
+            tool_broker.assert_policy(spec)
+            conn.execute("BEGIN IMMEDIATE")
+            # Recheck inside the receipt boundary. Purge/source changes cannot
+            # recreate a removed task or turn a late result into new authority.
+            fresh = store.assistant_task_get(conn, task["id"])
+            current = store.assistant_task_step_get(conn, step["id"], task["id"])
+            if fresh is None:
+                raise TaskBlocked("Investigation task was removed")
+            _source_for_task(conn, fresh)
+            if current is None or current["status"] != "waiting_fleet" or fresh["status"] not in {"planned", "running", "waiting_approval"} or fleet_lifecycle.admission_paused(conn):
+                raise TaskBlocked("Investigation receipt authority changed")
+            if not investigation.task_reference_current(agent, fresh, current):
+                raise TaskBlocked("Investigation receipt reference changed")
+            observed_row = conn.execute("SELECT * FROM fleet_requests WHERE id=?", (current["worker_job_id"],)).fetchone()
+            if row is not None and observed_row is None:
+                raise TaskBlocked("Investigation result was removed before receipt")
+            observed_payload = json.loads(observed_row["payload"]) if observed_row else None
+            if observed_row is not None and not investigation.task_current(agent, observed_row, observed_payload):
+                raise TaskBlocked("Investigation receipt binding changed")
+            status, summary, data, evidence, artifact_id, effect_id = investigation.task_outcome(agent, fresh, current, observed_row, observed_payload)
+            receipt = _receipt_for_step(conn, current)
+            if receipt is None:
+                receipt = store.task_receipt_create(conn, current, input_hash=step["worker_input_hash"], status=status, summary=summary,
+                    data=data, evidence=evidence, artifact_id=artifact_id, effect_id=effect_id, trace_id=common.current_trace(), commit=False)
+            store.task_attempt_finish(conn, step["id"], "succeeded", input_hash=step["worker_input_hash"], commit=False)
+            store.assistant_task_step_status(conn, step["id"], "succeeded", receipt_id=receipt["id"], commit=False)
+            conn.commit()
+            _finish_task_if_settled(agent, conn, task["id"])
+        except BaseException as exc:
+            if conn.in_transaction:
+                conn.rollback()
+            if not isinstance(exc, (ValueError, TaskBlocked, RuntimeError)):
+                raise
+            store.task_attempt_finish(conn, step["id"], "blocked", error=str(exc), commit=False)
+            store.assistant_task_step_status(conn, step["id"], "blocked", error=str(exc), commit=False)
+            conn.commit()
+            _finish_task_if_settled(agent, conn, task["id"])
+        handled += 1
+    return handled
 
 
 def poll_worker_results(agent, conn, now=None, limit=3):
@@ -1376,7 +1490,7 @@ def reconcile_worker_spool(agent, conn):
     rows = conn.execute(
         "SELECT s.worker_job_id, s.status AS step_status, t.status AS task_status"
         " FROM assistant_task_steps s JOIN assistant_tasks t ON t.id=s.task_id"
-        " WHERE s.worker_job_id IS NOT NULL"
+        " WHERE s.worker_job_id IS NOT NULL AND s.tool != 'fleet.investigate'"
     ).fetchall()
     referenced = {row["worker_job_id"] for row in rows}
     terminal_step = {
@@ -1394,6 +1508,7 @@ def tick(agent, conn):
     """One ordinary-loop task tick: poll workers, then run at most one step."""
     reconcile_approval_deliveries(agent, conn, limit=3)
     poll_worker_results(agent, conn, limit=3)
+    poll_fleet_results(agent, conn)
     reconcile_worker_spool(agent, conn)
     notify_blocked_tasks(agent, conn, limit=3)
     row = conn.execute(

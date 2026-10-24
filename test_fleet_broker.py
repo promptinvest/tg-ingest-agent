@@ -50,7 +50,13 @@ class FleetBrokerContract(unittest.TestCase):
         self.assertEqual(tool_broker.POLICY_VERSION, "task-tools/v3")
         self.assertEqual(tool_broker.IMPLEMENTATION_VERSION, "tasking/v3")
         self.assertIn("fleet.lookup", {item["id"] for item in tasks_svc._tool_manifest()})
-        for key in ("fleet.investigate", "fleet.status", "fleet.result", "fleet.execute"):
+        for key in ("fleet.status", "fleet.result"):
+            retained = tool_broker.get_spec(key)
+            self.assertEqual(retained.risk, "read_only")
+            self.assertEqual(retained.bound_inputs, frozenset({"query"}))
+            for flag in ("uses_llm", "external_network", "writes_state", "destructive", "requires_confirmation"):
+                self.assertFalse(getattr(retained, flag))
+        for key in ("fleet.investigate", "fleet.execute"):
             self.assertIsNone(tool_broker.get_spec(key))
 
     def test_independent_manifest_drift_fails_startup_and_invocation_policy(self):

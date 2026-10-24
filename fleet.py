@@ -15,6 +15,7 @@ import fleet_project
 import fleet_lifecycle
 import fleet_catalog
 import fleet_queue
+import fleet_investigation
 import llm
 import store
 import tasking
@@ -22,7 +23,7 @@ import worker_client
 
 SCHEMA = protocol.SCHEMA
 PENDING_STATES = ("preparing", "queued", "inspection_started", "executing", "ready", "approval_sending",
-                  "delivering", "analysis_started") + fleet_async.STATES
+                  "delivering", "analysis_started", "mcp_facts_queued", "mcp_facts_started") + fleet_async.STATES
 _context_recent = fleet_context.recent
 
 
@@ -352,6 +353,9 @@ class _FleetCore:
         return expected
 
     def _fleet_submit_operation(self, row, payload, operation, step, state, event):
+        if fleet_investigation.retained(payload):
+            if operation.get("operation") != "inspect" or not fleet_investigation.current(self, row, payload):
+                raise ValueError("retained admission cannot dispatch this operation")
         binding = submission_binding(row["source_update"], step)
         submitted_at = protocol.now()
         executor = spool(self.cfg)
@@ -433,7 +437,7 @@ class _FleetCore:
                      and status not in {"queue_expired", "cancelled"})
         state = "ambiguous" if uncertain else ("cancelled" if status == "cancelled" else "failed")
         self._fleet_save(row, state, payload, "executor_" + status + "_no_replay")
-        if not notify:
+        if not notify or fleet_investigation.retained(payload):
             return
         en = {"queue_expired": "The check expired while waiting for the executor; no execution was confirmed.",
               "queue_timeout": "The check reached its waiting deadline without a confirmed start. Cancellation was requested.",
@@ -547,6 +551,8 @@ class _FleetCore:
             self.reply(chat_id, "Проверка сейчас недоступна; измерений пока нет." if lang == "ru" else "The investigation is unavailable right now; I have no measurements yet.")
 
     def _fleet_approval(self, row, payload, inventory):
+        if fleet_investigation.retained(payload):
+            raise ValueError("retained admission cannot request an approval")
         host = payload["plan"]["hosts"][0]
         unit = payload["plan"]["service"]
         observation = payload["result"]["hosts"][host]
@@ -613,6 +619,8 @@ class _FleetCore:
             self._fleet_notice(callback_id, chat_id, "Expired / истекло")
             return
         payload = json.loads(row["payload"])
+        if fleet_investigation.retained(payload):
+            return
         try:
             if msg.get("message_id") != payload.get("approval_message"):
                 raise ValueError("different approval card")
@@ -661,6 +669,8 @@ class _FleetCore:
             payload["answer_pages"] = payload["catalog_answer_pages"] + payload.get("answer_pages", [payload["answer"]])
             payload["answer"] = "\n\n".join(payload["answer_pages"])
             payload["catalog_combined"] = True
+        if fleet_investigation.retained(payload):
+            return fleet_investigation.retain(self, row, payload)
         self._fleet_save(row, "delivering", payload, "result_delivery_started")
         message_ids = []
         for page in payload.get("answer_pages", [payload["answer"]]):
@@ -711,7 +721,8 @@ class _FleetCore:
                         continue
                     if not payload.get("executor_lifecycle") and protocol.age(payload["submitted_at"]) > 240:
                         self._fleet_save(row, "ambiguous" if row["state"] == "executing" else "failed", payload, "executor_timeout_no_retry")
-                        self.reply(row["chat_id"], "Нет подтверждённого результата; нужна новая проверка." if lang == "ru" else "No confirmed result is available; a fresh check is needed.")
+                        if not fleet_investigation.retained(payload):
+                            self.reply(row["chat_id"], "Нет подтверждённого результата; нужна новая проверка." if lang == "ru" else "No confirmed result is available; a fresh check is needed.")
                     continue
                 if payload.get("executor_lifecycle") and payload.get("executor_started") is None:
                     raise fleet_queue.QueueError("fleet result lacks a verified start receipt")
@@ -777,7 +788,8 @@ class _FleetCore:
                 self._fleet_cancel_executor(row, payload, "result_or_binding_unavailable")
                 current = self.conn.execute("SELECT state FROM fleet_requests WHERE id=?", (row["id"],)).fetchone()[0]
                 self._fleet_save(row, "ambiguous" if current in {"executing", "delivering"} else "failed", payload, "observation_or_delivery_unavailable")
-                self.reply(row["chat_id"], "Нет достоверного результата; нужна новая проверка." if lang == "ru" else "I have no reliable result; a fresh investigation is needed.")
+                if not fleet_investigation.retained(payload):
+                    self.reply(row["chat_id"], "Нет достоверного результата; нужна новая проверка." if lang == "ru" else "I have no reliable result; a fresh investigation is needed.")
         return len(rows) + inference_count
 
 
