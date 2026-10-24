@@ -168,3 +168,5 @@ package is complete. Advanced project adapters and durable MCP reads remain late
 independent increments; MCP is not enabled by this candidate.
 
 Exact-source full gate for76ecf87 passed2,203 tests and failed the unchanged config-catalogue check because the new lifecycle setting was missing from the environment example (nine unchanged skips). The correction documents its defaultfalse and installedtrue semantics only; Python runtime and model prompts are byte-identical. The original archive/log/failure and successful six-case model receipt are retained. Fresh full gates remain required; no assertion or runtime guard is relaxed.
+
+The exact661e94a distro-Linux normal and shuffled runs pass (2,204 cases, nine unchanged skips). CI40084077888 caught the existing documentation-hygiene rule against hard-coded suite counts in primary specs. The correction removes that count from CARA.md/SOLUTION.md only, retaining the exact evidence here. No Python, environment example, test or assertion changes. The failed CI/log and original archives remain; fresh exact-source CI/full verification is required.
