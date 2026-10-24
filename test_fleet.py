@@ -267,6 +267,7 @@ class FleetLifecycle(unittest.TestCase):
         import tg_ingest_agent
         from test_tg_ingest_agent import make_config
         cfg=make_config(DB_PATH=str(self.root/"test.db"),MEDIA_DIR=str(self.root/"media"),CARA_FLEET_ENABLED="true")
+        cfg.fleet_facts=self.agent.cfg.fleet_facts
         cfg.fleet_inventory=self.agent.cfg.fleet_inventory
         cfg.fleet_spool=self.agent.cfg.fleet_spool
         real=tg_ingest_agent.Agent(cfg)
@@ -561,6 +562,7 @@ class FleetLifecycle(unittest.TestCase):
         from test_tg_ingest_agent import make_config
         cfg=make_config()
         cfg.fleet_enabled=True
+        cfg.fleet_facts=self.agent.cfg.fleet_facts
         cfg.fleet_inventory=self.agent.cfg.fleet_inventory
         with mock.patch.object(router.llm,"chat_profile",return_value='{"action":"fleet_investigate","params":{},"confidence":0.99}') as chat:
             result=router.route(cfg,self.conn,111,"Что с российским прокси?",None)

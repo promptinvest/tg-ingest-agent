@@ -112,3 +112,5 @@ fields and rewritten source. Fleet-only planner guidance is now explicit; valida
 and budgets remain unchanged. Old fixture defaults are isolated from installed
 facts without changing app defaults or original answer assertions. The failed paid
 attempt and full-gate logs remain; fresh qualification is required.
+
+Literal-bound task plans receive the exact source length after an accounted model candidate miscounted its span; out-of-range input remains rejected. The remaining full-Agent fixture now carries its isolated facts path; original expectations and production defaults stay exact.

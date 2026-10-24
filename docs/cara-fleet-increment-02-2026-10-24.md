@@ -139,3 +139,5 @@ planner descriptions now state exact fields/array shape, full literal query bind
 and the investigation's existing answer delivery. Validators are unchanged; fresh
 bounded model qualification and full gates remain required. This is model-backed
 answer qualification, separate from real same-UID stdio readiness.
+
+The retained58a60a8 full run passed2499 cases and caught one remaining full-Agent fixture that failed to carry its absent facts path. Its original assertions are preserved. The second model attempt chose the correct single fleet investigation and literal query but miscounted the end span; costUSD0.00296496, aggregateUSD0.04991712. Source length is now provided explicitly; validation is unchanged. Both failed originals remain and are not replayed. Fresh qualification is required.

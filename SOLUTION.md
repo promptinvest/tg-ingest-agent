@@ -1738,3 +1738,5 @@ The exact-source full gate for76ecf87 passed the remaining suite and failed the 
 The shared registry regression asserts the admitted source-bound read and its exact risk, budgeted-model and delivery contract; effect tools remain absent. The retained old unimplemented-read expectation was corrected after full-gate failure, without changing runtime behavior.
 
 Fleet task planning now describes the closed catalog field array, full literal investigation clause and existing grounded answer contract. Invalid model selectors remain rejected. Offline fixture helpers explicitly isolate facts from installed production publications; application defaults are unchanged.
+
+Task planning receives the exact source character count for literal bindings; model-supplied spans remain fully validated. Test Agent fixtures carry their own absent facts path through full dispatch.

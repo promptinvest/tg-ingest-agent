@@ -132,6 +132,7 @@ def _planner_messages(text, source_time, timezone_offset, correction=None, learn
         f"SOURCE_TIME={source_time}",
         f"TIMEZONE_OFFSET={int(timezone_offset)}",
         f"SOURCE_HASH={source_hash}",
+        f"SOURCE_LENGTH={len(text)}",
         "TOOLS=" + common.neutralize_untrusted(_compact(_tool_manifest())),
         "<SOURCE>",
         common.neutralize_untrusted(text),
