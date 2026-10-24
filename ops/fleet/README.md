@@ -292,3 +292,105 @@ runner are UNCOMMITTED parallel work. Do not enable them from the project-read
 checkpoint or infer live readiness. Their own coherent specifications, exact-source
 qualification, same-UID stdio/policy and lifecycle gates are required separately.
 MCP remains disabled. Existing independent package criteria remain unchanged.
+
+## Increment 04: durable base MCP/client readiness
+
+This candidate supersedes the earlier absent-durable-path and uncommitted-MCP
+checkpoint descriptions. It is not a deployment receipt. See
+[increment 04](../../docs/cara-fleet-increment-04-2026-10-24.md).
+Target source/archive/operator/window remain UNSELECTED. Keep the MCP default false
+until exact full/model/CI and actual installed identity/readiness pass.
+
+Facts-only and optional retained/admission configuration are separate choices.
+Facts-only omits those policies and advertises only fleet_lookup. Admission uses
+the root-owned investigations policy with its exact compiled version/capability
+hash, existing database/owner and allowlisted subjects, hosts, projects, capabilities
+and facets. It must agree with any legacy retained policy. Generate no reviewed
+hash from an older source or arbitrary client declaration. Keep real policy and
+bootstrap values out of Git/issues.
+
+Use fleet_mcp_client.start_investigation only from asynchronous/external work,
+with a real canonical source_update and optional allowed format. The control
+helper is synchronous and must not block the owner loop. It commits a source-row
+admission_prepared intent and recovers its exact key before its first stdio call.
+The explicit-key investigation_start helper also prepares. The raw server start
+still accepts only source_update,idempotency_key and allowed lang/presentation/
+detail; no question/owner/target/address/path/command/approved override is accepted.
+
+Verify through a second connection that the key/input/principal/policy/format is
+durable before transport, prepared state has no inference/job/answer/send, and
+owner ticks cannot dispatch it. Only matching server promotion to admission_queued
+can begin existing paid phases. Prepared work counts within the original eight
+requests; source expiry/edit/revoked policy fences it without dispatch. Prepared
+cancellation can settle immediately because it is definitely unsent.
+
+After unavailable transport or a response lost after promotion, recover the same
+source/key/handle. Return reconcile_required for uncertain start/cancel; never
+create another key, perform local admission or automatically retry an unknown
+operation. Read-only fallback reloads current principal/source/scope/purge policy
+and returns the same canonical retained result. Denials cannot become outage
+fallbacks. Status/result never start a new model, probe or delivery.
+
+Protocol notifications do not cancel application work. Explicit cancellation stays
+requested through owner ticks while the transport future is running, suppressing
+late pages but retaining the memory handle and usage accounting. Confirm
+cancelled/settled only after actual settlement. Lost started settlement after a
+restart becomes ambiguous/unknown_outcome, including a loss before the first cancel
+tick; do not reconstruct/resubmit the original operation.
+
+Discovery may advertise the qualified base investigation_start/status/result/cancel
+tools in addition to fleet_lookup. Start/cancel annotations reflect orchestration
+writes; no protected project-state effect exists. Tasks is unsupported/not
+advertised, including for a Tasks-capable caller; base start/status/result must
+still work. No maintenance, restart, deploy, cleanup, backup-start, generation,
+project DB/repository write, messaging or A2A tool.
+
+Before activation, enter the actual final service mount namespace and use the
+real UID, primary/supplementary groups, explicit binary paths/PATH/cwd. Require
+actual installed stdio success with current config/code/facts/capability hashes,
+one same-ledger handle, useful requested answer, exact scope/dates/uncertainty,
+zero catalog probes and no extra paid calls. Qualify owner updates/reminders while
+work is blocked. Internal fallback alone is not stdio readiness. Preserve every
+main/worker/executor secret/write denial; the restricted SQL API does not prove an
+OS-level read-only database sandbox.
+
+Prepared/admitted states join original pending/capacity/readers, backup/restore and
+typed all-content purge. Hold admission, settle model/stdio/executor work, refresh
+counts and require the original nonce/source/PID/preview-bound quiescence before
+delete. Changed counts require the original renewed typed phrase. Keep spend,
+preferences, non-content consumed markers and protected configuration/facts/
+backup/release evidence. No live purge test.
+
+The existing catalog/MCP page limit and task receipt/delivery page limit differ.
+The candidate losslessly re-pages to at most 3,500 characters per task page/32
+pages and binds the exact retained answer to its immutable receipt. Actual answer
+overflow uses existing managed Markdown/send_document, keeping the 64 KiB cap and
+explicit draft artifacts. Register metadata before bytes; preserve counted crash
+residue. Explicit failed-document resume requires original source/owner/policy,
+succeeded steps, linked receipt and exact artifact, with no read/model rerun or
+automatic ambiguous-delivery retry. Its frozen taskbridge suite passes 45 tests
+in 22.201 s in network-isolated Linux with an empty environment, including ten
+new actual pipeline regressions. Preserve all failed originals. Final frozen-
+source combined/full/model/installed qualification remains required.
+
+Retain the focused 227-test/16-intent, 17 pure operator/orchestration-fixture and
+separate 18 pure gateway-updater-fixture receipts as supporting checkpoints. The
+gateway draft remains source/archive/module-unbound; its fixtures use no live
+updater entry point. Unbound pure fixtures are not operator qualification. The
+nine-path frozen model-harness precheck also makes zero paid calls/probes and
+does not qualify actual model behavior. These do not replace exact normal/shuffled Linux,
+pinned lint/CI, accounted model qualification, checked backups/stopped parity,
+loaded-source readiness, monitor/alert/recovery/neighbors and final acceptance.
+Use a fresh bounded-session one-use controller and atomic watched-file publication.
+Never replay failed/completed controllers, historical updates or unknown paid work.
+No manual Telegram sends or live maintenance demonstration.
+
+### Post-acceptance descriptive publication
+
+Keep accepted facts revision 1 until a new checked publication succeeds. After
+final app acceptance, update the private operational KB first, then use the
+existing facts status/review/export/forward-install workflow. Only reviewed
+changed source digests move; preserve other registered hashes and actual evidence/
+check dates. Keep status/lag in its existing operator CLI, without new query
+fields or self-referential publication-receipt content. Do not claim revision 2
+or current source hashes before the successful receipt. No new timer/schedule.

@@ -8,8 +8,9 @@ https://modelcontextprotocol.io/specification/2026-07-28/server/discover
 https://modelcontextprotocol.io/specification/2026-07-28/server/tools
 
 Local descriptive facts and optional retained source-bound observations are exposed.
-No effects, new project probes, request creation or model calls,
-Tasks or competing content/job ledger exist here. Self-reported MCP clientInfo
+Optional source-bound admission writes only the existing request ledger; the
+owner loop owns all planning and reads. No protected effects, direct probes, model
+calls, Tasks or competing content/job ledger exist here. Self-reported MCP clientInfo
 never establishes identity; the launching operator-owned config binds authority.
 """
 import argparse
@@ -68,7 +69,7 @@ def read_config(path):
         if mode.st_uid != 0 or (mode.st_mode & 0o022 and not mode.st_mode & stat.S_ISVTX):
             raise MCPError("MCP policy ancestry is not trusted")
     value = facts._read(path)
-    if not isinstance(value, dict) or set(value) not in ({"schema", "principal", "allowed_subjects", "facts_path"}, {"schema", "principal", "allowed_subjects", "facts_path", "references"}) or value["schema"] != CONFIG_SCHEMA:
+    if not isinstance(value, dict) or not {"schema", "principal", "allowed_subjects", "facts_path"} <= set(value) or set(value) - {"schema", "principal", "allowed_subjects", "facts_path", "references", "investigations"} or value["schema"] != CONFIG_SCHEMA:
         raise MCPError("invalid MCP local policy")
     principal, subjects, source = value["principal"], value["allowed_subjects"], value["facts_path"]
     if (not isinstance(principal, str) or not facts.ID.fullmatch(principal)
@@ -80,6 +81,21 @@ def read_config(path):
         raise MCPError("invalid MCP caller scope or facts configuration")
     if "references" in value:
         reference_policy(value["references"])
+    investigation_context(value)
+    return value
+
+
+def investigation_context(config):
+    """Optional installed contract; authority comes only from protected config."""
+    if "investigations" not in config:
+        return None
+    import fleet_mcp_admission as admission
+    value = admission.context(config)
+    if "references" in config:
+        reference = reference_policy(config["references"])
+        rule = value["policy"]
+        if any(reference[key] != rule[key] for key in ("database_path", "owner_chat_id")) or any(set(reference[key]) != set(rule[key]) for key in ("allowed_hosts", "allowed_projects", "allowed_capabilities")):
+            raise MCPError("investigation and retained policies conflict")
     return value
 
 
@@ -139,7 +155,7 @@ def _error(identity, code, message, data=None):
 REFERENCE_STATUS = "cara-fleet-investigation-status/v1"
 REFERENCE_RESULT = "cara-fleet-investigation-result/v1"
 REFERENCE_TOOLS = ("investigation_status", "investigation_result", "project_observe")
-REFERENCE_STATES = frozenset({"mcp_facts_queued", "mcp_facts_started", "preparing", "queued", "inspection_started", "ready", "analysis_started", "delivering", "done", "failed", "ambiguous", "cancelled"} | {name + "_" + phase for name in ("planning", "synthesis") for phase in ("queued", "started", "completed", "consumed")})
+REFERENCE_STATES = frozenset({"admission_prepared", "admission_queued", "mcp_facts_queued", "mcp_facts_started", "preparing", "queued", "inspection_started", "ready", "analysis_started", "delivering", "done", "failed", "ambiguous", "cancelled"} | {name + "_" + phase for name in ("planning", "synthesis") for phase in ("queued", "started", "completed", "consumed")})
 MAX_RETAINED_BYTES = 524288
 MAX_REFERENCE_PAGE = 48000
 MAX_REFERENCE_CELLS = 6
@@ -190,8 +206,58 @@ def reference_definitions():
     return definitions
 
 
+INVESTIGATION_TOOLS = ("investigation_start", "investigation_status", "investigation_result", "investigation_cancel")
+
+
+def investigation_definitions(legacy=False):
+    import fleet_mcp_admission as admission
+    definitions = []
+    for name in INVESTIGATION_TOOLS:
+        start = name == "investigation_start"
+        properties = ({"source_update": {"type": "integer", "minimum": 0, "maximum": 2**53-1},
+            "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
+            **{key: {"type": "string", "enum": sorted(values)} for key, values in admission.FORMATS.items()}}
+            if start else {"request_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"}})
+        required = ["source_update", "idempotency_key"] if start else ["request_id"]
+        if legacy and name == "investigation_result":
+            properties.update(cursor={"type": "string", "maxLength": 1024}, max_age_seconds={"type": "integer", "minimum": 1, "maximum": 86400})
+        output = {"type": "object", "required": ["version", "request_id", "status"], "properties": {
+            "version": {"const": admission.VERSION}, "request_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"}, "status": {"enum": ["available", "unavailable"]}}}
+        if legacy and name in {"investigation_status", "investigation_result"}:
+            output = {"anyOf": [output, next(item["outputSchema"] for item in reference_definitions() if item["name"] == name)]}
+        definitions.append({"name": name, "title": name.replace("_", " ").capitalize(),
+            "description": ("Admit one existing owner message to the original fleet read workflow. Reuse the same idempotency key after an uncertain response. No question, target, effect or transport argument is accepted." if start else
+                "Request cancellation of an existing caller-bound investigation; requested is distinct from settled." if name.endswith("cancel") else
+                "Read the original caller-bound investigation ledger and retained answer pages. No planning or probe is started."),
+            "inputSchema": {"type": "object", "additionalProperties": False, "required": required, "properties": properties},
+            "outputSchema": output,
+            "annotations": {"readOnlyHint": name in {"investigation_status", "investigation_result"}, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}})
+    return definitions
+
+
+def investigation_arguments(tool, value):
+    """Code-owned base handle API. Never evaluates a source or creates work."""
+    import fleet_mcp_admission as admission
+    if tool not in INVESTIGATION_TOOLS or not isinstance(value, dict):
+        raise MCPError("invalid investigation tool")
+    if tool == "investigation_start":
+        if (not {"source_update", "idempotency_key"} <= set(value) or set(value) - {"source_update", "idempotency_key", *admission.FORMATS}
+                or type(value["source_update"]) is not int or not 0 <= value["source_update"] <= 2**53-1
+                or not isinstance(value["idempotency_key"], str) or not admission.KEY.fullmatch(value["idempotency_key"])
+                or any(not isinstance(value[key], str) or value[key] not in admission.FORMATS[key] for key in set(value) & set(admission.FORMATS))):
+            raise MCPError("invalid source-bound start arguments")
+    elif set(value) != {"request_id"} or not isinstance(value["request_id"], str) or not fleet_protocol.TOKEN.fullmatch(value["request_id"]):
+        raise MCPError("invalid investigation reference arguments")
+    return copy.deepcopy(value)
+
+
 def tool_definitions(config=None):
-    return [tool_definition()] + (reference_definitions() if config and config.get("references") is not None else [])
+    config = config or {}
+    context = investigation_context(config)
+    if context is not None and context["policy"]["enabled"]:
+        return [tool_definition(), *investigation_definitions(legacy="references" in config),
+                *([item for item in reference_definitions() if item["name"] == "project_observe"] if "references" in config else [])]
+    return [tool_definition()] + (reference_definitions() if config.get("references") is not None else [])
 
 
 def _reference_time(value):
@@ -219,11 +285,12 @@ class RetainedReferences:
     does not install those bindings. immutable=1 is deliberately never used: it
     would hide current WAL updates, edits and deletions from the authority check.
     """
-    def __init__(self, policy, principal="cara", clock=None):
+    def __init__(self, policy, principal="cara", clock=None, admission_context=None):
         if not isinstance(principal, str) or not facts.ID.fullmatch(principal):
             raise MCPError("invalid retained principal")
         self.policy, self.principal = reference_policy(policy), principal
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.admission_context = copy.deepcopy(admission_context)
 
     def _connect(self):
         path = Path(self.policy["database_path"])
@@ -292,8 +359,23 @@ class RetainedReferences:
         connection = self._connect()
         try:
             connection.execute("BEGIN")
-            return fleet_shared_reads.canonical_reference(
+            loaded = fleet_shared_reads.canonical_reference(
                 connection, self.policy["owner_chat_id"], request_id=request_id)
+            if not loaded[2] and "mcp_admission" in loaded[1]:
+                if self.admission_context is None:
+                    raise ScopeDenied("admitted references require the same trusted admission policy")
+                import fleet_mcp_admission as admission
+                current = None
+                try:
+                    current = admission.connect(self.admission_context)
+                    if admission.classify(current, self.admission_context, request_id) != "admitted":
+                        raise ScopeDenied("admitted reference changed")
+                except admission.ScopeDenied:
+                    raise ScopeDenied("admitted reference scope denied") from None
+                finally:
+                    if current is not None:
+                        current.close()
+            return loaded
         except fleet_shared_reads.ReferenceError:
             raise MCPError("retained canonical source is invalid") from None
         finally:
@@ -315,7 +397,7 @@ class RetainedReferences:
         # host/project observations or guessed compatibility.
         if scope["read_scope"] is None or scope["kind"] not in {"projects", "all_projects"}:
             raise MCPError("retained project read schema is unavailable")
-        if payload["plan"].get("read_contract_hash") != fleet_protocol.digest(fleet_protocol.capability_contract()):
+        if not fleet_protocol.read_contract_compatible(payload["plan"].get("read_contract_hash")):
             raise MCPError("retained capability contract changed")
         raw = payload.get("result")
         required = {"version", "observed_at", "hosts", "read_scope"}
@@ -489,7 +571,7 @@ def _unique_pairs(items):
 
 class FactsAdapter:
     """One local trusted policy per adapter; protocol names/metadata grant no reads."""
-    def __init__(self, loader, allowed_subjects, principal="cara", clock=time.monotonic, limit=120, references=None):
+    def __init__(self, loader, allowed_subjects, principal="cara", clock=time.monotonic, limit=120, references=None, investigations=None):
         if (not callable(loader) or not isinstance(principal, str) or not facts.ID.fullmatch(principal)
                 or type(limit) is not int or not 1 <= limit <= 240
                 or not isinstance(allowed_subjects, (set, frozenset))
@@ -497,15 +579,51 @@ class FactsAdapter:
             raise MCPError("invalid trusted MCP adapter construction")
         self.loader, self.allowed_subjects, self.principal = loader, frozenset(allowed_subjects), principal
         self.clock, self.limit, self.calls = clock, limit, deque()
-        self.references = RetainedReferences(references, principal) if references is not None else None
+        self.config = {"principal": principal, "allowed_subjects": sorted(self.allowed_subjects)}
+        if references is not None:
+            self.config["references"] = references
+        if investigations is not None:
+            self.config["investigations"] = investigations
+        self.investigations = investigation_context(self.config)
+        self.references = RetainedReferences(references, principal, admission_context=self.investigations) if references is not None else None
+        self.tools = tool_definitions(self.config)
+
+    def _investigation(self, tool, arguments):
+        import fleet_mcp_admission as admission
+        connection = None
+        try:
+            connection = admission.connect(self.investigations, write=tool in {"investigation_start", "investigation_cancel"})
+            if tool in {"investigation_status", "investigation_result", "project_observe"}:
+                if not isinstance(arguments.get("request_id"), str):
+                    raise MCPError("invalid investigation identity")
+                kind = admission.classify(connection, self.investigations, arguments["request_id"])
+                if kind == "legacy":
+                    if self.references is None:
+                        raise ScopeDenied("legacy reference policy is unavailable")
+                    legacy = copy.deepcopy(arguments)
+                    if tool != "investigation_status":
+                        legacy.setdefault("cursor", "")
+                        legacy.setdefault("max_age_seconds", self.references.policy["max_age_seconds"])
+                    return self.references.read(tool, legacy)
+                if tool == "project_observe":
+                    if self.references is None:
+                        raise ScopeDenied("project reference policy is unavailable")
+                    return self.references.read(tool, arguments)
+            return {"investigation_start": admission.start, "investigation_status": admission.status,
+                    "investigation_result": admission.result, "investigation_cancel": admission.cancel}[tool](connection, self.investigations, arguments)
+        except admission.ScopeDenied:
+            raise ScopeDenied("investigation caller scope denied") from None
+        finally:
+            if connection is not None:
+                connection.close()
 
     def handle(self, message):
         identity = message.get("id") if isinstance(message, dict) else None
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
             return _error(None, -32600, "Invalid Request")
         if "id" not in message:
-            # There is no durable execution in this adapter. Cancellation requests
-            # cause no fabricated lifecycle result and notifications get no reply.
+            # RPC cancellation never invents cancellation of an application handle.
+            # The explicit caller-bound cancellation tool owns that lifecycle.
             return None
         if not ((type(identity) is int and -(2**53-1) <= identity <= 2**53-1)
                 or (isinstance(identity, str) and 1 <= len(identity) <= 96 and not re.search(r"[\x00-\x1f\x7f]", identity))):
@@ -535,22 +653,27 @@ class FactsAdapter:
             if method == "server/discover":
                 result = _complete({"supportedVersions": [PROTOCOL], "capabilities": {"tools": {}}})
             elif method == "tools/list":
-                result = _complete({"tools": [tool_definition()] + (reference_definitions() if self.references is not None else [])})
+                result = _complete({"tools": copy.deepcopy(self.tools)})
             else:
                 result = _complete({})
         elif method == "tools/call":
-            if set(params) != {"_meta", "name", "arguments"} or params.get("name") not in ([TOOL] + (list(REFERENCE_TOOLS) if self.references is not None else [])) or not isinstance(params.get("arguments"), dict):
+            if set(params) != {"_meta", "name", "arguments"} or params.get("name") not in [tool["name"] for tool in self.tools] or not isinstance(params.get("arguments"), dict):
                 return _error(identity, -32602, "Unknown tool or invalid tool-call structure")
             try:
                 selected = params["arguments"].get("subjects") if params["name"] == TOOL else None
                 if isinstance(selected, list) and all(isinstance(subject, str) for subject in selected) and any(subject not in self.allowed_subjects for subject in selected):
                     raise ScopeDenied("caller scope denied")
-                value = (lookup(self.loader(), params["arguments"], self.allowed_subjects) if params["name"] == TOOL else self.references.read(params["name"], params["arguments"]))
+                if params["name"] == TOOL:
+                    value = lookup(self.loader(), params["arguments"], self.allowed_subjects)
+                elif self.investigations is not None and self.investigations["policy"]["enabled"]:
+                    value = self._investigation(params["name"], params["arguments"])
+                else:
+                    value = self.references.read(params["name"], params["arguments"])
                 result = _complete({"structuredContent": value,
                                     "content": [{"type": "text", "text": facts.canonical(value)}], "isError": False})
             except ScopeDenied:
                 result = _complete({"content": [{"type": "text", "text": "Caller scope denied."}], "isError": True})
-            except (ValueError, OSError, TypeError):
+            except (ValueError, OSError, TypeError, sqlite3.Error):
                 result = _complete({"content": [{"type": "text", "text": "Published facts or requested lookup are unavailable."}], "isError": True})
         else:
             return _error(identity, -32601, "Method not found")
@@ -599,7 +722,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         config = read_config(args.config)
-        adapter = FactsAdapter(lambda: facts.load(config["facts_path"]), frozenset(config["allowed_subjects"]), config["principal"], references=config.get("references"))
+        adapter = FactsAdapter(lambda: facts.load(config["facts_path"]), frozenset(config["allowed_subjects"]), config["principal"], references=config.get("references"), investigations=config.get("investigations"))
     except (ValueError, OSError):
         print("MCP local configuration is unavailable.", file=sys.stderr)
         return 2

@@ -1,6 +1,6 @@
 # CF-07 — Reusable MCP fleet interface and Cara client
 
-- Status: Implementation in progress; offline contract published; MCP not enabled in production.
+- Status: Implementation in progress; published facts/retained foundation and durable-client candidate; MCP disabled in production.
 - Priority: P2 integration. CF-01–CF-06 keep their existing business priorities.
 - Planning: capability and client/server contracts can be designed immediately.
 - Production prerequisites: CF-01/02/03/04 for the facts/client path; the applicable CF-05 adapter for each project-read capability. CF-06 gates any future write exposure, which is outside this package.
@@ -155,3 +155,30 @@ executing cancellation are explicit gaps. Original47+15 specifications remain
 unchanged and the crosswalk distinguishes active cases from unqualified gaps.
 Focused Linux passes do not replace full release and actual-model qualification.
 See [increment02](../../cara-fleet-increment-02-2026-10-24.md); all packages stay open.
+
+## Increment 04 durable base/client checkpoint
+
+Candidate base investigation_start/status/result/cancel uses the existing ledger
+and ordinary async Agent workflow. prepare_start/start_investigation commits the
+exact key/source/input/principal/policy/format intent before first stdio. Prepared
+work is inert; only matching server promotion admits execution. Restart/lost
+responses recover one handle. Scope/owner/source/policy checks apply before
+dispatch and on results, without fallback bypass.
+
+Explicit cancellation is requested while a future runs, settled only on actual
+confirmation, and unknown/ambiguous after started proof is lost. Protocol
+notifications do not confirm cancellation. Tasks is unsupported/not advertised;
+a Tasks-capable caller still uses working base async. No both-peers Tasks, new
+project write, listener or A2A claim.
+
+All 15 MCP and 47 original IDs are executable without lifecycle skips. Focused
+Linux 227 passes in 14.395 s, including 16 durable-intent cases and protected stdio.
+Seventeen pure operator/orchestration fixtures are offline unbound-draft evidence.
+The frozen lossless task-page/artifact suite passes 45 tests in 22.201 s in isolated
+Linux, including ten new actual pipeline regressions; failed originals remain.
+Exact full/model/CI and actual installed identity/policy/readiness remain pending.
+
+Source/archive/operator/window remain UNSELECTED. Default MCP stays disabled;
+facts-only, retained and admission activation require their own qualified policies.
+No package completion; CF-01 through CF-06 retain independent acceptance.
+[Increment 04](../../cara-fleet-increment-04-2026-10-24.md).

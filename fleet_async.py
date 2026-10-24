@@ -61,9 +61,13 @@ class AsyncMixin:
 
     def _fleet_phase_messages(self, payload, inventory):
         if payload["inference"]["name"] == "planning":
-            return self._fleet_planning_messages(
+            messages = self._fleet_planning_messages(
                 payload["question"], inventory, payload.get("prior_scope", {}),
                 payload["lang"], payload.get("planning_error", ""))
+            if "mcp_admission" in payload:
+                import fleet_mcp_admission
+                messages[0]["content"] += fleet_mcp_admission.planning_hint(payload)
+            return messages
         # Selection records a derived optional-check gap on the report. It
         # cannot retroactively change the immutable model input at recovery.
         report = dict(payload["report"])
@@ -240,6 +244,9 @@ class AsyncMixin:
                     return
                 try:
                     plan = self._fleet_validate_planning(phase["raw"], inventory, payload.get("prior_scope"))
+                    if "mcp_admission" in payload:
+                        import fleet_mcp_admission
+                        plan = fleet_mcp_admission.validate_plan(self, row, payload, plan)
                     if payload["cost"] > self.cfg.task_cost_limit_usd:
                         raise ValueError("investigation planning budget exceeded")
                 except ValueError as exc:

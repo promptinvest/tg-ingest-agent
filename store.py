@@ -4796,6 +4796,31 @@ def assistant_task_set_status(conn, task_id, status, *, summary=None, artifact_i
     return bool(changed)
 
 
+FLEET_ANSWER_CHANNEL_ERROR = "fleet-answer-document-channel/v1:unavailable"
+FLEET_ANSWER_CHANNEL_SUMMARY = "Full task answer could not be delivered: The managed document channel is unavailable"
+
+
+def _fleet_answer_completion_resumable(conn, task):
+    """One code-owned document-channel gap; never a new tool/effect authority."""
+    if task["status"] != "blocked" or task["final_summary"] != FLEET_ANSWER_CHANNEL_SUMMARY:
+        return False
+    steps = conn.execute("SELECT status FROM assistant_task_steps WHERE task_id=?", (task["id"],)).fetchall()
+    if not steps or any(step["status"] != "succeeded" for step in steps):
+        return False
+    receipt = conn.execute("SELECT 1 FROM tool_receipts r JOIN assistant_task_steps s ON s.id=r.step_id AND s.task_id=r.task_id "
+        "WHERE r.task_id=? AND r.tool='fleet.investigate' AND r.status='ok' AND s.receipt_id=r.id AND s.worker_job_id IS NOT NULL AND s.error=? LIMIT 1", (task["id"], FLEET_ANSWER_CHANNEL_ERROR)).fetchone()
+    if receipt is None:
+        return False
+    for artifact in conn.execute("SELECT * FROM task_artifacts WHERE task_id=? AND kind='markdown'", (task["id"],)):
+        name, digest, path = artifact["safe_filename"], artifact["sha256"], artifact["local_path"]
+        if (isinstance(name, str) and isinstance(digest, str) and re.fullmatch(r"[a-f0-9]{64}", digest)
+                and name == "fleet-answer-" + digest[:16] + ".md" and isinstance(path, str)
+                and Path(path).name == name and Path(path).parent.name == "task-" + str(task["id"])
+                and type(artifact["size_bytes"]) is int and 0 < artifact["size_bytes"] <= 64 * 1024):
+            return True
+    return False
+
+
 def assistant_task_resume(conn, task_id, chat_id):
     row = assistant_task_get(conn, task_id, chat_id)
     if row is None or row["status"] not in {"blocked", "failed"}:
@@ -4837,7 +4862,7 @@ def assistant_task_resume(conn, task_id, chat_id):
             (now, int(task_id)),
         ).rowcount
         changed = 0
-        if requeued:
+        if requeued or _fleet_answer_completion_resumable(conn, row):
             changed = conn.execute(
                 "UPDATE assistant_tasks SET status = 'planned', completed_at = NULL,"
                 " delivery_status = 'pending', final_message_id = NULL,"

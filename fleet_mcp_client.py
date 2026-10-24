@@ -221,9 +221,23 @@ def reference(cfg, tool, arguments, reader, exchange=None):
     try:
         config = protocol.read_config(path)
     except (ValueError, OSError):
+        if reader.admission_context is not None:
+            raise protocol.ScopeDenied("MCP admitted reference policy is unavailable") from None
         return {"path": "internal", "reason": "configuration_unavailable", "result": reader.read(tool, arguments)}
-    if config["principal"] != reader.principal or "references" not in config or protocol.reference_policy(config["references"]) != reader.policy:
-        raise protocol.ScopeDenied("MCP retained caller scope differs from internal authority")
+
+    def authority(value):
+        if value["principal"] != reader.principal or "references" not in value or protocol.reference_policy(value["references"]) != reader.policy:
+            raise protocol.ScopeDenied("MCP retained caller scope differs from internal authority")
+        if reader.admission_context is not None and protocol.investigation_context(value) != reader.admission_context:
+            raise protocol.ScopeDenied("MCP admitted reference authority changed")
+
+    def current():
+        # Configuration changes must fence outage fallback as well as success.
+        # The same old reader cannot authorize data under a new caller policy.
+        authority(protocol.read_config(path))
+        return reader.read(tool, arguments)
+
+    authority(config)
     baseline = reader.read(tool, arguments)
     messages = [request(1, "server/discover"), request(2, "tools/list"),
                 request(3, "tools/call", name=tool, arguments=copy.deepcopy(arguments))]
@@ -232,13 +246,13 @@ def reference(cfg, tool, arguments, reader, exchange=None):
         validate_responses(messages, responses, baseline, tools=protocol.tool_definitions(config))
         # Reconcile against the current same logical request before exposing a
         # protocol response. Purged/edited/expired data cannot return from cache.
-        current = reader.read(tool, arguments)
-        if current != baseline:
-            return {"path": "internal", "reason": "reference_changed", "result": current}
+        latest = current()
+        if latest != baseline:
+            return {"path": "internal", "reason": "reference_changed", "result": latest}
     except protocol.ScopeDenied:
         raise
     except (ValueError, OSError, subprocess.SubprocessError):
-        return {"path": "internal", "reason": "interface_unavailable_or_invalid", "result": reader.read(tool, arguments)}
+        return {"path": "internal", "reason": "interface_unavailable_or_invalid", "result": current()}
     return {"path": "mcp", "reason": "verified_equivalent_retained_read", "result": copy.deepcopy(baseline)}
 
 # The optional facts transport has exactly one active background admission slot.
@@ -455,3 +469,119 @@ class FactsLookupSlot:
             return {"status": "settled", "pending_calls": 0}
         result = self._suppress("purge_hold" if purge_hold else "cancelled")
         return {"status": "settled" if result["settled"] else "waiting", "pending_calls": 0 if result["settled"] else 1}
+
+
+def _prepare_investigation(cfg, arguments, expected_context=None):
+    """Trusted client preparation; no exchange or investigation phase starts."""
+    import fleet_mcp_admission as admission
+    if getattr(cfg, "fleet_mcp_enabled", False) is not True:
+        raise protocol.ScopeDenied("MCP investigation admission is disabled")
+    path = getattr(cfg, "fleet_mcp_config", "/etc/cara-fleet/mcp-facts.json")
+    config = protocol.read_config(path)
+    context = protocol.investigation_context(config)
+    if context is None or context["policy"]["enabled"] is not True:
+        raise protocol.ScopeDenied("MCP investigation admission is not installed and enabled")
+    if expected_context is not None and context != expected_context:
+        raise protocol.ScopeDenied("MCP investigation authority changed before preparation")
+    connection = None
+    try:
+        connection = admission.connect(context, write=True)
+        return admission.prepare_start(connection, context, arguments)
+    except admission.ScopeDenied:
+        raise protocol.ScopeDenied("MCP investigation caller scope denied") from None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def start_investigation(cfg, source_update, *, presentation=None, detail=None, lang=None, exchange=None):
+    """Durably create/recover the source's caller key, then make ONE base call.
+
+    The existing fleet row retains its key, exact input and principal/policy
+    before the first exchange. Calling again after a process loss recovers that
+    same row/key and explicit formatting. Prepared intent never dispatches work.
+    This synchronous control helper belongs on asynchronous/external work only.
+    """
+    arguments = {"source_update": source_update}
+    arguments.update({key: value for key, value in {"presentation": presentation, "detail": detail, "lang": lang}.items() if value is not None})
+    prepared = _prepare_investigation(cfg, arguments)
+    if prepared["arguments"] is None:
+        return {"path": "internal", "reason": "purge_in_progress", "result": prepared["handle"]}
+    return investigation(cfg, "investigation_start", prepared["arguments"], exchange=exchange)
+
+
+def investigation(cfg, tool, arguments, exchange=None):
+    """Bounded base-MCP control client; call only from async/external work.
+
+    Start durably prepares its supplied caller key in the existing ledger
+    before any exchange. Preparation cannot dispatch an investigation. No logical
+    retry, local admission, cancellation fallback or replacement key is used. An uncertain mutating exchange returns the deterministic
+    same-ledger handle for reconciliation, never starts another investigation.
+    Only read helpers may return the equivalent current canonical local result.
+    This synchronous utility is not called by the owner update/reminder loop.
+    """
+    import hashlib
+    import fleet_mcp_admission as admission
+    arguments = protocol.investigation_arguments(tool, arguments)
+    if getattr(cfg, "fleet_mcp_enabled", False) is not True:
+        raise protocol.ScopeDenied("MCP investigation admission is disabled")
+    path = getattr(cfg, "fleet_mcp_config", "/etc/cara-fleet/mcp-facts.json")
+    config = protocol.read_config(path)
+    context = protocol.investigation_context(config)
+    if context is None or context["policy"]["enabled"] is not True:
+        raise protocol.ScopeDenied("MCP investigation admission is not installed and enabled")
+    if tool == "investigation_start":
+        prepared = _prepare_investigation(cfg, arguments, expected_context=context)
+        if prepared["arguments"] is None:
+            return {"path": "internal", "reason": "purge_in_progress", "result": prepared["handle"]}
+        arguments = prepared["arguments"]
+    if tool == "investigation_start":
+        caller = "mcp:" + hashlib.sha256(context["principal"].encode()).hexdigest()[:16] + ":" + hashlib.sha256(arguments["idempotency_key"].encode()).hexdigest()
+        identity = admission.retained.request_id(context["policy"]["owner_chat_id"], caller)
+    else:
+        identity = arguments["request_id"]
+    reference_arguments = {"request_id": identity}
+
+    def current():
+        # Reload root policy after the exchange. A changed principal/source/scope
+        # is a denial; an interface failure cannot downgrade that authority.
+        latest = protocol.investigation_context(protocol.read_config(path))
+        if latest != context:
+            raise protocol.ScopeDenied("MCP investigation authority changed")
+        connection = None
+        try:
+            connection = admission.connect(latest)
+            return (admission.result if tool == "investigation_result" else admission.cancellation_status if tool == "investigation_cancel" else admission.status)(connection, latest, reference_arguments)
+        except admission.ScopeDenied:
+            raise protocol.ScopeDenied("MCP investigation caller scope denied") from None
+        finally:
+            if connection is not None:
+                connection.close()
+
+    messages = [request(1, "server/discover"), request(2, "tools/list"),
+                request(3, "tools/call", name=tool, arguments=arguments)]
+    try:
+        responses = (exchange or (lambda values: stdio_exchange(path, values)))(messages)
+        # The wire cannot invent a handle or answer. First verify protocol/schema
+        # identity, then compare to the same current source-bound ledger reader.
+        if not isinstance(responses, list) or len(responses) != 3:
+            raise protocol.MCPError("MCP investigation response coverage mismatch")
+        called = responses[-1].get("result") if isinstance(responses[-1], dict) else None
+        expected = called.get("structuredContent") if isinstance(called, dict) else None
+        if called and called.get("isError") is True and called.get("content") == [{"type": "text", "text": "Caller scope denied."}]:
+            raise protocol.ScopeDenied("MCP caller scope denied; fallback is not permitted")
+        if not isinstance(expected, dict) or expected.get("request_id") != identity or len(facts.canonical(expected).encode()) > admission.MAX_BYTES:
+            raise protocol.MCPError("MCP investigation handle differs from caller identity")
+        validate_responses(messages, responses, expected, tools=protocol.tool_definitions(config))
+        canonical = current()
+        if expected != canonical:
+            return {"path": "internal", "reason": "reference_changed", "result": canonical}
+        return {"path": "mcp", "reason": "verified_same_investigation", "result": canonical}
+    except protocol.ScopeDenied:
+        raise
+    except (ValueError, OSError, subprocess.SubprocessError, protocol.sqlite3.Error):
+        if tool in {"investigation_start", "investigation_cancel"}:
+            # The request may already be durable or a paid phase may have begun.
+            # Reconcile this exact ID/key; never create another key or retry here.
+            return {"path": "mcp", "status": "reconcile_required", "reason": "interface_unavailable_or_invalid", "request_id": identity}
+        return {"path": "internal", "reason": "interface_unavailable_or_invalid", "result": current()}

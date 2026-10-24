@@ -104,3 +104,21 @@ executing cancellation are explicit gaps. Original47+15 specifications remain
 unchanged and the crosswalk distinguishes active cases from unqualified gaps.
 Focused Linux passes do not replace full release and actual-model qualification.
 See [increment02](../../cara-fleet-increment-02-2026-10-24.md); all packages stay open.
+
+## Increment 04 durable-intent checkpoint
+
+The client commits admission_prepared in the existing fleet ledger before first
+stdio. Owner ticks can fence but never dispatch prepared work; only server
+promotion begins ordinary budgeted phases. Prepared work shares the unchanged
+eight-request cap and source/policy expiry, cancellation, purge and restore.
+Reconnect recovers the same key/handle without duplicate paid work or delivery.
+
+Running facts cancellation remains requested through an owner tick until actual
+settlement; lost started proof is ambiguous/unknown, with no resend. Held Agent
+owner/reminder progress and real before-exchange durable visibility are tested.
+
+Focused Linux 227 passes, including 16 intent cases. The frozen taskbridge suite
+passes 45 tests in 22.201 s in isolated Linux; failed originals remain. Final
+all-phase/accounting/capacity/recovery and exact full/model/installed readiness
+remain pending. No package completion or MCP prerequisite.
+[Increment 04](../../cara-fleet-increment-04-2026-10-24.md).

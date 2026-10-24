@@ -153,6 +153,9 @@ class CatalogMixin:
         return super()._fleet_validate_planning(raw, inventory, self._fleet_runtime_prior(previous, inventory))
 
     def _fleet_catalog_answer(self, row, payload, plan, facts, _mcp_result=None):
+        if "mcp_admission" in payload:
+            import fleet_mcp_admission
+            plan = fleet_mcp_admission.validate_plan(self, row, payload, plan)
         if plan["kind"] == "catalog" and getattr(self.cfg, "fleet_mcp_enabled", False) is True and _mcp_result is None:
             self._fleet_queue_mcp_facts(row, payload, plan, facts)
             return
@@ -183,6 +186,10 @@ class CatalogMixin:
         source = store.assistant_task_source(self.conn, row["chat_id"], row["source_update"])
         if source is None or tasking.source_hash(source["text"]) != payload.get("source_hash"):
             return False
+        if "mcp_admission" in payload:
+            import fleet_mcp_admission
+            if not fleet_mcp_admission.current(self, row, payload):
+                return False
         if fleet_investigation.retained(payload):
             return fleet_investigation.current(self, row, payload)
         return payload.get("question") == source["text"]
@@ -230,9 +237,36 @@ class CatalogMixin:
 
     def _fleet_mcp_fail(self, row, payload, reason, *, notify=False):
         getattr(self, "_fleet_mcp_queued_nonces", {}).pop(row["id"], None)
+        phase = payload.setdefault("mcp_facts", {})
+        pending = getattr(self, "_fleet_mcp_facts_pending", None)
+        slot = getattr(self, "_fleet_mcp_facts_slot", None)
+        waiting = isinstance(phase.get("cancellation"), dict) and phase["cancellation"].get("state") == "requested"
+        if pending and pending["request_id"] == row["id"] and slot is not None:
+            settlement = slot.cancel(pending["handle"])
+            if settlement.get("settled") is False:
+                # Suppression is immediate; the running transport has not stopped.
+                # Retain both the durable phase and memory handle until done.
+                if not waiting:
+                    phase["cancellation"] = {"state": "requested", "reason": reason, "requested_at": protocol.now()}
+                    phase["outcome"] = "cancellation_requested"
+                    phase.pop("completed_at", None)
+                    self._fleet_save(row, "mcp_facts_started", payload, "mcp_facts_cancellation_waiting")
+                return
+            self._fleet_mcp_facts_pending = None
+            if waiting:
+                phase["cancellation"].update(state="settled", settled_at=protocol.now())
+        elif waiting or (payload.get("retained_cancel") and row["state"] == "mcp_facts_started" and phase.get("started_at")):
+            # This includes a cancel committed immediately before process loss,
+            # before the first owner cancellation tick could record its wait.
+            # Lost memory cannot prove the original started transport stopped.
+            phase.setdefault("cancellation", {"state": "requested", "reason": reason,
+                "requested_at": payload.get("retained_cancel", {}).get("requested_at", phase.get("started_at"))})
+            phase["cancellation"].update(state="unknown", observed_at=protocol.now())
+            phase.update(outcome="cancellation_settlement_unknown", completed_at=protocol.now())
+            self._fleet_save(row, "ambiguous", payload, "mcp_facts_cancellation_settlement_unknown")
+            return
         current = self._fleet_mcp_source_current(row, payload)
-        payload.setdefault("mcp_facts", {})["outcome"] = reason
-        payload["mcp_facts"]["completed_at"] = protocol.now()
+        phase.update(outcome=reason, completed_at=protocol.now())
         self._fleet_save(row, "failed" if current else "cancelled", payload, "mcp_facts_" + reason)
         if notify and current and not fleet_investigation.retained(payload):
             self.reply(row["chat_id"], "Requested facts are outside the configured interface scope." if payload["lang"] != "ru"
@@ -275,12 +309,18 @@ class CatalogMixin:
         for row in rows:
             payload = json.loads(row["payload"])
             try:
+                cancellation = payload.get("mcp_facts", {}).get("cancellation")
+                if isinstance(cancellation, dict) and cancellation.get("state") == "requested":
+                    # Once suppressed, restoration of the source/config cannot
+                    # resume normal polling or discard its settlement evidence.
+                    reason = cancellation.get("reason", "authority_changed")
+                    if reason not in {"authority_changed", "scope_denied", "observation_unavailable", "source_or_revision_changed"}:
+                        reason = "authority_changed"
+                    self._fleet_mcp_fail(row, payload, reason, notify=reason == "scope_denied")
+                    continue
                 facts = queries.load(self.cfg)
                 if not self._fleet_mcp_phase_current(row, payload, facts):
                     getattr(self, "_fleet_mcp_queued_nonces", {}).pop(row["id"], None)
-                    pending = getattr(self, "_fleet_mcp_facts_pending", None)
-                    if pending and pending["request_id"] == row["id"]:
-                        self._fleet_mcp_facts_slot.cancel(pending["handle"])
                     self._fleet_mcp_fail(row, payload, "authority_changed")
                     continue
                 phase = payload["mcp_facts"]
@@ -321,14 +361,8 @@ class CatalogMixin:
                 else:
                     self._fleet_mcp_fail(row, payload, "source_or_revision_changed")
             except fleet_mcp_client.protocol.ScopeDenied:
-                pending = getattr(self, "_fleet_mcp_facts_pending", None)
-                if pending and pending["request_id"] == row["id"] and slot.settle(purge_hold=False)["pending_calls"] == 0:
-                    self._fleet_mcp_facts_pending = None
                 self._fleet_mcp_fail(row, payload, "scope_denied", notify=True)
             except (ValueError, OSError, TypeError, KeyError):
-                pending = getattr(self, "_fleet_mcp_facts_pending", None)
-                if pending and pending["request_id"] == row["id"]:
-                    slot.cancel(pending["handle"])
                 self._fleet_mcp_fail(row, payload, "observation_unavailable")
         return len(rows)
 

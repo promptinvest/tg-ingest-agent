@@ -203,12 +203,34 @@ class EnabledFactsIntegration(unittest.TestCase):
         self.block()
         self.conn.execute("DELETE FROM conversation WHERE update_id=1"); self.conn.commit()
         self.agent.check_fleet_requests()
-        self.assertEqual(self.row()["state"], "cancelled")
+        self.assertEqual(self.row()["state"], "mcp_facts_started")
+        self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "requested")
+        self.assertTrue(self.agent._fleet_mcp_facts_slot._future.running())
         self.assertIsNotNone(self.agent._fleet_mcp_facts_pending)
         self.assertEqual(self.agent._pending_work_poll_timeout(), 2)
         self.release.set(); self.wait_transport()
         self.agent.check_fleet_requests()
+        self.assertEqual(self.row()["state"], "cancelled")
         self.assertIsNone(self.agent._fleet_mcp_facts_pending)
+        self.assertEqual(self.sent, [])
+
+    def test_restored_source_cannot_resume_suppressed_transport_or_lose_settlement(self):
+        self.block()
+        original = self.payload()["question"]
+        self.conn.execute("UPDATE conversation SET text='Changed owner source' WHERE update_id=1"); self.conn.commit()
+        self.agent.check_fleet_requests()
+        self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "requested")
+        self.conn.execute("UPDATE conversation SET text=? WHERE update_id=1", (original,)); self.conn.commit()
+        self.agent.check_fleet_requests()
+        self.assertEqual(self.row()["state"], "mcp_facts_started")
+        self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "requested")
+        self.assertTrue(self.agent._fleet_mcp_facts_slot._future.running())
+        self.assertEqual(self.sent, [])
+        self.release.set(); self.wait_transport(); self.agent.check_fleet_requests()
+        self.assertEqual(self.row()["state"], "failed")
+        self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "settled")
+        self.assertIsNone(self.agent._fleet_mcp_facts_pending)
+        self.assertEqual(self.exchanges, 1)
         self.assertEqual(self.sent, [])
 
     def test_removed_canonical_request_cannot_be_recreated_by_background_completion(self):
@@ -225,16 +247,24 @@ class EnabledFactsIntegration(unittest.TestCase):
         changed = copy.deepcopy(self.facts); changed["revision"] += 1; changed = fleet_facts.seal(changed)
         with mock.patch.object(fleet_facts, "load", return_value=changed):
             self.agent.check_fleet_requests()
-            self.assertEqual(self.row()["state"], "failed")
+            self.assertEqual(self.row()["state"], "mcp_facts_started")
+            self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "requested")
+            self.assertTrue(self.agent._fleet_mcp_facts_slot._future.running())
+            self.assertEqual(self.sent, [])
             self.release.set(); self.wait_transport(); self.agent.check_fleet_requests()
+            self.assertEqual(self.row()["state"], "failed")
         self.assertEqual(self.sent, [])
 
     def test_enabled_configuration_change_suppresses_inflight_result(self):
         self.block()
         self.cfg.fleet_mcp_config = "/etc/example-facts/changed.json"
         self.agent.check_fleet_requests()
-        self.assertEqual(self.row()["state"], "failed")
+        self.assertEqual(self.row()["state"], "mcp_facts_started")
+        self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "requested")
+        self.assertTrue(self.agent._fleet_mcp_facts_slot._future.running())
+        self.assertEqual(self.sent, [])
         self.release.set(); self.wait_transport(); self.agent.check_fleet_requests()
+        self.assertEqual(self.row()["state"], "failed")
         self.assertEqual(self.sent, [])
 
     def test_completed_result_rechecks_current_scope_before_publication(self):
@@ -393,6 +423,271 @@ class MCPConfigTests(unittest.TestCase):
             self.assertIn(state, fleet.PENDING_STATES)
             self.assertIn(state, fleet_shared_reads.STATES)
             self.assertIn(state, fleet_lifecycle_svc._ACTIVE)
+
+
+
+
+class DurableMCPAgentIntegration(unittest.TestCase):
+    """Actual enabled Agent phases and base-MCP handles, frozen model outputs."""
+    def setUp(self):
+        import test_fleet_async as async_tests
+        import test_fleet_mcp_admission as admission_tests
+        import fleet_mcp_admission as admission
+        self.base, self.admission = async_tests, admission
+        async_tests.FleetAsyncExecution.setUp(self)
+        self.cfg.fleet_mcp_enabled = True
+        self.cfg.fleet_mcp_config = str(self.root / "protected-policy.json")
+        self.facts = mcp_tests.fixture()
+        self.config = {**mcp_tests.configured(self.facts, ["host-a", "project-alpha"]), **admission_tests.config(self.root / "agent.db")}
+        self.server = mcp_tests.adapter(self.facts, self.config["allowed_subjects"], principal=self.config["principal"], investigations=self.config["investigations"])
+        self.transport_entered, self.transport_release = threading.Event(), None
+        self.facts_exchanges = 0
+        def exchange(_path, messages):
+            self.facts_exchanges += 1
+            self.transport_entered.set()
+            if self.transport_release is not None and not self.transport_release.wait(3):
+                raise AssertionError("held facts fixture not released")
+            return mcp_tests.exchange(self.server, messages)
+        self.extra_patches = [mock.patch.object(fleet_mcp, "read_config", side_effect=lambda _path: copy.deepcopy(self.config)),
+                              mock.patch.object(fleet_facts, "load", return_value=self.facts),
+                              mock.patch.object(client, "stdio_exchange", side_effect=exchange)]
+        for patcher in self.extra_patches: patcher.start()
+
+    def tearDown(self):
+        if self.transport_release is not None: self.transport_release.set()
+        for event in self.release_events: event.set()
+        slot = getattr(self.agent, "_fleet_mcp_facts_slot", None)
+        if slot:
+            end = time.monotonic() + 3
+            while slot.settle()["pending_calls"] and time.monotonic() < end: time.sleep(.001)
+            self.assertEqual(slot.settle()["pending_calls"], 0)
+        for patcher in reversed(self.extra_patches): patcher.stop()
+        self.base.FleetAsyncExecution.tearDown(self)
+
+    def reply(self, chat_id, text, **kwargs):
+        self.sent.append((chat_id, text, kwargs)); return {"message_id": 100 + len(self.sent)}
+
+    def source(self, *args, **kwargs): return self.base.FleetAsyncExecution.source(self, *args, **kwargs)
+    def row(self, *args, **kwargs): return self.base.FleetAsyncExecution.row(self, *args, **kwargs)
+    def payload(self, *args, **kwargs): return self.base.FleetAsyncExecution.payload(self, *args, **kwargs)
+    def wait_futures(self): return self.base.FleetAsyncExecution.wait_futures(self)
+
+    def control(self, tool, arguments):
+        return client.investigation(self.cfg, tool, arguments, exchange=lambda messages: mcp_tests.exchange(self.server, messages))
+
+    def admit(self, text="Give the recorded provider and public address of Example application host.", **style):
+        self.source(1, text)
+        self.start_args = {"source_update": 1, "idempotency_key": "owner-source-one", "lang": "en", **style}
+        return self.control("investigation_start", self.start_args)["result"]
+
+    def catalog_plan(self):
+        return dict(kind="catalog", subjects=["host-a"], scope="explicit", fields=["label", "provider", "public_ipv4"], presentation="list", detail="concise", clarification="")
+
+    def drain(self, terminal="done"):
+        end = time.monotonic() + 3
+        while time.monotonic() < end:
+            self.agent.check_fleet_requests(); self.wait_futures()
+            if self.row()["state"] == terminal: return self.row()
+            time.sleep(.001)
+        self.fail("retained fixture did not terminate: " + self.row()["state"])
+
+    def wait_facts(self):
+        end = time.monotonic() + 2
+        while time.monotonic() < end:
+            self.agent.check_fleet_requests(); self.wait_futures()
+            if self.transport_entered.is_set(): return
+            time.sleep(.001)
+        self.fail("facts transport was not admitted")
+
+    def test_wire_start_owner_loop_and_client_result_deliver_useful_table_with_one_model_and_zero_ssh(self):
+        with mock.patch.object(llm, "transport_chat", return_value=self.base.completion(self.catalog_plan())) as model, mock.patch.object(fleet, "submit", side_effect=AssertionError("known facts cannot inspect")) as probe:
+            handle = self.admit(presentation="table")
+            self.assertEqual(handle["state"], self.admission.STATE)
+            self.drain()
+        answer = self.control("investigation_result", {"request_id": handle["request_id"]})
+        self.assertEqual(answer["path"], "mcp")
+        text = "\n".join(answer["result"]["answer_pages"])
+        self.assertIn("ExampleCloud", text); self.assertIn("192.0.2.10", text); self.assertIn("|", text)
+        self.assertEqual(answer["result"]["scope"]["subjects"], ["host-a"])
+        self.assertEqual(self.payload()["mcp_facts"]["outcome"], "mcp")
+        self.assertEqual(model.call_count, 1); probe.assert_not_called()
+        self.assertEqual(self.facts_exchanges, 1)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM fleet_requests").fetchone()[0], 1)
+
+    def test_reconnect_during_original_paid_phase_reuses_handle_without_second_model_or_delivery(self):
+        entered, release = threading.Event(), threading.Event(); self.release_events.append(release)
+        def held(_prepared): entered.set(); release.wait(3); return self.base.completion(self.catalog_plan())
+        with mock.patch.object(llm, "transport_chat", side_effect=held) as model, mock.patch.object(fleet, "submit") as probe:
+            handle = self.admit()
+            self.agent.check_fleet_requests(); self.assertTrue(entered.wait(1))
+            again = self.control("investigation_start", self.start_args)["result"]
+            status = self.control("investigation_status", {"request_id": handle["request_id"]})["result"]
+            self.assertEqual(again["request_id"], handle["request_id"])
+            self.assertFalse(status["result_available"])
+            self.assertEqual(model.call_count, 1)
+            release.set(); self.drain()
+            self.assertEqual(self.control("investigation_start", self.start_args)["result"]["state"], "done")
+        self.assertEqual(model.call_count, 1); probe.assert_not_called(); self.assertEqual(self.sent, [])
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM fleet_requests").fetchone()[0], 1)
+
+    def test_unknown_paid_outcome_after_restart_is_never_resent_by_handle_reconnect(self):
+        with mock.patch.object(llm, "transport_chat", return_value=self.base.completion(self.catalog_plan())) as first:
+            handle = self.admit(); self.agent.check_fleet_requests(); self.wait_futures()
+        self.jobs.extend(self.agent._fleet_inference_calls.values()); self.agent._fleet_inference_calls.clear()
+        with mock.patch.object(llm, "transport_chat", side_effect=AssertionError("unknown paid outcome must not replay")):
+            self.agent.check_fleet_requests()
+            again = self.control("investigation_start", self.start_args)["result"]
+            answer = self.control("investigation_result", {"request_id": handle["request_id"]})["result"]
+        self.assertEqual(first.call_count, 1)
+        self.assertEqual(again["request_id"], handle["request_id"])
+        self.assertEqual(answer["gap"], "unknown_outcome"); self.assertEqual(answer["answer_pages"], [])
+        self.assertEqual(self.sent, [])
+
+    def test_source_edit_during_facts_stdio_suppresses_late_content_and_denies_reconnect_read(self):
+        self.transport_release = threading.Event()
+        with mock.patch.object(llm, "transport_chat", return_value=self.base.completion(self.catalog_plan())) as model:
+            handle = self.admit(); self.wait_facts()
+            self.conn.execute("UPDATE conversation SET text='Edited current question' WHERE update_id=1"); self.conn.commit()
+            self.transport_release.set(); self.drain("cancelled")
+        with self.assertRaises(fleet_mcp.ScopeDenied): self.control("investigation_result", {"request_id": handle["request_id"]})
+        self.assertNotIn("answer_pages", self.payload()); self.assertEqual(model.call_count, 1); self.assertEqual(self.sent, [])
+
+    def test_base_cancel_during_facts_stdio_suppresses_late_content_while_transport_settles(self):
+        self.transport_release = threading.Event()
+        with mock.patch.object(llm, "transport_chat", return_value=self.base.completion(self.catalog_plan())):
+            handle = self.admit(); self.wait_facts()
+            cancel = self.control("investigation_cancel", {"request_id": handle["request_id"]})["result"]
+            self.assertEqual(cancel["cancellation"], "requested"); self.assertNotEqual(cancel["state"], "cancelled")
+            self.agent.check_fleet_requests()
+            self.assertFalse(self.transport_release.is_set())
+            self.assertTrue(self.agent._fleet_mcp_facts_slot._future.running())
+            held = self.control("investigation_status", {"request_id": handle["request_id"]})["result"]
+            self.assertEqual(held["cancellation"], "requested")
+            self.assertNotEqual(held["state"], "cancelled")
+            self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "requested")
+            self.assertNotIn("answer_pages", self.payload())
+            self.transport_release.set(); self.drain("cancelled")
+        settled = self.control("investigation_status", {"request_id": handle["request_id"]})["result"]
+        self.assertEqual(settled["state"], "cancelled")
+        self.assertEqual(settled["cancellation"], "settled")
+        self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "settled")
+        self.assertIsNone(self.agent._fleet_mcp_facts_pending)
+        self.assertEqual(self.sent, [])
+
+    def test_restart_with_unsettled_cancellation_is_unknown_and_never_resubmitted(self):
+        self.transport_release = threading.Event()
+        with mock.patch.object(llm, "transport_chat", return_value=self.base.completion(self.catalog_plan())):
+            handle = self.admit(); self.wait_facts()
+            self.control("investigation_cancel", {"request_id": handle["request_id"]})
+            self.agent.check_fleet_requests()
+            slot = self.agent._fleet_mcp_facts_slot
+            self.agent._fleet_mcp_facts_slot = None
+            self.agent._fleet_mcp_facts_pending = None
+            try:
+                self.agent.check_fleet_requests()
+                answer = self.control("investigation_result", {"request_id": handle["request_id"]})["result"]
+                self.assertEqual(answer["state"], "ambiguous")
+                self.assertEqual(answer["gap"], "unknown_outcome")
+                self.assertEqual(answer["cancellation"], "unknown")
+                self.assertEqual(answer["answer_pages"], [])
+                self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "unknown")
+                self.assertEqual(self.facts_exchanges, 1)
+                self.assertEqual(self.sent, [])
+            finally:
+                self.transport_release.set()
+                end = time.monotonic() + 2
+                while slot.settle()["pending_calls"] and time.monotonic() < end: time.sleep(.001)
+                self.assertEqual(slot.settle()["pending_calls"], 0)
+
+    def test_restart_after_cancel_commit_before_first_owner_tick_is_unknown(self):
+        self.transport_release = threading.Event()
+        with mock.patch.object(llm, "transport_chat", return_value=self.base.completion(self.catalog_plan())) as model:
+            handle = self.admit(); self.wait_facts()
+            self.control("investigation_cancel", {"request_id": handle["request_id"]})
+            self.assertNotIn("cancellation", self.payload()["mcp_facts"])
+            slot = self.agent._fleet_mcp_facts_slot
+            self.agent._fleet_mcp_facts_slot = None
+            self.agent._fleet_mcp_facts_pending = None
+            try:
+                self.agent.check_fleet_requests()
+                answer = self.control("investigation_result", {"request_id": handle["request_id"]})["result"]
+                self.assertEqual(answer["state"], "ambiguous")
+                self.assertEqual(answer["cancellation"], "unknown")
+                self.assertEqual(answer["gap"], "unknown_outcome")
+                self.assertEqual(answer["answer_pages"], [])
+                self.assertEqual(model.call_count, 1)
+                self.assertEqual(self.facts_exchanges, 1)
+                self.assertEqual(self.sent, [])
+            finally:
+                self.transport_release.set()
+                end = time.monotonic() + 2
+                while slot.settle()["pending_calls"] and time.monotonic() < end: time.sleep(.001)
+                self.assertEqual(slot.settle()["pending_calls"], 0)
+
+    def test_actual_typed_purge_counts_and_deletes_admitted_row_after_facts_settlement(self):
+        spool = self.root / "cara-fleet" / "spool"
+        for name in ("requests", "results"): (spool/name).mkdir(parents=True)
+        self.cfg.fleet_spool = str(spool); fleet_queue.publish_ready(spool)
+        self.cfg.task_artifacts_dir = self.root / "tg-ingest-agent" / "task-artifacts"
+        self.cfg.task_worker_spool = str(self.root / "cara-worker" / "spool")
+        for name in ("requests", "results", "cancel"):
+            (Path(self.cfg.task_worker_spool) / name).mkdir(parents=True)
+        self.cfg.mentor_review_spool = str(self.root / "cara-mentor" / "spool")
+        self.cfg.mentor_runner_spool = str(self.root / "cara-mentor-runner" / "spool")
+        self.transport_release = threading.Event()
+        with mock.patch.object(llm, "transport_chat", return_value=self.base.completion(self.catalog_plan())):
+            handle = self.admit(); self.wait_facts(); self.agent._current_update_id = None
+            counts = lifecycle.db_preview(self.conn)
+            self.agent.do_purge(111, "en", {"scope": "all"})
+            pending = store.pending_get(self.conn, 111)
+            for field, count in counts.items(): self.assertEqual(pending["payload"]["anticipated"][field], count)
+            self.agent.resolve_purge(111, "en", pending, pending["payload"]["phrase"])
+            nonce = lifecycle._authorization(self.conn)["nonce"]
+            self.assertTrue(lifecycle.executor_gate(spool))
+            self.assertFalse(self.agent.check_fleet_content_purge())
+            self.transport_release.set()
+            end = time.monotonic() + 2
+            while not self.agent._fleet_mcp_facts_slot._future.done() and time.monotonic() < end: time.sleep(.001)
+            self.assertTrue(self.agent.check_fleet_content_purge())
+        self.assertEqual(lifecycle.db_preview(self.conn), {})
+        self.assertEqual(self.control("investigation_result", {"request_id": handle["request_id"]})["result"]["reason"], "purge_in_progress")
+        # Complete the real post-commit fleet and worker safe-point handshake.
+        # No fabricated receipt or status bool releases the global purge hold.
+        self.assertTrue(lifecycle.executor_gate(spool))
+        self.assertFalse(self.agent.recover_pending_task_purge(timeout_seconds=0))
+        import cara_worker
+        worker = Path(self.cfg.task_worker_spool)
+        self.assertEqual(list((worker / "requests").iterdir()), [])
+        self.assertTrue(cara_worker._process_purge_marker(worker / "cancel" / ".purge-all.json", worker / "requests", worker / "results", worker / "cancel"))
+        self.assertTrue(self.agent.recover_pending_task_purge(timeout_seconds=0))
+        self.assertFalse(lifecycle.admission_paused(self.conn))
+        read = self.control("investigation_result", {"request_id": handle["request_id"]})["result"]
+        self.assertEqual(read["reason"], "not_found_or_not_authorized")
+        self.agent.check_fleet_requests(); self.assertEqual(lifecycle.db_preview(self.conn), {})
+        self.assertFalse(any("192.0.2.10" in sent[1] for sent in self.sent))
+
+    def test_real_owner_loop_handles_stats_and_due_reminder_while_admitted_planning_is_blocked(self):
+        entered, release = threading.Event(), threading.Event(); self.release_events.append(release)
+        def held(_prepared): entered.set(); release.wait(3); return self.base.completion(self.catalog_plan())
+        self.agent.last_sweep = time.time(); polls = []
+        self.admit()
+        second = {"update_id": 2, "message": {"chat": {"id": 111}, "from": {"id": 111}, "message_id": 12, "date": int(time.time()), "text": "/stats"}}
+        def poll(_token, method, params=None, timeout=None):
+            if method != "getUpdates": return {}
+            polls.append(params["timeout"])
+            if len(polls) == 1:
+                self.assertTrue(entered.wait(1))
+                store.reminder_add(self.conn, 111, "fixture reminder during retained planning", (datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat())
+                return [second]
+            self.assertFalse(release.is_set()); self.agent.stop = True; return []
+        with mock.patch.object(llm, "transport_chat", side_effect=held) as model, mock.patch.object(entry, "tg_call", side_effect=poll), mock.patch.object(router, "route", return_value={"action": "stats", "params": {}, "confidence": 1, "risk": "read"}), mock.patch.object(entry.Agent, "SCHEDULER_TICKS", ("check_assistant_tasks", "fire_due_reminders")), mock.patch.object(self.agent, "announce_deploy_if_changed"), mock.patch.object(self.agent, "replay_pending_updates"), mock.patch.object(self.agent, "_recent_boss_msg", return_value=None):
+            self.agent.run()
+        self.assertEqual(polls, [2, 2]); self.assertEqual(model.call_count, 1)
+        self.assertEqual(store.telegram_update_get(self.conn, 2)["status"], "done")
+        self.assertTrue(any("fixture reminder during retained planning" in sent[1] for sent in self.sent))
+        self.assertFalse(any("192.0.2.10" in sent[1] for sent in self.sent))
+        self.assertFalse(release.is_set())
 
 
 if __name__ == "__main__":

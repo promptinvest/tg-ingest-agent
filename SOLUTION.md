@@ -1,5 +1,37 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 04 durable MCP/client candidate
+
+The stdlib base adapter shares fleet_requests/events, original asynchronous phases,
+budget accounting, retained evidence and typed lifecycle. Protected policy owns the
+caller/source/read scope; model parameters cannot supply targets or approval.
+Client prepare_start/start_investigation persists an inert admission_prepared row
+before stdio, with source-row key generation/recovery. Server-only atomic promotion
+starts the ordinary workflow; no table, outbox or competing ledger is added.
+
+Prepared intents join unchanged capacity, expiry/source fencing, cancellation,
+purge and checked restore. Facts cancellation waits with its live handle until
+settled; process loss yields unknown_outcome rather than a replay or false stop.
+The SQL-restricted same-UID API is not OS-level read-only isolation. Exact source/
+policy/schema and inherited sandbox remain required. Tasks is explicitly
+unsupported; base async does not depend on it.
+
+All 47 + 15 source cases are executable. Focused Linux 227 passes in 14.395 s,
+including 16 before-send intent tests. Seventeen operator/orchestration fixtures
+and a separate 18 gateway-updater fixtures pass as offline unbound-draft evidence,
+not release qualification. The nine-path frozen model-harness precheck makes zero
+paid calls/probes. The lossless task-page/managed-artifact adapter retains original
+bounds and exact answer content. The 45-test taskbridge suite, including ten new
+actual pipeline regressions, passes isolated Linux in 22.201 s; failed originals
+remain. Final full/model/CI, real binding/identity/readiness and guarded acceptance
+remain pending.
+Source/archive/operator/window: UNSELECTED. Production stays accepted `99037c5` /
+build `f54906e304fe` with MCP disabled; independent package criteria remain open.
+
+[Increment 04 contracts and release gates](docs/cara-fleet-increment-04-2026-10-24.md).
+Earlier candidate entries retain their historical checkpoint status.
+
+
 ## October 24 - Increment 03 typed project-read candidate
 
 Pure existing-monitor projections are separate from root-bound protected file I/O.

@@ -1,6 +1,7 @@
 """Real task wait/accounting/receipt path, with synthetic model/worker/Telegram I/O."""
 import copy
 import json
+from pathlib import Path
 import sqlite3
 import threading
 import unittest
@@ -9,6 +10,7 @@ from urllib.error import HTTPError
 
 import fleet
 import fleet_facts
+import fleet_queries
 import fleet_investigation as investigation
 import fleet_lifecycle
 import fleet_protocol as protocol
@@ -674,6 +676,248 @@ class FleetTaskBridge(unittest.TestCase):
             task_runner.reconcile_worker_spool(self.agent, self.conn)
         self.assertEqual(reconcile.call_args.args[1], set())
         self.assertEqual(reconcile.call_args.args[2], set())
+
+
+    def long_catalog_ready(self, count=18, wide=False):
+        document = fixture()
+        template = next(item for item in document["subjects"] if item["id"] == "host-a")
+        source_facts = [item for item in document["facts"] if item["subject_id"] == "host-a" and item["predicate"] != "aliases"]
+        identities = []
+        for index in range(count):
+            identity = "fixture-host-" + str(index)
+            identities.append(identity)
+            subject = dict(template, id=identity, label=("Example / Project Fleet Host " + str(index) + " / Useful recorded host scope" + " reference" * 12)[:120].rstrip())
+            document["subjects"].append(subject)
+            for claim in source_facts:
+                document["facts"].append(dict(claim, fact_id="long-" + str(index) + "-" + claim["predicate"], subject_id=identity))
+        raw = {"kind": "catalog", "subjects": identities, "fields": ["provider", "public_ipv4", "region", "role"],
+            "scope": "explicit", "presentation": "list", "detail": "detailed", "clarification": ""}
+        unit = "\u041f\u043e\u043b\u0435\u0437\u043d\u043e\u0435 \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u0440\u043e\u043b\u0438 \u043f\u0440\u043e\u0435\u043a\u0442\u0430. " if wide else "Useful recorded host role and responsibility. "
+        pages = None
+        qualified_width = getattr(type(self), "_qualified_long_width", None)
+        widths = (300,) if wide else (qualified_width,) if qualified_width is not None else range(80, 301, 5)
+        for length in widths:
+            candidate = copy.deepcopy(document)
+            for claim in candidate["facts"]:
+                if claim["subject_id"] in identities and claim["predicate"] in {"provider", "region"}:
+                    claim["value"] = (unit * 60)[:length if claim["predicate"] == "provider" else 300].rstrip()
+            for index, identity in enumerate(identities):
+                candidate["facts"].append({"fact_id": "role-" + str(index), "subject_id": identity,
+                    "predicate": "role", "value": (unit * 60)[:300].rstrip(), "status": "recorded",
+                    "evidence_at": "2026-10-20", "source_ids": ["fixture-source-current"], "supersedes": [], "conflicts": []})
+            candidate = fleet_facts.seal(candidate)
+            fleet_facts.validate(candidate, allow_fixture=True)
+            bound = fleet_queries.validate_plan(raw, candidate)
+            rendered = fleet_queries.render(candidate, bound, "en")
+            if wide or any(3500 < len(page) <= 3700 for page in rendered):
+                document, pages = candidate, rendered
+                if not wide:
+                    type(self)._qualified_long_width = length
+                break
+        self.assertIsNotNone(pages, "fixture must exercise an actual catalog page over3500")
+        if not wide:
+            self.assertTrue(any(3500 < len(page) <= 3700 for page in pages))
+        self.cfg.task_artifacts_dir = str(self.root / "tg-ingest-agent" / "task-artifacts")
+        self.cfg.fleet_spool = str(self.root / "cara-fleet" / "spool")
+        task = self.task("Give the recorded provider, public address, region and role of the listed fixture hosts in full detail.", calls=1, cost=.01)
+        with mock.patch.object(fleet_facts, "load", return_value=document), \
+                mock.patch.object(llm, "transport_chat", return_value=async_tests.completion(raw)) as paid, \
+                mock.patch.object(fleet, "submit", side_effect=AssertionError("known catalog facts cannot probe")):
+            self.begin(task); self.drain("done")
+        self.assertEqual(paid.call_count, 1)
+        self.assertEqual(self.payload()["answer_pages"], pages)
+        return task, pages
+
+    def test_valid_long_catalog_wait_receipt_delivers_full_exact_managed_answer_once(self):
+        task, pages = self.long_catalog_ready()
+        with mock.patch("tasks_svc.tg_send_document", return_value={"message_id": 9123}) as document:
+            task_runner.poll_fleet_results(self.agent, self.conn)
+            for _ in range(3):
+                task_runner.poll_fleet_results(self.agent, self.conn)
+                task_runner.run_task(self.agent, self.conn, task["id"])
+                self.agent.retry_task_deliveries()
+        finished = store.assistant_task_get(self.conn, task["id"])
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(finished["delivery_status"], "delivered")
+        self.assertEqual(finished["model_calls"], 2)
+        self.assertEqual(len(self.receipts(task)), 1)
+        persisted = json.loads(self.receipts(task)[0]["data_json"])["value"]["investigation"]
+        self.assertTrue(all(len(page) <= 3500 for page in persisted["pages"]))
+        self.assertEqual("".join(persisted["pages"]), "\n".join(pages))
+        self.assertEqual(document.call_count, 1)
+        self.assertEqual(document.call_args.args[3], "\n".join(pages).encode("utf-8"))
+        self.assertIn("Markdown", document.call_args.kwargs["caption"])
+        self.assertEqual(self.step(task)["attempts"], 1)
+        artifact = self.conn.execute("SELECT * FROM task_artifacts WHERE id=?", (finished["final_artifact_id"],)).fetchone()
+        self.assertEqual(Path(artifact["local_path"]).read_bytes(), "\n".join(pages).encode("utf-8"))
+        self.assertEqual(artifact["size_bytes"], len(document.call_args.args[3]))
+        for index in range(18):
+            self.assertIn("Example / Project Fleet Host " + str(index), document.call_args.args[3].decode())
+        self.delivery.assert_not_called(); self.assertEqual(self.sent, [])
+
+    def test_task_repage_preserves_every_character_and_existing_page_capacity(self):
+        original = [("Meaningful / Project Alpha with useful details. " * 100)[:3700]]
+        chunks = investigation.task_answer_pages(original)
+        self.assertEqual("".join(chunks), original[0])
+        self.assertTrue(all(0 < len(chunk) <= 3500 for chunk in chunks))
+        short = ["Example / Project Alpha", "Second dated observation"]
+        self.assertEqual(investigation.task_answer_pages(short), short)
+        with self.assertRaisesRegex(investigation.AdmissionError, "existing task page capacity"):
+            investigation.task_answer_pages([original[0]] * 32)
+
+    def test_long_document_ambiguity_never_replays_model_receipt_or_send(self):
+        task, pages = self.long_catalog_ready()
+        with mock.patch("tasks_svc.tg_send_document", return_value=None) as document, \
+                mock.patch.object(llm, "transport_chat", side_effect=AssertionError("completed work cannot replay")):
+            task_runner.poll_fleet_results(self.agent, self.conn)
+            for _ in range(3):
+                task_runner.poll_fleet_results(self.agent, self.conn)
+                task_runner.run_task(self.agent, self.conn, task["id"])
+                self.agent.retry_task_deliveries()
+        self.assertEqual(document.call_count, 1)
+        self.assertEqual(document.call_args.args[3], "\n".join(pages).encode())
+        self.assertEqual(store.assistant_task_get(self.conn, task["id"])["delivery_status"], "ambiguous")
+        self.assertEqual(len(self.receipts(task)), 1)
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM task_artifacts").fetchone()[0], 1)
+        self.delivery.assert_not_called()
+
+    def test_long_document_delivery_crash_keeps_ambiguous_boundary_without_resend(self):
+        task, _pages = self.long_catalog_ready()
+        with mock.patch("tasks_svc.tg_send_document", side_effect=KeyboardInterrupt) as document:
+            with self.assertRaises(KeyboardInterrupt):
+                task_runner.poll_fleet_results(self.agent, self.conn)
+        self.assertEqual(document.call_count, 1)
+        store.assistant_task_reclaim_stale(self.conn)
+        with mock.patch("tasks_svc.tg_send_document") as resend, mock.patch.object(llm, "transport_chat") as paid:
+            self.agent.retry_task_deliveries()
+            task_runner.run_task(self.agent, self.conn, task["id"])
+        self.assertEqual(store.assistant_task_get(self.conn, task["id"])["delivery_status"], "ambiguous")
+        self.assertEqual(len(self.receipts(task)), 1)
+        resend.assert_not_called(); paid.assert_not_called()
+
+    def test_checked_restore_keeps_full_managed_document_and_pending_single_delivery(self):
+        task, pages = self.long_catalog_ready()
+        with mock.patch.object(self.agent, "on_task_completed", return_value=False):
+            task_runner.poll_fleet_results(self.agent, self.conn)
+        before = store.assistant_task_get(self.conn, task["id"])
+        self.assertIsNotNone(before["final_artifact_id"])
+        self.restore_snapshot()
+        self.assertEqual(self.conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+        self.assertEqual(self.conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+        with mock.patch("tasks_svc.tg_send_document", return_value={"message_id": 9124}) as document, \
+                mock.patch.object(llm, "transport_chat", side_effect=AssertionError("restore must use the recorded document")):
+            self.agent.retry_task_deliveries()
+            self.agent.retry_task_deliveries()
+        self.assertEqual(document.call_count, 1)
+        self.assertEqual(document.call_args.args[3], "\n".join(pages).encode())
+        self.assertEqual(len(self.receipts(task)), 1)
+        self.assertEqual(store.assistant_task_get(self.conn, task["id"])["delivery_status"], "delivered")
+
+    def test_long_document_uses_existing_purge_counts_and_returned_artifact_path(self):
+        task, _pages = self.long_catalog_ready()
+        with mock.patch("tasks_svc.tg_send_document", return_value={"message_id": 9125}):
+            task_runner.poll_fleet_results(self.agent, self.conn)
+        artifact = self.conn.execute("SELECT * FROM task_artifacts WHERE task_id=?", (task["id"],)).fetchone()
+        preview = store.purge_preview(self.conn, "all")
+        self.assertEqual(preview["task_artifacts"], 1)
+        nonce = "a" * 32
+        store.kv_set(self.conn, "task_purge_authorization", protocol.canonical({"phase": "prepared", "nonce": nonce}))
+        counts = fleet_lifecycle.db_preview(self.conn)
+        receipt = {"version": "cara-fleet-queue/v1", "action": "purge_content", "nonce": nonce,
+            "status": "quiesced", "implementation_hash": "b" * 64, "pid": 123}
+        fleet_lifecycle.record_quiescence(self.conn, nonce, receipt, {"status": "settled", "pending_calls": 0}, counts)
+        spent = self.conn.execute("SELECT sum(cost_usd) FROM llm_usage").fetchone()[0]
+        deleted, paths = store.purge_execute(self.conn, "all", task_purge_nonce=nonce)
+        self.assertEqual(deleted["task_artifacts"], 1)
+        self.assertIn(artifact["local_path"], paths)
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM task_artifacts").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM tool_receipts").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT sum(cost_usd) FROM llm_usage").fetchone()[0], spent)
+        with mock.patch("tasks_svc.tg_send_document") as late:
+            self.agent.retry_task_deliveries()
+            task_runner.poll_fleet_results(self.agent, self.conn)
+        late.assert_not_called()
+
+    def test_full_answer_over_existing_managed_size_limit_is_explicitly_blocked(self):
+        task, pages = self.long_catalog_ready(count=60, wide=True)
+        self.assertGreater(len("\n".join(pages).encode()), 64 * 1024)
+        with mock.patch("tasks_svc.tg_send_document") as document:
+            task_runner.poll_fleet_results(self.agent, self.conn)
+        finished = store.assistant_task_get(self.conn, task["id"])
+        self.assertEqual(finished["status"], "blocked")
+        self.assertIn("managed document size limit", finished["final_summary"])
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM task_artifacts").fetchone()[0], 0)
+        self.assertEqual(len(self.receipts(task)), 1)
+        document.assert_not_called()
+
+
+    def test_document_copy_is_registered_before_write_and_file_failure_never_exposes_path(self):
+        task, pages = self.long_catalog_ready()
+        def fail(root, directory, filename, body):
+            row = self.conn.execute("SELECT * FROM task_artifacts WHERE task_id=?", (task["id"],)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["size_bytes"], len(body))
+            self.assertEqual(row["sha256"], __import__("hashlib").sha256(body).hexdigest())
+            self.assertEqual(self.agent._content_purge_preview("all")["task_artifacts"], 1)
+            raise OSError("SYNTHETIC-PRIVATE-PATH /private/operator/location")
+        with mock.patch.object(task_runner, "_write_managed_artifact", side_effect=fail), \
+                mock.patch("tasks_svc.tg_send_document") as document:
+            task_runner.poll_fleet_results(self.agent, self.conn)
+        failed = store.assistant_task_get(self.conn, task["id"])
+        self.assertEqual(failed["status"], "blocked")
+        self.assertNotIn("SYNTHETIC", failed["final_summary"])
+        self.assertNotIn("/private", failed["final_summary"])
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM task_artifacts").fetchone()[0], 1)
+        self.assertEqual(list(Path(self.cfg.task_artifacts_dir).rglob("*.md")), [])
+        self.assertTrue(store.assistant_task_resume(self.conn, task["id"], 111))
+        with mock.patch("tasks_svc.tg_send_document", return_value={"message_id": 9126}) as recovered, \
+                mock.patch.object(llm, "transport_chat", side_effect=AssertionError("document recovery cannot replay the read")):
+            self.begin(store.assistant_task_get(self.conn, task["id"]))
+        self.assertEqual(recovered.call_count, 1)
+        self.assertEqual(recovered.call_args.args[3], "\n".join(pages).encode())
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM task_artifacts").fetchone()[0], 1)
+        self.assertEqual(len(self.receipts(task)), 1)
+        document.assert_not_called()
+
+    def test_artifact_metadata_failure_cannot_leave_an_undisclosed_file(self):
+        task, _pages = self.long_catalog_ready()
+        with mock.patch.object(store, "task_artifact_create", side_effect=sqlite3.OperationalError("synthetic metadata failure")), \
+                mock.patch.object(task_runner, "_write_managed_artifact") as write, \
+                mock.patch("tasks_svc.tg_send_document") as document:
+            with self.assertRaises(sqlite3.OperationalError):
+                task_runner.poll_fleet_results(self.agent, self.conn)
+        write.assert_not_called(); document.assert_not_called()
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM task_artifacts").fetchone()[0], 0)
+        self.assertFalse(Path(self.cfg.task_artifacts_dir).exists())
+        self.assertEqual(len(self.receipts(task)), 1)
+
+
+    def test_registered_document_resume_preserves_owner_source_policy_and_receipt_fences(self):
+        task, _pages = self.long_catalog_ready()
+        with mock.patch.object(task_runner, "_write_managed_artifact", side_effect=OSError("synthetic unavailable")):
+            task_runner.poll_fleet_results(self.agent, self.conn)
+        failed = store.assistant_task_get(self.conn, task["id"])
+        self.assertEqual(self.step(task)["error"], store.FLEET_ANSWER_CHANNEL_ERROR)
+        self.assertFalse(store.assistant_task_resume(self.conn, task["id"], 222))
+        text = self.conn.execute("SELECT text FROM conversation WHERE update_id=1 AND role='user' ORDER BY id LIMIT 1").fetchone()[0]
+        self.conn.execute("UPDATE conversation SET text='Edited owner source' WHERE update_id=1"); self.conn.commit()
+        self.assertFalse(store.assistant_task_resume(self.conn, task["id"], 111))
+        self.conn.execute("UPDATE conversation SET text=? WHERE update_id=1", (text,)); self.conn.commit()
+        step = self.step(task)
+        with mock.patch.object(tool_broker, "POLICY_VERSION", "unqualified/v1"):
+            self.assertFalse(store.assistant_task_resume(self.conn, task["id"], 111))
+        self.conn.execute("UPDATE assistant_tasks SET final_summary='unrelated blocked flow' WHERE id=?", (task["id"],)); self.conn.commit()
+        self.assertFalse(store.assistant_task_resume(self.conn, task["id"], 111))
+        self.conn.execute("UPDATE assistant_tasks SET final_summary=? WHERE id=?", (store.FLEET_ANSWER_CHANNEL_SUMMARY, task["id"])); self.conn.commit()
+        artifact = self.conn.execute("SELECT * FROM task_artifacts WHERE task_id=?", (task["id"],)).fetchone()
+        self.conn.execute("UPDATE task_artifacts SET sha256=? WHERE id=?", ("0" * 64, artifact["id"])); self.conn.commit()
+        self.assertFalse(store.assistant_task_resume(self.conn, task["id"], 111))
+        self.conn.execute("UPDATE task_artifacts SET sha256=? WHERE id=?", (artifact["sha256"], artifact["id"])); self.conn.commit()
+        self.conn.execute("UPDATE assistant_task_steps SET receipt_id=NULL WHERE id=?", (step["id"],)); self.conn.commit()
+        self.assertFalse(store.assistant_task_resume(self.conn, task["id"], 111))
+        self.assertEqual(store.assistant_task_get(self.conn, task["id"])["status"], "blocked")
+        self.assertEqual(self.step(task)["attempts"], 1)
+        self.assertEqual(len(self.receipts(task)), 1)
 
 
 if __name__ == "__main__":

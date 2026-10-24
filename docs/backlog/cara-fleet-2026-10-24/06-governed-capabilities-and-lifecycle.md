@@ -114,3 +114,21 @@ facts without changing app defaults or original answer assertions. The failed pa
 attempt and full-gate logs remain; fresh qualification is required.
 
 Literal-bound task plans receive the exact source length after an accounted model candidate miscounted its span; out-of-range input remains rejected. The remaining full-Agent fixture now carries its isolated facts path; original expectations and production defaults stay exact.
+
+## Increment 04 shared-lifecycle checkpoint
+
+Client intent and server admission reuse existing fleet/task authority, rows,
+budget accounting, retained evidence and delivery. Prepared/admitted states join
+original capacity, shared reads, checked restore and typed all-content purge.
+Prepared work is definitely unsent; started cancellation needs real settlement.
+Lost proof is unknown and cannot permit another attempt.
+
+No new table/outbox/content ledger, effect tool or retention policy. Original
+spend/preferences, non-content consumed tokens, protected facts/configuration and
+backup/release evidence remain. Live purge is not a verification mechanism.
+
+Focused Linux 227 passes, including 16 before-send/restore/purge intent cases.
+The frozen taskbridge suite separately passes 45 tests in 22.201 s in isolated
+Linux; failed originals remain. Final full qualification and independent shared-
+authority/resource-lock/task/card/effect/sandbox acceptance audit remain pending
+before any broader effect. [Increment 04](../../cara-fleet-increment-04-2026-10-24.md).

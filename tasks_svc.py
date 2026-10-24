@@ -355,7 +355,9 @@ class TasksMixin:
         ]
         for step in steps:
             suffix = ""
-            if step["error"]:
+            if step["error"] == store.FLEET_ANSWER_CHANNEL_ERROR:
+                suffix = (" \u2014 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0430 \u043f\u043e\u043b\u043d\u043e\u0433\u043e \u043e\u0442\u0432\u0435\u0442\u0430 \u0444\u0430\u0439\u043b\u043e\u043c" if ru else " \u2014 full answer document delivery is unavailable")
+            elif step["error"]:
                 suffix = (
                     " — техническая причина сохранена в журнале"
                     if ru else f" — {step['error']}")

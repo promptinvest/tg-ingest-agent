@@ -2,7 +2,7 @@
 import copy
 import hashlib
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import io
 import json
 import os
@@ -537,6 +537,29 @@ class MCPRetainedReferences(unittest.TestCase):
         payload = reference_payload(); payload["plan"].pop("read_scope"); self.update(payload)
         self.assertEqual(self.read()["reason"], "unsupported_retained_schema")
 
+    def test_exact_qualified_prior_contracts_preserve_v1_observation_schema_and_dates(self):
+        for contract in ("13dbb6e9ff2ae7734878d5e306f887424b9484518119b10f00e92dad544df4ce", "987718d875c39d4e90bb2cfebc383ec921a20f3926b7a5ee468a456d85789d94"):
+            payload = reference_payload(); payload["plan"]["read_contract_hash"] = contract; self.update(payload)
+            with self.subTest(contract=contract):
+                value = self.read("project_observe")
+                self.assertEqual(value["observations"][0]["observation"]["build_version"], "example123")
+                self.assertEqual(value["observations"][0]["observation"]["observed_at"], REFERENCE_AT)
+                self.assertEqual(value["scope"]["projects"], ["project-alpha"])
+                tampered = copy.deepcopy(payload)
+                tampered["result"]["hosts"]["host-a"]["projects"]["project-alpha"]["release"]["implementation_version"] = "unqualified/v9"
+                self.update(tampered)
+                self.assertEqual(self.read()["reason"], "unsupported_retained_schema")
+
+    def test_prior_contract_keeps_stale_status_and_current_source_guard(self):
+        payload = reference_payload(); payload["plan"]["read_contract_hash"] = "13dbb6e9ff2ae7734878d5e306f887424b9484518119b10f00e92dad544df4ce"; self.update(payload)
+        value = self.read(max_age_seconds=10)
+        self.assertEqual(value["observations"][0]["freshness"], "stale")
+        self.assertEqual(value["result_observed_at"], REFERENCE_AT)
+        self.writer.execute("UPDATE conversation SET text='Edited original source'"); self.writer.commit()
+        denied = self.read()
+        self.assertEqual(denied["reason"], "source_no_longer_current")
+        self.assertNotIn("observations", denied)
+
     def test_selected_project_read_filters_other_colocated_project(self):
         self.policy["allowed_projects"].append("project-beta")
         self.reader = mcp.RetainedReferences(self.policy, clock=lambda: self.clock)
@@ -614,6 +637,19 @@ class MCPRetainedReferences(unittest.TestCase):
         self.assertEqual(value["result"]["reason"], "not_found_or_not_authorized")
         self.assertNotIn("example123", facts.canonical(value))
 
+    def test_reference_client_current_policy_fences_success_and_outage_fallback(self):
+        config = configured(fixture()); config["references"] = copy.deepcopy(self.policy)
+        cfg = SimpleNamespace(fleet_mcp_enabled=True)
+        for outage in (False, True):
+            config["references"] = copy.deepcopy(self.policy)
+            def changed(messages):
+                responses = exchange(self.server, messages)
+                config["references"]["allowed_projects"] = []
+                if outage: raise OSError("interface failed after policy changed")
+                return responses
+            with self.subTest(outage=outage), mock.patch.object(mcp, "read_config", side_effect=lambda _path: copy.deepcopy(config)), self.assertRaises(mcp.ScopeDenied):
+                client.reference(cfg, "investigation_result", self.arguments(), self.reader, exchange=changed)
+
     def test_client_scope_mismatch_denied_and_disabled_uses_no_mcp_configuration(self):
         with mock.patch.object(mcp, "read_config", side_effect=AssertionError("disabled needs no MCP config")):
             result = client.reference(SimpleNamespace(), "investigation_status", self.arguments("investigation_status"), self.reader)
@@ -683,7 +719,294 @@ class MCPRetainedReferences(unittest.TestCase):
         self.assertEqual(result["result"]["observations"][0]["observation"]["observed_at"], REFERENCE_AT)
         self.assertEqual(result["result"]["observations"][0]["freshness"], "within_window")
 
+
+
+
+
+@unittest.skipUnless(os.name == "posix", "fixed shared SQLite admission requires isolated Linux")
+class MCPDurableWire(unittest.TestCase):
+    """Real fixed-policy SQLite admission behind the actual base-MCP adapter."""
+    def setUp(self):
+        import fleet_mcp_admission as admission
+        self.admission = admission
+        self.directory = tempfile.TemporaryDirectory(prefix="cara-mcp-admit-")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name); self.root.chmod(0o700)
+        self.path = self.root / "existing.db"
+        self.writer = sqlite3.connect(self.path)
+        self.writer.row_factory = sqlite3.Row
+        self.addCleanup(self.writer.close)
+        self.writer.executescript(mcp.fleet_protocol.SCHEMA)
+        self.writer.executescript("CREATE TABLE kv(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE telegram_updates(update_id INTEGER PRIMARY KEY,chat_id INTEGER,received_at TEXT,payload TEXT); CREATE TABLE conversation(id INTEGER PRIMARY KEY,chat_id INTEGER,update_id INTEGER,role TEXT,source TEXT,text TEXT);")
+        self.writer.execute("INSERT INTO telegram_updates VALUES(7,12345,?,'SYNTHETIC-PRIVATE-PAYLOAD')", (mcp.fleet_protocol.now(),))
+        self.writer.execute("INSERT INTO conversation VALUES(1,12345,7,'user','boss','Give the recorded provider of Example application host.')")
+        self.writer.commit(); self.path.chmod(0o600)
+        self.document = fixture()
+        self.config = configured(self.document, ["host-a", "project-alpha"])
+        self.config["investigations"] = {"version": admission.VERSION, "capability_hash": admission.contract_hash(), "enabled": True,
+            "database_path": str(self.path), "owner_chat_id": 12345, "allowed_hosts": ["host-a"], "allowed_projects": ["project-alpha"],
+            "allowed_capabilities": list(mcp.fleet_protocol.PROJECT_CAPABILITIES), "allowed_facets": sorted(mcp.fleet_protocol.FACETS)}
+        self.server = self.make_server()
+        self.cfg = SimpleNamespace(fleet_mcp_enabled=True, fleet_mcp_config=str(self.root / "policy.json"))
+        self.args = {"source_update": 7, "idempotency_key": "fixture-one", "presentation": "table", "detail": "concise", "lang": "en"}
+
+    def make_server(self, config=None):
+        config = config or self.config
+        return adapter(self.document, config["allowed_subjects"], principal=config["principal"], investigations=config.get("investigations"), references=config.get("references"))
+
+    def call(self, tool, arguments, server=None):
+        return (server or self.server).handle(client.request(3, "tools/call", name=tool, arguments=arguments))["result"]
+
+    def start(self):
+        result = self.call("investigation_start", self.args)
+        self.assertIs(result["isError"], False)
+        return result["structuredContent"]
+
+    def row(self):
+        return self.writer.execute("SELECT * FROM fleet_requests").fetchone()
+
+    def payload(self):
+        return json.loads(self.row()["payload"])
+
+    def control(self, tool, arguments, exchange_call=None):
+        with mock.patch.object(mcp, "read_config", side_effect=lambda _path: copy.deepcopy(self.config)):
+            return client.investigation(self.cfg, tool, arguments, exchange=exchange_call or (lambda messages: exchange(self.server, messages)))
+
+    def test_optional_qualified_manifest_exposes_base_handles_without_tasks(self):
+        tools = self.server.handle(client.request(1, "tools/list"))["result"]["tools"]
+        self.assertEqual([item["name"] for item in tools], ["fleet_lookup", "investigation_start", "investigation_status", "investigation_result", "investigation_cancel"])
+        self.assertEqual(tools, mcp.tool_definitions(self.config))
+        self.assertFalse(tools[1]["annotations"]["readOnlyHint"])
+        self.assertFalse(tools[-1]["annotations"]["readOnlyHint"])
+        self.assertEqual(self.server.handle(client.request(1, "server/discover"))["result"]["capabilities"], {"tools": {}})
+        self.assertEqual(self.server.handle(client.request(1, "tasks/list"))["error"]["code"], -32601)
+
+    def test_absent_disabled_or_wrong_capability_never_advertises_creation(self):
+        disabled = copy.deepcopy(self.config); disabled["investigations"]["enabled"] = False
+        self.assertEqual(self.make_server(disabled).handle(client.request(1, "tools/list"))["result"]["tools"], [mcp.tool_definition()])
+        bad = copy.deepcopy(self.config); bad["investigations"]["capability_hash"] = "f" * 64
+        with self.assertRaises(ValueError): self.make_server(bad)
+        bad = copy.deepcopy(self.config); bad["investigations"]["enabled"] = "true"
+        with self.assertRaises(ValueError): self.make_server(bad)
+
+    def test_conflicting_legacy_and_admission_authority_is_rejected(self):
+        for field, value in (("owner_chat_id", 98765), ("database_path", str(self.root / "other.db")), ("allowed_hosts", ["host-b"]), ("allowed_projects", []), ("allowed_capabilities", [])):
+            config = copy.deepcopy(self.config)
+            config["references"] = reference_config(self.path)
+            config["references"]["allowed_capabilities"] = list(mcp.fleet_protocol.PROJECT_CAPABILITIES)
+            config["references"][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError): self.make_server(config)
+
+    def test_fixed_tool_never_accepts_question_targets_paths_or_commands(self):
+        for key, value in {"question": "Different question", "subjects": ["host-b"], "principal": "owner", "database_path": "/tmp/other.db", "command": "id", "approved": True}.items():
+            with self.subTest(key=key):
+                result = self.call("investigation_start", {**self.args, key: value})
+                self.assertTrue(result["isError"])
+                self.assertNotIn(str(value), facts.canonical(result))
+        self.assertIsNone(self.row())
+
+    def test_durable_handle_precedes_all_planning_and_reconnect_reuses_row(self):
+        with mock.patch("llm.transport_chat", side_effect=AssertionError("no model in adapter")), mock.patch("socket.create_connection", side_effect=AssertionError("no fleet probe")):
+            first = self.start()
+            second = self.make_server().handle(client.request(3, "tools/call", name="investigation_start", arguments=self.args))["result"]["structuredContent"]
+        self.assertEqual(first, second)
+        self.assertEqual(first["state"], self.admission.STATE)
+        self.assertFalse(first["result_available"])
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_requests").fetchone()[0], 1)
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_events").fetchone()[0], 1)
+        self.assertNotIn("SYNTHETIC-PRIVATE-PAYLOAD", facts.canonical(first))
+        self.assertNotIn("question", first)
+
+    def test_result_returns_actual_retained_answer_pages_and_evidence_gap(self):
+        handle = self.start()
+        waiting = self.call("investigation_result", {"request_id": handle["request_id"]})["structuredContent"]
+        self.assertEqual(waiting["answer_pages"], [])
+        self.assertEqual(waiting["gap"], "result_not_available")
+        payload = self.payload()
+        plan = planned(self.document, ["host-a"], ["provider"], presentation="table")
+        payload.update(plan=plan, answer_pages=queries.render(self.document, plan), facts_integrity=self.document["integrity"], retained_delivery={"state": "available"})
+        self.writer.execute("UPDATE fleet_requests SET state='done',payload=?", (facts.canonical(payload),)); self.writer.commit()
+        answer = self.call("investigation_result", {"request_id": handle["request_id"]})["structuredContent"]
+        self.assertEqual(answer["answer_pages"], payload["answer_pages"])
+        self.assertIn("ExampleCloud", "\n".join(answer["answer_pages"]))
+        self.assertIsNone(answer["observed_at"])
+        self.assertEqual(answer["scope"]["subjects"], ["host-a"])
+        self.assertEqual(answer["facts_integrity"], self.document["integrity"])
+
+    def test_principal_scope_or_source_changes_cannot_downgrade_to_legacy_reads(self):
+        handle = self.start(); args = {"request_id": handle["request_id"]}
+        other = copy.deepcopy(self.config); other["principal"] = "another-client"
+        for tool in ("investigation_status", "investigation_result", "investigation_cancel"):
+            with self.subTest(tool=tool):
+                denied = self.call(tool, args, self.make_server(other))
+                self.assertTrue(denied["isError"])
+                self.assertEqual(denied["content"], [{"type": "text", "text": "Caller scope denied."}])
+        self.writer.execute("UPDATE conversation SET text='Edited owner question'"); self.writer.commit()
+        self.assertTrue(self.call("investigation_result", args)["isError"])
+        cancelled = self.call("investigation_cancel", args)["structuredContent"]
+        self.assertEqual(cancelled["cancellation"], "requested")
+        self.assertNotIn("answer_pages", cancelled)
+
+    def test_legacy_only_reader_cannot_disclose_admitted_content(self):
+        handle = self.start()
+        reader = mcp.RetainedReferences(reference_config(self.path))
+        with self.assertRaises(mcp.ScopeDenied): reader.read("investigation_status", {"request_id": handle["request_id"]})
+
+    def test_explicit_cancellation_is_idempotent_and_distinct_from_rpc_notification(self):
+        handle = self.start(); args = {"request_id": handle["request_id"]}
+        self.assertIsNone(self.server.handle({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 3}}))
+        self.assertNotIn("retained_cancel", self.payload())
+        first = self.call("investigation_cancel", args)["structuredContent"]
+        second = self.call("investigation_cancel", args)["structuredContent"]
+        self.assertEqual(first, second)
+        self.assertEqual(first["state"], self.admission.STATE)
+        self.assertEqual(first["cancellation"], "requested")
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_events").fetchone()[0], 2)
+
+    def test_purge_hold_exposes_no_answer_and_admits_no_new_work(self):
+        handle = self.start()
+        self.writer.execute("INSERT INTO kv VALUES('task_purge_authorization',?)", (facts.canonical({"phase": "prepared", "nonce": "a"*32}),)); self.writer.commit()
+        for tool, args in (("investigation_start", self.args), ("investigation_status", {"request_id": handle["request_id"]}), ("investigation_result", {"request_id": handle["request_id"]}), ("investigation_cancel", {"request_id": handle["request_id"]})):
+            with self.subTest(tool=tool):
+                value = self.call(tool, args)["structuredContent"]
+                self.assertEqual(value["reason"], "purge_in_progress")
+                self.assertNotIn("answer_pages", value)
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_events").fetchone()[0], 1)
+
+    def test_client_verified_base_admission_and_result_use_same_ledger(self):
+        first = self.control("investigation_start", self.args)
+        self.assertEqual(first["path"], "mcp")
+        handle = first["result"]
+        status = self.control("investigation_status", {"request_id": handle["request_id"]})
+        self.assertEqual(status["result"]["request_id"], handle["request_id"])
+        self.assertEqual(status["path"], "mcp")
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_requests").fetchone()[0], 1)
+
+    def test_lost_start_response_requires_reconciliation_and_same_key_has_no_second_admission(self):
+        calls = []
+        def disconnected(messages):
+            calls.append(messages)
+            exchange(self.server, messages)
+            raise OSError("lost after original commit")
+        uncertain = self.control("investigation_start", self.args, disconnected)
+        self.assertEqual(uncertain["status"], "reconcile_required")
+        self.assertEqual(len(calls), 1)
+        handle = self.control("investigation_start", self.args)["result"]
+        self.assertEqual(uncertain["request_id"], handle["request_id"])
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_requests").fetchone()[0], 1)
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_events").fetchone()[0], 1)
+
+    def test_unavailable_start_persists_only_inert_intent_and_keeps_key(self):
+        failed = self.control("investigation_start", self.args, lambda _messages: (_ for _ in ()).throw(OSError("offline")))
+        self.assertEqual(failed["status"], "reconcile_required")
+        self.assertEqual(self.row()["state"], self.admission.PREPARED)
+        self.assertEqual(self.payload()["client_intent"]["idempotency_key"], self.args["idempotency_key"])
+        self.assertNotIn("inference", self.payload())
+        self.assertEqual(self.payload()["model_calls"], 0)
+        self.assertEqual(self.payload()["cost"], 0)
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_events").fetchone()[0], 1)
+        self.assertEqual(failed["request_id"], self.control("investigation_start", self.args)["result"]["request_id"])
+
+    def test_read_outage_returns_current_canonical_gap_without_any_new_phase(self):
+        handle = self.start()
+        result = self.control("investigation_result", {"request_id": handle["request_id"]}, lambda _messages: (_ for _ in ()).throw(OSError("offline")))
+        self.assertEqual(result["path"], "internal")
+        self.assertEqual(result["result"]["gap"], "result_not_available")
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_events").fetchone()[0], 1)
+        self.assertEqual(self.row()["state"], self.admission.STATE)
+
+    def test_client_denial_never_uses_an_internal_paid_or_read_fallback(self):
+        handle = self.start()
+        self.config["principal"] = "another-client"
+        with self.assertRaises(mcp.ScopeDenied): self.control("investigation_status", {"request_id": handle["request_id"]})
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_requests").fetchone()[0], 1)
+
+    def test_admitted_reference_outage_cannot_reuse_old_subject_authority(self):
+        handle = self.start()
+        policy = reference_config(self.path); policy["allowed_capabilities"] = list(mcp.fleet_protocol.PROJECT_CAPABILITIES)
+        self.config["references"] = policy
+        context = mcp.investigation_context(self.config)
+        reader = mcp.RetainedReferences(policy, self.config["principal"], admission_context=context)
+        def changed(_messages):
+            self.config["allowed_subjects"] = ["project-alpha"]
+            raise OSError("interface outage during authority update")
+        with mock.patch.object(mcp, "read_config", side_effect=lambda _path: copy.deepcopy(self.config)), self.assertRaises(mcp.ScopeDenied):
+            client.reference(self.cfg, "investigation_status", {"request_id": handle["request_id"]}, reader, exchange=changed)
+
+    def test_client_cancellation_validates_same_principal_after_source_edit(self):
+        handle = self.start()
+        self.writer.execute("UPDATE conversation SET text='Edited owner question'"); self.writer.commit()
+        result = self.control("investigation_cancel", {"request_id": handle["request_id"]})
+        self.assertEqual(result["path"], "mcp")
+        self.assertEqual(result["result"]["cancellation"], "requested")
+        self.assertNotIn("scope", result["result"])
+
+    def test_client_rejects_extra_tools_arguments_and_disabled_config_before_exchange(self):
+        transport = mock.Mock(side_effect=AssertionError("must not exchange"))
+        for tool, args in (("deploy", {}), ("investigation_start", {**self.args, "question": "injected"}), ("investigation_status", {"request_id": "a"*32, "principal": "owner"})):
+            with self.subTest(tool=tool), self.assertRaises(ValueError): self.control(tool, args, transport)
+        self.cfg.fleet_mcp_enabled = False
+        with self.assertRaises(mcp.ScopeDenied): self.control("investigation_start", self.args, transport)
+        transport.assert_not_called()
+
+    def test_wire_fabricated_answer_is_never_exposed_in_place_of_canonical_result(self):
+        handle = self.start()
+        def fabricated(messages):
+            responses = exchange(self.server, messages)
+            value = responses[-1]["result"]["structuredContent"]
+            value["answer_pages"] = ["Unrelated fabricated project name"]
+            responses[-1]["result"]["content"] = [{"type": "text", "text": facts.canonical(value)}]
+            return responses
+        result = self.control("investigation_result", {"request_id": handle["request_id"]}, fabricated)
+        self.assertEqual(result["result"]["answer_pages"], [])
+        self.assertNotIn("Unrelated fabricated", facts.canonical(result))
+        self.assertEqual(result["reason"], "reference_changed")
+
+    @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "actual isolated stdio qualification requires root-owned Linux source and policy")
+    def test_actual_isolated_stdio_start_and_status_share_the_existing_ledger(self):
+        import shutil
+        # Model the protected installed program, without changing working-tree
+        # permissions. A focused Windows transfer can preserve writable modes.
+        installed = self.root / "installed"; installed.mkdir(mode=0o700)
+        modules = ("fleet_mcp.py", "fleet_mcp_client.py", "fleet_protocol.py", "fleet_project_adapters.py", "fleet_monitor_adapters.py",
+            "fleet_facts.py", "fleet_queries.py", "fleet_shared_reads.py", "fleet_mcp_admission.py",
+            "fleet_investigation.py", "fleet_lifecycle.py", "common.py", "mentor_protocol.py",
+            "tasking.py", "tool_broker.py", "skill_manifest.py", "store.py", "worker_client.py")
+        for name in modules:
+            target = installed / name
+            shutil.copyfile(Path(__file__).with_name(name), target); target.chmod(0o644)
+        self.writer.execute("UPDATE telegram_updates SET received_at=? WHERE update_id=7", (datetime.now(timezone.utc).isoformat(),))
+        self.writer.commit()
+        path = Path(self.cfg.fleet_mcp_config)
+        path.write_text(facts.canonical(self.config), encoding="utf-8"); path.chmod(0o600)
+        messages = [client.request(1, "server/discover"), client.request(2, "tools/list"), client.request(3, "tools/call", name="investigation_start", arguments=self.args)]
+        program = installed / "fleet_mcp.py"
+        with mock.patch.object(client, "__file__", str(installed / "fleet_mcp_client.py")):
+            program.chmod(0o666)
+            with self.assertRaisesRegex(mcp.MCPError, "program is not trusted"):
+                client.stdio_exchange(path, messages)
+            self.assertIsNone(self.row())
+            program.chmod(0o644)
+            with mock.patch("llm.transport_chat", side_effect=AssertionError("adapter cannot call model")):
+                started = client.investigation(self.cfg, "investigation_start", self.args)
+                self.assertEqual(started["path"], "mcp")
+                self.assertIn("result", started, started)
+                status = client.investigation(self.cfg, "investigation_status", {"request_id": started["result"]["request_id"]})
+        self.assertEqual(status["path"], "mcp")
+        self.assertEqual(status["result"]["state"], self.admission.STATE)
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_requests").fetchone()[0], 1)
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM fleet_events").fetchone()[0], 1)
+        self.assertNotIn("inference", self.payload())
+
+    @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "protected policy qualification requires root Linux harness")
+    def test_actual_protected_policy_reader_accepts_qualified_extension_and_rejects_unknown_keys(self):
+        path = self.root / "policy.json"
+        path.write_text(facts.canonical(self.config), encoding="utf-8"); path.chmod(0o600)
+        self.assertEqual(mcp.read_config(path), self.config)
+        extra = {**self.config, "question": "not configuration"}
+        path.write_text(facts.canonical(extra), encoding="utf-8")
+        with self.assertRaises(ValueError): mcp.read_config(path)
+
+
 if __name__ == "__main__":
     unittest.main()
-
-

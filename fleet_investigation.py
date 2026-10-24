@@ -21,7 +21,7 @@ import worker_client
 VERSION = "cara-fleet-investigation/v1"
 HEADER_KEYS = {"version", "delivery_mode", "principal", "chat_id", "source_update", "source_hash",
                "source_span", "caller_key", "input_hash", "request_id", "admitted_at"}
-ACTIVE = ("mcp_facts_queued", "mcp_facts_started", "preparing", "queued", "inspection_started", "executing", "ready", "approval_sending", "delivering", "analysis_started") + tuple(
+ACTIVE = ("admission_prepared", "admission_queued", "mcp_facts_queued", "mcp_facts_started", "preparing", "queued", "inspection_started", "executing", "ready", "approval_sending", "delivering", "analysis_started") + tuple(
     name + "_" + phase for name in ("planning", "synthesis") for phase in ("queued", "started", "completed", "consumed"))
 TERMINAL = {"done", "failed", "cancelled", "ambiguous"}
 KEY = re.compile(r"[a-z0-9][a-z0-9_.:-]{0,127}\Z")
@@ -59,6 +59,8 @@ def _input(header, payload):
         "question": payload["question"], "lang": payload["lang"]}
     if "task_waiter" in payload:
         value["task_waiter"] = payload["task_waiter"]
+    if "mcp_admission" in payload:
+        value["mcp_admission"] = payload["mcp_admission"]
     return value
 
 
@@ -99,6 +101,10 @@ def current(agent, row, payload):
             return False
         if payload.get("retained_cancel") or not task_current(agent, row, payload):
             return False
+        if "mcp_admission" in payload:
+            import fleet_mcp_admission
+            if not fleet_mcp_admission.current(agent, row, payload):
+                return False
         plan = payload.get("plan", {})
         operation = payload.get("operation", {})
         return (isinstance(plan, dict) and plan.get("operation", "inspect") == "inspect"
@@ -533,6 +539,25 @@ def safe_task_receipt(data, evidence, *, request_id):
     return checked(data), task_evidence(request_id)
 
 
+def task_answer_pages(pages):
+    """Re-page existing qualified answers without raising task output limits.
+
+    Original short pages retain their exact representation. Oversize catalog
+    pages become contiguous chunks of the same rendered text; their full source
+    remains in the retained row for exact managed-document delivery.
+    """
+    if (not isinstance(pages, list) or not 1 <= len(pages) <= 32
+            or any(not isinstance(page, str) or not page or len(page) > 3700 for page in pages)):
+        raise AdmissionError("retained answer exceeds qualified source page bounds")
+    cleaned = [tasking.redact_derived_text(page) for page in pages]
+    if all(len(page) <= 3500 for page in cleaned):
+        return cleaned
+    text = "\n".join(cleaned)
+    if len(text) > 32 * 3500:
+        raise AdmissionError("full investigation answer exceeds existing task page capacity")
+    return [text[offset:offset + 3500] for offset in range(0, len(text), 3500)]
+
+
 def task_outcome(agent, task, step, row, payload):
     """Build code-owned receipt data only after the source-bound work settles."""
     gap, pages, observed = "", None, None
@@ -556,7 +581,7 @@ def task_outcome(agent, task, step, row, payload):
                   "investigation_cancelled": "The investigation was cancelled; no completed answer is available.",
                   "investigation_failed": "The investigation ended without a reliable answer; no completed result is available."}[gap]]
     value = {"version": TASK_VERSION, "request_id": step["worker_job_id"], "source_update": task["source_update"],
-             "state": state, "observed_at": observed, "pages": [tasking.redact_derived_text(page) for page in pages], "gap": gap}
+             "state": state, "observed_at": observed, "pages": task_answer_pages(pages), "gap": gap}
     validate_task_output(value)
     evidence = task_evidence(step["worker_job_id"])
     return ("partial" if gap else "ok", "Read-only investigation result recorded.",

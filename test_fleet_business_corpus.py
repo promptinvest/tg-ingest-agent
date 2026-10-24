@@ -343,7 +343,7 @@ MCP_CASE_TESTS = {
     **{identity: "test_fleet_mcp_business.MCPRetainedBusiness.test_" + identity.replace("-", "_")
        for identity in ("mcp-project-isolation", "mcp-no-hidden-content")},
     "mcp-async-responsiveness": "test_fleet_mcp_business.MCPAsyncBusiness.test_mcp_async_responsiveness",
-    **{identity: "test_fleet_mcp_business.MCPUnimplementedBusiness.test_" + identity.replace("-", "_")
+    **{identity: "test_fleet_mcp_business.MCPDurableBusiness.test_" + identity.replace("-", "_")
        for identity in ("mcp-reconnect-no-duplicate", "mcp-tasks-optional", "mcp-cancel-truthful")},
 }
 

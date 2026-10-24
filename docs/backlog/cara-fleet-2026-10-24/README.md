@@ -3,7 +3,33 @@
 Status: Implementation authorized October 24, 2026; work in progress. No package is complete.
 Parent tracker: [CF-00 / issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
 
-## Increment 03 current checkpoint
+## Increment 04 current checkpoint
+
+Published project-read source `498cb11` is followed by a separate durable MCP/client
+candidate. It persists caller intent in the existing ledger before first stdio,
+admits only by matching server promotion, and reuses original async budgets,
+capacity, source/policy checks, cancellation, typed purge and checked restore.
+Tasks is unsupported; no project effect, new ledger or MCP prerequisite for CF-01
+through CF-06 is added.
+
+All 47 original and 15 MCP source IDs now have executable assertions with no
+lifecycle skips; their specification bytes are unchanged. Focused durable-client
+Linux 227 passes in 14.395 s, including 16 before-send intent cases. Seventeen pure
+operator/orchestration fixtures pass offline in 0.017 s; a separate 18 pure
+gateway-updater fixtures pass in network-isolated Linux in 0.373 s with release
+bindings unselected. Neither is operator/live qualification. The frozen lossless
+long-page/artifact taskbridge suite passes 45 tests in 22.201 s in isolated Linux,
+including ten new actual pipeline regressions; failed originals remain. Final
+frozen-source combined/full/model/installed qualification remains pending.
+
+Target source/archive/operator/window: UNSELECTED. Final exact full/model/CI,
+actual source/policy/stdio/readiness, backups/parity and original preservation/
+release gates remain pending. Production stays on accepted `99037c5` with MCP
+disabled; no package is complete.
+[Independent acceptance and release record](../../cara-fleet-increment-04-2026-10-24.md).
+Earlier checkpoint sections retain their historical status.
+
+## Increment 03 published project checkpoint
 
 The typed project-read candidate extends published `8f50282`; production remains the
 accepted99037c5 business baseline. It adds fixed existing-observer/route projections,

@@ -106,3 +106,19 @@ Project-only focused Linux 201 passes in 0.622 s. Fresh bounded entailment/omiss
 format qualification and full compatibility/release checks remain required.
 Original criteria stay intact; CF-03 remains open independently of MCP.
 [Increment 03](../../cara-fleet-increment-03-2026-10-24.md).
+
+## Increment 04 answer-compatibility checkpoint
+
+Optional base handles retain the actual grounded answer pages and requested
+presentation; raw protocol data cannot substitute for the answer. The candidate losslessly
+re-pages catalog answers within original task bounds and matches their exact full
+text to an immutable receipt and existing managed Markdown/document delivery.
+Original artifact cap, explicit draft artifacts, counted crash residue and existing
+source/owner/resume/ambiguity fences remain. The frozen taskbridge suite passes
+45 tests in 22.201 s in isolated Linux, including ten new actual pipeline
+regressions; failed originals remain. No truncation or read/model rerun.
+
+All 47 + 15 source IDs are executable; focused durable-client Linux 227 passes.
+Existing cleanup/preferences/format assertions stay intact. Fresh model
+entailment/omission and full compatibility/release acceptance remain required.
+[Increment 04](../../cara-fleet-increment-04-2026-10-24.md).

@@ -780,6 +780,72 @@ def _create_approval(agent, conn, task, step, inputs, input_hash):
     return existing
 
 
+def _fleet_answer_artifact(agent, conn, task, receipts, lang, artifact):
+    """Deliver overflowing fleet answers through the existing managed artifact.
+
+    Receipts keep their bounded contract. Reconstruct an investigation's exact
+    rendered source only after matching its deterministic re-pagination to that
+    immutable receipt; no model, new read job or separate content store is used.
+    """
+    fleet_tools = {"fleet.lookup", "fleet.investigate", "fleet.status", "fleet.result"}
+    if (not any(row["tool"] in fleet_tools and row["status"] in {"ok", "partial"} for row in receipts)
+            or len(_render_task_result(receipts, lang=lang, complete=True)) <= 3500):
+        return _render_task_result(receipts, lang=lang), artifact
+    import fleet_investigation as investigation
+    import fleet_lifecycle
+    if fleet_lifecycle.admission_paused(conn):
+        raise TaskBlocked("Fleet answer delivery is paused for content purge")
+    restored = []
+    for receipt in receipts:
+        if receipt["tool"] != "fleet.investigate" or receipt["status"] not in {"ok", "partial"}:
+            restored.append(receipt)
+            continue
+        data = _json(receipt, "data_json", {})
+        value = data.get("value", {}).get("investigation") if isinstance(data, dict) else None
+        investigation.validate_task_output(value)
+        if value["gap"]:
+            restored.append(receipt)
+            continue
+        row = conn.execute("SELECT * FROM fleet_requests WHERE id=? AND chat_id=? AND source_update=?",
+            (value["request_id"], task["chat_id"], task["source_update"])).fetchone()
+        step = store.assistant_task_step_get(conn, receipt["step_id"], task["id"])
+        if row is None or row["state"] != "done" or not investigation.task_reference_current(agent, task, step):
+            raise TaskBlocked("Full fleet answer lost its original source-bound reference")
+        payload = json.loads(row["payload"])
+        investigation._validate(agent, row, payload)
+        original = payload.get("answer_pages", [payload.get("answer", "")])
+        if investigation.task_answer_pages(original) != value["pages"]:
+            raise TaskBlocked("Full fleet answer differs from its immutable task receipt")
+        projected = dict(receipt)
+        projected_data = json.loads(receipt["data_json"])
+        projected_data["value"]["investigation"]["pages"] = [tasking.redact_derived_text(page) for page in original]
+        projected["data_json"] = json.dumps(projected_data, ensure_ascii=False)
+        restored.append(projected)
+    complete = _render_task_result(restored, lang=lang, complete=True)
+    if len(complete) <= 3500:
+        return _render_task_result(receipts, lang=lang), artifact
+    if artifact is not None:
+        raise TaskBlocked("Full fleet answer requires a separate document; the existing draft was preserved")
+    encoded = complete.encode("utf-8")
+    if len(encoded) > 64 * 1024:
+        raise TaskBlocked("Full fleet answer exceeds the existing managed document size limit")
+    _source_for_task(conn, task)
+    digest = hashlib.sha256(encoded).hexdigest()
+    filename = "fleet-answer-" + digest[:16] + ".md"
+    directory = "task-" + str(task["id"])
+    path = Path(agent.cfg.task_artifacts_dir) / directory / filename
+    # Register the exact deterministic managed copy BEFORE creating any bytes.
+    # A crash leaves disclosed recoverable metadata, never an uncounted file.
+    artifact = store.task_artifact_create(conn, task["id"], "markdown", filename, str(path), len(encoded), digest)
+    _write_managed_artifact(agent.cfg.task_artifacts_dir, directory, filename, encoded)
+    _source_for_task(conn, task)
+    if fleet_lifecycle.admission_paused(conn):
+        raise TaskBlocked("Fleet answer delivery is paused for content purge")
+    caption = ("\u041f\u043e\u043b\u043d\u044b\u0439 \u043e\u0442\u0432\u0435\u0442 \u043f\u043e \u0444\u043b\u043e\u0442\u0443 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d \u0432 \u0444\u0430\u0439\u043b\u0435 Markdown; \u0432\u0441\u0435 \u0437\u0430\u043f\u0440\u043e\u0448\u0435\u043d\u043d\u044b\u0435 \u0441\u0432\u0435\u0434\u0435\u043d\u0438\u044f \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u044b."
+               if lang == "ru" else "The full fleet answer is attached as a Markdown file; all requested details are preserved.")
+    return caption, artifact
+
+
 def _finish_task_if_settled(agent, conn, task_id):
     task = store.assistant_task_get(conn, task_id)
     if task is None or task["status"] in {"waiting_approval", "cancel_requested"}:
@@ -806,6 +872,32 @@ def _finish_task_if_settled(agent, conn, task_id):
         summary = _render_task_result(receipts, lang=lang)
         artifact = next((row["artifact_id"] for row in reversed(receipts)
                          if row["artifact_id"]), None)
+        overflow = (any(row["tool"] in {"fleet.lookup", "fleet.investigate", "fleet.status", "fleet.result"}
+                        and row["status"] in {"ok", "partial"} for row in receipts)
+                    and len(_render_task_result(receipts, lang=lang, complete=True)) > 3500)
+        if overflow:
+            failure, failure_code = None, None
+            try:
+                summary, artifact = _fleet_answer_artifact(agent, conn, task, receipts, lang, artifact)
+            except TaskBlocked as exc:
+                failure = str(exc)  # Only code-owned business gap text.
+            except OSError:
+                failure = "The managed document channel is unavailable"
+                failure_code = store.FLEET_ANSWER_CHANNEL_ERROR
+            except ValueError:
+                failure = "Full fleet answer evidence is unavailable or inconsistent"
+            if failure is not None:
+                summary = "Full task answer could not be delivered: " + failure
+                conn.execute("UPDATE assistant_task_steps SET error=? WHERE task_id=? AND tool='fleet.investigate' AND status='succeeded' AND receipt_id IS NOT NULL", (failure_code, task_id))
+                store.assistant_task_set_status(conn, task_id, "blocked", summary=summary)
+                agent.on_task_blocked(store.assistant_task_get(conn, task_id), summary)
+                return "blocked"
+        if overflow:
+            conn.execute("UPDATE assistant_task_steps SET error=NULL WHERE task_id=? AND error=?", (task_id, store.FLEET_ANSWER_CHANNEL_ERROR))
+        if overflow and task["status"] == "planned":
+            # Explicit resume after document-channel failure reuses succeeded
+            # steps/receipt; it does not claim or execute another read attempt.
+            store.assistant_task_set_status(conn, task_id, "running")
         store.assistant_task_set_status(
             conn, task_id, "completed", summary=summary, artifact_id=artifact)
         task = store.assistant_task_get(conn, task_id)
@@ -881,7 +973,7 @@ def _finalize_cancelled(agent, conn, task_id, lead):
     return "cancelled"
 
 
-def _render_task_result(receipts, lang="en"):
+def _render_task_result(receipts, lang="en", *, complete=False):
     """Deterministic user result; derived bytes never enter conversation memory."""
     ru = lang == "ru"
     syntheses = [
@@ -949,7 +1041,7 @@ def _render_task_result(receipts, lang="en"):
                     + tasking.redact_derived_text(
                         item.get("label") or "")[:180]
                     + " — " + str(item.get("source") or "")[:500])
-        return "\n".join(lines)[:3500]
+        return "\n".join(lines) if complete else "\n".join(lines)[:3500]
     lines = []
     for receipt in receipts:
         if receipt["status"] not in {"ok", "partial"}:
@@ -985,7 +1077,7 @@ def _render_task_result(receipts, lang="en"):
                 lines.append(f"Шаг {receipt['tool']} выполнен.")
             else:
                 lines.append(tasking.redact_derived_text(receipt["summary"])[:1000])
-    return "\n".join(lines)[:3500] or (
+    return ("\n".join(lines) if complete else "\n".join(lines)[:3500]) or (
         "Задача выполнена; результат подтверждён квитанциями."
         if ru else "Task completed with recorded receipts.")
 

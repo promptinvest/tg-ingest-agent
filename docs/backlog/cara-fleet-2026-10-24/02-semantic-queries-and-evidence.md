@@ -117,3 +117,17 @@ Project-only focused Linux 201 passes in 0.622 s. Fresh bounded RU/EN/paraphrase
 correction and final requested-answer qualification, exact full/CI and protected
 real bindings/release gates remain pending. Original47+15 specifications are
 unchanged. No CF-02 completion. [Increment 03](../../cara-fleet-increment-03-2026-10-24.md).
+
+## Increment 04 optional-client checkpoint
+
+The candidate preserves source-bound subjects, allowed read scope, requested
+fields/format and useful retained answers through base MCP admission and reconnect.
+A protocol success or outage cannot substitute unrelated diagnostics, broaden
+targets or bypass current policy. Semantic interpretation stays in the ordinary
+budgeted planner; the adapter adds no model call.
+
+All 47 + 15 source IDs are executable; focused durable-client Linux 227 passes.
+The frozen task-page suite separately passes 45 tests in 22.201 s in isolated
+Linux; failed originals remain. Fresh bounded RU/EN/context/correction/mixed-answer
+and exact full/release criteria remain required independently of MCP.
+[Increment 04](../../cara-fleet-increment-04-2026-10-24.md).

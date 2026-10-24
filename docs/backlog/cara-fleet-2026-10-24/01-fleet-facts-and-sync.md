@@ -91,3 +91,22 @@ Source99037c5/buildf54906e304fe was accepted at10:46:31UTC after the full
 Linux/CI, accounted semantic qualification, original data/backup/runtime/sandbox
 and scoped-read gates. This is an incremental business baseline; no full package
 completion is claimed. MCP remains disabled. [Exact evidence and remaining work](../../cara-fleet-increment-01-2026-10-24.md).
+
+## Increment 04 compatibility checkpoint
+
+Optional MCP admission/client intent continues using the same local facts,
+provenance, uncertainty and requested cells; disabled/outage behavior preserves
+known answers with zero host inspections. It adds no descriptive source, publisher,
+schedule or execution authority. CF-01 retains its independent source-status/lag,
+history/privacy/failure and compatibility acceptance audit.
+
+All 47 + 15 source IDs are executable; focused durable-client Linux 227 passes.
+The separate task-page suite passes 45 tests in 22.201 s in isolated Linux; failed
+originals remain. Final source/model/full/installed release qualification remains
+pending. No package completion.
+[Increment 04](../../cara-fleet-increment-04-2026-10-24.md).
+
+Publication status/lag remains in the existing operator CLI; no new query field
+is claimed. Revision 1 remains the installed publication. The planned post-acceptance private-KB
+update and reviewed forward publication must retain other source digests/history
+and actual dates, without self-referential receipt fields or continuous-sync claims.

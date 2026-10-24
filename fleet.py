@@ -22,7 +22,7 @@ import tasking
 import worker_client
 
 SCHEMA = protocol.SCHEMA
-PENDING_STATES = ("preparing", "queued", "inspection_started", "executing", "ready", "approval_sending",
+PENDING_STATES = ("admission_prepared", "admission_queued", "preparing", "queued", "inspection_started", "executing", "ready", "approval_sending",
                   "delivering", "analysis_started", "mcp_facts_queued", "mcp_facts_started") + fleet_async.STATES
 _context_recent = fleet_context.recent
 
@@ -356,6 +356,9 @@ class _FleetCore:
         if fleet_investigation.retained(payload):
             if operation.get("operation") != "inspect" or not fleet_investigation.current(self, row, payload):
                 raise ValueError("retained admission cannot dispatch this operation")
+        if "mcp_admission" in payload:
+            import fleet_mcp_admission
+            operation = fleet_mcp_admission.validate_operation(self, row, payload, operation)
         binding = submission_binding(row["source_update"], step)
         submitted_at = protocol.now()
         executor = spool(self.cfg)
@@ -690,7 +693,9 @@ class _FleetCore:
             return 0
         if not getattr(self.cfg, "fleet_enabled", False):
             return 0
-        inference_count = self._fleet_check_inference()
+        import fleet_mcp_admission
+        admission_count = fleet_mcp_admission.pump(self)
+        inference_count = self._fleet_check_inference() + admission_count
         rows = self.conn.execute("SELECT * FROM fleet_requests WHERE state IN ('preparing','queued','inspection_started','executing','ready','approval_sending','delivering','analysis_started') ORDER BY updated_at LIMIT 16").fetchall()
         for row in rows:
             payload = json.loads(row["payload"])

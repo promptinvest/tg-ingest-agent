@@ -1,5 +1,35 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 04 durable MCP/client candidate
+
+Optional base MCP start/status/result/cancel now uses the existing source-bound
+fleet ledger and ordinary budgeted Agent workflow. The client commits an inert
+admission_prepared intent, exact key/source/input/principal/policy and format before
+the first stdio exchange. Only matching server admission promotes that same row.
+Restart/lost-response recovery reuses one key/handle without paid work or delivery
+duplication. Prepared intents share the original eight-request capacity.
+
+Running cancellation remains requested through owner ticks until actual settlement.
+Lost started settlement is ambiguous/unknown and never replayed. Owner messages
+and reminders continue while model/stdio work is held. Existing typed purge and
+checked backup/restore include prepared/admitted content; original spend/preferences,
+consumed markers, recovery and approvals remain.
+
+All 47 original and 15 MCP source IDs are executable with no lifecycle skips.
+Focused durable-client Linux 227 passes in 14.395 s, including 16 intent cases.
+The lossless catalog-to-task page/artifact adapter preserves the exact answer and
+original bounds. Its 45-test taskbridge suite, including ten new actual receipt/
+delivery regressions, passes isolated Linux in 22.201 s; failed originals remain.
+Pure operator fixtures and the nine-path frozen harness check remain
+offline evidence with zero paid calls/probes. Full exact-source Linux/model/CI,
+real bindings and installed stdio/policy/readiness remain pending; source/archive/operator/window:
+UNSELECTED. Production remains accepted `99037c5` / build `f54906e304fe`. MCP stays disabled;
+Tasks/write/A2A is not exposed and no CF package is complete.
+
+[Increment 04 behavior, independent acceptance and release limits](docs/cara-fleet-increment-04-2026-10-24.md).
+Earlier candidate entries retain their historical checkpoint status.
+
+
 ## October 24 - Increment 03 typed project-read candidate
 
 Selected-project reads can consume existing application observer and authenticated

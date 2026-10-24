@@ -1,11 +1,13 @@
-"""Additional MCP business source IDs, with explicit unimplemented lifecycle gaps.
+"""Additional MCP business source IDs through shared facts and durable Agent reads.
 
 Facts and retained observations use the same production validators and answer
 obligations as internal reads. A passing protocol exchange alone is insufficient.
 The full disabled baseline suite remains a separate release gate.
 """
 import copy
+import hashlib
 import json
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -23,16 +25,6 @@ import test_fleet_mcp_integration as integration
 from test_fleet_business_corpus import MCP, raw
 from test_fleet_facts import fixture
 from test_fleet_queries import planned
-
-
-# These are material business gaps, never xfail/passing protocol substitutes.
-# Root may retire a gap only after its actual durable application/client path is
-# implemented and its complete original source assertions are executed.
-UNIMPLEMENTED_MCP_CASES = {
-    "mcp-reconnect-no-duplicate": "MCP has no durable investigation_start submission/reconciliation path.",
-    "mcp-tasks-optional": "MCP has no base durable start/status/result lifecycle with optional negotiated Tasks.",
-    "mcp-cancel-truthful": "MCP has no executing-investigation cancellation/reconciliation path; safe notification rejection is only partial coverage.",
-}
 
 
 class MCPDisabledOriginalBusiness(unittest.TestCase):
@@ -202,18 +194,190 @@ class MCPAsyncBusiness(unittest.TestCase):
         self.assertFalse((self.root / "spool/requests").exists())
 
 
-class MCPUnimplementedBusiness(unittest.TestCase):
-    @unittest.skip(UNIMPLEMENTED_MCP_CASES["mcp-reconnect-no-duplicate"])
+class MCPDurableBusiness(unittest.TestCase):
+    """Base handles drive the actual Agent; optional Tasks grants no authority."""
+    setUp = integration.DurableMCPAgentIntegration.setUp
+    tearDown = integration.DurableMCPAgentIntegration.tearDown
+    reply = integration.DurableMCPAgentIntegration.reply
+    source = integration.DurableMCPAgentIntegration.source
+    row = integration.DurableMCPAgentIntegration.row
+    payload = integration.DurableMCPAgentIntegration.payload
+    wait_futures = integration.DurableMCPAgentIntegration.wait_futures
+    control = integration.DurableMCPAgentIntegration.control
+    admit = integration.DurableMCPAgentIntegration.admit
+    catalog_plan = integration.DurableMCPAgentIntegration.catalog_plan
+    drain = integration.DurableMCPAgentIntegration.drain
+    wait_facts = integration.DurableMCPAgentIntegration.wait_facts
+
+    def assert_one_request(self, handle):
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM fleet_requests").fetchone()[0], 1)
+        self.assertEqual(self.row()["id"], handle["request_id"])
+        self.assertEqual(self.row()["source_update"], 1)
+        self.assertEqual(self.payload()["mcp_admission"]["principal"], self.config["principal"])
+        self.assertEqual(self.sent, [])
+
     def test_mcp_reconnect_no_duplicate(self):
-        pass
+        case = MCP["mcp-reconnect-no-duplicate"]
+        self.assertEqual(case["fault"], "response lost after durable read submission")
+        self.assertEqual(case["expected"]["logical_investigations"], 1)
+        for field in ("reconcile_same_request_before_fallback", "no_duplicate_paid_calls_or_delivery",
+                      "caller_bound_key_persisted_before_send"):
+            self.assertIs(case["expected"][field], True)
+        self.source(1, "Give the recorded provider and public address of Example application host.")
+        self.start_args = {"source_update": 1, "idempotency_key": "source-one-reconnect",
+                           "presentation": "table", "lang": "en"}
+        exchanges = []
+        def lost_after_commit(messages):
+            exchanges.append(copy.deepcopy(messages))
+            existing.exchange(self.server, messages)
+            raise OSError("synthetic response lost after commit")
+        with mock.patch.object(llm, "transport_chat", side_effect=AssertionError("adapter called model")) as premature, \
+                mock.patch.object(cara_fleet, "execute", side_effect=AssertionError("adapter inspected")):
+            uncertain = client.investigation(self.cfg, "investigation_start", self.start_args, exchange=lost_after_commit)
+        premature.assert_not_called()
+        self.assertEqual(len(exchanges), 1)  # no automatic logical retry/fallback
+        self.assertEqual(uncertain["status"], "reconcile_required")
+        bound = self.payload()
+        expected_key = hashlib.sha256(self.start_args["idempotency_key"].encode()).hexdigest()
+        self.assertEqual(bound["mcp_admission"]["idempotency_hash"], expected_key)
+        self.assertTrue(bound["external_waiter"]["caller_key"].endswith(":" + expected_key))
+        self.assertEqual(bound["external_waiter"]["source_update"], self.start_args["source_update"])
+        self.assertEqual(bound["external_waiter"]["request_id"], uncertain["request_id"])
+        self.assertEqual(bound["external_waiter"]["source_hash"], bound["source_hash"])
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM fleet_events").fetchone()[0], 1)
+        self.assertNotIn("inference", bound)
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM llm_usage").fetchone()[0], 0)
+        # The caller supplies its stable source/key; this server binding is
+        # durable before the owner loop may send any paid phase or host read.
+        entered, release = threading.Event(), threading.Event()
+        self.release_events.append(release)
+        def held(_prepared):
+            entered.set()
+            self.assertTrue(release.wait(3), "held business planner not released")
+            return self.base.completion(self.catalog_plan())
+        with mock.patch.object(llm, "transport_chat", side_effect=held) as model, \
+                mock.patch("fleet.submit", side_effect=AssertionError("known fact inspected a host")) as probe:
+            handle = self.control("investigation_start", self.start_args)["result"]
+            self.assertEqual(handle["request_id"], uncertain["request_id"])
+            self.agent.check_fleet_requests()
+            self.assertTrue(entered.wait(1))
+            reconnected = self.control("investigation_start", self.start_args)["result"]
+            self.assertEqual(reconnected["request_id"], handle["request_id"])
+            self.assertFalse(self.control("investigation_status", {"request_id": handle["request_id"]})["result"]["result_available"])
+            self.assertEqual(model.call_count, 1)
+            release.set()
+            self.drain()
+            result = self.control("investigation_result", {"request_id": handle["request_id"]})["result"]
+            events = self.conn.execute("SELECT count(*) FROM fleet_events").fetchone()[0]
+            self.assertEqual(self.control("investigation_result", {"request_id": handle["request_id"]})["result"], result)
+            self.assertEqual(self.control("investigation_start", self.start_args)["result"]["state"], "done")
+            self.assertEqual(self.conn.execute("SELECT count(*) FROM fleet_events").fetchone()[0], events)
+        text = "\n".join(result["answer_pages"])
+        for fact in ("Example application host", "ExampleCloud", "192.0.2.10", "|"):
+            self.assertIn(fact, text)
+        self.assertEqual(result["request_id"], handle["request_id"])
+        self.assertEqual(model.call_count, 1)
+        probe.assert_not_called()
+        self.assertEqual(self.facts_exchanges, 1)
+        self.assertEqual(self.payload()["model_calls"], 1)
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM llm_usage").fetchone()[0], 1)
+        self.assert_one_request(handle)
 
-    @unittest.skip(UNIMPLEMENTED_MCP_CASES["mcp-tasks-optional"])
     def test_mcp_tasks_optional(self):
-        pass
+        case = MCP["mcp-tasks-optional"]
+        self.assertEqual(case["variants"], ["Tasks not negotiated", "Tasks supported by both peers"])
+        for field in ("base_start_status_result_always_available", "same_application_job_identity", "no_competing_ledger"):
+            self.assertIs(case["expected"][field], True)
+        original_request = client.request
+        offered = {}
+        def request(identity, method, **params):
+            value = original_request(identity, method, **params)
+            value["params"]["_meta"][mcp.PREFIX + "clientCapabilities"] = copy.deepcopy(offered)
+            return value
+        before_tables = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+        identities, answers = [], []
+        with mock.patch.object(client, "request", side_effect=request), \
+                mock.patch.object(llm, "transport_chat", return_value=self.base.completion(self.catalog_plan())) as model, \
+                mock.patch("fleet.submit", side_effect=AssertionError("Tasks cannot cause a host read")) as probe:
+            # This qualified server has no Tasks extension. A Tasks-capable
+            # caller gets explicit unsupported discovery and uses base handles;
+            # no successful both-peers Tasks negotiation is claimed.
+            for offer in ({}, {"tasks": {}}):
+                offered = offer
+                with self.subTest(client_capabilities=offer):
+                    discovery = self.server.handle(request(1, "server/discover"))["result"]
+                    self.assertEqual(discovery["capabilities"], {"tools": {}})
+                    tools = self.server.handle(request(2, "tools/list"))["result"]["tools"]
+                    self.assertEqual([item["name"] for item in tools], [
+                        "fleet_lookup", "investigation_start", "investigation_status", "investigation_result", "investigation_cancel"])
+                    self.assertEqual(self.server.handle(request(3, "tasks/list"))["error"]["code"], -32601)
+                    self.assertEqual(self.server.handle(request(4, "tasks/get", taskId="unsupported"))["error"]["code"], -32601)
+                    if not identities:
+                        handle = self.admit(presentation="table")
+                        self.assertEqual(handle["state"], self.admission.STATE)
+                        self.assertFalse(self.control("investigation_status", {"request_id": handle["request_id"]})["result"]["result_available"])
+                        self.drain()
+                    else:
+                        handle = self.control("investigation_start", self.start_args)["result"]
+                    identities.append(handle["request_id"])
+                    result = self.control("investigation_result", {"request_id": handle["request_id"]})["result"]
+                    self.assertEqual(result["state"], "done")
+                    answers.append(result["answer_pages"])
+        self.assertEqual(identities[0], identities[1])
+        self.assertEqual(answers[0], answers[1])
+        for fact in ("ExampleCloud", "192.0.2.10", "|"):
+            self.assertIn(fact, "\n".join(answers[0]))
+        self.assertEqual(model.call_count, 1)
+        probe.assert_not_called()
+        self.assertEqual(self.facts_exchanges, 1)
+        self.assertEqual(self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall(), before_tables)
+        self.assert_one_request({"request_id": identities[0]})
 
-    @unittest.skip(UNIMPLEMENTED_MCP_CASES["mcp-cancel-truthful"])
     def test_mcp_cancel_truthful(self):
-        pass
+        case = MCP["mcp-cancel-truthful"]
+        self.assertEqual(case["fault"], "client disconnects or requests cancellation while job is executing")
+        self.assertIs(case["expected"]["no_unconfirmed_cancelled_claim"], True)
+        self.assertIs(case["expected"]["no_automatic_repeat"], True)
+        self.transport_release = threading.Event()
+        with mock.patch.object(llm, "transport_chat", return_value=self.base.completion(self.catalog_plan())) as model, \
+                mock.patch("fleet.submit", side_effect=AssertionError("cancel cannot inspect")) as probe:
+            handle = self.admit()
+            self.wait_facts()
+            reference = {"request_id": handle["request_id"]}
+            self.assertTrue(self.agent._fleet_mcp_facts_slot._future.running())
+            self.assertIsNone(self.server.handle({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                                                 "params": {"requestId": 3}}))
+            self.assertNotIn("retained_cancel", self.payload())
+            first = self.control("investigation_cancel", reference)["result"]
+            events = self.conn.execute("SELECT count(*) FROM fleet_events").fetchone()[0]
+            self.assertEqual(self.control("investigation_cancel", reference)["result"], first)
+            self.assertEqual(self.conn.execute("SELECT count(*) FROM fleet_events").fetchone()[0], events)
+            self.assertEqual(first["cancellation"], "requested")
+            self.assertNotEqual(first["state"], "cancelled")
+            self.agent.check_fleet_requests()
+            held = self.control("investigation_status", reference)["result"]
+            self.assertFalse(self.transport_release.is_set())
+            self.assertTrue(self.agent._fleet_mcp_facts_slot._future.running())
+            self.assertEqual(held["cancellation"], "requested")
+            self.assertNotEqual(held["state"], "cancelled")
+            self.assertEqual(self.payload()["mcp_facts"]["cancellation"]["state"], "requested")
+            self.assertEqual(self.control("investigation_result", reference)["result"]["answer_pages"], [])
+            self.assertNotIn("answer_pages", self.payload())
+            self.transport_release.set()
+            self.drain("cancelled")
+            settled = self.control("investigation_status", reference)["result"]
+            self.assertEqual(settled["state"], "cancelled")
+            self.assertEqual(settled["cancellation"], "settled")
+            self.assertEqual(self.agent._fleet_mcp_facts_slot.settle(purge_hold=False)["pending_calls"], 0)
+            self.assertEqual(self.control("investigation_result", reference)["result"]["answer_pages"], [])
+            self.control("investigation_cancel", reference)
+            self.agent.check_fleet_requests()
+        self.assertEqual(model.call_count, 1)
+        probe.assert_not_called()
+        self.assertEqual(self.facts_exchanges, 1)
+        self.assertEqual(self.payload()["model_calls"], 1)
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM llm_usage").fetchone()[0], 1)
+        self.assert_one_request(handle)
 
 
 if __name__ == "__main__":

@@ -92,3 +92,26 @@ Source/archive/operator/window are UNSELECTED; no package is complete.
 Durable MCP/client-intent/cancellation and the completed15-case runner remain
 UNCOMMITTED parallel scope for a separate increment. CF-01 through CF-06 keep their own
 criteria and no MCP prerequisite. See [increment 03](../cara-fleet-increment-03-2026-10-24.md).
+
+## Increment 04 durable client/read decision and checkpoint
+
+Persist the optional client's exact source/key/input/principal/policy/format intent
+before first stdio in the existing fleet ledger, not a new outbox. Prepared work is
+inert until matching server promotion; source expiry/edits, policy, capacity,
+cancellation, typed purge and checked restore share existing authority/accounting.
+Base start/status/result/cancel retain one handle and useful answer. Running
+cancellation waits for settlement; lost started proof is unknown and never replayed.
+Tasks is explicitly unsupported. New protected project effects remain excluded.
+
+All 47 original and 15 additional source IDs are executable without lifecycle
+skips. Focused Linux 227 passes in 14.395 s, including 16 client-intent cases;
+17 pure operator/orchestration fixtures pass in 0.017 s as unbound-draft evidence.
+The lossless task-page/managed-artifact adapter preserves exact answers and
+original limits. Its frozen 45-test suite, including ten new actual pipeline
+regressions, passes isolated Linux in 22.201 s; failed originals remain.
+Final frozen-source full/model/CI and actual identity/policy/readiness remain open.
+Source/archive/operator/window: UNSELECTED; no package completion or deployment.
+
+[Increment 04](../cara-fleet-increment-04-2026-10-24.md) records independent criteria
+and release gates. CF-01 through CF-06 retain no MCP prerequisite, while CF-07 uses
+their shared policy/evidence/lifecycle rather than creating competing authority.

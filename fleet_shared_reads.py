@@ -19,7 +19,7 @@ import tasking
 
 VERSION = "cara-fleet-shared-read/v1"
 TOOLS = frozenset({"fleet.status", "fleet.result"})
-STATES = frozenset({"preparing", "queued", "inspection_started", "ready", "analysis_started", "delivering", "done", "failed", "ambiguous", "cancelled", "mcp_facts_queued", "mcp_facts_started"} |
+STATES = frozenset({"preparing", "queued", "inspection_started", "ready", "analysis_started", "delivering", "done", "failed", "ambiguous", "cancelled", "mcp_facts_queued", "mcp_facts_started", "admission_queued", "admission_prepared"} |
                    {name + "_" + phase for name in ("planning", "synthesis") for phase in ("queued", "started", "completed", "consumed")})
 MAX_RETAINED_BYTES = 524288
 REFERENCE_KEYS = {"version", "source_update", "status", "state", "phase", "created_at", "updated_at", "observed_at",

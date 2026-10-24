@@ -13,7 +13,7 @@ import store
 from texts import T
 
 
-_ACTIVE = ("preparing", "queued", "inspection_started", "executing", "ready", "approval", "approval_sending",
+_ACTIVE = ("admission_prepared", "admission_queued", "preparing", "queued", "inspection_started", "executing", "ready", "approval", "approval_sending",
            "delivering", "analysis_started", "mcp_facts_queued", "mcp_facts_started") + tuple(name + "_" + phase for name in ("planning", "synthesis")
                                                      for phase in ("queued", "started", "completed", "consumed"))
 

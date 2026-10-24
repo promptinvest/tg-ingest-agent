@@ -133,3 +133,17 @@ Project-only focused Linux 201 passes in 0.622 s, including 32 development-publi
 service-identity reads, useful dated answers/gaps, fresh full/model/CI and gateway
 preservation/release acceptance remain pending. No new project effect or MCP
 prerequisite. [Increment 03](../../cara-fleet-increment-03-2026-10-24.md).
+
+## Increment 04 downstream-client checkpoint
+
+The optional client/server can only narrow to existing qualified facts/project
+implementations; policy/source/operation checks forbid broader targets or a
+legacy all-project fallback. No new project source, binding, probe or effect is
+created. Increment 03 real-source/service-identity and useful dated-answer gates
+remain independently required; MCP does not block those adapters.
+
+All 47 + 15 source IDs are executable and focused durable-client Linux 227 passes.
+The frozen taskbridge suite separately passes 45 tests in 22.201 s in isolated
+Linux; failed originals remain. Final client/full/model/installed qualification
+remains separate.
+[Increment 04](../../cara-fleet-increment-04-2026-10-24.md).
