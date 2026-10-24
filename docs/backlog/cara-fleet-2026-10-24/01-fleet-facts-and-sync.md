@@ -69,3 +69,18 @@ Update BOTH CARA.md and SOLUTION.md, relevant ADR/backlog status and operator do
 
 Full handoff, source map, sanitized production evidence, bootstrap facts and semantic regression corpus:
 https://github.com/promptinvest/tg-ingest-agent/tree/main/docs/backlog/cara-fleet-2026-10-24
+
+### CF-01 contract/publication increment
+
+`fleet_facts.py` defines exact descriptive provenance, uncertainty, completeness,
+retained history and lifecycle exclusions. `fleet_facts_publish.py` verifies the
+reviewed workstation source register before export. The receiving root-owned
+publisher accepts a validated sealed export without requiring raw KB files. It
+retains immutable revision history, an atomic current view and publication receipt;
+failed or changed inputs leave the last good view intact. Tests use synthetic data.
+
+The 53 schema/history and 17 publisher cases pass in isolated Linux focused runs.
+The later combined integration check passed those cases again; installer checks
+remain a separate gate. No new fact artifact is installed in production yet.
+Source synchronization is an explicit review/export/status workflow at this stage,
+not a claim of an automatic scheduler. No CF-01 completion is claimed.

@@ -71,3 +71,23 @@ No package is complete until its business, compatibility and release criteria pa
 Model I/O and queue lifecycle remain separate work; a short poll does not make a
 synchronous model call nonblocking. The original 47+15 specifications remain
 required, with their qualification recorded independently from interface checks.
+### Reviewed descriptive facts (pending activation)
+
+Keep the reviewed projection and source register in private operator storage. Run
+`python3 fleet_facts_publish.py status --projection <private-projection> --register
+<private-register>` locally to detect pending source changes. Review changed facts,
+record their actual source/check times, then use `export` with the same arguments
+and `--output <sanitized-export>`. Export refusal preserves the previous export.
+Never copy the raw KB or source register to the server or public repository.
+
+After exact-source qualification, stage only the sanitized export under a protected
+root-owned path. Create the destination with root ownership, no group/world writes,
+and read access for the existing assistant group. Run as root:
+`python3 fleet_facts_publish.py install-export --artifact <sanitized-export>
+--directory <protected-facts-directory>`. Fixture artifacts, untrusted ancestors,
+tampered integrity and history rewrites are refused. Retain the receipt and verify
+its revision/current integrity using the service identity. Preserve the previous
+revision and recovery backups. Facts do not change gateway transport authority.
+
+This increment adds no timer: operators must review/export source changes and
+record publication lag explicitly. Do not report a source date as a live probe.

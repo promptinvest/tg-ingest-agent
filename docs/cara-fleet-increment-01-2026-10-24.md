@@ -65,3 +65,17 @@ only those files to the exact expected list, preserving all original entries,
 script-glob rejection, excluded migration script and line-ending assertions.
 Original archive, failed log and result remain retained. A fresh full gate is
 required for the corrected source; no runtime failure was observed or waived.
+### CF-01 contract/publication increment
+
+`fleet_facts.py` defines exact descriptive provenance, uncertainty, completeness,
+retained history and lifecycle exclusions. `fleet_facts_publish.py` verifies the
+reviewed workstation source register before export. The receiving root-owned
+publisher accepts a validated sealed export without requiring raw KB files. It
+retains immutable revision history, an atomic current view and publication receipt;
+failed or changed inputs leave the last good view intact. Tests use synthetic data.
+
+The 53 schema/history and 17 publisher cases pass in isolated Linux focused runs.
+The later combined integration check passed those cases again; installer checks
+remain a separate gate. No new fact artifact is installed in production yet.
+Source synchronization is an explicit review/export/status workflow at this stage,
+not a claim of an automatic scheduler. No CF-01 completion is claimed.

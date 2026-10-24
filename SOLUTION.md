@@ -1584,3 +1584,17 @@ Accepted deployment October 13: source `7de363c`, build `05f8e80d1687`, receipt
 `387cd0c8d238f0b087484eaa`. Exact 1,743-case gate passed (nine unchanged skips);
 all 59 installed source files and protected historical rows verified.
 [Release and preservation record](docs/cara-learning-2026-10-13.md).
+
+## October 24 - Descriptive facts contract and reviewed publication
+
+CF-01 now has a versioned, validated descriptive schema and an operator publisher.
+Scalar facts, placement relations, lifecycle exclusions, completeness and source
+check times remain distinct. Conflicts/unknowns stay explicit; history and exclusion
+records cannot silently disappear. Facts grant no execution target or permission.
+The workstation exporter verifies reviewed source hashes and publishes only the
+sealed sanitized projection; raw sources and the private source register stay local.
+Root-owned Linux installation atomically retains the last good revision and receipt.
+
+The contract/publisher pass 70 focused isolated Linux tests. Publication, periodic
+source-change review and production installation are still pending; no package is
+complete and no new schedule is installed. See the incremental runbook and backlog.
