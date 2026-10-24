@@ -3,7 +3,8 @@
 ## October 24 - Fleet backlog implementation started
 
 The owner requested implementation, publication and deployment of CF-01–CF-07.
-The first independent increment repairs content-erasing emphasis cleanup and
+The first independent increment includes the unchanged public corpus in the isolated
+test payload under an exact named-file allowlist. It repairs content-erasing emphasis cleanup and
 includes consumable fleet requests in the existing two-second pending-work poll
 cadence. Meaningful emphasized names survive; narrated physical gestures remain
 suppressed. Waiting owner approvals and terminal requests retain normal idle

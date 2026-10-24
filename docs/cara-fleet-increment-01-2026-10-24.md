@@ -55,3 +55,13 @@ queries/obligations; CF-03 adaptive grounded answers and shared preferences; CF-
 asynchronous model phases and queue lifecycle; CF-05 qualified project reads; CF-06
 shared authority/content lifecycle; and downstream CF-07 read-only interface/client
 remain independently tracked. The wakeup and cleanup fixes alone close none of them.
+
+### Retained first full-gate failure
+
+Source 4628d11 passed 1,877 tests and failed the one old exact deployment-payload
+list assertion (nine unchanged skips; 1,878 total). The added three explicitly
+named public fixture files were absent from that assertion. The correction adds
+only those files to the exact expected list, preserving all original entries,
+script-glob rejection, excluded migration script and line-ending assertions.
+Original archive, failed log and result remain retained. A fresh full gate is
+required for the corrected source; no runtime failure was observed or waived.

@@ -15571,7 +15571,12 @@ class OpsArtifactHardening20260726Tests(unittest.TestCase):
                                  "verify-cara-runtime.sh",
                                  "tg-ingest-agent.env.example", "tg-ingest-agent.service",
                                  "cara-worker.service", "cara-mentor.service",
-                                 "cara-mentor-runner.service", "cara-failed-notify@.service"])
+                                 "cara-mentor-runner.service", "cara-failed-notify@.service",
+                                 "docs/backlog/cara-fleet-2026-10-24/regression-cases.json",
+                                 "docs/backlog/cara-fleet-2026-10-24/mcp-regression-cases.json",
+                                 "docs/backlog/cara-fleet-2026-10-24/bootstrap-facts.json"])
+        # The three named, unchanged public fixtures make corpus-driven tests run
+        # in the isolated VPS payload too; no script glob or private input is added.
         # NAMED, not `*.sh`. WP10 archived one armed one-shot out of the repo root
         # precisely because a glob would tar it onto the live box; migrate-cara-to-pd.sh
         # stops the service, copies DBs and overwrites /etc/tg-ingest-agent.env, and
