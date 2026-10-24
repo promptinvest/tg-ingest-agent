@@ -3,10 +3,29 @@
 Status: Implementation authorized October 24, 2026; work in progress. No package is complete.
 Parent tracker: [CF-00 / issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
 
-## Increment 04 current checkpoint
+## Increment 05 current checkpoint
 
-Published project-read source `498cb11` is followed by a separate durable MCP/client
-candidate. It persists caller intent in the existing ledger before first stdio,
+Published durable-MCP/task source `319dd95` is followed by a separate CF-06
+existing-effect compatibility candidate. The existing approved restart gains
+same-unit mutual exclusion plus a durable non-content unresolved-outcome hold.
+Different-token contention cannot consume the host token or inspect the
+fingerprint; unknown outcome cannot be cleared by time, a new fingerprint or a
+new token. Same-held-token known durable outcome is the only automatic settlement.
+Actual operator reconciliation and fresh original approval are otherwise required.
+
+No new effect, clear-unknown tool, MCP write, model/provider or budget change.
+Network-isolated Linux passes 80 tests in 4.645 s: 20 new resource guards plus
+60 existing fleet cases; failed originals remain. Final source/full/model/CI/
+installed/operator readiness is pending. Source/archive/operator/window:
+UNSELECTED. Production remains accepted `99037c5`, MCP disabled; no package is
+complete. CF-01 through CF-06 retain independent criteria without an MCP dependency.
+[Increment 05 contract and acceptance](../../cara-fleet-increment-05-2026-10-24.md).
+The increment04 section below preserves its publication checkpoint.
+
+## Increment 04 published source checkpoint
+
+Published durable MCP/client source `319dd95` follows project-read source
+`498cb11`. It persists caller intent in the existing ledger before first stdio,
 admits only by matching server promotion, and reuses original async budgets,
 capacity, source/policy checks, cancellation, typed purge and checked restore.
 Tasks is unsupported; no project effect, new ledger or MCP prerequisite for CF-01
@@ -68,7 +87,7 @@ The owner explicitly clarified: Cara can use her LLM for free-form queries to un
 - Keep grounding, scope, freshness and effect permissions enforced independently from natural-language freedom.
 - Preserve working behavior outside the approved change.
 
-The current request is to create a backlog for further development. All seven packages remain Proposed. It does not itself start implementation, grant a new runbook/account connection, create schedules, authorize paid evaluation/corpus work or deploy software. When the owner later requests implementation, the standing implementation-includes-deployment rule applies within that scope, with all original checks; do not invent a separate hash/window approval requirement.
+At the original October 24 documentation-only checkpoint, the owner requested a backlog for further development and all seven packages were Proposed. That publication did not start implementation, grant a new runbook/account connection, create schedules, authorize paid evaluation/corpus work or deploy software. The owner subsequently requested implementation, testing, publication and deployment; that current authorization supersedes the documentation-only checkpoint within the specified scope. The standing implementation-includes-deployment rule applies with all original checks and explicit exclusions; do not invent a separate hash/window approval requirement.
 
 No missing product decision blocks offline work on these specifications. Routine module/interface choices belong to the developer under these invariants. A materially broader behavior or authority change follows the owner's existing approval rule. Operator secrets/access and independently verified real deployment inputs remain outside public source control.
 

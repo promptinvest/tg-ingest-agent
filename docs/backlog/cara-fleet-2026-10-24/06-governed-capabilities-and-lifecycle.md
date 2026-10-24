@@ -132,3 +132,35 @@ The frozen taskbridge suite separately passes 45 tests in 22.201 s in isolated
 Linux; failed originals remain. Final full qualification and independent shared-
 authority/resource-lock/task/card/effect/sandbox acceptance audit remain pending
 before any broader effect. [Increment 04](../../cara-fleet-increment-04-2026-10-24.md).
+
+## Increment 05 existing-restart resource checkpoint
+
+The existing allowlisted restart now uses a per-operation/unit nonblocking host
+lock. A different token for an occupied unit returns resource_busy before host-
+token consumption, fingerprint collection or systemctl. Existing duplicate-token
+ambiguity remains. A durable executing/unknown hold blocks new attempts even after
+process death releases the OS lock. A new token, fingerprint or elapsed lease
+cannot make the earlier outcome known.
+
+Automatic settlement requires the same held token's durable known final receipt
+for the same unit. Missing, unsafe, malformed or ambiguous evidence fails closed.
+Other operator reconciliation requires actual evidence of the prior outcome and
+fresh original approval before a later effect; no clear-unknown tool is added.
+The root-owned no-follow ledger retains only version, fixed service, token, state
+and time as new resource evidence, beside original consumed-token tombstones.
+This is non-content operational residue preserved through purge/recovery, with no
+automatic expiry or implicit deletion policy.
+
+Original cards/source/fingerprint/expiry/double-token checks, bounded 20-second
+restart and existing capability allowlists remain. Authorization expiry is checked
+again before dispatching the effect. Closed RU/EN replies say the new request did
+not start due to busy, prior unknown outcome or expiry. No new effect or MCP write.
+
+Published increment04 is `319dd95`. Network-isolated Linux passes 80 tests in
+4.645 s: 20 new resource guards plus 60 existing fleet cases; failed originals
+remain. This does not close every CF-06 crash/recovery criterion. Final full/model/
+CI, installed ledger/sandbox/backup/recovery checks and independent CF-06
+acceptance remain open.
+No live restart or purge is used as a demonstration. Exact source/archive/operator/
+window: UNSELECTED; production remains accepted `99037c5`, MCP disabled.
+[Increment 05](../../cara-fleet-increment-05-2026-10-24.md).

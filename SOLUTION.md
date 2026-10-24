@@ -1,5 +1,34 @@
 # Cara — Solution Specification
 
+## October 24 - Increment 05 per-resource restart candidate
+
+fleet_host protects the existing allowlisted restart with a nonblocking fcntl
+lock keyed by operation/unit in the fixed host ledger. Different-token same-unit
+contention returns resource_busy before fingerprint or host-token consumption.
+A separately fsynced non-content resource hold is published before the existing
+host token is consumed; executing/unknown survives process loss and lock release.
+Only a durable known final receipt for that hold's exact token/unit can settle it
+automatically. Missing, malformed or ambiguous evidence fails closed.
+
+The protected descriptor-relative ledger rejects unsafe paths/files. Hold fields
+are version, fixed service, token, state and time; no question, answer, task text or
+approval prose is stored. Preserve this operational evidence with consumed-token
+markers across content purge/recovery. No elapsed lease, changed fingerprint or
+fresh token proves settlement. No automated clear or new maintenance API exists.
+
+Original source/card/approval/fingerprint/token checks remain, with expiry checked
+again immediately before the unchanged 20-second systemctl restart. Closed RU/EN
+busy/unknown/expired explanations do not claim the prior uncertain effect stopped.
+MCP remains read-only for project state and exposes no restart.
+
+Published increment04 is `319dd95`. Network-isolated Linux passes 80 tests in
+4.645 s: 20 new resource guards plus 60 existing fleet cases; failed originals
+remain. Final full/model/CI/installed gates are pending. Exact source/archive/
+operator/window: UNSELECTED. Production remains accepted `99037c5` / build
+`f54906e304fe`, MCP disabled; all independent package criteria remain open.
+
+[Increment 05 contract and release gates](docs/cara-fleet-increment-05-2026-10-24.md).
+
 ## October 24 - Increment 04 durable MCP/client candidate
 
 The stdlib base adapter shares fleet_requests/events, original asynchronous phases,

@@ -2,7 +2,7 @@
 
 Frozen semantic choices isolate pipeline/rendering acceptance from actual-model
 language qualification. These tests do not claim model quality, live gateway
-qualification, or completion of the unimplemented durable MCP capabilities.
+qualification, or accepted deployment of the separate durable MCP capabilities.
 The original corpus files remain unchanged and are the source of questions and
 assertions. Existing independent lifecycle/runtime suites remain required.
 """

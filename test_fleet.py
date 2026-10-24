@@ -189,11 +189,13 @@ class FleetContracts(unittest.TestCase):
         self.assertEqual(value, {"cara": {"source_revision": "abc123"}})
 
     def test_service_drift_prevents_restart(self):
-        value = {"operation": "restart", "service": "cara-worker.service", "fingerprint": "old", "token": "b"*32,
+        value = {"operation": "restart", "service": "cara-worker.service", "fingerprint": "a"*64, "token": "b"*32,
                  "expires": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()}
-        with mock.patch.object(fleet_host, "fingerprint", return_value="new"), mock.patch.object(fleet_host, "command") as effect:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(fleet_host, "LEDGER", Path(tmp)), mock.patch.object(fleet_host, "fingerprint", return_value="c"*64) as fingerprint, mock.patch.object(fleet_host, "command") as effect:
             with self.assertRaises(ValueError):
                 fleet_host.restart({"restart_services": ["cara-worker.service"]}, value)
+            fingerprint.assert_called_once_with("cara-worker.service")
+            self.assertFalse((Path(tmp) / (value["token"] + ".json")).exists())
             effect.assert_not_called()
 
     def test_executor_never_retries_ambiguous_restart(self):

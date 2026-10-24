@@ -394,3 +394,60 @@ changed source digests move; preserve other registered hashes and actual evidenc
 check dates. Keep status/lag in its existing operator CLI, without new query
 fields or self-referential publication-receipt content. Do not claim revision 2
 or current source hashes before the successful receipt. No new timer/schedule.
+
+## Increment 05 existing-restart resource qualification
+
+Published increment04 `319dd95` remains a source publication, not installed
+acceptance. The separate increment05 candidate protects only the existing reviewed
+worker-restart runbook. Do not exercise a live restart to qualify the lock.
+
+The fixed host ledger gains a protected resources directory, a stable per-unit
+lock inode and a separate durable hold. The host gateway takes a nonblocking
+fcntl lock before reading the fingerprint or consuming a new host token. Distinct
+same-unit contention returns resource_busy with no effect. A replayed token keeps
+its original consumed/ambiguous meaning. Keep the lock inode stable; replacing
+its path while processes hold it would split mutual exclusion.
+
+New hold fields are version, fixed service, token, executing/unknown/settled state
+and timestamp. These contain no owner question, answer, task payload or approval
+prose. Preserve this non-content resource evidence and existing consumed markers
+through content purge and host recovery. It is outside the conversation database;
+normal application backup policy remains unchanged. Host release/recovery evidence
+must preserve the existing ledger, rather than assume database backup covers it.
+Do not delete/restore old markers to authorize another attempt.
+
+A crash releases the OS lock but does not settle the durable hold. Before any new
+token can proceed, the gateway requires known settlement. It can reconcile only
+from the exact held token's durable succeeded/failed receipt for that same unit.
+Malformed/missing/ambiguous evidence stays held. Time, service health, a new
+fingerprint, approval or process absence alone cannot establish the previous
+effect's outcome. No timer, force flag or clear-unknown endpoint is provided.
+
+For a remaining unknown outcome, retain the evidence and use the existing guarded
+operator/recovery process to establish what actually happened. Record the actual
+outcome and its proof; any later restart still needs fresh original source/card/
+fingerprint/expiry authorization. Do not invent a successful outcome or repeat the
+old token to reconcile it. No ad-hoc shell effect or automated ledger editing is
+part of this increment.
+
+Qualify in isolated Linux with synthetic units/command doubles: two independent
+processes and distinct tokens on the same unit; busy before fingerprint/token;
+independent unit isolation; crash before/after consumption, effect and receipt;
+durable unknown after lock release; same-token final-receipt reconciliation;
+expiry immediately before effect; protected no-follow paths/files and old token
+compatibility. Verify closed RU/EN busy/unknown/expired answers through existing
+result handling. All actual service restarts remain outside fixture verification.
+
+The focused network-isolated Linux run passes 80 tests in 4.645 s: 20 new resource
+guards plus 60 existing fleet cases (attempt 3). Preserve the initial fixture
+FD-inheritance failure and the earlier corrected run; the final drift fixture
+uses a valid changed fingerprint and keeps the original rejection assertion.
+This does not replace the complete crash-boundary/restore audit or the separate
+pending CF-04 logical-90-second/two-completion proof.
+
+Final source/archive/operator/window are UNSELECTED;
+require original full/model/CI, actual protected ledger/source hashes, sandbox,
+checked backups/stopped parity, readiness, monitor/alert/recovery/neighbors and
+fresh one-use release acceptance. Keep production accepted `99037c5` and MCP
+disabled until the exact new package passes. All CF packages remain open.
+[Increment 05 release record](../../docs/cara-fleet-increment-05-2026-10-24.md).

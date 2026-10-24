@@ -737,6 +737,11 @@ class _FleetCore:
                     payload["maintenance_result"] = result
                     answer = (("Результат перезапуска: " if lang == "ru" else "Restart outcome: ") + result["outcome"]
                               + " · " + operation["host"] + " / " + operation["service"])
+                    if result["outcome"] == "failed" and result.get("reason") in {"resource_busy", "resource_unknown", "authorization_expired"}:
+                        detail = {"resource_busy": ("\u043d\u0435 \u0437\u0430\u043f\u0443\u0449\u0435\u043d: \u0440\u0435\u0441\u0443\u0440\u0441 \u0437\u0430\u043d\u044f\u0442", "not started: resource busy"),
+                                  "resource_unknown": ("\u043d\u0435 \u0437\u0430\u043f\u0443\u0449\u0435\u043d: \u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0439 \u0438\u0441\u0445\u043e\u0434 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u0441\u0432\u0435\u0440\u043a\u0438", "not started: prior outcome requires reconciliation"),
+                                  "authorization_expired": ("\u043d\u0435 \u0437\u0430\u043f\u0443\u0449\u0435\u043d: \u0441\u0440\u043e\u043a \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u044f \u0438\u0441\u0442\u0451\u043a", "not started: authorization expired")}
+                        answer += " \u00b7 " + detail[result["reason"]][0 if lang == "ru" else 1]
                 else:
                     if "read_scope" in operation:
                         result = protocol.result(result, operation["hosts"], read_scope=operation["read_scope"])

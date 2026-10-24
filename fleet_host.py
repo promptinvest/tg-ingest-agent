@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Forced-command host gateway. No shell, arbitrary paths, or arbitrary units."""
+import contextlib
+import fcntl
 import json
+import secrets
+import stat
 import os
 import re
 import subprocess
@@ -406,46 +410,235 @@ def inspect_scoped(config, facets, scope):
                 out["projects"][project][capability] = value
     return protocol.scoped_host_result(out, config["host"], scope, facets)
 
-def restart(config, request):
-    if set(request) != {"operation", "service", "fingerprint", "token", "expires"}:
-        raise ValueError("invalid restart fields")
-    unit = request["service"]
+RESOURCE_VERSION = "cara-fleet-resource/v1"
+
+
+def _resource_directory():
+    """Open the fixed ledger through protected no-follow directory descriptors."""
+    path = Path(LEDGER)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("invalid resource ledger")
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for index, part in enumerate(path.parts[1:]):
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            except FileNotFoundError:
+                if index != len(path.parts) - 2:
+                    raise
+                os.mkdir(part, 0o700, dir_fd=descriptor)
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            info = os.fstat(descriptor)
+            if (info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX):
+                raise ValueError("untrusted resource ledger")
+        info = os.fstat(descriptor)
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise ValueError("untrusted resource ledger")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _resource_file(directory, name, flags, mode=0o600):
+    descriptor = os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, mode, dir_fd=directory)
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or info.st_mode & 0o022):
+            raise ValueError("untrusted resource evidence")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _resource_json(directory, name):
+    try:
+        descriptor = _resource_file(directory, name, os.O_RDONLY)
+    except FileNotFoundError:
+        return None
+    try:
+        raw = os.read(descriptor, 16385)
+        if len(raw) > 16384:
+            raise ValueError("resource evidence exceeds bound")
+        def pairs(items):
+            value = {}
+            for key, item in items:
+                if key in value:
+                    raise ValueError("duplicate resource evidence")
+                value[key] = item
+            return value
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs,
+            parse_constant=lambda _item: (_ for _ in ()).throw(ValueError("nonfinite resource evidence")))
+        if not isinstance(value, dict):
+            raise ValueError("invalid resource evidence")
+        return value
+    finally:
+        os.close(descriptor)
+
+
+def _resource_write(directory, name, value):
+    """Publish non-content resource state durably without replacing its lock inode."""
+    temporary = "." + name + ".tmp." + secrets.token_hex(8)
+    descriptor = _resource_file(directory, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(protocol.canonical(value).encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+        os.fsync(directory)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except FileNotFoundError:
+            pass
+
+
+def _resource_consumed(directory, token):
+    try:
+        descriptor = _resource_file(directory, token + ".json", os.O_RDONLY)
+    except FileNotFoundError:
+        return False
+    os.close(descriptor)
+    return True
+
+
+def _resource_completed(receipt, unit):
+    """Only the gateway's closed durable final-result shapes settle a hold."""
+    if not isinstance(receipt, dict) or receipt.get("service") != unit:
+        return False
+    if set(receipt) == {"outcome", "service", "reason"}:
+        return receipt["outcome"] == "failed" and receipt["reason"] == "authorization_expired"
+    if set(receipt) != {"outcome", "service", "state"} or receipt["outcome"] not in {"succeeded", "failed"}:
+        return False
+    state = receipt["state"]
+    if (not isinstance(state, dict) or not {"ActiveState", "InvocationID"} <= set(state)
+            or not set(state) <= set(PROPERTIES) or not isinstance(state["ActiveState"], str)
+            or not state["ActiveState"]):
+        return False
+    for value in state.values():
+        if (type(value) is not int or value < 0) and (not isinstance(value, str)
+                or re.fullmatch(r"[A-Za-z0-9_.@:/ -]{0,100}", value) is None):
+            return False
+    return receipt["outcome"] == ("succeeded" if state["ActiveState"] == "active" else "failed")
+
+
+def _resource_unsettled(ledger, resources, name, unit):
+    try:
+        value = _resource_json(resources, name)
+        if value is None:
+            return False
+        if (set(value) != {"version", "service", "token", "state", "at"}
+                or value["version"] != RESOURCE_VERSION or value["service"] != unit
+                or not isinstance(value["token"], str) or not protocol.TOKEN.fullmatch(value["token"])
+                or value["state"] not in {"executing", "unknown", "settled"}):
+            return True
+        protocol.age(value["at"])
+        if value["state"] == "settled":
+            return False
+        receipt = _resource_json(ledger, value["token"] + ".json")
+        if _resource_completed(receipt, unit):
+            # A completed durable outcome can reconcile a crash after its write.
+            # A new fingerprint or elapsed lease alone cannot establish settlement.
+            _resource_write(resources, name, dict(value, state="settled", at=protocol.now()))
+            return False
+        return True
+    except (OSError, ValueError, UnicodeError, TypeError):
+        return True
+
+
+@contextlib.contextmanager
+def _restart_resource_lock(unit):
+    ledger = _resource_directory()
+    resources = lock = None
+    try:
+        try:
+            os.mkdir("resources", 0o700, dir_fd=ledger)
+        except FileExistsError:
+            pass
+        resources = os.open("resources", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=ledger)
+        info = os.fstat(resources)
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise ValueError("untrusted resource lock directory")
+        identity = protocol.digest({"operation": "restart", "service": unit})
+        lock = _resource_file(resources, identity + ".lock", os.O_RDWR | os.O_CREAT)
+        acquired = True
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            acquired = False
+        yield ledger, resources, identity + ".json", acquired
+    finally:
+        if lock is not None:
+            os.close(lock)
+        if resources is not None:
+            os.close(resources)
+        os.close(ledger)
+
+
+def _restart_under_lock(unit, request, ledger, resources, resource_name):
     token = request["token"]
-    if unit not in config.get("restart_services", []) or not protocol.TOKEN.fullmatch(str(token)):
-        raise ValueError("restart is outside host policy")
-    if not -610 <= protocol.age(request["expires"]) < 0:
-        raise ValueError("authorization expired")
+    if _resource_consumed(ledger, token):
+        return {"outcome": "ambiguous", "reason": "authorization already consumed"}
+    if _resource_unsettled(ledger, resources, resource_name, unit):
+        return {"outcome": "failed", "service": unit, "reason": "resource_unknown"}
     if fingerprint(unit) != request["fingerprint"]:
         raise ValueError("service changed; fresh approval required")
-    LEDGER.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path = LEDGER / (token + ".json")
+    if not -610 <= protocol.age(request["expires"]) < 0:
+        raise ValueError("authorization expired")
+    hold = {"version": RESOURCE_VERSION, "service": unit, "token": token, "state": "executing", "at": protocol.now()}
+    _resource_write(resources, resource_name, hold)
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        descriptor = _resource_file(ledger, token + ".json", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
+        _resource_write(resources, resource_name, dict(hold, state="settled", at=protocol.now()))
         return {"outcome": "ambiguous", "reason": "authorization already consumed"}
-    with os.fdopen(fd, "w") as handle:
+    with os.fdopen(descriptor, "w") as handle:
         handle.write(protocol.canonical({"state": "executing", "at": protocol.now(), "service": unit}))
         handle.flush()
         os.fsync(handle.fileno())
-    directory = os.open(LEDGER, os.O_RDONLY | os.O_DIRECTORY)
+    os.fsync(ledger)
     try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-    try:
-        command(["/usr/bin/systemctl", "restart", unit], timeout=20)
-        state = unit_state(unit)
-        result = {"outcome": "succeeded" if state.get("ActiveState") == "active" else "failed",
-                  "service": unit, "state": state}
+        if not -610 <= protocol.age(request["expires"]) < 0:
+            result = {"outcome": "failed", "service": unit, "reason": "authorization_expired"}
+        else:
+            command(["/usr/bin/systemctl", "restart", unit], timeout=20)
+            state = unit_state(unit)
+            result = {"outcome": "succeeded" if state.get("ActiveState") == "active" else "failed",
+                      "service": unit, "state": state}
     except (OSError, ValueError, subprocess.TimeoutExpired):
         result = {"outcome": "ambiguous", "service": unit}
-    # The consumed marker remains durable even if this final write is interrupted.
-    with open(path, "w") as handle:
+    descriptor = _resource_file(ledger, token + ".json", os.O_WRONLY)
+    with os.fdopen(descriptor, "w") as handle:
+        handle.truncate(0)
         handle.write(protocol.canonical(result))
         handle.flush()
         os.fsync(handle.fileno())
+    _resource_write(resources, resource_name, dict(hold,
+        state="settled" if result["outcome"] in {"succeeded", "failed"} else "unknown", at=protocol.now()))
     return result
 
+
+def restart(config, request):
+    if set(request) != {"operation", "service", "fingerprint", "token", "expires"}:
+        raise ValueError("invalid restart fields")
+    unit, token = request["service"], request["token"]
+    if (request["operation"] != "restart" or not isinstance(unit, str) or unit not in config.get("restart_services", [])
+            or not isinstance(token, str) or not protocol.TOKEN.fullmatch(token)
+            or not isinstance(request["fingerprint"], str) or not re.fullmatch(r"[a-f0-9]{64}", request["fingerprint"])):
+        raise ValueError("restart is outside host policy")
+    if not -610 <= protocol.age(request["expires"]) < 0:
+        raise ValueError("authorization expired")
+    with _restart_resource_lock(unit) as (ledger, resources, name, acquired):
+        if not acquired:
+            if _resource_consumed(ledger, token):
+                return {"outcome": "ambiguous", "reason": "authorization already consumed"}
+            return {"outcome": "failed", "service": unit, "reason": "resource_busy"}
+        return _restart_under_lock(unit, request, ledger, resources, name)
 
 def run(config, request):
     if request.get("operation") == "capabilities":

@@ -1,5 +1,29 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 24 - Increment 05 existing-restart resource guard candidate
+
+The existing approved worker restart now has a per-unit host lock. A different
+request for the same unit gets an immediate resource-busy answer before host-token
+consumption, fingerprint reads or effect dispatch. A durable non-content hold
+keeps an unresolved attempt blocked after a crash or OS-lock release. Time passing,
+a new fingerprint or another approval token cannot clear an unknown outcome.
+
+Only the same held token's durable known final receipt can reconcile it
+automatically. Other reconciliation needs actual operational evidence and fresh
+existing approval before any later effect; there is no clear-unknown tool. Closed
+RU/EN replies distinguish new work not started because of busy, unknown or expired
+authorization. Original exact cards, fingerprints, expiry, double token protection
+and the bounded restart runbook remain. No new effect or MCP write is exposed.
+
+This follows published increment04 `319dd95`. Network-isolated Linux passes 80
+tests in 4.645 s: 20 new resource guards and 60 existing fleet cases. Failed
+originals remain. Final source/archive/operator/window are UNSELECTED. Production remains accepted `99037c5` / build `f54906e304fe`, MCP stays
+disabled and every CF package remains open. Full/model/CI, actual installed
+preservation/readiness and guarded acceptance remain required.
+
+[Increment 05 behavior and remaining gates](docs/cara-fleet-increment-05-2026-10-24.md).
+Earlier entries retain their historical checkpoint status.
+
 ## October 24 - Increment 04 durable MCP/client candidate
 
 Optional base MCP start/status/result/cancel now uses the existing source-bound

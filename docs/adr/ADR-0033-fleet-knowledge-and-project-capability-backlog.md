@@ -115,3 +115,33 @@ Source/archive/operator/window: UNSELECTED; no package completion or deployment.
 [Increment 04](../cara-fleet-increment-04-2026-10-24.md) records independent criteria
 and release gates. CF-01 through CF-06 retain no MCP prerequisite, while CF-07 uses
 their shared policy/evidence/lifecycle rather than creating competing authority.
+
+## Increment 05 existing-effect concurrency decision and checkpoint
+
+The CF-06 per-resource concurrency requirement applies to the existing approved
+worker restart before any broader effect. Use the fixed host ledger and one
+nonblocking fcntl lock for the operation/unit, separate from authorization tokens.
+Different same-unit tokens cannot execute concurrently; contention returns busy
+before the new host token is consumed or a fingerprint is read.
+
+An OS lock alone cannot prove an earlier attempt finished. Publish minimal durable
+executing/unknown/settled resource evidence before host-token consumption. Process
+loss or ambiguous completion keeps the resource held. Only the same held token's
+known durable final receipt can reconcile a write/receipt crash automatically;
+new time, fingerprint or token cannot. Other reconciliation needs real evidence
+and fresh existing approval, without an exposed clear-unknown operation.
+
+Hold state is non-content operational evidence beside existing consumed markers,
+not a second task ledger. Preserve it across typed content purge and recovery.
+Existing source/card/fingerprint/expiry/double-token rules, the 20-second restart
+and all unsupported-effect behavior remain. Expiry is rechecked before the effect.
+Closed RU/EN result text distinguishes busy, unresolved outcome and expiry.
+
+Published increment04 is `319dd95`. Network-isolated Linux passes 80 tests in
+4.645 s: 20 new resource guards plus 60 existing fleet cases. The initial fixture
+FD-inheritance failure remains; the final run retains the original drift assertion
+with a valid changed fingerprint. Final exact full/model/CI, installed gateway/
+ledger protection, backups/parity/readiness and operator
+acceptance remain pending. Source/archive/operator/window are UNSELECTED.
+Production stays accepted `99037c5`, MCP disabled, and all packages remain open.
+[Increment 05](../cara-fleet-increment-05-2026-10-24.md).
