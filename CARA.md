@@ -2959,3 +2959,16 @@ Thirty-four isolated Linux query cases pass, including frozen obligations from
 17 catalog specifications in the unchanged original corpus. This is contract
 qualification, not a claim that free-form model behavior or all 47+15 scenarios pass.
 Full-dispatch integration and actual-model/release acceptance remain separate gates.
+## October 24 - Offline MCP facts parity contract
+
+CF-07 now has an optional stdio facts adapter/client over the same validated query
+cells. The pinned modern protocol uses per-request version metadata and discovery;
+trusted local root-owned configuration binds caller scope. Discovery cannot grant
+new tools or authority. Scope denials are not bypassed, and interface failure uses
+the same already-bound internal facts and answer obligations. Transport has bounded
+output/deadline/concurrency, an explicit restricted environment and no extra model.
+
+Twenty-seven isolated Linux checks pass. This is an offline facts-only increment:
+no production endpoint/client is enabled, no investigation/project API or Tasks is
+advertised, and no new content ledger exists. Durable read parity, unprivileged
+installation, owner-loop responsiveness and complete CF-07 acceptance remain open.

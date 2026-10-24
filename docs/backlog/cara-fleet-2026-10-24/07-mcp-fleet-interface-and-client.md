@@ -123,3 +123,17 @@ Parent roadmap: https://github.com/promptinvest/tg-ingest-agent/issues/7.
 Upstream facts/client production phase: [CF-01/#1](https://github.com/promptinvest/tg-ingest-agent/issues/1), [CF-02/#2](https://github.com/promptinvest/tg-ingest-agent/issues/2), [CF-03/#3](https://github.com/promptinvest/tg-ingest-agent/issues/3), [CF-04/#4](https://github.com/promptinvest/tg-ingest-agent/issues/4). Project-read phase also consumes relevant [CF-05/#5](https://github.com/promptinvest/tg-ingest-agent/issues/5) adapters. [CF-06/#6](https://github.com/promptinvest/tg-ingest-agent/issues/6) gates future out-of-scope write exposure. CF-01–CF-06 acquire no reverse dependency on this interface.
 
 This owner request updates the backlog only. A subsequent implementation request follows the standing implementation-includes-deployment rule within its scope and original gates. This planning update authorizes no runtime interface, new client/account, live check, effect or paid qualification.
+
+## October 24 - Offline MCP facts parity contract
+
+CF-07 now has an optional stdio facts adapter/client over the same validated query
+cells. The pinned modern protocol uses per-request version metadata and discovery;
+trusted local root-owned configuration binds caller scope. Discovery cannot grant
+new tools or authority. Scope denials are not bypassed, and interface failure uses
+the same already-bound internal facts and answer obligations. Transport has bounded
+output/deadline/concurrency, an explicit restricted environment and no extra model.
+
+Twenty-seven isolated Linux checks pass. This is an offline facts-only increment:
+no production endpoint/client is enabled, no investigation/project API or Tasks is
+advertised, and no new content ledger exists. Durable read parity, unprivileged
+installation, owner-loop responsiveness and complete CF-07 acceptance remain open.

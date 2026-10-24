@@ -44,3 +44,5 @@ Tracks review findings F01-F07 through CF-01..CF-06; CF-07 consumes their qualif
 - 2026-10-24: scoped project reads use a separate additive protocol/capability contract. Project-only collection cannot use a broad fallback; code derives multi-host coverage and preserves scope on extra reads. Thirty-two Linux cases pass; gateway rollout and application-specific adapters remain unaccepted.
 
 - 2026-10-24: descriptive answer obligations and presentation share one validated query contract. Model plans choose fields/format; typed facts own every cell and no factual model prose is admitted. Thirty-four Linux cases pass; semantic model/full-dispatch acceptance remains separate.
+
+- 2026-10-24: offline facts-only MCP adapter/client preserves shared cells/provenance and trusted caller scope;27 Linux cases pass. It is neither installed/enabled nor a durable/project interface. CF-01–06 still have independent gates; A2A and writes remain excluded.
