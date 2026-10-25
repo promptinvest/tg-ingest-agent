@@ -32,7 +32,7 @@ def partition(prepared, old_raw, original_profiles, prior_candidate_profiles, pa
             'exact active/dormant profile catalogue required')
     require(partial_profiles['converse_warm'] == original_profiles['converse_warm']
             and original_profiles['converse_warm']['max_tokens'] == 320
-            and original_profiles['converse_warm']['primary'] == 'deepseek-4-flash',
+            and original_profiles['converse_warm']['primary'] == 'deepseek-v4-pro',
             'conversation must retain exact original DeepSeek320 effective profile')
     require(sorted(name for name in ACTIVE if partial_profiles[name] != original_profiles[name]) == list(CHANGED_ACTIVE),
             'exactly seven changed active profiles required')

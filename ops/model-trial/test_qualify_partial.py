@@ -23,7 +23,9 @@ class PartialScopeProof(unittest.TestCase):
         def profiles(cfg):
             table = base_profiles(cfg)
             if cfg.cohort == 'baseline':
-                table['converse_warm']['primary'] = 'deepseek-4-flash'
+                table['converse_warm']['primary'] = 'deepseek-v4-pro'
+            if table['converse_warm']['primary'] == 'deepseek-v4-pro':
+                table['converse_warm']['fallbacks'] = ['kimi-k2.6', 'deepseek-4-flash', 'openai-gpt-oss-20b']
             table['improvement_evaluator'] = {'primary': cfg.cohort + '-improvement-evaluator',
                 'fallbacks': ['unchanged-backup'], 'max_tokens': 1000, 'json_required': True, 'timeout': 90}
             return table
@@ -33,8 +35,8 @@ class PartialScopeProof(unittest.TestCase):
         self.profiles = profiles
         self.original = profiles(SimpleNamespace(cohort='baseline', cap=320))
         self.candidate = profiles(SimpleNamespace(cohort='candidate', cap=320))
-        self.selected = profiles(SimpleNamespace(cohort='candidate', cap=320, converse_primary='deepseek-4-flash'))
-        data = fixture.old_env + b'LLM_PROFILES_JSON={"converse_warm":{"primary":"deepseek-4-flash","max_tokens":320}}\n'
+        self.selected = profiles(SimpleNamespace(cohort='candidate', cap=320, converse_primary='deepseek-v4-pro'))
+        data = fixture.old_env + b'LLM_PROFILES_JSON={"converse_warm":{"primary":"deepseek-v4-pro","fallbacks":["kimi-k2.6","deepseek-4-flash","openai-gpt-oss-20b"],"max_tokens":320}}\n'
         (self.root / 'candidate.env').write_bytes(data)
         initial = json.loads((self.root / 'prepared.json').read_text())
         initial['candidate_env_sha256'] = partial.sha(data)
@@ -72,7 +74,8 @@ class PartialScopeProof(unittest.TestCase):
         self.assertEqual(summary['unchanged_profile_sha256s'], {'converse_warm': expected})
         proof = json.loads((self.root / 'partial-output' / 'unchanged-conversation-proof.json').read_text())
         self.assertEqual(proof['effective_original'], proof['effective_candidate'])
-        self.assertEqual(proof['effective_candidate']['primary'], 'deepseek-4-flash')
+        self.assertEqual(proof['effective_candidate']['primary'], 'deepseek-v4-pro')
+        self.assertEqual(proof['effective_candidate']['fallbacks'], ['kimi-k2.6', 'deepseek-4-flash', 'openai-gpt-oss-20b'])
         self.assertEqual(proof['effective_candidate']['max_tokens'], 320)
         self.assertNotEqual(expected, partial.sha(partial.canonical(self.candidate['converse_warm'])))
         self.assertTrue(proof['failed_conversation_trials_not_promoted'])
@@ -92,6 +95,12 @@ class PartialScopeProof(unittest.TestCase):
                 selected['converse_warm'][field] = value
                 with self.assertRaisesRegex(ValueError, 'exact original DeepSeek320'):
                     self.partition(selected=selected)
+
+    def test_flash_cannot_be_substituted_for_explicit_original_pro_primary(self):
+        selected = deepcopy(self.selected)
+        selected['converse_warm']['primary'] = 'deepseek-4-flash'
+        with self.assertRaisesRegex(ValueError, 'exact original DeepSeek320'):
+            self.partition(selected=selected)
 
     def test_any_other_changed_role_control_delta_is_rejected(self):
         selected = deepcopy(self.selected)

@@ -12,7 +12,7 @@ skill, provider integration or runtime process is needed.
 | Routing, ingest, memory candidates | Claude Haiku 5.5 |
 | Grounded KB answers, memory consolidation | Claude Sonnet 5.5 |
 | Task planning and synthesis | GPT-6.1 Sol |
-| Conversation | Existing DeepSeek profile, unchanged |
+| Conversation | DeepSeek v4 Pro, exact existing profile |
 
 The dormant improvement-evaluator profile also selects Sol; it has no production
 caller and is not claimed as functionally qualified. Existing fallback lists keep
@@ -91,3 +91,9 @@ Conflicting later model/runtime changes require review before any overwrite.
 
 Status: prepared; final qualification, acceptance and monitor receipts are recorded
 below only after their checks pass.
+
+The retained conversation identity is the verified explicit `deepseek-v4-pro`,
+with the original Kimi/Flash/OSS fallback order. An initial partial-proof helper
+incorrectly assumed the default Flash primary and rejected before its phase marker,
+output or paid call; that failed helper evidence remains retained. The corrected
+proof checks the actual Pro identity and retains all original profile-equality checks.

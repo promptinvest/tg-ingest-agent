@@ -5,7 +5,7 @@
 The owner's model-trial request selects Haiku 5.5 for routing/ingest/memory
 candidates, Sonnet 5.5 for KB/consolidation and GPT-6.1 Sol for task planning and
 synthesis through the existing DigitalOcean gateway. Conversation keeps its exact
-original DeepSeek profile: Sonnet and Sol both failed task-context repair checks.
+original DeepSeek v4 Pro profile: Sonnet and Sol both failed task-context repair checks.
 Those failed trials remain retained and are excluded from the selected scope.
 All profile controls, fallbacks, USD2/day and USD12/month guards remain. The flat
 pricing meter uses conservative context-tier ceilings for the new models.
