@@ -31,8 +31,9 @@ entries or changing extraction prompts, model selection, call limits or budgets.
 
 [Guarded release](docs/cara-notifications-gratitude-2026-10-25.md) accepted
 **2026-10-25 09:08:55 UTC** for `dcdd5ee`, build `c39b8684b7db`, receipt
-`f5bad2f470066a136a80f297`. Source/full normal+shuffle/CI, original 375 operator
-regressions plus 37 fresh fixtures and the actual prepared-input handoff pass.
+`f5bad2f470066a136a80f297`. The full offline suite in normal/shuffled order,
+exact-source CI, original operator regressions, fresh operator fixtures and the
+actual prepared-input handoff pass. The dated release record holds exact totals.
 The exact native installer, original 54-table parity, before/after strict nonroot
 readiness, MCP60, scoped reads, preservation and native once-only notice pass.
 Postacceptance review preserves original content/history; only independently

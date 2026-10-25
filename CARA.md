@@ -27,8 +27,9 @@ mutation. One-shot and ordinary reminder behavior remain compatible. Existing
 model prompts, profiles, budgets, delivery policy and recovery controls remain.
 [Scope, verification and release gates](docs/cara-notifications-gratitude-2026-10-25.md).
 Deployed and accepted **2026-10-25 09:08:55 UTC** (`dcdd5ee`, build `c39b8684b7db`,
-receipt `f5bad2f470066a136a80f297`). All 89 installed modules match; full normal /
-shuffled Linux gates each pass 2,893 tests with nine unchanged skips. Fresh backup,
+receipt `f5bad2f470066a136a80f297`). All 89 installed modules match; the full offline
+suite passes in normal and shuffled Linux orders. Exact totals and skip evidence
+stay in the dated release record. Fresh backup,
 original 54-table/schema parity, strict namespace/MCP60, typed scoped reads,
 protected-file/monitor/recovery preservation and once-only native notice pass.
 Existing journal records remain unchanged; no manual test or historical replay.

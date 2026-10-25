@@ -76,6 +76,14 @@ harness correctly refused a world-writable ancestor; a subsequent fixture assume
 CRLF in a baseline that contains LF. The corrected fixture introduces CRLF and
 still requires byte-delta refusal. No assertions or protection checks were relaxed.
 
+The acceptance-only documentation commit `93b7dca` triggered a separate CI
+hygiene failure: a rolling primary specification included a hard-coded test
+count. The correction keeps exact counts here and uses “the full offline suite”
+in both primary specifications, as the unchanged original test requires. Runtime,
+fixtures and corpus bytes are unchanged; the accepted source CI above remains
+valid. The failed documentation CI is retained, and its corrected successor must
+pass the same full checkout checks.
+
 Full verification receipt SHA256:
 `be63d6a936c78f3a0105ba99cda8401e9df2692a22a941caeb8a2e259525faf0`.
 
