@@ -6,6 +6,7 @@ Only single-line EnvironmentFile assignments are supported; unrelated bytes are
 preserved by update_env_bytes. Never print an entire environment or its values.
 """
 from copy import deepcopy
+import hashlib
 import json
 import math
 import re
@@ -16,10 +17,6 @@ HAIKU = "anthropic-claude-5.5-haiku"
 SONNET = "anthropic-claude-sonnet-5.5"
 SOL = "openai-gpt-6-1-sol"
 FLASH = "deepseek-4-flash"
-# Scoped compatibility correction: Sonnet's measured 320/640-token conversation
-# attempts failed through the existing repair flow. Qualify Sol conversation at
-# exactly 640, preserving all other controls and the original cap for reversion.
-TRIAL_CONVERSE_MAX_TOKENS = 640
 # USD per million input/output tokens. Reference rates are not the active meter.
 NORMAL_REFERENCE_PRICES = {HAIKU: (0.10, 0.50), SONNET: (2.0, 10.0), SOL: (2.0, 10.0)}
 # Existing flat-rate gateway cannot select context tiers. Use documented maximum
@@ -30,13 +27,14 @@ PRIMARY_BY_PROFILE = {
     "router_fast": HAIKU,
     "ingest_balanced": HAIKU,
     "ask_grounded": SONNET,
-    "converse_warm": SOL,
     "memory_curator": HAIKU,
     "memory_consolidate": SONNET,
     "task_planner": SOL,
     "task_synthesis": SOL,
     "improvement_evaluator": SOL,
 }
+UNCHANGED_PROFILES = frozenset({"converse_warm"})
+PROFILE_NAMES = frozenset(PRIMARY_BY_PROFILE) | UNCHANGED_PROFILES
 MODEL_KEYS = frozenset({"DO_CHAT_MODEL", "ROUTER_MODEL", "LLM_PROFILES_JSON", "PRICING_JSON"})
 _ASSIGN = re.compile(r"^([ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*)(.*)$")
 _MISSING = object()
@@ -221,7 +219,7 @@ def _positive_number(value):
 def effective_profiles(env, llm_module):
     """Installed defaults plus strictly validated overrides; no llm module import."""
     defaults = deepcopy(llm_module.default_profiles(_config(env)))
-    if set(defaults) != set(PRIMARY_BY_PROFILE):
+    if set(defaults) != PROFILE_NAMES:
         raise ValueError("installed profile catalogue changed")
     for name, value in _overrides(env).items():
         if name not in defaults or not isinstance(value, dict):
@@ -266,11 +264,12 @@ def build_candidate(old_env, llm_module):
         fallbacks = list(old_profiles[name]["fallbacks"])
         if FLASH not in fallbacks:
             fallbacks.append(FLASH)
-        # Preserve every old backup, its order, and all controls except the
-        # explicitly approved conversation model/output-cap correction.
+        # Preserve every old backup, its order, and every profile control.
         overrides.setdefault(name, {}).update(primary=primary, fallbacks=fallbacks)
-        if name == "converse_warm" and primary == SOL:
-            overrides[name]["max_tokens"] = TRIAL_CONVERSE_MAX_TOKENS
+    for name in UNCHANGED_PROFILES:
+        # Pin the whole old effective profile explicitly: DO_CHAT_MODEL changes
+        # to Haiku, so relying on inherited defaults would change conversation.
+        overrides[name] = deepcopy(old_profiles[name])
     prices = _prices(old_env)
     for model, pair in ACCOUNTING_UPPER_PRICES.items():
         if model in prices and tuple(prices[model]) != pair:
@@ -310,12 +309,13 @@ def validate_candidate(old_env, candidate_env, llm_module, effective_budgets=(2.
     before = effective_profiles(old_env, llm_module)
     after = effective_profiles(candidate_env, llm_module)
     for name, profile in before.items():
+        if name in UNCHANGED_PROFILES:
+            if after[name] != profile:
+                raise ValueError('trial changes an explicitly unchanged effective profile')
+            continue
         before_controls = {key: value for key, value in profile.items() if key not in {"primary", "fallbacks"}}
         after_controls = {key: value for key, value in after[name].items() if key not in {"primary", "fallbacks"}}
-        expected_controls = dict(before_controls)
-        if name == "converse_warm" and after[name]["primary"] == SOL:
-            expected_controls["max_tokens"] = TRIAL_CONVERSE_MAX_TOKENS
-        if expected_controls != after_controls:
+        if before_controls != after_controls:
             raise ValueError("trial changes profile controls")
         expected_backups = list(profile["fallbacks"])
         if FLASH not in expected_backups:
@@ -324,9 +324,13 @@ def validate_candidate(old_env, candidate_env, llm_module, effective_budgets=(2.
             raise ValueError("trial profile mapping or fallback preservation failed")
     return {"changed_keys": sorted(changed_model_keys(old_env, candidate_env)),
             "profiles": len(after), "budgets_usd": [2.0, 12.0],
-            "profile_control_exceptions": {"converse_warm": {
-                "model": SOL, "max_tokens_before": before["converse_warm"]["max_tokens"],
-                "max_tokens_after": TRIAL_CONVERSE_MAX_TOKENS}},
+            "profile_control_exceptions": {},
+            "unchanged_profiles": sorted(UNCHANGED_PROFILES),
+            "unchanged_profile_sha256s": {name: hashlib.sha256(json.dumps(before[name],
+                sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
+                for name in sorted(UNCHANGED_PROFILES)},
+            "changed_active_profiles": sorted(name for name in PRIMARY_BY_PROFILE if name != 'improvement_evaluator'),
+            "dormant_configured_profiles": ['improvement_evaluator'],
             "pricing_mode": "conservative_context_tier_upper_bound",
             "normal_reference_rates": {model: list(pair) for model, pair in NORMAL_REFERENCE_PRICES.items()},
             "accounting_upper_rates": {model: list(pair) for model, pair in ACCOUNTING_UPPER_PRICES.items()}}

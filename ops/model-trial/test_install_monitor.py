@@ -35,7 +35,7 @@ class MonitorTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name) / "fixed-attempt3"
+        self.root = Path(self.temp.name) / "fixed-attempt4"
         self.root.mkdir()
         self.units = Path(self.temp.name) / "systemd"
         self.units.mkdir()

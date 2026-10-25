@@ -387,8 +387,9 @@ class OriginalOwnerFlowBusiness(unittest.TestCase):
                protocol.now(), protocol.now()))
         self.conn.commit()
         self.turn(1, case["question"], dispatch=False)
+        future_due = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
         with mock.patch.object(router.llm, "chat_profile", return_value=json.dumps({
-                "action": "reminder_create", "params": {"title": "check the server", "due_utc": "2026-10-25T12:00:00Z"},
+                "action": "reminder_create", "params": {"title": "check the server", "due_utc": future_due},
                 "confidence": 1})) as model:
             selected = router.route(self.cfg, self.conn, 111, case["question"], None)
         self.assertEqual(selected["action"], "reminder_create")

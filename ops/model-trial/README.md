@@ -1,7 +1,8 @@
 # Cara: temporary model trial
 
-Prepared configuration-only package. This runbook does not claim deployment or
-acceptance. Trial duration is 72 hours from `accepted.json.at`.
+Prepared partial configuration-only variant, pending the owner's scope preference.
+This runbook does not claim deployment or acceptance. Trial duration is 72 hours
+from `accepted.json.at`.
 
 The accepted application source remains
 `ee1a319ce53ddc941ebf4b760c084abd865afd19`; install no code, change no native
@@ -13,15 +14,15 @@ must match every accepted installed runtime counterpart, including the existing
 | --- | --- |
 | Routing, ingestion, memory candidates, routine media metadata | `anthropic-claude-5.5-haiku` |
 | Grounded KB answers, memory consolidation | `anthropic-claude-sonnet-5.5` |
-| Conversation, planning, synthesis, configured improvement evaluator | `openai-gpt-6-1-sol` |
+| Planning, synthesis, configured improvement evaluator | `openai-gpt-6-1-sol` |
+| Conversation | Exact original effective profile: DeepSeek primary, original 320-token production cap and original fallback chain |
 
-Preserve every existing fallback in its original order; append
-`deepseek-4-flash` only where absent. The sole profile-control exception is
-`converse_warm.max_tokens=640` for Sol. Sonnet conversation failed measured
-320-token and 640-token trials through the unchanged action-truth repair flow;
-its accepted KB/consolidation roles are separately scoped. Reversion
-restores the exact original cap (320 in production). Every other cap, timeout,
-temperature, JSON validation, source/confirmation rule and history remains.
+For switched profiles, preserve every existing fallback in its original order;
+append `deepseek-4-flash` only where absent. `converse_warm` is explicitly pinned
+to its complete original effective profile, with no added fallback or cap change;
+changing the main model to Haiku must not alter conversation through inheritance.
+There are no profile-control exceptions. Every cap, timeout, temperature, JSON
+validation, source/confirmation rule and history remains.
 `VISION_MODEL`, BGE-M3
 embeddings and local Whisper remain unchanged. The improvement evaluator has no
 production call site; its configuration is not evidence of functional testing.
@@ -57,12 +58,12 @@ The original environment must match
 the exact accepted 78-file protected map must have canonical digest
 `763f79140a92fbc2376bf004f217bfb7aab65d7b9d636500a70cb7ac33aa56da`.
 Keep originals, backups, raw answers and failures private and immutable.
-Both failed Sonnet conversation candidates and all original charges/raw responses
-remain retained and are not deployment proof. Sol conversation at 640 tokens
-requires a fresh exact candidate environment/hash and
-qualification receipt; reuse earlier cases only when their full input/profile
-bindings are unchanged. Qualify fresh affected conversation and actual repair
-prompts without changing prompts, action-truth guards or application source.
+Failed Sonnet conversation trials at 320/640 tokens and the failed Sol640 trial,
+including all charges/raw responses, remain retained and are not deployment proof.
+The partial variant requires a fresh exact candidate environment/hash and receipt,
+with the unchanged effective conversation profile's canonical SHA bound explicitly.
+Reuse cases only when their complete input/profile bindings are unchanged. Do not
+change prompts, action-truth guards or application source to force qualification.
 
 Each following controller/cohort invocation is one-shot. Read existing phase
 receipts before acting; never replay a started phase.
@@ -78,8 +79,11 @@ maximum conservative reservation per call; normal production budget checks also
 apply. Unknown charges stop continuation. This allowance does not authorize paid
 replays or work beyond that ceiling.
 
-The 24 synthetic cases exercise eight active profiles through actual builders
-and isolated handler/validator replay. External effects and host execution are
+The original 24-case corpus covers eight active profiles. A partial qualification
+must identify the 21 applicable cases for the seven changed active profiles and
+bind the unchanged conversation profile separately. The dormant evaluator is
+configured but not functionally qualified. Actual builders and isolated
+handler/validator replay are used; external effects and host execution are
 mocked. They do not establish all production behavior, screenshot quality,
 exhaustive fleet correctness, dormant-evaluator behavior or long-term quality.
 Review retained raw RU/EN answers for semantic correctness and tone. The fresh
@@ -124,19 +128,27 @@ environment edits, takes a stopped backup and restores only trial-changed model
 keys. Never restore an old database, reinstall old code, erase usage/history or
 replay messages. A conflicting later model edit requires review, not an overwrite.
 
-## October 25 corrected cohort and fixed monitor
+## October 25 selected partial cohort and fixed monitor
 
-For this record, the original baseline and candidate cohorts ran once in
-`/root/cara-model-trial-20261025/attempt1`; its candidate is superseded. Never run
-that activation. The failed Sonnet640 cohort remains in `attempt2`; the selected fresh prepared root is `attempt3`. Qualification
-carries exactly 21 unchanged, newly replayed inputs/results and pays for the three
-changed conversation cases plus at most one actual existing repair per case:
+The original baseline and Sonnet320 candidate ran once in `attempt1`. Sonnet640
+failed in `attempt2`, and Sol640 conversation failed in `attempt3`. All original
+raw evidence and charges remain; none of those attempts may activate. The selected
+fresh root is `/root/cara-model-trial-20261025/attempt4`. It preserves the exact
+original effective DeepSeek conversation profile, with no token-control exception.
+
+Qualify all 21 cases for the seven changed active profiles by exact input/profile/
+source/raw/ledger carry and new isolated functional replay. This makes no model
+calls and does not promote failed conversation answers:
 
 ```sh
-python3 "$TOOLS/qualify_corrected.py" --root "$RUN" --prior-root "$PRIOR" --prior-run "$PRIOR/qualification-candidate" --output "$RUN/qualification-corrected"
+python3 "$TOOLS/qualify_partial.py" --root "$RUN" --prior-root "$PRIOR" --prior-run "$PRIOR/qualification-candidate" --output "$RUN/qualification-partial"
 ```
 
-After acceptance, install the fixed root-bound observer using the fresh installer:
+The passed proof must enumerate all 21 case IDs, all seven changed active profiles
+and the SHA of the unchanged effective conversation profile. Failed conversation
+cases are excluded from this explicitly reduced scope, not counted as passes.
+
+After acceptance, install the fixed root-bound observer:
 
 ```sh
 python3 "$TOOLS/install_monitor.py" install --root "$RUN" --dry-run
@@ -144,7 +156,7 @@ python3 "$TOOLS/install_monitor.py" install --root "$RUN"
 systemctl start cara-model-trial-20261025-observer.service
 ```
 
-Read its receipt and first report to verify actual systemd sandbox access. Its
-12 absolute calendar entries run at +6 through +72 hours, rounded upward to the
-next whole second. The final wrapper stops only this timer even if observation
-fails. Existing application/worker/fleet/Whisper units remain unchanged.
+Read its receipt and first report to verify actual sandbox access. Twelve absolute
+calendar entries run at +6 through +72 hours, rounded upward to the next whole
+second. The final wrapper stops only this timer even if observation fails.
+Existing application/worker/fleet/Whisper units remain unchanged.

@@ -1,5 +1,6 @@
 """Offline regression checks for the reversible model-only trial configuration."""
 from copy import deepcopy
+import hashlib
 import json
 import unittest
 from unittest import mock
@@ -52,36 +53,46 @@ class TrialConfigTests(unittest.TestCase):
         candidate = trial.build_candidate(self.env, InstalledLLM)
         after = trial.effective_profiles(candidate, InstalledLLM)
         self.assertEqual(self.env, original)
-        self.assertEqual(set(after), set(trial.PRIMARY_BY_PROFILE))
+        self.assertEqual(set(after), trial.PROFILE_NAMES)
         for name, prior in before.items():
+            if name in trial.UNCHANGED_PROFILES:
+                self.assertEqual(after[name], prior)
+                continue
             self.assertEqual(after[name]["primary"], trial.PRIMARY_BY_PROFILE[name])
             backups = list(prior["fallbacks"])
             if trial.FLASH not in backups:
                 backups.append(trial.FLASH)
             self.assertEqual(after[name]["fallbacks"], backups)
             for key in prior.keys() - {"primary", "fallbacks"}:
-                expected = 640 if name == "converse_warm" and key == "max_tokens" else prior[key]
-                self.assertEqual(after[name][key], expected)
+                self.assertEqual(after[name][key], prior[key])
         self.assertEqual(candidate["VISION_MODEL"], self.env["VISION_MODEL"])
         self.assertEqual(candidate["BUDGET_DAILY_USD"], "0.80")
         self.assertEqual(trial.validate_candidate(self.env, candidate, InstalledLLM)["profiles"], 9)
 
-    def test_sol_conversation_cap_is_exactly_640_and_only_control_exception(self):
+    def test_partial_trial_preserves_entire_effective_conversation_profile_and_binds_hash(self):
         before = trial.effective_profiles(self.env, InstalledLLM)
         candidate = trial.build_candidate(self.env, InstalledLLM)
         after = trial.effective_profiles(candidate, InstalledLLM)
         differences = {(name, key) for name in before for key in before[name]
                        if key not in {"primary", "fallbacks"} and before[name][key] != after[name][key]}
-        self.assertEqual(differences, {("converse_warm", "max_tokens")})
-        self.assertEqual(after["converse_warm"]["primary"], trial.SOL)
+        self.assertEqual(differences, set())
+        self.assertEqual(after["converse_warm"], before["converse_warm"])
+        self.assertEqual(after["converse_warm"]["primary"], trial.FLASH)
         self.assertEqual(after["ask_grounded"]["primary"], trial.SONNET)
         self.assertEqual(after["memory_consolidate"]["primary"], trial.SONNET)
-        self.assertEqual(after["converse_warm"]["max_tokens"], 640)
+        self.assertEqual(after["converse_warm"]["max_tokens"], 450)
         validation = trial.validate_candidate(self.env, candidate, InstalledLLM)
-        self.assertEqual(validation["profile_control_exceptions"], {"converse_warm": {
-            "model": trial.SOL, "max_tokens_before": 450, "max_tokens_after": 640}})
+        self.assertEqual(validation["profile_control_exceptions"], {})
+        self.assertEqual(validation['unchanged_profiles'], ['converse_warm'])
+        self.assertEqual(validation['changed_active_profiles'], sorted([
+            'router_fast', 'ingest_balanced', 'ask_grounded', 'memory_curator',
+            'memory_consolidate', 'task_planner', 'task_synthesis']))
+        self.assertEqual(validation['dormant_configured_profiles'], ['improvement_evaluator'])
+        expected_sha = hashlib.sha256(json.dumps(before['converse_warm'], sort_keys=True,
+            ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+        self.assertEqual(validation['unchanged_profile_sha256s'], {'converse_warm': expected_sha})
 
-    def test_cap_639_641_and_every_other_profile_cap_change_are_rejected(self):
+    def test_conversation_639_641_and_every_other_profile_control_change_are_rejected(self):
         candidate = trial.build_candidate(self.env, InstalledLLM)
         profiles = trial.strict_json(candidate["LLM_PROFILES_JSON"])
         changes = [("converse_warm", 639), ("converse_warm", 641)]
@@ -95,13 +106,25 @@ class TrialConfigTests(unittest.TestCase):
             with self.subTest(profile=name, cap=cap), self.assertRaises(ValueError):
                 trial.validate_candidate(self.env, changed, InstalledLLM)
 
-    def test_reversion_restores_original_320_conversation_cap(self):
+        for key, value in [('primary', trial.SOL), ('fallbacks', [trial.FLASH]),
+                           ('temperature', .123), ('timeout', 17), ('json_required', True)]:
+            altered = deepcopy(profiles)
+            altered['converse_warm'][key] = value
+            changed = dict(candidate, LLM_PROFILES_JSON=json.dumps(altered))
+            with self.subTest(control=key), self.assertRaises(ValueError):
+                trial.validate_candidate(self.env, changed, InstalledLLM)
+
+    def test_partial_trial_keeps_original_320_conversation_and_reverts_original_configuration(self):
         profiles = trial.strict_json(self.env["LLM_PROFILES_JSON"])
         profiles["converse_warm"].pop("max_tokens")
         old = dict(self.env, LLM_PROFILES_JSON=json.dumps(profiles))
         self.assertEqual(trial.effective_profiles(old, InstalledLLM)["converse_warm"]["max_tokens"], 320)
         candidate = trial.build_candidate(old, InstalledLLM)
-        self.assertEqual(trial.effective_profiles(candidate, InstalledLLM)["converse_warm"]["max_tokens"], 640)
+        selected = trial.effective_profiles(candidate, InstalledLLM)
+        self.assertEqual(selected["converse_warm"]["max_tokens"], 320)
+        self.assertEqual(selected["converse_warm"], trial.effective_profiles(old, InstalledLLM)["converse_warm"])
+        self.assertEqual(candidate['DO_CHAT_MODEL'], trial.HAIKU)
+        self.assertEqual(selected['converse_warm']['primary'], trial.FLASH)
         reverted = trial.revert_model_keys(candidate, old, candidate)
         self.assertEqual(reverted, old)
         restored = trial.effective_profiles(reverted, InstalledLLM)

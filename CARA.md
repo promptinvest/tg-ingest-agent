@@ -1,19 +1,20 @@
 # Cara — Capabilities, Features & Architecture
 
-## October 25 - Reversible model trial prepared
+## October 25 - Qualified-role model trial prepared
 
-The owner requested the proposed model switch and several days of observation.
-The configuration-only trial selects Haiku 5.5 for routine routing/ingest/memory
-candidates, Sonnet 5.5 for KB/consolidation and GPT-6.1 Sol for conversation and task
-planning/synthesis, through the existing DigitalOcean gateway. Existing fallbacks
-and USD2/day, USD12/month guards remain. Sol conversation alone receives a
-640-token cap after Sonnet failed existing conversation guards; reverting restores320.
-Application code, data, source/confirmation guards, vision, embeddings and speech
-remain. Conservative context-tier pricing ceilings retain safe reservations.
-The [trial record](docs/cara-model-trial-2026-10-25.md) distinguishes failed evidence,
-qualification, acceptance and the bounded72-hour metadata monitor. This section
-records preparation, not live activation. The guarded model-key reversion never
-restores a database or erases later history.
+The owner's model-trial request selects Haiku 5.5 for routing/ingest/memory
+candidates, Sonnet 5.5 for KB/consolidation and GPT-6.1 Sol for task planning and
+synthesis through the existing DigitalOcean gateway. Conversation keeps its exact
+original DeepSeek profile: Sonnet and Sol both failed task-context repair checks.
+Those failed trials remain retained and are excluded from the selected scope.
+All profile controls, fallbacks, USD2/day and USD12/month guards remain. The flat
+pricing meter uses conservative context-tier ceilings for the new models.
+The [trial record](docs/cara-model-trial-2026-10-25.md) binds 21 cases for seven
+changed active profiles, an unchanged-conversation proof, acceptance and bounded
+72-hour read-only monitoring. This section records preparation, not activation.
+Reversion changes only model settings and preserves later data and history.
+An expired reminder timestamp in one offline fixture now uses a future date;
+every original assertion and all application behavior remain unchanged.
 
 ## October 25 - Personal assistant reliability accepted
 

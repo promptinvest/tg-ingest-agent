@@ -21,6 +21,15 @@ EXPECTED_ENV = 'e1ae7f6c65e4076a1a6fb93a87ecf200eb59745f048183acbbea389cfa64b733
 EXPECTED_PINS = '763f79140a92fbc2376bf004f217bfb7aab65d7b9d636500a70cb7ac33aa56da'
 MAIN = 'tg-ingest-agent.service'
 PEERS = ('cara-worker.service', 'cara-fleet.service', 'whisper-server.service')
+PARTIAL_CASE_IDS = frozenset(('assistant-data-only-ru', 'router-reminders-en',
+    'router-notes-ru', 'router-ask-en', 'router-untrusted-ru', 'ingest-en',
+    'ingest-ru-taint', 'kb-grounded-en', 'kb-missing-ru', 'memory-source-en',
+    'memory-taint-ru', 'memory-consolidation-en', 'catalog-table-en',
+    'catalog-names-ru', 'task-fleet-plan-en', 'development-en-plan',
+    'application-ru-plan', 'task-admission-en', 'task-grounded-answer-en',
+    'development-en-selection', 'application-ru-selection'))
+PARTIAL_PROFILES = sorted(('router_fast', 'ingest_balanced', 'ask_grounded',
+    'memory_curator', 'memory_consolidate', 'task_planner', 'task_synthesis'))
 
 
 def require(value, message):
@@ -296,6 +305,28 @@ def verify_preserved(initial, expected_env):
     return current
 
 
+def qualification_coverage(initial, proof):
+    """All changed roles must pass; unchanged conversation is explicitly excluded."""
+    validation = initial.get('validation', {})
+    if validation.get('unchanged_profiles') == ['converse_warm']:
+        hashes = validation.get('unchanged_profile_sha256s', {})
+        case_ids = proof.get('case_ids', [])
+        require(proof.get('qualification_scope') == 'changed_profiles_only'
+                and proof['functional_cases_passed'] == proof['functional_cases_total'] == 21
+                and len(case_ids) == 21 and set(case_ids) == PARTIAL_CASE_IDS
+                and validation.get('changed_active_profiles') == PARTIAL_PROFILES
+                and proof.get('changed_active_profiles') == PARTIAL_PROFILES
+                and set(hashes) == {'converse_warm'}
+                and re.fullmatch('[0-9a-f]{64}', hashes['converse_warm']) is not None
+                and proof.get('unchanged_profile_sha256s') == hashes
+                and validation.get('profile_control_exceptions') == {},
+                'all21 changed-role cases and exact unchanged conversation proof required')
+    else:
+        # Historical full-scope package contract; it cannot accept partial proof.
+        require(proof['functional_cases_passed'] == proof['functional_cases_total'] >= 24,
+                'all full-scope cases required')
+
+
 def activate(root, proof, package_hash):
     from trial_config import parse_env_bytes
     initial = json.loads((root / 'prepared.json').read_text())
@@ -312,9 +343,9 @@ def activate(root, proof, package_hash):
             and qualification['source_revision'] == initial['identity']['source_revision']
             and qualification['unknown_usage_ids'] == []
             and qualification['accounted_cost_usd'] <= qualification['qualification_ceiling_usd'] == 5.0
-            and qualification['manual_quality_passed'] is True
-            and qualification['functional_cases_passed'] == qualification['functional_cases_total'] >= 24,
+            and qualification['manual_quality_passed'] is True,
             'fresh passed exact-configuration qualification required')
+    qualification_coverage(initial, qualification)
     require(0 <= (datetime.now(timezone.utc) - datetime.fromisoformat(qualification['at'])).total_seconds() <= 7200,
             'qualification is stale or future-dated')
     require(package_hash and len(package_hash) == 64, 'exact selected operator package hash required')

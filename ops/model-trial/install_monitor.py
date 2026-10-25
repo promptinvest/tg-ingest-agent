@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 
 
-ROOT = Path("/root/cara-model-trial-20261025/attempt3")
+ROOT = Path("/root/cara-model-trial-20261025/attempt4")
 DATABASE = Path("/var/lib/tg-ingest-agent/ingest.db")
 SOURCE = "ee1a319ce53ddc941ebf4b760c084abd865afd19"
 SERVICE = "cara-model-trial-20261025-observer.service"

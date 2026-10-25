@@ -11,15 +11,20 @@ skill, provider integration or runtime process is needed.
 | --- | --- |
 | Routing, ingest, memory candidates | Claude Haiku 5.5 |
 | Grounded KB answers, memory consolidation | Claude Sonnet 5.5 |
-| Conversation, task planning and synthesis | GPT-6.1 Sol |
+| Task planning and synthesis | GPT-6.1 Sol |
+| Conversation | Existing DeepSeek profile, unchanged |
 
 The dormant improvement-evaluator profile also selects Sol; it has no production
 caller and is not claimed as functionally qualified. Existing fallback lists keep
 their original order; DeepSeek Flash is appended where absent. Vision remains
 Llama 4 Maverick; embeddings remain BGE-M3 and speech remains local Whisper.
-Sol conversation alone uses 640 output tokens. Sonnet at320 truncated two
-measured answers; at640 its original corrective path lost task context or returned
-a generic containment response. Both failed cohorts remain retained. All other token limits, timeouts, temperatures, prompts,
+Conversation retains its entire original effective profile and 320-token cap.
+Sonnet320 truncated measured replies; Sonnet640 and Sol640 lost task context
+through the existing corrective path, or returned a generic containment response.
+All failed cohorts remain retained and are excluded from the live trial. The
+owner was offered a qualified-role trial versus a separate compatibility fix;
+the qualified-role trial preserves current conversation while proceeding with
+the authorized model switch elsewhere. All other token limits, timeouts, temperatures, prompts,
 validators, confirmation rules and tool permissions remain exact.
 
 Budget guards remain USD2 per UTC day and USD12 per month. Existing authoritative
@@ -42,20 +47,30 @@ required. No operator Telegram message or message replay is included.
 
 Private evidence root: `/root/cara-model-trial-20261025`. `attempt1` contains the
 retained 320-token failure and paired baseline; it is superseded and must never
-activate. `attempt2` retains the failed Sonnet640 cohort. `attempt3` is the Sol640 trial. Original environment hash
+activate. `attempt2` retains the failed Sonnet640 cohort. `attempt3` retains failed Sol640 evidence. `attempt4` is the selected partial trial. Original environment hash
 `e1ae7f6c65e4076a1a6fb93a87ecf200eb59745f048183acbbea389cfa64b733`;
 selected candidate hash is recorded with acceptance below.
 The [operator runbook](../ops/model-trial/README.md) contains guarded commands.
 Started controllers/cohorts are one-shot; read receipts and never replay them.
 
-Twenty-four synthetic RU/EN cases cover eight active profiles through real prompt
-builders and isolated handler/validator replay. Host execution and outbound
-messages are mocked. The corrected cohort carries only 21 cases with exact
-unchanged input/profile/source bindings and makes three fresh conversation calls;
-where required, it uses the existing corrective prompt and guard. Original failed
-raw answers and all charged attempts remain in the shared USD5 qualification
-ceiling, also subject to ordinary production caps. Transport success alone is
-insufficient; complete final answers require separate semantic review.
+The original 24 synthetic RU/EN cases cover eight active profiles through real
+prompt builders and isolated handler/validator replay. Host execution and outbound
+messages are mocked. The selected partial cohort covers exactly 21 cases across
+seven changed active profiles. Each carried raw answer retains exact input,
+profile, model, source and paid-ledger bindings, and is revalidated under the final
+configuration without new model calls. Conversation is separately proven unchanged;
+its three failed new-model cases are not counted as passes. The dormant evaluator
+is configured but not functionally qualified. All charged attempts remain within
+the same USD5 aggregate ceiling and ordinary production budget guards.
+
+A minimal compatibility fix would retain the first-pass task context and current
+requested structure in the existing repair prompt, which currently discards both.
+That application change is not part of this configuration-only trial.
+
+The first preparation commit's CI caught an unrelated fixture expiry: its mocked
+reminder deadline was fixed at October25 12:00 UTC, and became past during this
+session. The fixture now selects a future timestamp; every original assertion and
+all application behavior remain unchanged. Failed CI evidence is retained.
 
 ## Observation and reversion
 
@@ -69,7 +84,7 @@ model calls or owner messages. Metadata cannot judge answer quality; fewer than
 consider actual conversations, format following and unnecessary repair/fallbacks.
 
 Reversion is conditional, not automatically scheduled. The guarded command
-restores only trial-changed model keys and the original conversation cap, preserving
+restores only trial-changed model keys and leaves the original conversation profile intact, preserving
 later unrelated environment edits, all stored data, usage and conversation history.
 It takes a fresh stopped backup and never restores the old database or application.
 Conflicting later model/runtime changes require review before any overwrite.
