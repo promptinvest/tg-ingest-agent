@@ -97,6 +97,12 @@ def _spec(tool_id, title, risk, *, required=(), optional=(), bound=(),
 
 
 TOOLS = {
+    "analysis.reason": _spec(
+        "analysis.reason", "Read-only grounded analysis", "read_only",
+        required=("question",), optional=("context_task_id",), bound=("question",),
+        output_schema="analysis.reason/v1", output_paths=(("analysis", "model_untrusted"),),
+        uses_llm=True, output_limit=64000, timeout_seconds=45,
+    ),
     "knowledge.search": _spec(
         "knowledge.search", "Search saved knowledge", "read_only",
         required=("query",), optional=("limit",),
@@ -265,7 +271,11 @@ def validate_input(spec, value):
         raise ToolInputError(f"{spec.id}: missing input(s): {', '.join(sorted(missing))}")
 
     out = dict(value)
-    if spec.id == "knowledge.search":
+    if spec.id == "analysis.reason":
+        out = {"question": _bounded_text(out.get("question"), 12000, "question")}
+        if "context_task_id" in value:
+            out["context_task_id"] = _bounded_int(value["context_task_id"], 1, 2_000_000_000, "context_task_id")
+    elif spec.id == "knowledge.search":
         query = _bounded_text(out.get("query"), 500, "query")
         limit = _bounded_int(out.get("limit", 5), 1, 8, "limit")
         out = {"query": query, "limit": limit}
@@ -374,7 +384,10 @@ def validate_output(spec, data, evidence):
     expected = {path for path, _ in spec.output_paths}
     if set(value) != expected:
         raise ToolOutputError(f"{spec.id}: output fields mismatch")
-    if spec.id == "knowledge.search":
+    if spec.id == "analysis.reason":
+        import analysis_engine
+        analysis_engine.validate_output(value["analysis"])
+    elif spec.id == "knowledge.search":
         rows = value["results"]
         if not isinstance(rows, list) or len(rows) > 8:
             raise ToolOutputError("knowledge.search: invalid results")

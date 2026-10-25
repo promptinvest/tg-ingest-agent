@@ -98,6 +98,13 @@ def _dispatch_default(s, c):
     s.do_converse(c.chat_id, c.lang, c.text, c.msg_id)
 
 
+def _dispatch_task_start(s, c):
+    if c.params.get("mode") == "analysis":
+        return s.do_task_start(
+            c.chat_id, c.lang, c.text, c.msg_id, params=c.params)
+    return s.do_task_start(c.chat_id, c.lang, c.text, c.msg_id)
+
+
 _DISPATCH = {
     "ingest":              lambda s, c: s.do_ingest(c.chat_id, c.lang, c.msg),
     "reminder_create":     lambda s, c: s.do_reminder_create(c.chat_id, c.lang, c.params,
@@ -142,8 +149,7 @@ _DISPATCH = {
     # ADR-0020 step 0: the documented «давай по одному» — never the task planner,
     # which has no close/reschedule tool and answered with a paid refusal.
     "multi_action":        lambda s, c: s.reply(c.chat_id, T(c.lang, "one_at_a_time")),
-    "task_start":          lambda s, c: s.do_task_start(
-        c.chat_id, c.lang, c.text, c.msg_id),
+    "task_start":          _dispatch_task_start,
     "task_list":           lambda s, c: s.do_task_list(c.chat_id, c.lang, c.params),
     "task_show":           lambda s, c: s.do_task_show(c.chat_id, c.lang, c.params),
     "task_cancel":         lambda s, c: s.do_task_cancel(c.chat_id, c.lang, c.params),
@@ -831,6 +837,9 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
 
     def check_assistant_tasks(self):
         try:
+            import analysis_lifecycle
+            if analysis_lifecycle.continue_all_purge(self):
+                return 0
             self.check_fleet_content_purge()
             self.recover_pending_task_purge(timeout_seconds=0.1)
         except (ValueError, OSError, worker_client.WorkerError) as exc:

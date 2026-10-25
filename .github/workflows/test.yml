@@ -43,6 +43,9 @@ jobs:
       - name: Check capability trial-continuation contracts
         working-directory: ops/capability-release
         run: python -B -m unittest discover -p 'test_*.py'
+      - name: Check analysis trial epoch contracts
+        working-directory: ops/analysis-release
+        run: python -B -m unittest discover -p 'test_*.py'
       - name: Run unit tests (with duration)
         # ADR-0017: the suite's wall time is printed so a creeping gate is visible.
         run: |

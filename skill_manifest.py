@@ -23,6 +23,11 @@ _DEFAULT = {
 # every compiled ToolSpec against these independent policy declarations at
 # startup and immediately before invocation.
 TASK_TOOLS = {
+    "analysis.reason": {
+        "risk": "read_only", "uses_llm": True, "external_network": False,
+        "writes_state": False, "destructive": False,
+        "requires_confirmation": False, "allowed_proactive": False,
+    },
     "knowledge.search": {
         "risk": "read_only", "uses_llm": False, "external_network": False,
         "writes_state": False, "destructive": False,

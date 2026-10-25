@@ -3772,6 +3772,8 @@ def message_update_summary(conn, message_id, summary):
 def delete_message(conn, message_id):
     """Delete a message row (urls/images cascade); returns media paths to
     unlink. Other rows referencing it as duplicate_of keep their copy."""
+    import analysis_lifecycle
+    analysis_lifecycle.erase_message(conn, message_id)
     row = conn.execute(
         "SELECT status, knowledge_state, use_count FROM messages WHERE id = ?",
         (message_id,),
@@ -4013,6 +4015,8 @@ def purge_preview(conn, scope, category=None):
         # source messages go; the journal itself (category + definition) stays.
         info["messages"] = len(_messages_in_category(conn, category))
         info["category"] = category
+    import analysis_lifecycle
+    info.update(analysis_lifecycle.preview(conn, scope, category))
     return info
 
 
@@ -4020,10 +4024,14 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
     """Run the purge. Returns (summary_dict, media_paths_to_unlink).
     Preserves llm_usage and preferences in every scope."""
     info = purge_preview(conn, scope, category)
+    import analysis_lifecycle
     if scope == "all":
+        analysis_lifecycle.require_quiescence(conn, task_purge_nonce)
         # Fail before ANY content mutation until fleet transports/accounting
         # have acknowledged the same durable typed-purge nonce.
         fleet_lifecycle.require_quiescence(conn, task_purge_nonce)
+    elif scope in {"category", "journal", "messages", "reminders"}:
+        analysis_lifecycle.erase_scope(conn, scope, category)
     paths = []
     if scope == "all":
         paths = [r["local_path"] for r in
@@ -5324,7 +5332,10 @@ def task_receipt_create(conn, step, *, input_hash, status, summary, data,
     if status not in {"ok", "partial"}:
         raise ValueError("only successful or partial outcomes are immutable receipts")
     safe_summary = tasking.redact_derived_text(summary)[:1000]
-    if step["tool"] == "fleet.lookup":
+    if step["tool"] == "analysis.reason":
+        import analysis_engine
+        safe_data, safe_evidence = analysis_engine.safe_receipt(data, list(evidence))
+    elif step["tool"] == "fleet.lookup":
         import fleet_broker
         safe_data, safe_evidence = fleet_broker.safe_receipt(data, list(evidence))
     elif step["tool"] == "fleet.investigate":

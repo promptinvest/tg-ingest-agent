@@ -1,5 +1,27 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 25 - Read-only grounded analysis in implementation
+
+The owner approved extending the existing task skill and tool broker with
+source-bound read-only analysis, ADR-0036. Deliberate comparison/recommendation
+requests can select saved-note, reminder and published-project-fact reads,
+inspect their receipts and gather bounded additional evidence. The answer
+separates source-quoted facts from conclusions, recommendations and unknowns.
+Existing task/approval/delivery/recovery contracts, ordinary chat, extractive KB
+answers and direct recorded-work reads remain compatible. Existing Sol task
+profiles, DeepSeek conversation, fallbacks and budget limits remain.
+
+Implementation and qualification are underway; the accepted context/evidence
+runtime below remains live. October28 was a proposed model-observation
+checkpoint, not a technical dependency. An earlier transition would require a
+new authenticated source epoch, observer and conditional model-only reversion,
+preserving the original deadline, prior evidence, data and protections. The owner
+selected deployment as soon as qualification passes, with a separate trial
+segment. See
+[ADR-0036](docs/adr/ADR-0036-read-only-grounded-analysis.md).
+The pure third-epoch contract used by the private operator is published under
+[ops/analysis-release](ops/analysis-release/README.md) and checked separately in CI.
+
 ## October 25 - Context and evidence improvements accepted
 
 The owner approved the architecture review's first release. ADR-0035 extends

@@ -132,6 +132,12 @@ def validate_plan(value, canonical_source, *, source_time=None, timezone_offset=
         step = _validate_step(
             raw_step, ordinal, prior, canonical_source, canonical_hash,
             normalized["time_context"])
+        if step["tool"] == "analysis.reason":
+            binding = step["bindings"].get("question", {})
+            if (len(steps) != 1 or binding.get("source") != "boss_span"
+                    or binding.get("start") != 0 or binding.get("end") != len(canonical_source)
+                    or binding.get("transform") != "literal"):
+                raise PlanError("Analysis must be the sole source-bound controller for the complete request")
         if step["tool"] == "fleet.investigate" and any(item["tool"] == "fleet.investigate" for item in normalized["steps"]):
             raise PlanError("Use one fleet.investigate step for the complete owner fleet clause")
         prior[step["key"]] = step

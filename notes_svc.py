@@ -586,6 +586,11 @@ class NotesMixin:
             cat = info.get("category") or "?"
             parts = [f"  • {info['messages']} " + ("записей дневника «" if ru else
                      "entries of the journal \"") + f"{cat}»"]
+        if info.get("analysis_evidence_copies"):
+            parts.append(f"  • {info['analysis_evidence_copies']} " + (
+                "анализов: сохранённые копии источников и выводы будут удалены; история отправки сохранится."
+                if ru else
+                "analyses: saved source copies and conclusions will be removed; delivery history remains."))
         if any(info.get(key) for key in fleet_lifecycle.PREVIEW_KEYS):
             parts.append("  • Бюджеты, настройки, рабочие факты, маркеры использованных разрешений и служебная готовность сохраняются. История релизов и проверенные резервные копии остаются; политика бэкапов не меняется." if ru else "  • Budgets, preferences, operational facts, consumed authorization markers and readiness remain. Release evidence and checked backups remain under the existing backup policy.")
         return "\n".join(parts)
@@ -626,6 +631,7 @@ class NotesMixin:
                                          "task_feedback", "evaluation_cases",
                                          "evaluation_runs",
                                          "improvement_proposals", "learning_lessons",
+                                         "analysis_evidence_copies",
                                          *fleet_lifecycle.PREVIEW_KEYS)):
             self.reply(chat_id, T(lang, "purge_nothing"), record=False)
             return
@@ -656,6 +662,9 @@ class NotesMixin:
         payload = pending["payload"]
         store.pending_clear(self.conn, chat_id)
         if text.strip().casefold() != str(payload.get("phrase") or "").strip().casefold():
+            if payload.get("analysis_purge_nonce"):
+                import analysis_lifecycle
+                analysis_lifecycle.cancel_all_purge(self, payload["analysis_purge_nonce"])
             cancel = getattr(self, "cancel_fleet_purge", None)
             if payload.get("fleet_purge_nonce") and callable(cancel):
                 cancel(payload["fleet_purge_nonce"])
@@ -709,6 +718,16 @@ class NotesMixin:
                     record=False)
                 return
         hook = getattr(self, "prepare_fleet_purge", None)
+        if payload["scope"] == "all":
+            import analysis_lifecycle
+            if not analysis_lifecycle.begin_all_purge(
+                    self, chat_id, lang, purge_nonce, compare_actual):
+                self.reply(chat_id,
+                           "Очистка ждёт остановки анализа и завершения учёта модели. Данные сохранены."
+                           if lang == "ru" else
+                           "Purge is waiting for analysis to stop and model accounting to settle. Data is preserved.",
+                           record=False)
+                return
         if payload["scope"] == "all" and callable(hook):
             try:
                 state = hook(chat_id, lang, purge_nonce, compare_actual)

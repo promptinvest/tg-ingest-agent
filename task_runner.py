@@ -975,6 +975,10 @@ def _finalize_cancelled(agent, conn, task_id, lead):
 
 def _render_task_result(receipts, lang="en", *, complete=False):
     """Deterministic user result; derived bytes never enter conversation memory."""
+    for receipt in receipts:
+        if receipt["tool"] == "analysis.reason" and receipt["status"] in {"ok", "partial"}:
+            import analysis_engine
+            return analysis_engine.render(_json(receipt, "data_json", {})["value"]["analysis"], lang)
     ru = lang == "ru"
     syntheses = [
         receipt for receipt in receipts
@@ -1082,8 +1086,12 @@ def _render_task_result(receipts, lang="en", *, complete=False):
         if ru else "Task completed with recorded receipts.")
 
 
-def run_task(agent, conn, task_id, max_steps=1):
+def run_task(agent, conn, task_id, max_steps=1, *, _analysis_child=False):
     """Execute dependency-ready safe steps until approval/completion/block."""
+    import analysis_engine
+    analysis_task = analysis_engine.is_analysis(conn, task_id)
+    if analysis_task and not _analysis_child:
+        return analysis_engine.advance_task(agent, conn, task_id)
     processed = 0
     while processed < max_steps:
         task = store.assistant_task_get(conn, task_id)
@@ -1118,6 +1126,11 @@ def run_task(agent, conn, task_id, max_steps=1):
                     raise
                 continue
             inputs = resolve_inputs(conn, task, step)
+            if analysis_task:
+                try:
+                    analysis_engine.validate_child(conn, task, step, inputs)
+                except ValueError as exc:
+                    raise TaskBlocked(str(exc)) from exc
             digest = _input_hash(inputs)
             spec = tool_broker.get_spec(step["tool"])
             if spec is None or spec.risk != step["risk"]:
@@ -1168,6 +1181,8 @@ def run_task(agent, conn, task_id, max_steps=1):
                     data=data, evidence=evidence, artifact_id=artifact_id,
                     effect_id=effect_id, trace_id=common.current_trace(),
                     commit=False)
+                if analysis_task:
+                    analysis_engine.record_child_receipt(conn, task, step, receipt)
                 store.task_attempt_finish(
                     conn, step["id"], "succeeded",
                     input_hash=digest, commit=False)
@@ -1598,6 +1613,8 @@ def reconcile_worker_spool(agent, conn):
 
 def tick(agent, conn):
     """One ordinary-loop task tick: poll workers, then run at most one step."""
+    import analysis_engine
+    analysis_engine.poll(agent, conn)
     reconcile_approval_deliveries(agent, conn, limit=3)
     poll_worker_results(agent, conn, limit=3)
     poll_fleet_results(agent, conn)

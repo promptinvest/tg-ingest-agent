@@ -35,6 +35,78 @@ _RATING_WORDS = {
     4: ("four", "четыре"),
     5: ("five", "пять"),
 }
+_ANALYSIS_TASK_REFERENCE = re.compile(
+    r"(?<!\w)(?:task|analysis|задач[аеиуы]|анализ(?:а|е|у|ом)?)(?:\s*#\s*|\s+)"
+    r"([1-9]\d*)((?:\s*(?:,|and\b|и\b)\s*#?\s*[1-9]\d*)*)", re.I)
+
+
+def _analysis_owner_message(conn, chat_id, update_id, text):
+    """Use the durable Telegram envelope, not model prose or mutable turn hints."""
+    update = store.telegram_update_get(conn, update_id)
+    try:
+        payload = json.loads(update["payload"]) if update is not None else None
+        message = payload.get("message") if isinstance(payload, dict) else None
+        if (not isinstance(message, dict)
+                or int(message.get("chat", {}).get("id")) != int(chat_id)
+                or any(message.get(key) for key in (
+                    "forward_origin", "forward_from", "forward_from_chat", "forward_date"))):
+            return None
+        if isinstance(message.get("text"), str) and message["text"] != text:
+            return None
+        return message
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _analysis_context_id(conn, chat_id, text, params, reply_id):
+    """Bind a continuation to an explicit, unchanged owner task, never recency."""
+    explicit = set()
+    for match in _ANALYSIS_TASK_REFERENCE.finditer(str(text or "")):
+        explicit.add(int(match.group(1)))
+        explicit.update(int(value) for value in re.findall(r"[1-9]\d*", match.group(2)))
+    if len(explicit) > 1:
+        raise ValueError("ambiguous analysis task reference")
+    supplied = params.get("context_task_id")
+    if supplied is not None and (type(supplied) is not int or supplied < 1):
+        raise ValueError("invalid analysis task reference")
+    replied = []
+    if type(reply_id) is int and reply_id > 0:
+        replied = conn.execute(
+            "SELECT id FROM assistant_tasks WHERE chat_id = ?"
+            " AND (final_message_id = ? OR status_message_id = ?)",
+            (int(chat_id), reply_id, reply_id)).fetchall()
+        if len(replied) > 1:
+            raise ValueError("ambiguous analysis reply")
+        if not replied:
+            raise ValueError("analysis reply has no available task context")
+    named = next(iter(explicit), None)
+    replied_id = replied[0]["id"] if replied else None
+    references = {value for value in (named, supplied, replied_id) if value is not None}
+    if len(references) > 1 or (supplied is not None and named is None and replied_id is None):
+        raise ValueError("analysis reference is not owner-bound")
+    task_id = next(iter(references), None)
+    if task_id is None:
+        return None
+    task = store.assistant_task_get(conn, task_id, chat_id)
+    if (task is None or task["status"] != "completed"
+            or task["delivery_status"] != "delivered"
+            or task["plan_version"] != tasking.PLAN_VERSION):
+        raise ValueError("analysis task is unavailable")
+    import analysis_lifecycle
+    if analysis_lifecycle.is_erased(task):
+        raise ValueError("analysis evidence was removed")
+    try:
+        steps = json.loads(task["plan_json"])["steps"]
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError("analysis plan is unavailable") from exc
+    if (not isinstance(steps, list) or len(steps) != 1
+            or not isinstance(steps[0], dict)
+            or steps[0].get("tool") != "analysis.reason"):
+        raise ValueError("referenced task is not an analysis")
+    source = store.assistant_task_source(conn, chat_id, task["source_update"])
+    if source is None or tasking.source_hash(source["text"]) != task["source_hash"]:
+        raise ValueError("analysis source changed")
+    return int(task_id)
 
 
 def _compact(value):
@@ -64,6 +136,8 @@ def _localized_planner_text(value, lang, *, purpose=False):
 def _tool_manifest():
     rows = []
     for spec in tool_broker.TOOLS.values():
+        if spec.id == "analysis.reason":
+            continue  # Only the typed analysis entry builds this controller.
         rows.append({
             "id": spec.id,
             "risk": spec.risk,
@@ -225,7 +299,13 @@ class TasksMixin:
     """Handlers kept inside Cara's one-process skill architecture."""
 
     @action_delivery.caller_finalized
-    def do_task_start(self, chat_id, lang, text, msg_id=None):
+    def do_task_start(self, chat_id, lang, text, msg_id=None, params=None):
+        if isinstance(params, dict) and "mode" in params:
+            if params["mode"] == "analysis":
+                return self._start_analysis(chat_id, lang, text, msg_id, params)
+            self.reply(chat_id, "Уточни, какую задачу разобрать." if lang == "ru"
+                       else "Please clarify which task to analyze.", record=False)
+            return
         update_id = getattr(self, "_current_update_id", None)
         if update_id is None:
             self.reply(
@@ -305,6 +385,11 @@ class TasksMixin:
                 return
             candidate = llm.parse_llm_json(raw)
             try:
+                candidate_steps = candidate.get("steps") if isinstance(candidate, dict) else None
+                if isinstance(candidate_steps, list) and any(
+                        isinstance(step, dict) and step.get("tool") == "analysis.reason"
+                        for step in candidate_steps):
+                    raise tasking.PlanError("analysis requires the explicit analysis mode")
                 plan = tasking.validate_plan(
                     candidate, text, source_time=source_time,
                     timezone_offset=self.tz_offset())
@@ -378,6 +463,73 @@ class TasksMixin:
                 (result["message_id"], row["id"]))
             self.conn.commit()
 
+    def _start_analysis(self, chat_id, lang, text, msg_id, params):
+        """Queue read-only reasoning through the existing durable task lifecycle."""
+        import analysis_engine
+        import analysis_lifecycle
+
+        if analysis_lifecycle.admission_held(self.conn):
+            self.reply(chat_id, "Сначала завершу подтверждённую очистку данных." if lang == "ru"
+                       else "I'll finish the confirmed data purge first.", record=False)
+            return
+
+        update_id = getattr(self, "_current_update_id", None)
+        source = (store.assistant_task_source(self.conn, chat_id, update_id)
+                  if update_id is not None else None)
+        owner_message = (_analysis_owner_message(self.conn, chat_id, update_id, text)
+                         if update_id is not None else None)
+        if (source is None or source["text"] != str(text or "")
+                or owner_message is None
+                or set(params) - {"mode", "context_task_id"}
+                or len(str(text or "")) > store.CONVO_TEXT_MAX):
+            self.reply(chat_id,
+                       "Пришли запрос на разбор отдельным сообщением от себя."
+                       if lang == "ru" else
+                       "Send the analysis request as a separate message of your own.",
+                       record=False)
+            return
+        existing = store.assistant_task_by_source(self.conn, chat_id, update_id)
+        if existing is not None:
+            self._reply_task_record(chat_id, existing, lang)
+            return
+        open_count = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM assistant_tasks WHERE chat_id = ?"
+            " AND status NOT IN ('completed','failed','cancelled')",
+            (int(chat_id),)).fetchone()["n"]
+        if open_count >= self.cfg.task_open_limit:
+            self.reply(chat_id,
+                       "Сначала закроем одну из открытых задач — достигнут лимит."
+                       if lang == "ru" else
+                       "Let's close an open task first—the open-task limit is reached.",
+                       record=False)
+            return
+        try:
+            reply = owner_message.get("reply_to_message")
+            reply_id = reply.get("message_id") if isinstance(reply, dict) else None
+            context_id = _analysis_context_id(
+                self.conn, chat_id, text, params, reply_id)
+            candidate = analysis_engine.build_plan(text, lang, context_task_id=context_id)
+            row, _ = store.assistant_task_create(
+                self.conn, chat_id, update_id, candidate, current_trace(),
+                timezone_offset=self.tz_offset())
+        except (ValueError, tasking.PlanError):
+            self.reply(chat_id,
+                       "Укажи одну завершённую задачу для продолжения или пришли новый запрос на разбор."
+                       if lang == "ru" else
+                       "Name one completed task to continue, or send a fresh analysis request.",
+                       record=False)
+            return
+        message = (f"Разбираю задачу #{row['id']}. Вернусь с выводами; действия не запускаю."
+                   if lang == "ru" else
+                   f"Analysis #{row['id']} is queued. I'll return with conclusions; no actions are being executed.")
+        result = self.reply(chat_id, message, reply_to=msg_id, record=False)
+        if (isinstance(result, dict) and type(result.get("message_id")) is int
+                and result["message_id"] > 0):
+            self.conn.execute(
+                "UPDATE assistant_tasks SET status_message_id = ? WHERE id = ?",
+                (result["message_id"], row["id"]))
+            self.conn.commit()
+
     def _task_detail(self, task, lang):
         steps = store.assistant_task_steps(self.conn, task["id"])
         ru = lang == "ru"
@@ -423,11 +575,22 @@ class TasksMixin:
     def do_task_show(self, chat_id, lang, params):
         task = store.assistant_task_get(
             self.conn, _int(params.get("id")) or 0, chat_id)
-        self.reply(
-            chat_id,
-            self._task_detail(task, lang) if task else (
-                "Задача не найдена." if lang == "ru" else "Task not found."),
-            record=False)
+        if task is not None:
+            return self._reply_task_record(chat_id, task, lang)
+        self.reply(chat_id, "Задача не найдена." if lang == "ru" else "Task not found.", record=False)
+
+    def _reply_task_record(self, chat_id, task, lang):
+        previous = getattr(self, "_reply_delivery_metadata", None)
+        analysis = self.conn.execute(
+            "SELECT 1 FROM assistant_task_steps WHERE task_id=? AND tool='analysis.reason' LIMIT 1",
+            (task["id"],)).fetchone()
+        if analysis is not None:
+            self._reply_delivery_metadata = {**(previous or {}), "analysis_task_id": task["id"]}
+        try:
+            return self.reply(chat_id, self._task_detail(task, lang), record=False)
+        finally:
+            if analysis is not None:
+                self._reply_delivery_metadata = previous
 
     def do_task_cancel(self, chat_id, lang, params):
         task_id = _int(params.get("id"))
@@ -459,6 +622,11 @@ class TasksMixin:
 
     def do_task_resume(self, chat_id, lang, params):
         task_id = _int(params.get("id")) or 0
+        import analysis_lifecycle
+        prior = store.assistant_task_get(self.conn, task_id, chat_id)
+        if analysis_lifecycle.is_erased(prior):
+            self.reply(chat_id, analysis_lifecycle.erased_text(prior), record=False)
+            return
         if store.assistant_task_authorize_redelivery(
                 self.conn, task_id, chat_id):
             self.reply(
@@ -666,6 +834,10 @@ class TasksMixin:
         return True
 
     def on_task_completed(self, task, summary, artifact_id):
+        import analysis_lifecycle
+        if task is not None and analysis_lifecycle.is_erased(
+                store.assistant_task_get(self.conn, task["id"])):
+            return False
         if task is None or task["delivery_status"] == "delivered":
             return True
         task = store.assistant_task_begin_delivery(self.conn, task["id"])
@@ -809,6 +981,10 @@ class TasksMixin:
             self._mark_task_delivery_failed(task_id)
 
     def on_task_blocked(self, task, summary):
+        import analysis_lifecycle
+        if task is not None and analysis_lifecycle.is_erased(
+                store.assistant_task_get(self.conn, task["id"])):
+            return False
         if task is None or task["delivery_status"] == "delivered":
             return False
         task = store.assistant_task_begin_delivery(self.conn, task["id"])
@@ -841,6 +1017,10 @@ class TasksMixin:
         return delivered
 
     def on_task_cancelled(self, task, summary):
+        import analysis_lifecycle
+        if task is not None and analysis_lifecycle.is_erased(
+                store.assistant_task_get(self.conn, task["id"])):
+            return False
         if task is None or task["delivery_status"] == "delivered":
             return False
         task = store.assistant_task_begin_delivery(self.conn, task["id"])
@@ -874,6 +1054,7 @@ class TasksMixin:
         rows = self.conn.execute(
             "SELECT * FROM assistant_tasks WHERE status = 'completed'"
             " AND delivery_status IN ('pending','retry')"
+            " AND instr(plan_json,'\"analysis_erasure\":')=0"
             " AND (next_action_at IS NULL OR next_action_at <= ?)"
             " ORDER BY updated_at LIMIT 3",
             (datetime.now(timezone.utc).isoformat(),),
@@ -1047,6 +1228,8 @@ class TasksMixin:
                     log(f"pending task purge recovery deferred: {exc}")
                     return False
             if isinstance(authorized, dict) and authorized.get("phase") == "prepared":
+                if authorized.get("analysis_purge"):
+                    return False  # The ordinary analysis continuation owns this hold.
                 if authorized.get("fleet_phase") or authorized.get("fleet_quiescence"):
                     hook = getattr(self, "abort_fleet_purge", None)
                     if not callable(hook) or not hook(authorized["nonce"]):
