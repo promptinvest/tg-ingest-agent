@@ -4,8 +4,8 @@ Proposed architecture decision records from the 2026-09-07 review of Cara (archi
 
 October 25 follow-up: ADR-0004/0005 now include notification occurrence and
 gratitude correction handling. Source implementation is recorded in the
-[dated release](../cara-notifications-gratitude-2026-10-25.md); installed acceptance
-is pending. The original implemented decisions and historical evidence remain.
+[dated release](../cara-notifications-gratitude-2026-10-25.md); guarded acceptance
+completed 2026-10-25 09:08:55 UTC for `dcdd5ee`. The original implemented decisions and historical evidence remain.
 
 **Rules**
 

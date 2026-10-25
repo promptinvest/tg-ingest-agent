@@ -26,12 +26,18 @@ cannot acknowledge a newer occurrence; unknown legacy recurring bindings refuse
 mutation. One-shot and ordinary reminder behavior remain compatible. Existing
 model prompts, profiles, budgets, delivery policy and recovery controls remain.
 [Scope, verification and release gates](docs/cara-notifications-gratitude-2026-10-25.md).
-Deployment acceptance is pending; the October 24 release remains installed.
+Deployed and accepted **2026-10-25 09:08:55 UTC** (`dcdd5ee`, build `c39b8684b7db`,
+receipt `f5bad2f470066a136a80f297`). All 89 installed modules match; full normal /
+shuffled Linux gates each pass 2,893 tests with nine unchanged skips. Fresh backup,
+original 54-table/schema parity, strict namespace/MCP60, typed scoped reads,
+protected-file/monitor/recovery preservation and once-only native notice pass.
+Existing journal records remain unchanged; no manual test or historical replay.
 
 The full catalogue gate caught an undeclared final-action template. The correction
 success template now declares the confirmed lifecycle and is emitted only after
 its atomic commit; date clarification has no completion claim. Original action-
-truth assertions remain intact. Fresh full-source verification is required.
+truth assertions remain intact. The corrected source passed full verification
+and the guarded installed acceptance above.
 
 ## October 24 - Fleet and project release accepted
 

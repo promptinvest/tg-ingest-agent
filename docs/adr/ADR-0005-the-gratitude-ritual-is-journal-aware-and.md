@@ -37,5 +37,5 @@ nothing
   update. Invalid dates retain editable pending state; pronouns are not people.
   All date surfaces agree, real names remain and extraction prompts/profiles and
   budgets are unchanged. Existing entries are not automatically rewritten.
-  Guarded release is pending; see
+  Guarded release accepted 2026-10-25 09:08:55 UTC, source `dcdd5ee`; see
   [release record](../cara-notifications-gratitude-2026-10-25.md).

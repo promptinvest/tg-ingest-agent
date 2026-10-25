@@ -35,5 +35,5 @@ nothing
   identities; old cards cannot act on newer fires. Legacy recurring actions need
   unique timestamp evidence. Late journal invitations and saved cards show their
   event date. One-shot behavior, delivery retries, batching, original pending
-  TTLs and existing notification policy remain. Guarded release is pending; see
+  TTLs and existing notification policy remain. Guarded release accepted 2026-10-25 09:08:55 UTC, source `dcdd5ee`; see
   [release record](../cara-notifications-gratitude-2026-10-25.md).

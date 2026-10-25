@@ -29,13 +29,23 @@ correction success, stale refusal and cancel with their original timestamps.
 Pronoun filtering changes validated/displayed named people without rewriting old
 entries or changing extraction prompts, model selection, call limits or budgets.
 
-[Verification and guarded release](docs/cara-notifications-gratitude-2026-10-25.md)
-remain required. This implementation checkpoint does not claim deployment.
+[Guarded release](docs/cara-notifications-gratitude-2026-10-25.md) accepted
+**2026-10-25 09:08:55 UTC** for `dcdd5ee`, build `c39b8684b7db`, receipt
+`f5bad2f470066a136a80f297`. Source/full normal+shuffle/CI, original 375 operator
+regressions plus 37 fresh fixtures and the actual prepared-input handoff pass.
+The exact native installer, original 54-table parity, before/after strict nonroot
+readiness, MCP60, scoped reads, preservation and native once-only notice pass.
+Postacceptance review preserves original content/history; only independently
+accounted normal runtime markers, health usage and the new deployment receipt
+advance. Sealed prior model evidence keeps its original source; fresh deterministic
+qualification made no model calls. Existing records require normal confirmation
+for any correction.
 
 The full catalogue gate caught an undeclared final-action template. The correction
 success template now declares the confirmed lifecycle and is emitted only after
 its atomic commit; date clarification has no completion claim. Original action-
-truth assertions remain intact. Fresh full-source verification is required.
+truth assertions remain intact. The corrected source passed full verification
+and the guarded installed acceptance above.
 
 ## October 24 - Fleet and project release accepted
 
