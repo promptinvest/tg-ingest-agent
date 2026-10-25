@@ -953,6 +953,18 @@ TEXTS = {
         "ru": "неудавшиеся честные переписывания",
         "en": "honest rewrites that failed",
     },
+    "issue_kind_converse_format_mismatch": {
+        "ru": "ответы, не соблюдавшие запрошенный формат",
+        "en": "replies that missed your requested format",
+    },
+    "issue_kind_converse_format_repaired": {
+        "ru": "ответы, исправленные под запрошенный формат",
+        "en": "replies corrected to your requested format",
+    },
+    "issue_kind_converse_format_repair_failed": {
+        "ru": "ответы, формат которых не удалось исправить",
+        "en": "replies whose requested format could not be corrected",
+    },
     "issue_kind_curation_skipped_after_fabrication": {
         "ru": "пропущенное обучение после выдуманного действия",
         "en": "learning skipped after a fabricated action",

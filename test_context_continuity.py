@@ -13,6 +13,7 @@ from unittest import mock
 import action_truth
 import converse
 import llm
+import review
 import store
 import task_runner
 import tasks_svc
@@ -425,6 +426,24 @@ class ConversationContextContinuityTests(unittest.TestCase):
             converse.recorded_work_contract(self.conn, 1, text), "ru")
         self.assertIn("доставлено", answer)
         self.assertIn("прочтение тобой не подтверждено", answer)
+
+    def test_format_issue_labels_and_repeated_actionable_patterns_reach_review(self):
+        kinds = ("converse_format_mismatch", "converse_format_repaired",
+                 "converse_format_repair_failed")
+        for kind in kinds:
+            for lang in ("ru", "en"):
+                label = review._issue_label(kind, lang)
+                self.assertTrue(label and label != kind, (kind, lang))
+                self.assertNotIn("converse_", label)
+            for _ in range(2):
+                store.issue_add(self.conn, 1, kind, "same repeatable formatting outcome")
+        data = review.collect(self.conn, "week")
+        patterns = {row["kind"]: row["n"] for row in data["open_issue_patterns"]}
+        self.assertEqual(patterns, {"converse_format_mismatch": 2,
+                                    "converse_format_repair_failed": 2})
+        self.assertIn("converse_format_repair_failed", review.FAILURE_ISSUE_KINDS)
+        self.assertNotIn("converse_format_repaired", review.FAILURE_ISSUE_KINDS)
+        self.assertEqual(sum(row["n"] for row in data["issue_counts"]), 6)
 
     def test_wrong_turn_snapshot_fails_closed_before_a_model_call(self):
         context = converse.freeze_turn_context(2, "en", "Other request", [

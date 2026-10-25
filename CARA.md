@@ -19,7 +19,10 @@ Ambiguous, edited, forwarded or mixed requests keep the model path. Explicit
 current numbered-item instructions share the bounded corrective path and
 immutable evidence; earlier degenerate/action repair behavior remains.
 Independent holdouts cover task identity, source integrity, mixed requests
-and extra numbered items. Fresh exact-source qualification is required.
+and extra numbered items. Format outcomes have readable Russian/English report
+labels; repeated mismatches and failed corrections enter existing issue review.
+Only failed corrections add the existing failure-health line. Fresh exact-source
+qualification is required.
 
 Implementation is being qualified; the accepted runtime below remains live.
 The ongoing model trial requires an authenticated runtime observation segment

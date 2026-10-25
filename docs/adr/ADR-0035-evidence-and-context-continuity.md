@@ -49,3 +49,7 @@ unchanged and the original observation end remains.
   format correction; mixed/ambiguous requests retain inference. Independent
   holdouts protect identity, untrusted/edited sources and extra intents.
   No model, budget, schema or tool permission change. New qualification pending.
+
+- 2026-10-25: source review closed new format-event reporting: additive RU/EN
+  labels and existing actionable/failure report integration. No authority
+  or model change; these two report modules join the explicit runtime delta.
