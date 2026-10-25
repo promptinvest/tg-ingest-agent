@@ -1,6 +1,6 @@
 # ADR-0036 — Read-only grounded analysis in ordinary requests
 
-Status: Accepted for implementation, 2026-10-25; qualification/deployment pending.
+Status: Implemented e242516; deployed and accepted2026-10-25T20:04:47.643688+00:00; actual observer and independent audit passed.
 
 ## Context
 
@@ -78,3 +78,48 @@ replay a consumed controller or restore an old database.
   deadline and model/budget settings; the qualified operator selects the exact
   package and bounded active-session window without claiming hash-specific
   owner approval.
+- 2026-10-25: candidate e242516 passes exact-source normal/shuffled Linux,
+  exact-head CI40225722321 and isolated operator checks. All six final-source
+  outcomes pass independent semantic review;20 new calls add USD0.152374.
+  All57 known qualification rows total USD0.421429; earlier failed candidates
+  retain their37 rows/USD0.269055 and29 historical unknown rows remain unchanged,
+  with no new unknown charges. The pinned operator-selected USD0.60 cumulative
+  evaluation amendment preserves those rows, all six semantic criteria and
+  application USD2/day, USD12/month, USD0.15/task and four-call limits. An operator
+  proof-sealer failure and its narrow redaction-equivalence correction remain
+  retained. Final proof8768ac83 was sealed19:44:26UTC without further app/model
+  calls; manual review28d4ed20 supports all six outcomes. Guarded acceptance,
+  third-source observer and independent live audit remain pending. No deployment is claimed here.
+
+- 2026-10-25: data-only materialization passed; the operator selected
+  19:45:30.518099-20:45:30.518099UTC under the owner implementation/timing
+  request. Fresh release-attempt1 controller launched once (PID3308942), with
+  preflight/backups/installed gates running. Application acceptance, actual third
+  source epoch and observer/audit remain pending; never replay the controller.
+
+- 2026-10-25: first controller forward-paused19:47:22UTC before new worker/main
+  startup. The operator shim generated seven legacy guard-counted caches plus
+  eight root caches; all65 original members/all15 caches, new source and56-table
+  stopped data remain exact. A new forward-only package adds single-argument
+  -IB/kernel execution qualification; original installer/controller are not
+  replayed. Fresh completion/acceptance and source first-start remain pending.
+
+- 2026-10-25: forward package qualified on actual isolated Linux; fresh root2
+  materialization/prepared checks passed. Controller launched once(PID3317152)
+  in operator-selected20:01:11.094085-21:01:11.094085UTC, authorization5be45645.
+  Original source/full/CI/model evidence and trial deadline remain; acceptance,
+  actual first analysis exposure and sandbox observer/audit are pending.
+
+- 2026-10-25: accepted20:04:47.643688UTC, sourcee242516/build77f6380d9912/
+  deployment73e0133c10ad848334a43e76, acceptance02ddfe8d. Forward completion
+  retained all failed65+15 operator/cache artifacts and all56-table data without
+  reinstall or DB restore. The third source starts20:02:28.895163UTC after the
+  recorded918.431712-second source gap; prior pause and October28 deadline remain.
+  Actual sandbox observer installed20:05:42UTC; independent read-only audit
+  c500fede passed20:06:41UTC, all93 runtime/99 protected files and original
+  model/budget/peer/alert/retention settings preserved. One normal notice attempt;
+  no manual messages or historical/controller/source-publisher replay.
+
+- 2026-10-25: production tag `production-2026-10-25-grounded-analysis` published
+  and remotely verified: annotated object5138ea99, peeled sourcee242516. The
+  documentation publication preserves that exact installed runtime.

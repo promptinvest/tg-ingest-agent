@@ -1,40 +1,56 @@
 # Cara — Solution Specification
 
-## October 25 - Read-only grounded analysis in implementation
+## October 25 - Read-only grounded analysis accepted
 
-The owner approved extending the existing task skill and tool broker with
-source-bound read-only analysis, ADR-0036. Deliberate comparison/recommendation
-requests can select saved-note, reminder and published-project-fact reads,
-inspect their receipts and gather bounded additional evidence. The answer
-separates source-quoted facts from conclusions, recommendations and unknowns.
-Existing task/approval/delivery/recovery contracts, ordinary chat, extractive KB
-answers and direct recorded-work reads remain compatible. Existing Sol task
-profiles, DeepSeek conversation, fallbacks and budget limits remain.
+Deployed and accepted **2026-10-25 20:04:47 UTC** (23:04 Moscow), source
+`e242516`, build `77f6380d9912`, deployment `73e0133c10ad848334a43e76`.
+The actual sandbox observer was installed 20:05:42 UTC; independent read-only
+runtime and preservation audit passed 20:06:41 UTC. The remotely verified tag is
+`production-2026-10-25-grounded-analysis`, pointing to the exact installed source.
 
-Implementation and qualification are underway; the accepted context/evidence
-runtime below remains live. The initial analysis candidate was rejected by
-real-model qualification: resolved planning gaps leaked into the final answer,
-and an unsuccessful literal search was repeated without useful result context.
-The next candidate retains planning history, reassesses gaps against current
-evidence, and gives the planner completed-read results plus the existing literal
-search contract. A second real-model cohort passed five scenarios but its source
-injection scenario could not deliver a usable comparison: the unchanged action
-truth guard rejected ordinary prose containing "saved". The bounded correction
-now receives the exact rejected fragment as untrusted user-level diagnostic data;
-the prompt asks for the comparison without unnecessary workflow narratives. Both
-global action guards and their original behavior remain. All failed evidence and
-charges remain. A recorded operator-selected finite evaluation allowance is
-USD0.60 across all analysis qualification attempts, replacing the initial USD0.40
-allowance; application USD2/day, USD12/month and task guards remain exact. A fresh
-full six-case cohort against the final source is required. October28 was a proposed
-model-observation checkpoint, not a technical dependency. An earlier transition would require a
-new authenticated source epoch, observer and conditional model-only reversion,
-preserving the original deadline, prior evidence, data and protections. The owner
-selected deployment as soon as qualification passes, with a separate trial
-segment. See
-[ADR-0036](docs/adr/ADR-0036-read-only-grounded-analysis.md).
-The pure third-epoch contract used by the private operator is published under
-[ops/analysis-release](ops/analysis-release/README.md) and checked separately in CI.
+ADR-0036 extends the existing task skill and broker. A deliberate comparison or
+recommendation can select up to four local saved-note, reminder and published-fact
+reads, inspect validated receipts and adapt its reading before synthesis. Recorded
+facts cite source quotations and dates; conclusions, recommendations, conflicts
+and unknowns stay distinct. Successful empty searches remain visible to planning,
+and synthesis reassesses provisional gaps against the evidence. Explicit
+follow-ups bind to the same owner's delivered parent task/result.
+
+Ordinary chat, extractive KB answers, existing task plans, confirmations, action
+guards, cancellation, delivery ambiguity, restart accounting and stored history
+remain. Analysis copies follow existing authorized source/all purge semantics;
+late inference cannot restore erased content. No new external search, calendar
+or state-change permission is activated. Models/fallbacks and USD 2/day,
+USD 12/month, USD 0.15/task and four task-profile calls remain unchanged.
+
+Exact-source normal/shuffled Linux, exact-head CI, finite model qualification,
+network-isolated operator/kernel checks and all installed release gates passed.
+All six final-source synthetic outcomes pass independent semantic review. The
+final cohort adds 20 native calls/USD 0.152374; all 57 known qualification rows total
+USD 0.421429. Earlier failed 37 rows/USD 0.269055 and 29 historical unknowns remain,
+with no new unknown charge. The pinned operator-selected USD 0.60 finite evaluation
+amendment changes no native budget or quality criterion. Six outcomes do not
+establish general IQ or ChatGPT-agent capability parity.
+
+The first attempt paused before new worker/main startup on operator bytecode
+inventory checks. Forward-only completion preserved all 65 original package files,
+all 15 cache artifacts, data and failed receipts; it performed no reinstall or
+DB restore. The accepted map has 93 runtime/99 protected files, with the new
+observer's two unit files separately bound. The third source epoch begins
+20:02:28.895163 UTC after the recorded 918.431712-second source-transition gap;
+the earlier source pause and original October 28 13:36:17.924552 UTC trial end
+remain. The actual final timer entry is13:36:18 UTC. Observation is metadata-only,
+with no paid probes, messages or automatic reversion; sparse traffic remains
+insufficient evidence. Conditional model-only reversion preserves new code/data
+and requires fresh accepted-runtime/PID/idle/backup/protected checks and a
+compare-and-swap of only the four original model keys.
+
+The owner selected deployment as soon as qualification passes with a separate
+trial segment. Exact packages/windows were operator selections under that
+request; no separate hash-specific owner approval or Cara standing deployment
+rule is claimed. See the [accepted release](docs/cara-grounded-analysis-2026-10-25.md),
+[ADR-0036](docs/adr/ADR-0036-read-only-grounded-analysis.md) and
+[pure continuation contract](ops/analysis-release/README.md).
 
 ## October 25 - Context and evidence improvements accepted
 
