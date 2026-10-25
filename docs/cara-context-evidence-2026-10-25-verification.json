@@ -1,0 +1,217 @@
+{
+  "acceptance_sha256": "4c1b47eeae099fb00910f34a89bb4bdf05142881d05d7d133bd685ae43c764a8",
+  "accepted_at": "2026-10-25T16:21:02.879450+00:00",
+  "application_status": "accepted",
+  "authorization_sha256": "1b8ea12dfe51676761a631423822c165aea061e683a3d333ef42e61ac3991896",
+  "finite_quality_evidence": {
+    "actual_action_truth_repairs": 1,
+    "actual_conversation_responses": 2,
+    "actual_grounded_kb_responses": 1,
+    "actual_model_calls": 3,
+    "aggregate_ceiling_usd": 0.15,
+    "corrected_accounted_usd": 0.01436096,
+    "criteria_preserved": true,
+    "direct_record_read_outcomes": 6,
+    "manual_review_sha256": "f6d5a6cb6612ace7721360533bb06b19f7809bb084e6727f433ed717b1511319",
+    "new_unknown_charges": 0,
+    "outcomes_passed": 9,
+    "prior_failed_accounted_usd": 0.041772224,
+    "prior_failed_outcomes": 4,
+    "prior_failed_raw_sha256": "26a570f8207ba1ac4fe63b694331c0aa3159ba54ce6410c4f675da9464150469",
+    "prior_failed_source_commit": "167274417c5dc652052b6795699aa07be26e8548",
+    "qualification_accounted_usd": 0.056133184,
+    "raw_corrected_sha256": "d2e2281fd7238a42658f5c5c8053ab34dd320ba600910d2ab7d144f1f7c3896f",
+    "scope_limit": "Finite synthetic outcomes; six direct reads are not model-reasoning samples. Only one actual corrective response was sampled. Production completion rates and broad intelligence parity are unmeasured.",
+    "sealed_model_proof_sha256": "f3e027813ddb4fb81996609c1603dab41e7eb24d4003da2c31f5b88c3dc38708",
+    "synthetic_rejected_drafts": 1
+  },
+  "health": {
+    "all_four_existing_services_active": true,
+    "automatic_restarts_per_service": 0,
+    "manual_messages": 0,
+    "normal_notice_recorded_once": true,
+    "receipt_sha256": "7502a10e156b4d8e768799d8f256653a1befd57b8d848c063ed90a9a901f0d8a",
+    "sample_times": [
+      "2026-10-25T16:20:46.878294+00:00",
+      "2026-10-25T16:20:52.173112+00:00",
+      "2026-10-25T16:20:57.447141+00:00"
+    ]
+  },
+  "preservation": {
+    "application_restores": 0,
+    "before_main_start_sha256": "28da88acb32ad03d1f511b368fb40752e2aa78ffec3755e6439e1f420001f2ab",
+    "before_worker_start_sha256": "e2669fbf6cea0f640a130eb0279f6a58a1412f0edab6e6f9249394ad0c315ee8",
+    "canonical_migration_invocations": 0,
+    "changed_original_columns_before_first_start": 0,
+    "changed_original_rows_before_first_start": 0,
+    "completed_controllers_replayed": 0,
+    "database_restores": 0,
+    "gateway_updates_performed": 0,
+    "original_attempts_retained": true,
+    "original_tables": 56,
+    "post_start_history_preserved": true,
+    "reinstallations_during_forward_completion": 0,
+    "retired_configuration": {
+      "changed_key": "DO_CHAT_MODEL",
+      "generated_sha256": "0797f0a800f140e4293d403e59a2d5c6d19956b9591bbb5d4d4b4c1ee4c57b69",
+      "main_environment_sha256": "46d9c31a9dd24770b51f9830a6150ce407700912a04304abf1c153c29d1f9db5",
+      "main_environment_unchanged": true,
+      "original_sha256": "51745bec2a120044c907d1bc1d7f4bb75b1c6b06befa9812dcbb4209aee490f6",
+      "receipt_sha256": "e2e3f79df15d6f76311c2058be4d6d7cc0304d66aae123ed23fa4ccff7dca880",
+      "restored_at": "2026-10-25T16:18:28.735197+00:00",
+      "retired_units_inactive_and_disabled": true
+    },
+    "retired_configuration_restores": 1,
+    "schema_changed": false,
+    "source_publishers_run": 0,
+    "stopped_parity_sha256": "daaf072ed8b21c3d3a10ce5cc8d3a3208b549672c8c9d74751d0a67b4ac990d4",
+    "total_tables": 56
+  },
+  "publication": {
+    "final_audit": {
+      "application_mutations": 0,
+      "at": "2026-10-25T16:33:56.459536+00:00",
+      "current_process_unknown_attempts": 0,
+      "historical_unknown_attempts_retained": 29,
+      "messages_sent": 0,
+      "model_calls": 0,
+      "neighbors_unchanged": true,
+      "protected_backups_verified": 4,
+      "protected_files": 93,
+      "receipt_sha256": "caa9dfb0d7f4249cfd08ab918a04cafa1ca91d456f704508f05fe12959c571e5",
+      "runtime_files": 91,
+      "service_actions": 0,
+      "source_outputs_unchanged": true,
+      "status": "passed"
+    },
+    "later_repository_update_installed_in_application": false,
+    "release_tag": {
+      "expected_source_commit": "17083d6ee4647de4bcaf03808cac0649996f7652",
+      "name": "production-2026-10-25-context-evidence",
+      "remote_object": "86cf4e612a8ba02130b7f9352b704c9e634204dc",
+      "status": "verified_remote",
+      "verified_peeled_commit": "17083d6ee4647de4bcaf03808cac0649996f7652"
+    }
+  },
+  "retained_transition_failures": [
+    {
+      "application_transition_started": false,
+      "attempt": 1,
+      "reason": "Stale expected source-output lineage; corrected using pinned accepted ancestry.",
+      "stage": "fresh_preflight"
+    },
+    {
+      "attempt": 2,
+      "forward_paused": true,
+      "reason": "Unchanged runtime verifier could not find runuser because its command-local PATH omitted /usr/sbin.",
+      "stage": "runtime_verification_after_exact_install"
+    },
+    {
+      "application_resumed": false,
+      "attempt": 3,
+      "reason": "Canonical installer regenerated the retired Mentor model projection; exact original retired configuration was restored in attempt4.",
+      "stage": "paused_preflight_before_resumption"
+    }
+  ],
+  "schema": "cara.context-evidence-public-verification/v1",
+  "source": {
+    "archive_sha256": "e333ec93410330f559f3395f04ccb7bf1a1a4de186c2798d809a9f3144c09c35",
+    "build_version": "23cada405758",
+    "commit": "17083d6ee4647de4bcaf03808cac0649996f7652",
+    "deployment_id": "88a0cb2a8c15f71ac6fc5d4c",
+    "installed_at": "2026-10-25T15:53:13.044003+00:00",
+    "installed_runtime_counterparts": 91,
+    "production_modules": [
+      "boss_model.py",
+      "converse.py",
+      "converse_svc.py",
+      "hermes.py",
+      "knowledge.py",
+      "memory_curator.py",
+      "review.py",
+      "texts.py"
+    ],
+    "verified_at": "2026-10-25T16:19:54.146367+00:00"
+  },
+  "trial": {
+    "automatic_quality_judgment": false,
+    "automatic_reversion": false,
+    "continuation_sha256": "860b5f62ac51a2ae3b86950f4e12d64b6a405c82851b8eb71c5d5557121e25f4",
+    "conversation_max_tokens": 320,
+    "conversation_primary": "deepseek-v4-pro",
+    "daily_budget_usd": 2,
+    "first_new_source_exposure": "2026-10-25T15:53:26.953420+00:00",
+    "first_snapshot_actual_systemd_sandbox": true,
+    "first_snapshot_quality_evidence": "insufficient_ordinary_traffic",
+    "first_snapshot_sha256": "b784f94db2fb05c0fc520c0b53966aae4ffa981eac7d1f863d57bcdbf4770274",
+    "interval_hours": 6,
+    "kb_max_tokens": 500,
+    "last_timer_entry_utc": "2026-10-28 13:36:18 UTC",
+    "model_only_reversion_preserves_source_and_data": true,
+    "monitor_installation_sha256": "f0f5a175136e2110a0624737e84eb948f193d890380b651c834ad477c57c9b3a",
+    "monitor_installed_at": "2026-10-25T16:21:33.658649+00:00",
+    "monitor_manifest_sha256": "f0b7eda76da3ee81f5999f788217c06078fa39f289535d2e9fb341e772b74824",
+    "monthly_budget_usd": 12,
+    "observation_read_only": true,
+    "observer_messages_sent": 0,
+    "observer_model_calls": 0,
+    "original_end": "2026-10-28T13:36:17.924552+00:00",
+    "original_start": "2026-10-25T13:36:17.924552+00:00",
+    "profiles_and_fallbacks_unchanged": true,
+    "recorded_paused_intervals": [
+      {
+        "from_inclusive": "2026-10-25T15:54:21.327691+00:00",
+        "reason": "forward_paused_after_runtime_verifier_path_failure",
+        "until_exclusive": "2026-10-25T16:18:45+00:00"
+      }
+    ],
+    "source_change_confounds_model_only_comparison": true
+  },
+  "verification": {
+    "ci": {
+      "head_sha": "17083d6ee4647de4bcaf03808cac0649996f7652",
+      "receipt_sha256": "011269f36444021e29ce66bc5d3a904c20b05e188c333e694747ed8515b33f58",
+      "run_id": 40207619599,
+      "status": "passed",
+      "url": "https://github.com/promptinvest/tg-ingest-agent/actions/runs/40207619599"
+    },
+    "full_linux": {
+      "executed_passing_per_order": 3046,
+      "existing_skips_per_order": 9,
+      "failures_per_order": 0,
+      "normal_tests": 3055,
+      "original_test_files_unchanged": 78,
+      "receipt_sha256": "31c78c2eb9632e0ad4b269d144a3e091f69d05e710ebae232371e260ec1010bf",
+      "shuffled_tests": 3055,
+      "status": "passed"
+    },
+    "operator": {
+      "receipt_sha256": "aae7dd554626df25532a85b6c14fe0f5afcbf4a07d48ac37d3057cd2a6b3c923",
+      "status": "passed",
+      "tests": 70
+    },
+    "public_helper_maintenance": {
+      "helper_sha256": "dea40d82dad4a634f5999d4ae7b2069bf3255c6f6dfc6a9b92afea1a7ee36a3a",
+      "installed_in_application": false,
+      "model_calls": 0,
+      "network_disabled": true,
+      "nonroot": true,
+      "original_methods_ast_unchanged": 19,
+      "owner_database_connections": 0,
+      "receipt_sha256": "78253883ae33601da258d16b1f7529bd265bc217b85b36cba602a8c20724be0f",
+      "service_actions": 0,
+      "status": "passed",
+      "test_sha256": "78f8bff6b1fc2057d21f061c3ed2c3544eba5a68b9912615c8664ba5feeb571b",
+      "tests": 21
+    },
+    "readiness": {
+      "after_final_restart_canonical_inner_sha256": "fb4c8dcda934310aaa0a4fc0a19f58220d6f2ee73d00423badfd59f94fbe01cb",
+      "after_final_restart_receipt_file_sha256": "815b54a51a6e5493b595b05b607604331a559543f89dda0b24d49a6d0686bccb",
+      "before_mark_verified_canonical_inner_sha256": "61eb962d3df74e10cd6d39217f1c5cd64ba80d74d10e7d0ea167b403bb72ccd6",
+      "before_mark_verified_receipt_file_sha256": "092d4a8745e981ab72ee512ccf2c053dd7f8d11d0d48c99efe6ca075e6561781",
+      "mcp_obligations": 60,
+      "scoped_reads": 9,
+      "scoped_receipt_sha256": "e072e89aedf2ae17680fa651e988fed55856e8f2770c1b7174570bf35b0375c7"
+    }
+  }
+}

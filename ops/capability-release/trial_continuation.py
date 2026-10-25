@@ -181,6 +181,13 @@ def validate_continuation(value):
     require(digest(value.get("new_runtime")) == value["new_runtime_sha256"], "new runtime receipt changed")
     require(start <= utc(value.get("old_segment_until")) <= utc(value.get("new_segment_from")) < end, "invalid runtime windows")
     require(value.get("automatic_reversion") is False and value.get("messages_sent") == value.get("model_calls") == 0 and value.get("model_configuration_unchanged") is True, "continuation scope differs")
+    pauses = value.get("recorded_paused_intervals", [])
+    require(isinstance(pauses, list) and len(pauses) <= 4, "bounded source pause intervals required")
+    previous = utc(value["new_segment_from"])
+    for pause in pauses:
+        require(isinstance(pause, dict) and set(pause) == {"from_inclusive", "until_exclusive", "reason"} and pause["reason"] == "forward_paused_after_runtime_verifier_path_failure", "closed recorded source pause required")
+        require(previous <= utc(pause["from_inclusive"]) < utc(pause["until_exclusive"]) < end, "recorded source pause dates differ")
+        previous = utc(pause["until_exclusive"])
     return start, end
 
 

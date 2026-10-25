@@ -1,6 +1,6 @@
 # Cara — Solution Specification
 
-## October 25 - Context and evidence improvements in qualification
+## October 25 - Context and evidence improvements accepted
 
 The owner approved the architecture review's first release. ADR-0035 extends
 existing conversation, knowledge and memory modules. Turn context survives
@@ -21,18 +21,27 @@ immutable evidence; earlier degenerate/action repair behavior remains.
 Independent holdouts cover task identity, source integrity, mixed requests
 and extra numbered items. Format outcomes have readable Russian/English report
 labels; repeated mismatches and failed corrections enter existing issue review.
-Only failed corrections add the existing failure-health line. Fresh exact-source
-qualification is required.
+Only failed corrections add the existing failure-health line. Exact-source
+qualification passed; the dated release record retains all failed evidence.
 
-Implementation is being qualified; the accepted runtime below remains live.
-The ongoing model trial requires an authenticated runtime observation segment
-and compatible model-only reversion before an application transition. Its
-original October28 end and failed evidence remain. Adaptive tool reasoning,
-grounded analysis and broader research tools are subsequent work, not claimed
-as delivered here. See [ADR-0035](docs/adr/ADR-0035-evidence-and-context-continuity.md).
+Deployed and accepted **2026-10-25 16:21:02 UTC** (19:21 Moscow), source
+`17083d6`, build `23cada405758`, deployment `88a0cb2a8c15f71ac6fc5d4c`.
+Exact-source normal/shuffled Linux qualification, CI, finite model review and
+guarded forward completion passed. Existing data/schema and the model profiles,
+fallbacks, USD2/day and USD12/month remain. The authenticated continuation and
+companion observer retain the original October28 deadline and actual deployment
+pause; conditional model-only reversion preserves the new source and all data.
+See the [release record](docs/cara-context-evidence-2026-10-25.md) and
+[ADR-0035](docs/adr/ADR-0035-evidence-and-context-continuity.md). Adaptive tool
+reasoning, grounded analysis and broader research tools remain subsequent work;
+this release does not establish ChatGPT-agent capability parity.
 
 
-## October 25 - Qualified-role model trial live
+## October 25 - Qualified-role model trial: original acceptance
+
+This section records the original model-only transition. The accepted
+context/evidence release above subsequently changed application source and
+continued the same trial with a new observer; its original evidence remains.
 
 Accepted **2026-10-25 13:36:17 UTC** (16:36 Moscow). Haiku 5.5 handles routing,
 ingest and memory candidates; Sonnet 5.5 handles KB answers and memory
@@ -42,8 +51,8 @@ task-context repair checks. Failed conversation trials remain retained and are
 excluded from the selected scope. No conversation repair code is included.
 
 All profile controls, existing fallbacks, USD2/day and USD12/month guards remain.
-New-model reservations use conservative context-tier ceilings. The installed
-application remains ee1a319/de3e62ab43f8/ad778b10272c813105b7080a; no code install,
+New-model reservations use conservative context-tier ceilings. At that acceptance
+the installed application remained ee1a319/de3e62ab43f8/ad778b10272c813105b7080a; no code install,
 schema change or database restore occurred. All 91 runtime files and 78 protected
 files pass, with only four model environment keys changed. Exact stopped data
 across 56 tables, peers, notification receipts and final health checks pass.

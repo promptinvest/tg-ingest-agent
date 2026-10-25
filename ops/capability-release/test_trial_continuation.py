@@ -163,5 +163,54 @@ class ContinuationContracts(unittest.TestCase):
                 t.verify_revert_preflight(fresh, value, now="2026-10-27T15:10:00+00:00")
 
 
+class RecordedPauseContracts(unittest.TestCase):
+    def test_recorded_pauses_round_trip_without_resetting_epoch_or_trial_end(self):
+        value = plan()
+        first, end = value["new_segment_from"], value["trial_end"]
+        pauses = [{"from_inclusive": "2026-10-25T15:06:00+00:00",
+                   "until_exclusive": "2026-10-25T15:07:00+00:00",
+                   "reason": "forward_paused_after_runtime_verifier_path_failure"},
+                  {"from_inclusive": "2026-10-25T15:08:00+00:00",
+                   "until_exclusive": "2026-10-25T15:09:00+00:00",
+                   "reason": "forward_paused_after_runtime_verifier_path_failure"}]
+        value["recorded_paused_intervals"] = copy.deepcopy(pauses)
+        original = copy.deepcopy(value)
+        accepted = t.decode(t.canonical(value))
+        t.validate_continuation(accepted)
+        self.assertEqual(accepted["recorded_paused_intervals"], pauses)
+        self.assertEqual(accepted["new_segment_from"], first)
+        self.assertEqual(accepted["trial_end"], end)
+        self.assertEqual(t.segment_window(accepted, "2026-10-29T00:00:00+00:00"),
+                         (first, end, True))
+        self.assertEqual(t.remaining_dates(accepted, "2026-10-25T15:10:00+00:00")[-1],
+                         "2026-10-28 13:36:18 UTC")
+        self.assertEqual(value, original)
+
+    def test_malformed_out_of_epoch_or_overlapping_recorded_pauses_are_rejected(self):
+        valid = {"from_inclusive": "2026-10-25T15:06:00+00:00",
+                 "until_exclusive": "2026-10-25T15:07:00+00:00",
+                 "reason": "forward_paused_after_runtime_verifier_path_failure"}
+        invalid = [None, {}, [valid] * 5,
+                   [{"from_inclusive": valid["from_inclusive"], "reason": valid["reason"]}],
+                   [{**valid, "extra": "unbound"}],
+                   [{**valid, "reason": "unbound"}],
+                   [{**valid, "from_inclusive": "2026-10-25T15:04:00+00:00"}],
+                   [{**valid, "until_exclusive": valid["from_inclusive"]}],
+                   [{**valid, "until_exclusive": "2026-10-25T15:05:30+00:00"}],
+                   [{**valid, "until_exclusive": "2026-10-28T13:36:17.924552+00:00"}],
+                   [{**valid, "until_exclusive": "2026-10-29T00:00:00+00:00"}],
+                   [{**valid, "from_inclusive": "2026-10-25T16:06:00+01:00"}],
+                   [valid, {**valid, "from_inclusive": "2026-10-25T15:06:30+00:00",
+                            "until_exclusive": "2026-10-25T15:08:00+00:00"}]]
+        for pauses in invalid:
+            with self.subTest(pauses=pauses):
+                value = plan()
+                value["recorded_paused_intervals"] = copy.deepcopy(pauses)
+                before = copy.deepcopy(value)
+                with self.assertRaises(ValueError):
+                    t.validate_continuation(value)
+                self.assertEqual(value, before)
+
+
 if __name__ == "__main__":
     unittest.main()

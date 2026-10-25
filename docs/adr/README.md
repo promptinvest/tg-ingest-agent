@@ -16,7 +16,7 @@ completed 2026-10-25 09:08:55 UTC for `dcdd5ee`. The original implemented decisi
 
 | ADR | Title | Phase | Depends on | Status |
 |---|---|---|---|---|
-| [ADR-0035](ADR-0035-evidence-and-context-continuity.md) | Evidence and context continuity | Owner implementation request | Existing conversation/knowledge/memory | Accepted; qualification pending |
+| [ADR-0035](ADR-0035-evidence-and-context-continuity.md) | Evidence and context continuity | Owner implementation request | Existing conversation/knowledge/memory | Implemented/deployed 17083d6; accepted October25 16:21:02 UTC; [release evidence](../cara-context-evidence-2026-10-25.md) |
 | [ADR-0034](ADR-0034-personal-assistant-follow-through.md) | Reliable action outcomes and personal-assistant continuity | Owner implementation request | Existing runtime/delivery/skills | Implemented/deployed ee1a319; accepted October25 11:37:18 UTC; [release evidence](../cara-assistant-reliability-2026-10-25.md) |
 | [ADR-0001](ADR-0001-inline-buttons-are-a-first-class-control-for.md) | Inline buttons are a first-class control for reminder state changes | Phase A | nothing | Implemented 0a2639a |
 | [ADR-0002](ADR-0002-simultaneous-fires-are-delivered-as-one-numbered.md) | Simultaneous fires are delivered as one numbered card with batch close | Phase A | ADR-0001 | Implemented 0a2639a |

@@ -143,3 +143,34 @@ choosing whether to keep or revert the new roles.
 Fresh 13:40:31 UTC checks retain the same main PID and zero automatic restarts,
 zero unknown inference outcomes since acceptance, unchanged runtime/protected files
 and the active timer. No ordinary model calls had occurred yet.
+
+## Context/evidence release continuation
+
+The [context/evidence release](cara-context-evidence-2026-10-25.md) was accepted
+at **2026-10-25T16:21:02.879450+00:00**, source `17083d6`, build `23cada405758`.
+All model roles, profile controls, fallbacks and USD2/day / USD12/month remain.
+The source change prevents treating later cumulative reports as model-only
+comparison evidence. Original reports and failed trials remain unchanged.
+
+The authenticated continuation is
+`860b5f62ac51a2ae3b86950f4e12d64b6a405c82851b8eb71c5d5557121e25f4` under
+`/root/cara-capability-20261025/release-attempt4`. Its old-source boundary is
+15:53:05.997074 UTC; first new-source exposure is 15:53:26.953420 UTC. The explicit
+pause **15:54:21.327691–16:18:45 UTC** remains recorded; acceptance resets neither
+source exposure nor the **October28 13:36:17.924552 UTC** deadline.
+
+The original observer timer is disabled; its unit files, receipts and historical
+snapshots remain. The separately qualified
+`cara-model-trial-20261025-continuation-observer.service/.timer` retains six-hour
+absolute dates and the final 13:36:18 UTC entry. Its real first sandbox run passed
+at 16:21:33 UTC and reports insufficient ordinary traffic. It makes no model
+calls/messages or automatic quality/reversion decision; no data permission changes.
+
+The original frozen reverter correctly refuses the new source and must not be
+used for this runtime. The accepted root's `trial_runtime_operator.py` provides
+conditional `revert-preflight` then `revert`: bind a fresh PID/idle/backup/source
+preflight, continuation SHA above and the exact preflight SHA. It compare-and-swaps
+only the four original model keys, preserving later unrelated environment edits,
+the installed source and all data/history. Both verifier paths retain their
+command-local PATH fix. Reversion has not been run. Never replay a consumed
+release controller or restore an old database.

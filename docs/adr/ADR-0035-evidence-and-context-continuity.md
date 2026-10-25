@@ -1,6 +1,7 @@
 # ADR-0035 — Evidence and context continuity
 
-Status: Accepted for implementation, 2026-10-25; qualification/deployment pending.
+Status: Implemented/deployed `17083d6`; accepted 2026-10-25 16:21:02 UTC.
+See [release evidence](../cara-context-evidence-2026-10-25.md).
 
 ## Context
 
@@ -53,3 +54,18 @@ unchanged and the original observation end remains.
 - 2026-10-25: source review closed new format-event reporting: additive RU/EN
   labels and existing actionable/failure report integration. No authority
   or model change; these two report modules join the explicit runtime delta.
+
+- 2026-10-25: exact source `17083d6` passed normal/shuffled Linux, CI and the
+  bounded independently reviewed outcomes. One installation reached guarded
+  forward acceptance at 16:21:02 UTC. Original transition failures remain;
+  no database/code restore or consumed-controller replay occurred. The native
+  install's incidental retired Mentor config projection was restored to its
+  exact original bytes/metadata while both retired units remained disabled.
+  Existing schema/data, active profiles, caps and source protections remain.
+- 2026-10-25: source-separated trial continuation and its actual sandboxed
+  observer passed. The first new-source epoch, explicit deployment pause and
+  original October28 end remain; conditional reversion changes model keys only.
+  The public pure continuation contract now validates optional recorded pause
+  intervals as qualified by the private operator. This nested helper/docs update
+  is outside the installed application; its accepted source remains `17083d6`.
+  Broader agent reasoning and ChatGPT capability parity remain unmeasured.
