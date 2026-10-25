@@ -65,6 +65,20 @@ The prompt correction explicitly separates displayed context from performed work
 and makes exact requested structures exclusive. Fresh exact-source qualification
 must include the prior charge within the same total USD0.15 ceiling.
 
+The `72a9e23` source also passed canonical full gates and CI, but its model trial
+(USD0.016547936, no unknowns) still answered an older request alongside the latest
+one. Manual review rejected it; both trials total USD0.032152976. Investigation
+confirmed that real task acknowledgements use `record=False`, leaving consecutive
+owner requests in prompt history. The correction retains all existing history
+and final text, and adds a static current-turn boundary only for consecutive
+owner turns. No user content is promoted into a system instruction. Review also
+found the work projection used `completed` instead of the runner's successful
+step state `succeeded`; successful steps are now excluded from pending next steps.
+The uncertainty fixture must represent completed work with successful steps,
+rather than a completed task containing unperformed planned steps. Original
+inputs/raw/failed verdicts remain; strict quality assertions and the same total
+USD0.15 ceiling remain required for fresh qualification.
+
 Prompt/context changes are explicit. Existing sealed model evidence remains
 bound to its original source and cannot be relabeled fresh candidate evidence.
 No paid qualification, manual Telegram message, historical replay, facts/source

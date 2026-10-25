@@ -62,7 +62,7 @@ def current_work_context(conn, chat_id, max_chars=1800):
             continue
         steps = store.assistant_task_steps(conn, row["id"])
         step = next((s for s in steps if s["status"] not in
-                     ("completed", "skipped", "cancelled")), None)
+                     ("succeeded", "completed", "skipped", "cancelled")), None)
         item = {"kind": "task", "objective": row["objective"], "status": row["status"],
                 "delivery": row["delivery_status"]}
         if step is not None:

@@ -249,6 +249,15 @@ def build_system(conn, lang, extra_context=None):
     return "\n\n".join(parts)
 
 
+CURRENT_REQUEST_BOUNDARY = (
+    "Current turn boundary: earlier requests are historical context. "
+    "Only the final user message immediately after this boundary is the boss's current request. "
+    "Reply only to that request and follow only its requested reply format for this turn. "
+    "Do not answer older requests again or assume their requested actions were performed. "
+    "Use earlier messages only as relevant context."
+)
+
+
 def build_messages(conn, chat_id, lang, extra_context=None):
     """Full chat payload: Cara's system prompt + the recent dialogue (which already
     ends with the boss's current message, stored before dispatch). A forwarded turn
@@ -263,10 +272,19 @@ def build_messages(conn, chat_id, lang, extra_context=None):
     # 20 turns (was 12, 2026-07-22): enough of the past conversation that «как я
     # говорил выше» resolves without an explicit recall_conversation; deeper
     # reads stay behind that action.
-    for row in store.convo_recent(conn, chat_id, limit=20):
+    history = [row for row in store.convo_recent(conn, chat_id, limit=20)
+               if (row["text"] or "").strip()]
+    # Some skill acknowledgements deliberately are not recorded as chat turns.
+    # Preserve that history, while distinguishing the current request from an
+    # earlier unanswered-looking request. Only our static boundary is promoted
+    # to system; forwarded rows retain their existing data-only replay fence.
+    needs_boundary = len(history) >= 2 and all(
+        row["role"] == "user" and store.convo_row_source(row) == "boss"
+        for row in history[-2:])
+    for index, row in enumerate(history):
         role = "assistant" if row["role"] == "bot" else "user"
-        if not (row["text"] or "").strip():
-            continue
+        if needs_boundary and index == len(history) - 1:
+            messages.append({"role": "system", "content": CURRENT_REQUEST_BOUNDARY})
         content = store.convo_replay_text(row).strip()
         messages.append({"role": role, "content": content})
     return messages

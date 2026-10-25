@@ -27,6 +27,8 @@ records exact-source verification and guarded installed acceptance.
   Current requested format/detail wins over the concise conversational default.
   Status replies cannot infer execution from a request or displayed context;
   exact requested structures omit extra introductions and closing questions.
+  Consecutive owner messages retain their history with an explicit current-turn
+  boundary. Successful task steps are excluded from the next-step projection.
 - Fleet execution skips retained terminal requests before its original attempt
   cap. Genuine authority changes finish a still-valid owner request with a
   content-free status; edited/deleted sources and tampered bindings stay silent.

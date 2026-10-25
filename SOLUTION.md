@@ -30,6 +30,10 @@ no objective or permission. Recent equal-priority guidance survives crowded
 profiles, and current requested structure/detail overrides concise defaults.
 Showing context is not evidence of executing a pending step or of the owner
 reading it. Exact requested structures exclude unsolicited opening/closing text.
+A static current-turn boundary disambiguates consecutive owner messages when a
+skill acknowledgement was not stored as a conversation turn. Existing history,
+forwarded-content fences and the final owner text remain intact. The next-step
+projection excludes the runner's actual successful state, `succeeded`.
 Fleet queue fairness and an exact terminal stale-authority status improve
 follow-through while preserving tampered-source silence and no automatic replay.
 
