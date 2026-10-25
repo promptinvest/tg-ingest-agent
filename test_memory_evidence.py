@@ -27,6 +27,11 @@ class EvidenceSurfaceTests(unittest.TestCase):
             ("Сегодня отвечай коротко.", "отвечай коротко", "Всегда отвечай коротко."),
             ("Alice prefers short replies.", "prefers short replies", "He prefers short replies."),
             ("Alice prefers short replies.", "Alice prefers short replies.", "Bob prefers short replies."),
+            ("Alice likes tea and Bob likes coffee.", "Bob likes coffee", "Alice likes coffee."),
+            ("Alice likes tea and Bob likes coffee.", "Bob likes coffee", "He likes coffee."),
+            ("My wife works in finance.", "My wife works in finance.", "He works in finance."),
+            ("My wife works in finance.", "My wife works in finance.", "His sister works in finance."),
+            ("My brother lives in Oslo.", "My brother lives in Oslo.", "He lives in Oslo."),
             ("Моя жена предпочитает короткие ответы.", "короткие ответы", "Предпочитает короткие ответы."),
             ("У моей жены аллергия на орехи.", "аллергия на орехи", "У него аллергия на орехи."),
             ("She said: I prefer short replies.", "I prefer short replies", "He prefers short replies."),
@@ -55,10 +60,18 @@ class EvidenceSurfaceTests(unittest.TestCase):
              "Use short replies.", "correction"),
             ("My wife prefers short replies.", "My wife prefers short replies.",
              "His wife prefers short replies.", "boss"),
+            ("My wife works in finance.", "My wife works in finance.",
+             "His wife works in finance.", "boss"),
+            ("My brother lives in Oslo.", "My brother lives in Oslo.",
+             "His brother lives in Oslo.", "boss"),
+            ("Моя жена работает в банке.", "Моя жена работает в банке.",
+             "Его жена работает в банке.", "boss"),
             ("Моя жена предпочитает короткие ответы.", "Моя жена предпочитает короткие ответы.",
              "Его жена предпочитает короткие ответы.", "boss"),
             ("Alice prefers short replies.", "Alice prefers short replies.",
              "Alice prefers short replies.", "boss"),
+            ("Alice likes tea and Bob likes coffee.", "Bob likes coffee", "Bob likes coffee.", "boss"),
+            ("My wife likes tea and Alice likes coffee.", "Alice likes coffee", "Alice likes coffee.", "boss"),
             ("не пиши про мои лекарства в общем списке", "не пиши про мои лекарства в общем списке",
              "Не упоминай его лекарства в общих списках.", "correction"),
             ("If I write in English, reply in English.", "If I write in English, reply in English.",
@@ -111,6 +124,31 @@ class MemoryEvidenceOutcomeTests(unittest.TestCase):
         self.assertEqual(result["boss"], 0)
         self.assertEqual(store.boss_items(self.conn, "inferred"), [])
         self.assertEqual(store.candidates_pending(self.conn), [])
+
+    def test_later_attributed_quote_keeps_its_own_subject_in_stored_memory(self):
+        source = "Alice likes tea and Bob likes coffee."
+        result = self._curate(source, "boss_facts", "Bob likes coffee.",
+                              evidence="Bob likes coffee", kind="relationship_note")
+        self.assertEqual(result["boss"], 1)
+        rows = store.boss_items(self.conn, "inferred")
+        self.assertEqual([(r["value"], r["evidence"]) for r in rows],
+                         [("Bob likes coffee.", "Bob likes coffee")])
+        # The first person in the larger sentence must not capture Bob's quote.
+        wrong = self._curate(source, "boss_facts", "Alice likes coffee.",
+                             evidence="Bob likes coffee", kind="relationship_note")
+        self.assertEqual(wrong["boss"], 0)
+        self.assertEqual([r["value"] for r in store.boss_items(self.conn, "inferred")],
+                         ["Bob likes coffee."])
+
+    def test_ordinary_kinship_fact_preserves_attribution_and_sensitivity(self):
+        source = "My wife works in finance."
+        text = "His wife works in finance."
+        result = self._curate(source, "boss_facts", text, kind="relationship_note")
+        self.assertEqual(result["boss"], 1)
+        self.assertEqual(store.boss_items(self.conn, "inferred"), [])
+        pending = store.candidates_pending(self.conn)
+        self.assertEqual([(r["proposed_text"], r["evidence"]) for r in pending], [(text, source)])
+        self.assertEqual(pending[0]["sensitivity"], "sensitive")
 
     def test_true_conflicting_preference_is_confirm_first_not_a_duplicate(self):
         old = boss_model.remember_explicit(self.conn, "He prefers short replies.", "tone")

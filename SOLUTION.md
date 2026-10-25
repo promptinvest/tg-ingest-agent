@@ -6,7 +6,8 @@ The owner approved the architecture review's first release. ADR-0035 extends
 existing conversation, knowledge and memory modules. Turn context survives
 repair; retrieval keeps distinct source passages and late keyword matches;
 memory context retains certainty/provenance and candidate checks reject clear
-contradictions. Existing source quotations, action guards, confirmations,
+contradictions while preserving correctly attributed family and compound-sentence
+facts, including sensitive facts that still require confirmation. Existing source quotations, action guards, confirmations,
 persona, stored history and model/budget settings remain. No schema or new
 service/tool permission is introduced. Outcome regressions accompany the change.
 

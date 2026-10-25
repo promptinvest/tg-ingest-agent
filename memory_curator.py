@@ -152,6 +152,14 @@ def _subject_anchor(value):
     else:
         match = re.search(r"\bу\s+(?:(?:моей|моего|его|ее|их|нашей|вашей)\s+)?(\w+)", value)
         word = match.group(1) if match else ""
+    if not word:
+        # Explicit kinship attribution does not depend on the predicate: a wife
+        # can work in finance and a brother can live in Oslo, not only 'prefer'.
+        match = re.search(
+            r"\b(?:my|his|her|their|our|your|мо[йяею]|моей|моего|мои|его|ее|их|наш[аеи]?)\s+"
+            r"(wife|husband|friend|colleague|sister|brother|жен\w*|муж\w*|друг\w*|"
+            r"подруг\w*|коллег\w*|сестр\w*|брат\w*)\b", value)
+        word = match.group(1) if match else ""
     if word in {"i", "we", "he", "she", "they", "я", "мы", "он", "она", "они", "меня", "нас"}:
         return ""
     for stem in ("жен", "муж", "друг", "подруг", "коллег", "сестр", "брат"):
@@ -202,7 +210,10 @@ def _scope_supported(context, text, subject, evidence):
                 # source text; don't mistake that explicit owner subject for a name.
                 own_quote = (re.search(r"\b(?:i|we|я|мы|мне|меня)\b", evidence)
                              and not _THIRD_PARTY.search(evidence))
-                source_subject = _subject_anchor(context)
+                # A sentence can contain several attributed facts. Prefer the
+                # explicit subject in the selected quote, rather than assigning
+                # a later Bob quote to the first Alice mentioned in the clause.
+                source_subject = _subject_anchor(evidence) or _subject_anchor(context)
                 preserved_subject = source_subject and source_subject == _subject_anchor(text)
                 if not own_quote and not preserved_subject and not re.match(
                         r"(?:i|we)\s+(?:likes|prefers|dislikes|hates)\b", third.group()):
