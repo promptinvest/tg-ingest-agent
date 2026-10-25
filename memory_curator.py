@@ -105,7 +105,9 @@ _EXTRACT_SYSTEM = (
     "speaker named above; never cite the other speaker or forwarded data. The quote "
     "must directly support the normalized text, not merely occur nearby. An item with "
     "no exact supporting quote must be omitted. Never invent — only what the text "
-    "plainly supports. Use empty arrays when nothing durable is new."
+    "plainly supports. Preserve negation, whose preference it is, and historical or "
+    "temporary scope. A quoted/hypothetical third-party statement is not the boss's "
+    "own preference or a standing instruction. Use empty arrays when nothing durable is new."
 )
 
 
@@ -126,21 +128,108 @@ def _evidence_stems(value):
     return {w[:5] for w in words}
 
 
-def _supported_item(item, source_texts):
-    """Require a verbatim source quote plus lexical support for the normalized item.
+_CONTEXT_BOUNDARY = re.compile(r"[.!?;\n]|(?:,\s*)?\b(?:but|however|но|зато)\b", re.I)
+_HISTORICAL = re.compile(r"\b(?:used to|previously|formerly|раньше|прежде|когда-то)\b", re.I)
+_TEMPORARY = re.compile(
+    r"\b(?:today|tonight|tomorrow|yesterday|this time|for now|сегодня|завтра|вчера|"
+    r"на этот раз|в этот раз|пока)\b", re.I)
+_HYPOTHETICAL = re.compile(
+    r"\b(?:suppose|imagine|if (?:i|we) (?:said|were|liked|preferred)|если бы|допустим|представь)\b", re.I)
+_REPORTED = re.compile(r"\b(?:says?|said|told me|сказал[аи]?|говорит|писал[аи]?)\b", re.I)
+_THIRD_PARTY = re.compile(
+    r"\b(?:[\w'-]+\s+(?:likes|prefers|dislikes|hates|любит|предпочитает)|"
+    r"(?:he|she|they|он|она|они|ему|ей)\s|"
+    r"у\s+(?!меня\b|нас\b)[\w]+|"
+    r"(?:my|мо[йяею]|моей|моего)\s+(?:wife|husband|friend|colleague|sister|brother|"
+    r"жена|жены|муж|мужа|друг|подруга|коллега|сестра|брат))", re.I)
+
+
+def _subject_anchor(value):
+    """Only explicit subjects in the bounded forms above; no coreference guess."""
+    match = re.search(r"\b([\w'-]+)\s+(?:likes|prefers|dislikes|hates|любит|предпочитает)\b", value)
+    if match:
+        word = match.group(1)
+    else:
+        match = re.search(r"\bу\s+(?:(?:моей|моего|его|ее|их|нашей|вашей)\s+)?(\w+)", value)
+        word = match.group(1) if match else ""
+    if word in {"i", "we", "he", "she", "they", "я", "мы", "он", "она", "они", "меня", "нас"}:
+        return ""
+    for stem in ("жен", "муж", "друг", "подруг", "коллег", "сестр", "брат"):
+        if word.startswith(stem):
+            return stem
+    return word
+
+
+def _quote_contexts(evidence, source_texts):
+    """Matched clause plus surrounding attribution, not a selectively clipped quote."""
+    needle = _normalized_evidence(evidence)
+    pattern = re.compile((r"(?<!\w)" if needle[0].isalnum() else "")
+                         + re.escape(needle)
+                         + (r"(?!\w)" if needle[-1].isalnum() else ""))
+    for source in source_texts:
+        source = _normalized_evidence(source)
+        for match in pattern.finditer(source):
+            before = [b for b in _CONTEXT_BOUNDARY.finditer(source, 0, match.start())]
+            after = _CONTEXT_BOUNDARY.search(source, match.end())
+            start = before[-1].end() if before else 0
+            end = after.start() if after else len(source)
+            # Keep a terminal question mark: asking whether X is true isn't X.
+            context = source[start:end] + ("?" if after and after.group() == "?" else "")
+            yield context.strip()
+
+
+def _scope_supported(context, text, subject, evidence):
+    if _HISTORICAL.search(context) and not _HISTORICAL.search(text):
+        return False
+    if _TEMPORARY.search(context) and not _TEMPORARY.search(text):
+        return False
+    # Preserve explicit dates/numbers rather than accepting overlap on the topic.
+    numbers = set(re.findall(r"\b\d+\b", text))
+    source_numbers = set(re.findall(r"\b\d+\b", context))
+    if numbers and not numbers <= source_numbers:
+        return False
+    if subject in {"boss", "correction"}:
+        if context.endswith("?") or _HYPOTHETICAL.search(context):
+            return False
+        # A report of somebody's instruction is not a new instruction to Cara.
+        if _REPORTED.search(context) and not re.search(
+                r"\b(?:i said|i say|i told|я сказал[а]?|я говорил[а]?)\b", context):
+            return False
+        if subject == "boss":
+            third = _THIRD_PARTY.search(context)
+            if third and not re.search(r"\b(?:i|we|я|мы)\s*$", context[:third.start()]):
+                # English 'I' can precede the finite form in quoted/ungrammatical
+                # source text; don't mistake that explicit owner subject for a name.
+                own_quote = (re.search(r"\b(?:i|we|я|мы|мне|меня)\b", evidence)
+                             and not _THIRD_PARTY.search(evidence))
+                source_subject = _subject_anchor(context)
+                preserved_subject = source_subject and source_subject == _subject_anchor(text)
+                if not own_quote and not preserved_subject and not re.match(
+                        r"(?:i|we)\s+(?:likes|prefers|dislikes|hates)\b", third.group()):
+                    return False
+    return True
+
+
+def _supported_item(item, source_texts, subject=None):
+    """Require a verbatim source quote plus bounded contradiction/scope checks.
 
     The exact-quote check enforces speaker attribution. Stem overlap prevents the
     model from attaching an unrelated real quote (for example ``Давай md``) to an
-    invented weekly-summary preference.
+    invented weekly-summary preference. Surface checks reject recognized RU/EN
+    polarity, subject and time reversals; they do not prove semantic entailment.
+    Unknown paraphrases still remain inferred and subject to confirmation rules.
     """
     evidence = str(item.get("evidence") or "").strip()
     text = str(item.get("text") or "").strip()
     if not evidence or not text:
         return False
     needle = _normalized_evidence(evidence)
-    if len(needle) < 3 or not any(needle in _normalized_evidence(src) for src in source_texts):
+    if len(needle) < 3 or not (_evidence_stems(evidence) & _evidence_stems(text)):
         return False
-    return bool(_evidence_stems(evidence) & _evidence_stems(text))
+    return any(_scope_supported(context, _normalized_evidence(text), subject, needle)
+               and not boss_model.surface_conflict(evidence, text)
+               and not boss_model.surface_conflict(context, text)
+               for context in _quote_contexts(evidence, source_texts))
 
 
 # How many conversation ROWS one curation pass mines (~6 exchanges). Named because
@@ -200,7 +289,7 @@ def curate_conversation(conn, cfg, chat_id, limit=CONVO_WINDOW, correction_mode=
 
     life_added = 0
     for item in (parsed.get("cara_life") or [])[:5]:
-        if not isinstance(item, dict) or not _supported_item(item, cara_sources):
+        if not isinstance(item, dict) or not _supported_item(item, cara_sources, subject="cara"):
             continue
         text = str(item.get("text") or "").strip()
         kind = str(item.get("kind") or "moment").strip().lower()
@@ -211,7 +300,7 @@ def curate_conversation(conn, cfg, chat_id, limit=CONVO_WINDOW, correction_mode=
 
     boss_added = 0
     for item in (parsed.get("boss_facts") or [])[:5]:
-        if not isinstance(item, dict) or not _supported_item(item, boss_sources):
+        if not isinstance(item, dict) or not _supported_item(item, boss_sources, subject="boss"):
             continue
         text = str(item.get("text") or "").strip()
         kind = str(item.get("kind") or "personal_fact").strip().lower()
@@ -239,7 +328,7 @@ def curate_conversation(conn, cfg, chat_id, limit=CONVO_WINDOW, correction_mode=
     corrections_added = 0
     learned, proposed, unresolved = [], [], []
     for item in (parsed.get("corrections") or [])[:5]:
-        if not isinstance(item, dict) or not _supported_item(item, boss_sources):
+        if not isinstance(item, dict) or not _supported_item(item, boss_sources, subject="correction"):
             continue
         text = str(item.get("text") or "").strip()
         kind = str(item.get("kind") or "workflow").strip().lower()
@@ -261,7 +350,8 @@ def curate_conversation(conn, cfg, chat_id, limit=CONVO_WINDOW, correction_mode=
             continue
         store.issue_add(conn, chat_id, "correction", text)
         sens = boss_model.effective_sensitivity(kind, text)
-        if boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]:
+        if (boss_model.SENS_ORDER[sens] <= boss_model.SENS_ORDER["normal"]
+                and not boss_model.conflicts_with_confirmed(conn, text)):
             item_id = store.boss_add(conn, kind, text, status="inferred", confidence=0.8,
                            sensitivity=sens, source_table="correction",
                            evidence=str(item.get("evidence") or "").strip())
@@ -413,7 +503,8 @@ def _merge_groups_steps(conn, cfg, items, max_items=120, status_of=None):
     except (llm.BudgetExceeded, llm.LLMError):
         return []
     parsed = llm.parse_llm_json(reply) or {}
-    valid = {i for i, _ in items}
+    values = dict(items)
+    valid = set(values)
 
     def _id(x):  # the model may emit ids as ints OR strings ("12") — accept both
         try:
@@ -430,7 +521,14 @@ def _merge_groups_steps(conn, cfg, items, max_items=120, status_of=None):
         drops = [d for d in (_id(x) for x in (g.get("drop") or []))
                  if d in valid and d != keep]
         if drops:
-            groups.append(_confirmed_wins(keep, drops, status_of or {}))
+            keep, drops = _confirmed_wins(keep, drops, status_of or {})
+            # A schema-valid grouping can still call opposite preferences a
+            # duplicate. Preserve both original rows when that clear conflict is
+            # recognized; confirmation precedence is not permission to erase a
+            # different confirmed claim as a paraphrase.
+            drops = [d for d in drops if not boss_model.surface_conflict(values[keep], values[d])]
+            if drops:
+                groups.append((keep, drops))
     # Cross-group consistency, AFTER the keeper rewrite above (which can move a
     # keeper). Nothing that another group is keeping may be dropped, and the same
     # id is folded at most once.

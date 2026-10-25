@@ -174,7 +174,8 @@ class HermesMixin:
                 log(f"ask: embedding failed, keyword search only: {exc}")
                 store.issue_add(self.conn, chat_id, "llm_error", f"ask embed: {exc}")
             keyword = self._keyword_context(question)
-            context = knowledge.fuse_contexts(semantic, keyword, self.cfg.ask_top_k)
+            context = knowledge.fuse_contexts(semantic, keyword, self.cfg.ask_top_k,
+                                             self.cfg.ask_context_chars)
             if not context:
                 store.issue_add(self.conn, chat_id, "ask_no_context", question[:200])
                 self.reply(chat_id, knowledge.no_answer(lang))
@@ -250,12 +251,22 @@ class HermesMixin:
     def _keyword_context(self, question):
         import knowledge
         items = []
-        for term in knowledge.salient_terms(question):
+        terms = knowledge.salient_terms(question)
+        for term in terms:
             for row in store.list_messages(self.conn, query=term, limit=3):
                 if not any(c["message_id"] == row["id"] for c in items):
+                    passages = knowledge.keyword_passages(
+                        row["raw_text"] or row["summary"] or "", [term, *terms])
+                    passage = passages[0]
                     items.append({"message_id": row["id"],
                                   "note_no": self.note_no(row["id"]),
-                                  "text": (row["raw_text"] or row["summary"] or "")[:1500],
+                                  "text": passage["text"],
+                                  "passages": [p["text"] for p in passages],
+                                  "source_ranges": [{"start": p["start"], "end": p["end"]}
+                                                    for p in passages],
+                                  "source_start": passage["start"],
+                                  "source_end": passage["end"],
+                                  "source_truncated": passage["truncated"],
                                   "category": row["category"] or row["suggested_category"] or "?",
                                   "title": row["forward_origin_title"],
                                   "date": (row["received_at"] or "")[:10],

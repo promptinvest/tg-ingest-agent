@@ -1,5 +1,23 @@
 # Cara — Solution Specification
 
+## October 25 - Context and evidence improvements in qualification
+
+The owner approved the architecture review's first release. ADR-0035 extends
+existing conversation, knowledge and memory modules. Turn context survives
+repair; retrieval keeps distinct source passages and late keyword matches;
+memory context retains certainty/provenance and candidate checks reject clear
+contradictions. Existing source quotations, action guards, confirmations,
+persona, stored history and model/budget settings remain. No schema or new
+service/tool permission is introduced. Outcome regressions accompany the change.
+
+Implementation is being qualified; the accepted runtime below remains live.
+The ongoing model trial requires an authenticated runtime observation segment
+and compatible model-only reversion before an application transition. Its
+original October28 end and failed evidence remain. Adaptive tool reasoning,
+grounded analysis and broader research tools are subsequent work, not claimed
+as delivered here. See [ADR-0035](docs/adr/ADR-0035-evidence-and-context-continuity.md).
+
+
 ## October 25 - Qualified-role model trial live
 
 Accepted **2026-10-25 13:36:17 UTC** (16:36 Moscow). Haiku 5.5 handles routing,

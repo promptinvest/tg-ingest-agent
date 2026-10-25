@@ -123,10 +123,77 @@ def _similar(a, b, thresh=0.6):
     return len(ta & tb) / max(len(ta), len(tb)) >= thresh
 
 
+# A bounded contradiction guard, not an entailment/semantic verifier. These
+# surface forms cover common preference/correction reversals which a shared-word
+# ratio treats as duplicates ("likes tea" / "does not like tea"). Unknown wording
+# still needs the curator's quoted evidence and remains inferred, never confirmed.
+_CLAIM_NEGATIVE = {"not", "never", "no", "without", "neither", "не", "нет", "без"}
+_CLAIM_SKIP = {"and", "the", "that", "this", "with", "from", "your", "you", "his",
+               "her", "does", "did", "can", "will", "should", "would", "have", "has",
+               "для", "как", "что", "это", "его", "она", "они", "тебе", "тебя",
+               "мне", "меня", "любит", "люблю", "like", "likes", "prefer", "prefers"}
+_CLAIM_SKIP.update({"write", "writes", "give", "gives", "send", "sends", "пиши", "пишите",
+                    "отвечай", "отвечает", "предпочитает", "предпочитаю"})
+_CLAIM_AXES = (
+    (("short", "brief", "concis", "корот", "короч", "кратк", "лакон"),
+     ("long", "detail", "verbos", "длин", "подроб", "разверн")),
+    (("early", "рано", "ранни"), ("late", "позд")),
+)
+
+
+def _claim_signs(value):
+    value = str(value or "").casefold().replace("ё", "е").replace("’", "'")
+    value = re.sub(r"\b(?:don't|doesn't|didn't|can't|won't|isn't|aren't|wasn't|shouldn't)\b",
+                   " not ", value)
+    value = " ".join(value.split())
+    # A request to remember is positive, despite its conventional negative form.
+    value = re.sub(r"\b(?:не забывай|не забудь|(?:do )?not forget)\b", "remember", value)
+    value = re.sub(r"\b(?:not only|не только)\b", "", value)
+    signs, axes, negative = {}, [set() for _ in _CLAIM_AXES], False
+    for word in re.findall(r"[^\W_]+|[.,;:!?]", value, re.UNICODE):
+        if word in {".", ",", ";", ":", "!", "?", "but", "however", "and", "но", "а", "и"}:
+            negative = False
+            continue
+        if (word in _CLAIM_NEGATIVE or word.startswith(("dislik", "avoid", "ненавид"))
+                or word in {"hate", "hates", "hated", "hating"}):
+            negative = not negative
+            continue
+        sign = -1 if negative else 1
+        if len(word) >= 3 and word not in _CLAIM_SKIP:
+            signs.setdefault(word[:5], set()).add(sign)
+        for idx, (low, high) in enumerate(_CLAIM_AXES):
+            if word.startswith(low):
+                axes[idx].add(-sign)
+            elif word.startswith(high):
+                axes[idx].add(sign)
+    return signs, axes
+
+
+def surface_conflict(a, b):
+    """Recognize explicit polarity/opposite-form conflicts in supported RU/EN forms.
+
+    False means "no recognized conflict", NOT "these claims mean the same thing".
+    """
+    sa, aa = _claim_signs(a)
+    sb, ab = _claim_signs(b)
+    axis_objects = set()
+    for idx, (left, right) in enumerate(zip(aa, ab)):
+        if len(left) == len(right) == 1:
+            if left != right:
+                return True
+            if idx == 0:
+                axis_objects.update({"answe", "reply", "repli", "respo", "ответ", "сообщ", "текст"})
+    # "Don't give long answers" / "give short answers" has a polarity change
+    # on 'answers' but agrees on the explicit length axis.
+    return any(len(sa[w]) == len(sb[w]) == 1 and sa[w] != sb[w]
+               for w in (sa.keys() & sb.keys()) - axis_objects)
+
+
 def _dedup(values, thresh=0.7):
     out = []
     for v in values:
-        if v and not any(_similar(v, kept, thresh) for kept in out):
+        if v and not any(_similar(v, kept, thresh) and not surface_conflict(v, kept)
+                         for kept in out):
             out.append(v)
     return out
 
@@ -136,7 +203,7 @@ def find_similar(conn, text, thresh=0.7):
     lives in, or None — the row a repeated correction BUMPS (ADR-0012)."""
     for status in ("confirmed", "inferred"):
         for row in store.boss_items(conn, status, limit=60):
-            if _similar(text, row["value"], thresh):
+            if _similar(text, row["value"], thresh) and not surface_conflict(text, row["value"]):
                 return row
     return None
 
@@ -207,7 +274,9 @@ def conflicts_with_confirmed(conn, text, low=0.4):
     """True if a CONFIRMED fact is on the same topic but says something different
     — likely an update/contradiction, so it should be confirmed, not auto-stored."""
     for row in store.boss_items(conn, "confirmed", limit=60):
-        if _similar(text, row["value"], low) and not _similar(text, row["value"], 0.75):
+        if (_similar(text, row["value"], low)
+                and (surface_conflict(text, row["value"])
+                     or not _similar(text, row["value"], 0.75))):
             return True
     return False
 
@@ -228,23 +297,72 @@ _OPERATING_KINDS = tuple(dict.fromkeys(k for _key, _labels, kinds in _OPERATING_
                                        for k in kinds))
 
 
-def operating_model(conn, lang):
+def _prompt_annotations(rows, budget=1800):
+    """Bounded one-line data metadata; no new retrieval, storage or instructions.
+
+    Status/source/date are retained for every selected row. Exact evidence is
+    optional and clipped, under a shared metadata budget. Values keep their
+    existing separate selection/character budget so metadata cannot evict a rule.
+    """
+    cores = []
+    for row in rows:
+        status = row["status"] if row["status"] in {"confirmed", "inferred"} else "unconfirmed"
+        source = common.neutralize_untrusted(row["source_table"] or "")[:24]
+        seen = str(row["last_seen_at"] or row["first_seen_at"] or row["created_at"] or "")[:10]
+        parts = [status]
+        if source:
+            parts.append(f"source={source}")
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", seen):
+            parts.append(f"seen={seen}")
+        cores.append("; ".join(parts))
+    remaining = max(0, budget - sum(len(core) + 3 for core in cores))
+    out = []
+    for row, core in zip(rows, cores):
+        evidence = common.neutralize_untrusted(row["evidence"] or "")
+        # A snippet is visibly a snippet; do not present a clipped quote as exact.
+        if evidence and remaining >= 24:
+            clipped = evidence[:min(72, remaining - 15)]
+            if len(clipped) < len(evidence):
+                clipped += "…"
+            extra = f"; quote=«{clipped}»"
+            if len(extra) <= remaining:
+                core += extra
+                remaining -= len(extra)
+        out.append(f" [{core}]")
+    return out
+
+
+def operating_model(conn, lang, include_provenance=False):
     """Grouped, deduped, non-sensitive facts about the boss for the prompt:
     list of (label, [values]). Confirmed + inferred."""
     rows = []
     for status in ("confirmed", "inferred"):
         rows += store.boss_items(conn, status, sensitivities=("normal",), limit=80,
                                  kinds=_OPERATING_KINDS)
-    out = []
+    out, provenance_rows = [], []
     for _key, (ru, en), kinds in _OPERATING_GROUPS:
-        vals = _dedup([r["value"] for r in rows if r["kind"] in kinds])
+        selected = []
+        for row in rows:
+            if row["kind"] in kinds and not any(
+                    _similar(row["value"], kept["value"], 0.7)
+                    and not surface_conflict(row["value"], kept["value"])
+                    for kept in selected):
+                selected.append(row)
         # One value per '; '-joined slot on ONE prompt line: these rows are
         # LLM-extracted and rendered into the converse SYSTEM prompt, so a value
         # carrying a newline could otherwise open a forged prompt line above the
         # persona (2026-07-27 review).
-        vals = [v for v in (common.neutralize_untrusted(x) for x in vals[:6]) if v]
+        vals = [common.neutralize_untrusted(r["value"]) for r in selected[:6]]
+        selected = [r for r, v in zip(selected[:6], vals) if v]
+        vals = [v for v in vals if v]
         if vals:
             out.append((ru if lang == "ru" else en, vals))
+            if include_provenance:
+                # Across all groups, apply one shared metadata budget below.
+                provenance_rows.extend(selected)
+    if include_provenance:
+        annotations = iter(_prompt_annotations(provenance_rows))
+        out = [(label, [value + next(annotations) for value in values]) for label, values in out]
     return out
 
 
@@ -286,13 +404,13 @@ def render_profile(conn, lang, include_inferred=True):
     return "\n".join(lines)
 
 
-def confirmed_context(conn, max_items=8, max_chars=600):
+def confirmed_context(conn, max_items=8, max_chars=600, include_provenance=False):
     """Compact confirmed-preferences snippet for prompt personalization
     (skips sensitive). Used by persona.py. Values are flattened to one line
     each (they can be model-extracted text), and an over-budget row is SKIPPED,
     not a stop: `break` here meant one over-long first row emptied the whole
     snippet (2026-07-27 review — same failure standing_guidance had)."""
-    out = []
+    out, selected = [], []
     used = 0
     for row in store.boss_items(conn, "confirmed", sensitivities=("normal",), limit=max_items):
         value = common.neutralize_untrusted(row["value"])
@@ -302,7 +420,10 @@ def confirmed_context(conn, max_items=8, max_chars=600):
         if used + len(line) > max_chars:
             continue
         out.append(line)
+        selected.append(row)
         used += len(line)
+    if include_provenance:
+        out = [line + meta for line, meta in zip(out, _prompt_annotations(selected))]
     return out
 
 
@@ -312,7 +433,7 @@ def confirmed_context(conn, max_items=8, max_chars=600):
 GUIDANCE_KINDS = ("tone", "workflow", "avoidance", "quality_bar")
 
 
-def standing_guidance(conn, max_items=8, max_chars=600):
+def standing_guidance(conn, max_items=8, max_chars=600, include_provenance=False):
     """The standing behavioral rules for the prompt.
 
     The kind filter lives in SQL, before the LIMIT: filtering the top-20 rows in
@@ -341,7 +462,7 @@ def standing_guidance(conn, max_items=8, max_chars=600):
                              str(r["last_seen_at"] or "")), reverse=True)
     tone = [r for r in rows if r["kind"] == "tone"]
     ordered = tone[:TONE_SLOTS] + [r for r in rows if r not in tone[:TONE_SLOTS]]
-    out, used, seen = [], 0, set()
+    out, used, seen, selected = [], 0, set(), []
     for row in ordered:
         value = common.neutralize_untrusted(row["value"])
         if not value or value in seen:
@@ -352,10 +473,13 @@ def standing_guidance(conn, max_items=8, max_chars=600):
                        f"item over the {max_chars - used}-char budget left")
             continue
         out.append(line)
+        selected.append(row)
         used += len(line)
         seen.add(value)
         if len(out) >= max_items:
-            return out
+            break
+    if include_provenance:
+        out = [line + meta for line, meta in zip(out, _prompt_annotations(selected))]
     return out
 
 
