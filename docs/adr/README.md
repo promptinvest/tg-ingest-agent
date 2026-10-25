@@ -2,6 +2,11 @@
 
 Proposed architecture decision records from the 2026-09-07 review of Cara (architecture, code, live behavior; deployed build `e3208b8`). Each ADR is one file: Status, Context, Decision, Consequences, Resolves (review finding ids), Depends on, Status log.
 
+October 25 follow-up: ADR-0004/0005 now include notification occurrence and
+gratitude correction handling. Source implementation is recorded in the
+[dated release](../cara-notifications-gratitude-2026-10-25.md); installed acceptance
+is pending. The original implemented decisions and historical evidence remain.
+
 **Rules**
 
 - Status lifecycle: `Proposed` → `Accepted` (owner agreed) → `Implemented <commit>` or `Rejected <why>` or `Superseded by ADR-NNNN`. Update the status line and the status log in the ADR when it changes.

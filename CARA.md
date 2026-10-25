@@ -1,5 +1,33 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 25 - Notification and gratitude corrections
+
+Delivered gratitude invitations retain their occurrence date across the ordinary
+30-minute confirmation timeout and a restart. A same-day unthreaded reply can use
+the latest invitation only with no intervening conversation; explicit replies to
+older journal cards retain their original date. Ordinary questions and commands
+keep their routes. Late invitations state their date explicitly.
+
+Retrospective correction requests preview the original note, journal, event date
+and grounded fields. The existing owner confirmation applies one source-bound
+atomic correction, preserving raw text, receipt time, entry identity and prior
+metadata in history. Ambiguous targets require clarification. Cancel and stale
+source handling preserve unrelated unexpired reminder context and original TTL.
+No existing entry is automatically repaired or replayed.
+
+Preview, storage, saved acknowledgement and edited card use the same event date.
+Invalid journal dates remain editable without consuming confirmation; changing
+the category to an ordinary note still works. Pronoun-only values are excluded
+from named people and legacy person statistics without rewriting stored payloads;
+meaningful names and family groups remain supported.
+
+Recurring notification actions bind the exact recorded firing event. Old cards
+cannot acknowledge a newer occurrence; unknown legacy recurring bindings refuse
+mutation. One-shot and ordinary reminder behavior remain compatible. Existing
+model prompts, profiles, budgets, delivery policy and recovery controls remain.
+[Scope, verification and release gates](docs/cara-notifications-gratitude-2026-10-25.md).
+Deployment acceptance is pending; the October 24 release remains installed.
+
 ## October 24 - Fleet and project release accepted
 
 Application acceptance completed **2026-10-24 20:56:22 UTC** for source

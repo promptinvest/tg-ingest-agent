@@ -478,6 +478,14 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if not message_id:
             return
         summary = (row["summary"] or "")[:500]
+        card_text = f"{row['category']} ✅\n{summary}\n(#{self.note_no(row['id'])})"
+        entry = store.journal_entry_get(self.conn, row["id"])
+        if entry and store.is_journal(self.conn, row["category"]):
+            day = self._fmt_iso_local(entry["occurred_at"]).split(",")[0]
+            lines = journals.draft_lines(self.lang(), store.journal_entry_payload(entry))
+            card_text = (f"{row['category']} ✅ · {day}\n" + (row["raw_text"] or "")[:2200]
+                         + ("\n" + "\n".join("• " + line for line in lines) if lines else "")
+                         + f"\n(#{self.note_no(row['id'])})")
         try:
             tg_call(
                 self.cfg.token,
@@ -485,7 +493,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 {
                     "chat_id": chat_id,
                     "message_id": message_id,
-                    "text": f"{row['category']} ✅\n{summary}\n(#{self.note_no(row['id'])})",
+                    "text": card_text,
                 },
             )
         except TelegramError as exc:
@@ -1709,6 +1717,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         self.turn_extra = []
         self.turn_reply_quote = ""
         self.turn_reply_message_id = None
+        self.turn_reply_date = None
         self.turn_reply_reminder_id = None
         self.turn_reply_reminder_ids = []
         self.turn_reply_suggestion_id = None
@@ -1847,6 +1856,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         reply_to_msg = msg.get("reply_to_message")
         if reply_to_msg:
             self.turn_reply_message_id = reply_to_msg.get("message_id")
+            self.turn_reply_date = reply_to_msg.get("date")
             row = store.find_by_suggestion_message(
                 self.conn, chat_id, reply_to_msg.get("message_id"))
             if row and text and not (auto_store or own_media):
@@ -2484,6 +2494,14 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             self._trace_route("purge", "pending_purge_phrase")
             self.resolve_purge(chat_id, lang, pending, text)
             return
+        if pending and pending["kind"] == "journal_correction":
+            reply_card = (msg.get("reply_to_message") or {}).get("message_id")
+            if self.resolve_journal_correction(chat_id, lang, pending, text, card_id=reply_card):
+                self._trace_route("recategorize", "journal_correction_confirmation")
+                return
+        if self.resolve_gratitude_correction(chat_id, lang, msg, text, pending):
+            self._trace_route("recategorize", "journal_source_correction")
+            return
         # «Изменить» on a journal capture card: his next message is the
         # correction for the pending entry DRAFT (deterministic, no router).
         if pending and pending["kind"] == "journal_edit":
@@ -2586,6 +2604,14 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if explicit_category and (pending is None or pending["kind"] == "reminder_fired"):
             self._deterministic_capture(chat_id, lang, msg, explicit_category, source="replied_gratitude")
             return
+        if pending is None:
+            invitation = self.gratitude_invitation(chat_id, msg, delayed=True)
+            context = ({"kind": "reminder_fired", "payload": {"title": invitation["title"]}}
+                       if invitation else None)
+            category = self._fired_gratitude_category(context, msg)
+            if category:
+                self._deterministic_capture(chat_id, lang, msg, category, source="delayed_gratitude")
+                return
         fired_pending_context = None
         fired_pending_row = None
         if (pending and pending["kind"] == "reminder_fired"
@@ -2759,7 +2785,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     # router, so every imperative that is a request to HER («напиши эссе»,
     # «расскажи», «переведи») must be recognised here, not by a model reading.
     _GRATITUDE_CAPTURE_COMMAND_RE = re.compile(
-        r"^\s*(?:/|(?:покажи|покажите|выведи|перечисли|открой|найди|"
+        r"^\s*(?:/|(?:список|перечень|статус|можешь|можно|пожалуйста|please|can\s+you|could\s+you|status|покажи|покажите|выведи|перечисли|открой|найди|"
         r"удали|убери|сотри|очисти|напомни|поставь|перенеси|отложи|"
         r"сохрани|запиши|добавь|отключи|выключи|перестань|отправь|пришли|"
         r"создай|сделай|измени|исправь|переименуй|объедини|закрой|отмени|"
@@ -2790,9 +2816,14 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if not isinstance(msg, dict) or not str(msg.get("text") or "").strip():
             return ""
         typed = str(msg.get("text") or "").strip()
-        if self._GRATITUDE_CAPTURE_COMMAND_RE.match(typed):
+        if self._GRATITUDE_CAPTURE_COMMAND_RE.match(typed) or journals.correction_intent(typed):
             return ""
-        if typed.endswith("?") or re.match(
+        if getattr(self.cfg, "fleet_enabled", False):
+            import fleet_catalog
+            chat_id = (msg.get("chat") or {}).get("id")
+            if chat_id is not None and fleet_catalog.route_plan(self.cfg, self.conn, chat_id, typed) is not None:
+                return ""
+        if "?" in typed or re.match(
                 r"^(?:кто|что|где|когда|как|почему|зачем|сколько|како\w*|"
                 r"what|who|where|when|how|why|which)\b",
                 typed, re.IGNORECASE):
@@ -2844,7 +2875,19 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if body is not None and body != (msg.get("text") or ""):
             msg = dict(msg)
             msg["text"] = body
-        self.do_ingest(chat_id, lang, msg, forced_category=category)
+        previous = getattr(self, "_journal_capture_date", None)
+        invitation = self.gratitude_invitation(chat_id, msg, delayed=True)
+        try:
+            event_at = journals.occurred_at(
+                msg.get("text") or "", datetime.now(timezone.utc).isoformat(), self.tz_offset(),
+                invitation_at=invitation["occurred_at"] if invitation else None)
+            self._journal_capture_date = {"occurred_at": event_at}
+        except (ValueError, OverflowError):
+            self._journal_capture_date = {"date_error": True}
+        try:
+            self.do_ingest(chat_id, lang, msg, forced_category=category)
+        finally:
+            self._journal_capture_date = previous
 
     def _gratitude_autosave_enabled(self):
         value = str(store.pref_get(self.conn, "gratitude_autosave") or "off").strip().casefold()
@@ -2971,6 +3014,13 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             self.reply(chat_id, T(lang, "nothing_pending"))
             return
         kind, payload = pending["kind"], pending["payload"]
+        if kind == "journal_correction":
+            answer = "yes" if action == "confirm" else "no" if action == "cancel" else ""
+            if not answer or not self.resolve_journal_correction(
+                    chat_id, lang, pending, answer,
+                    card_id=getattr(self, "turn_reply_message_id", None)):
+                self.reply(chat_id, T(lang, "journal_date_needed"))
+            return
         if kind == "reminder" and self._reject_reminder_draft_reply(chat_id, lang, pending):
             return
         if (kind == "reminder_fired" and action == "amend"
@@ -3000,8 +3050,6 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             category = (llm.normalize_category(params.get("category"))
                         if action == "amend" else None)
             category = category or row["suggested_category"] or self.cfg.fallback_category
-            if payload.get("row_id") == row["id"]:
-                store.pending_clear(self.conn, chat_id)   # the OTHER card stays pending
             self.apply_category_confirm(chat_id, row, category, reply_to=None)
         elif kind == "media_capture":
             if action == "amend":
@@ -4598,6 +4646,17 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             self.answer_callback(callback_id, "Not allowed.")
             return
         data = callback.get("data") or ""
+        if data.startswith("jc|"):
+            parts = data.split("|")
+            if len(parts) != 3:
+                self.answer_callback(callback_id, "?")
+                return
+            pending = store.pending_get(self.conn, chat_id)
+            handled = self.resolve_journal_correction(
+                chat_id, self.lang(), pending, parts[2],
+                card_id=msg.get("message_id"), nonce=parts[1])
+            self.answer_callback(callback_id, "✓" if handled else T(self.lang(), "journal_correction_stale"))
+            return
         if data.startswith("fl|"):
             self._trace_route("fleet_maintain", "fleet_approval_callback")
             self.handle_fleet_callback(callback_id, chat_id, msg, data)
@@ -4669,8 +4728,10 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 pass
             return
         category = name if kind == "named" else (row["suggested_category"] or self.cfg.fallback_category)
-        if ours:
-            store.pending_clear(self.conn, chat_id)
+        if (store.is_journal(self.conn, category)
+                and (self._journal_draft(row_id) or {}).get("date_error")):
+            self.answer_callback(callback_id, T(lang, "journal_date_needed"))
+            return
         self.answer_callback(callback_id, category)
         self.apply_category_confirm(
             chat_id, row, category, reply_to=None,
@@ -4808,8 +4869,6 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if not category:
             return False
         pending = store.pending_get(self.conn, chat_id)
-        if pending and pending["kind"] == "category" and pending["payload"].get("row_id") == row["id"]:
-            store.pending_clear(self.conn, chat_id)
         self.apply_category_confirm(chat_id, row, category, reply_to=reply_to)
         return True
 
@@ -4839,8 +4898,16 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         source = (row["raw_text"] or "") + "\n" + str(text or "")
         payload, jstatus = journals.extract(self.cfg, self.conn,
                                             gdef["entry_type"], source, lang)
+        previous = self._journal_draft(row_id) or {}
+        try:
+            event_at = journals.occurred_at(text, datetime.now(timezone.utc).isoformat(),
+                                            self.tz_offset(), invitation_at=previous.get("occurred_at") or row["received_at"])
+        except (ValueError, OverflowError):
+            self.reply(chat_id, T(lang, "journal_date_needed"))
+            store.pending_set(self.conn, chat_id, "journal_edit", {"row_id": row_id})
+            return
         store.kv_set(self.conn, f"journal_draft:{row_id}",
-                     json.dumps({"payload": payload, "status": jstatus},
+                     json.dumps({"payload": payload, "status": jstatus, "occurred_at": event_at},
                                 ensure_ascii=False))
         self.present_suggestion(row_id, chat_id, None, category, [],
                                 row["summary"] or "", "")
@@ -4850,6 +4917,10 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     def apply_category_confirm(self, chat_id, row, category, reply_to,
                                edit_message_id=None, quiet=False):
         lang = self.lang()
+        draft = self._journal_draft(row["id"]) or {}
+        if store.is_journal(self.conn, category) and draft.get("date_error"):
+            self.reply(chat_id, T(lang, "journal_date_needed"))
+            return
         canonical = store.ensure_category(self.conn, category)
         # The confirm boundary: for a structured journal the stashed validated
         # draft becomes the entry payload NOW (never earlier); raw text stays
@@ -4857,7 +4928,11 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         draft = self._journal_draft(row["id"]) or {}
         store.confirm_category(self.conn, row["id"], canonical,
                                journal_payload=draft.get("payload"),
-                               journal_status=draft.get("status"))
+                               journal_status=draft.get("status"),
+                               journal_occurred_at=draft.get("occurred_at") if store.is_journal(self.conn, canonical) else None)
+        pending = store.pending_get(self.conn, chat_id)
+        if pending and pending["kind"] == "category" and pending["payload"].get("row_id") == row["id"]:
+            store.pending_clear(self.conn, chat_id)
         store.kv_set(self.conn, f"journal_draft:{row['id']}", "")
         corrected = bool(row["suggested_category"]
                          and canonical.casefold() != row["suggested_category"].casefold())
@@ -4884,7 +4959,9 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         )
         if not quiet:
             if store.is_journal(self.conn, canonical):
-                day = self._fmt_iso_local(store._now()).split(",")[0]
+                entry = store.journal_entry_get(self.conn, row["id"])
+                event_at = entry["occurred_at"] if entry else draft.get("occurred_at") or row["received_at"]
+                day = self._fmt_iso_local(event_at).split(",")[0]
                 ack = T(lang, "journal_saved", category=canonical,
                         n=store.journal_count(self.conn, canonical), date=day)
                 lines = journals.draft_lines(lang, draft.get("payload") or {})

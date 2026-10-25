@@ -15,6 +15,7 @@ Design rules (binding):
 """
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 import common
 import llm
@@ -48,6 +49,83 @@ ENTRY_TYPES = {
 LIST_FIELDS = {"people", "tags"}
 NUMERIC_FIELDS = {"intensity", "severity"}
 PEOPLE_FIELDS = {"people"}          # strict support: EVERY name must be in the source
+
+# A sourced pronoun is still not a person's name. Keep named people and groups.
+_PERSON_PRONOUNS = frozenset((
+    "я меня мне мной мы нас нам нами ты тебя тебе тобой вы вас вам вами "
+    "он его ему им нём нем она её ее ей нею они их ими себя себе собой "
+    "i me myself we us ourselves you yourself yourselves he him himself "
+    "she her herself they them themselves it itself this that and и"
+).split())
+
+
+def person_name(value):
+    words = _words(value)
+    return bool(words) and any(word not in _PERSON_PRONOUNS for word in words)
+
+
+def correction_intent(text):
+    """A journal correction describes earlier capture, not new journal content."""
+    value = str(text or "").strip()
+    if not re.search(r"\b(?:благодарност\w*|gratitude|gratitudes|thankfulness)\b",
+                     value, re.I):
+        return False
+    # An explicit new-entry prefix remains an entry, even when its prose says
+    # "this" or "that". Corrections describe an earlier capture instead.
+    if re.match(r"\s*(?:gratitudes?|thankfulness|(?:в\s+)?благодарност\w*)\s*[:—-]", value, re.I):
+        return False
+    # Normal queries (including polite requests) keep their ordinary routes.
+    if re.search(r"\b(?:покаж\w*|список|найди|удал\w*|show|list|find|delete|display|count)\b",
+                 value, re.I) or re.match(r"\s*(?:сколько|когда|какие|what|when|how many)\b", value, re.I):
+        return False
+    return bool(re.search(
+        r"\b(?:имел[аи]?\s+в\s+виду|просил\w*|надо\s+было|"
+        r"должн\w*\s+был\w*|исправ\w*|перенес\w*|meant|asked|"
+        r"should\s+(?:have|be)|correct|reclassify)\b|"
+        r"\b(?:это|то)\s+(?:(?:было|был|была)\s+)?(?:в\s+сч[её]т|для|в)\s+благодарност\w*|"
+        r"\b(?:this|that)\s+was\s+(?:(?:intended|meant)\s+)?(?:for\s+)?gratitude\b",
+        value, re.I))
+
+
+def occurred_at(text, received_at, offset_hours=0, invitation_at=None):
+    """Receipt stays authoritative; explicit event days are local-day boundaries.
+    An exact delivered invitation supplies the default event date for late replies.
+    """
+    receipt = datetime.fromisoformat(str(received_at).replace("Z", "+00:00"))
+    if receipt.tzinfo is None:
+        raise ValueError("aware receipt required")
+    offset = timedelta(hours=float(offset_hours))
+    local = receipt.astimezone(timezone.utc) + offset
+    value = str(text or "").casefold()
+    day_phrase = r"(?:позавчера|сегодня|вчера|day before yesterday|yesterday|today|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})"
+    requested = (re.match(r"^\s*(?:(?:нет|no)[, ]+)?(?:(?:за|for|on)\s+)?(" + day_phrase + r")\b", value)
+                 or re.search(r"\b(?:запись\s+за|entry\s+for|record\s+for)\s+(" + day_phrase + r")\b", value))
+    value = requested.group(1) if requested else ""
+    days = None
+    if re.search(r"\b(?:позавчера|day\s+before\s+yesterday)\b", value):
+        days = -2
+    elif re.search(r"\b(?:вчера|yesterday)\b", value):
+        days = -1
+    elif re.search(r"\b(?:сегодня|today)\b", value):
+        days = 0
+    if days is not None:
+        day = (local + timedelta(days=days)).date()
+        return (datetime.combine(day, datetime.min.time(), timezone.utc) - offset).isoformat()
+    match = re.search(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)", value)
+    if match:
+        day = datetime(*map(int, match.groups()), tzinfo=timezone.utc)
+        return (day - offset).isoformat()
+    match = re.search(r"(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{4})(?!\d)", value)
+    if match:
+        d, m, y = map(int, match.groups())
+        return (datetime(y, m, d, tzinfo=timezone.utc) - offset).isoformat()
+    if invitation_at:
+        anchor = datetime.fromisoformat(str(invitation_at).replace("Z", "+00:00"))
+        if anchor.tzinfo is None:
+            raise ValueError("aware invitation required")
+        return anchor.astimezone(timezone.utc).isoformat()
+    return receipt.astimezone(timezone.utc).isoformat()
+
 
 MAX_FIELD_CHARS = 160
 MAX_LIST_ITEMS = 5
@@ -153,7 +231,7 @@ def validate_payload(entry_type, payload, source_text):
                 if not value:
                     continue
                 # tags are the boss/model's own labels; names must be sourced
-                if strict and not has_support(value, source_text, strict=True):
+                if strict and (not person_name(value) or not has_support(value, source_text, strict=True)):
                     continue
                 if value.casefold() not in {v.casefold() for v in items}:
                     items.append(value)
@@ -234,7 +312,9 @@ def draft_lines(lang, payload):
         if not value:
             continue
         if isinstance(value, list):
-            value = ", ".join(value)
+            value = ", ".join(str(v) for v in value if field != "people" or person_name(v))
+            if not value:
+                continue
         label = _FIELD_LABELS.get(field, (field, field))[0 if ru else 1]
         lines.append(f"{label}: {value}")
     return lines
@@ -253,6 +333,8 @@ def person_counts(entries):
         seen = set()
         for name in (payload or {}).get("people") or []:
             name = str(name)
+            if not person_name(name):
+                continue
             key = name.casefold()
             if key in seen:
                 continue

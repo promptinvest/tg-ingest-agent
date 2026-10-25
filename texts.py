@@ -472,6 +472,14 @@ TEXTS = {
     },
     # A fired reminder whose title IS an active journal invites the entry itself
     # (ADR-0005); a bare «готово» there means «today without an entry».
+    "reminder_notification_stale": {
+        "ru": "Это уведомление относится к прошлому повтору. Используй последнее уведомление или назови нужное напоминание.",
+        "en": "This notification belongs to an earlier occurrence. Use the latest one or name the reminder.",
+    },
+    "reminder_fired_journal_dated": {
+        "ru": "📔 {name}, {title} — запись за {date}. Напиши строкой или пропусти запись.",
+        "en": "📔 {name}, {title} — entry for {date}. Write a line or skip this entry.",
+    },
     "reminder_fired_journal": {
         "ru": "📔 {name}, {title} — за что сегодня? Напиши строкой, запишу. Или «готово», если сегодня без записи.",
         "en": "📔 {name}, {title} — what's today's entry? Write it as a line and I'll record it. Or \"done\" to skip today.",
@@ -1096,6 +1104,28 @@ TEXTS = {
     "journal_empty": {
         "ru": "В дневнике «{category}» пока нет записей за этот период.",
         "en": "No «{category}» journal entries for that period yet.",
+    },
+    "journal_correction_target": {
+        "ru": "Какую запись исправить? Пришли её номер или точный текст.",
+        "en": "Which entry should I correct? Send its number or exact text.",
+    },
+    "journal_date_needed": {
+        "ru": "Уточни дату записи: например, «вчера» или «24.10.2026». До этого не сохраняю.",
+        "en": "Please clarify the entry date, for example yesterday or 2026-10-24. I have not saved it.",
+    },
+    "journal_correction_preview": {
+        "ru": "📔 Исправить существующую запись #{n}: «{category}», за {date}?\n📝 {text}",
+        "en": "📔 Correct existing entry #{n}: {category}, for {date}?\n📝 {text}",
+    },
+    "journal_correction_accept": {"ru": "Сохранить исправление", "en": "Save correction"},
+    "journal_correction_cancel": {"ru": "Отмена", "en": "Cancel"},
+    "journal_correction_saved": {
+        "ru": "Исправила запись. Исходный текст и история сохранены.",
+        "en": "Entry corrected. The original text and history are preserved.",
+    },
+    "journal_correction_stale": {
+        "ru": "Это подтверждение уже неактуально. Покажи запись заново, чтобы проверить исправление.",
+        "en": "This confirmation is no longer current. Open the entry again to review the correction.",
     },
     "journal_capture_card": {
         "ru": "📔 Добавить в «{category}» — запись за {date}?\n📝 {summary}",

@@ -2971,6 +2971,58 @@ def journal_entry_add(conn, journal_id, message_id, occurred_at, payload=None,
     return cur.rowcount > 0
 
 
+def journal_source_hash(conn, message_id):
+    row = get_message(conn, message_id)
+    entry = conn.execute("SELECT * FROM journal_entries WHERE message_id=?", (message_id,)).fetchone()
+    value = {"message": {key: row[key] for key in (
+        "id", "chat_id", "raw_text", "received_at", "status", "category", "suggested_category"
+    )} if row else None, "entry": dict(entry) if entry else None}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def journal_apply_correction(conn, chat_id, message_id, category, occurred_at,
+                             payload, extraction_status, expected_hash):
+    """Exact preview source + metadata update + retained old metadata in one commit."""
+    stamp = datetime.fromisoformat(occurred_at.replace("Z", "+00:00"))
+    if stamp.tzinfo is None:
+        raise ValueError("aware journal date required")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = get_message(conn, message_id)
+        definition = journal_def_by_category(conn, category)
+        if (row is None or row["chat_id"] != chat_id or definition is None
+                or not definition["active"] or journal_source_hash(conn, message_id) != expected_hash):
+            conn.rollback()
+            return False
+        old = conn.execute("SELECT * FROM journal_entries WHERE message_id=?", (message_id,)).fetchone()
+        before = {"category": row["category"], "status": row["status"],
+                  "journal_entry": dict(old) if old else None}
+        now = _now()
+        conn.execute("UPDATE messages SET category=?,status='confirmed',knowledge_state=NULL WHERE id=?",
+                     (category, message_id))
+        if old:
+            conn.execute("UPDATE journal_entries SET journal_id=?,occurred_at=?,payload_json=?,"
+                         "extraction_status=?,updated_at=? WHERE message_id=?",
+                         (definition["id"], occurred_at, json.dumps(payload, ensure_ascii=False),
+                          extraction_status, now, message_id))
+        else:
+            conn.execute("INSERT INTO journal_entries(journal_id,message_id,occurred_at,payload_json,"
+                         "extraction_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                         (definition["id"], message_id, occurred_at, json.dumps(payload, ensure_ascii=False),
+                          extraction_status, now, now))
+        after = {"category": category, "occurred_at": occurred_at, "payload": payload}
+        conn.execute("INSERT INTO feedback(ts,skill,input_digest,suggested,corrected) VALUES(?,?,?,?,?)",
+                     (now, "journal_correction", expected_hash, json.dumps(before, ensure_ascii=False),
+                      json.dumps(after, ensure_ascii=False)))
+        bump_vec_gen(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    invalidate_vector_cache(conn)
+    return True
+
+
 def journal_entry_get(conn, message_id):
     return conn.execute("SELECT * FROM journal_entries WHERE message_id = ?",
                         (message_id,)).fetchone()
@@ -3262,7 +3314,11 @@ def set_suggestion_message(conn, message_id, tg_suggestion_message_id):
 
 
 def confirm_category(conn, message_id, category, journal_payload=None,
-                     journal_status=None):
+                     journal_status=None, journal_occurred_at=None):
+    if journal_occurred_at is not None:
+        stamp = datetime.fromisoformat(str(journal_occurred_at).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            raise ValueError("aware journal date required")
     if is_journal(conn, category):
         # Journal entries live in the dated journal, outside note lifecycle:
         # no #N, no knowledge_state (they never enter inbox/active/archive views).
@@ -3293,7 +3349,7 @@ def confirm_category(conn, message_id, category, journal_payload=None,
             row = get_message(conn, message_id)
             journal_entry_add(
                 conn, gdef["id"], message_id,
-                occurred_at=(row["received_at"] if row else _now()),
+                occurred_at=(journal_occurred_at or (row["received_at"] if row else _now())),
                 payload=journal_payload or {},
                 extraction_status=(journal_status or
                                    ("complete" if journal_payload else "unstructured")))

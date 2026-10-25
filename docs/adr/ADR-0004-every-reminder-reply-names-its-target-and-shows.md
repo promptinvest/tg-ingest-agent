@@ -29,3 +29,11 @@ nothing
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
 - 2026-09-07: implemented in `0a2639a` (Phase A batch) — replies name title + display number; `reminders.fmt_relative`; create/reschedule/rename re-render the list; part-of-day defaults 09/13/19/22 — a bare «завтра» deliberately keeps the documented 09:00; twin offer with a «Перенести существующее» button; a subject-less create after a >3 h stale one-shot opens a partial.
+
+- 2026-10-25: notification occurrence binding implemented in the notification /
+  gratitude follow-up. New delivered recurring cards retain exact fired-event
+  identities; old cards cannot act on newer fires. Legacy recurring actions need
+  unique timestamp evidence. Late journal invitations and saved cards show their
+  event date. One-shot behavior, delivery retries, batching, original pending
+  TTLs and existing notification policy remain. Guarded release is pending; see
+  [release record](../cara-notifications-gratitude-2026-10-25.md).

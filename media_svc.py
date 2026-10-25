@@ -1386,6 +1386,11 @@ class MediaMixin:
                            reply_to)
                 return
         row = store.get_message(self.conn, row_id)
+        capture_date = getattr(self, "_journal_capture_date", None)
+        if forced_category and capture_date:
+            draft = self._journal_draft(row_id) or {}
+            draft.update(capture_date)
+            store.kv_set(self.conn, f"journal_draft:{row_id}", json.dumps(draft, ensure_ascii=False))
         suggestion = (self.suggest_row(row, forced_category=forced_category)
                       if forced_category else self.suggest_row(row))
         if not suggestion:
@@ -1393,13 +1398,14 @@ class MediaMixin:
             return
         category, alternatives, summary = suggestion
         if forced_category and self._gratitude_autosave_enabled() \
-                and store.journal_def_by_category(self.conn, category) is not None:
+                and store.journal_def_by_category(self.conn, category) is not None \
+                and not (self._journal_draft(row_id) or {}).get("date_error"):
             # Opt-in (ADR-0005): the deterministic gratitude path skips the card and
             # commits the entry at once, with the undo route named in the ack.
             draft = self._journal_draft(row_id) or {}
             canonical = store.ensure_category(self.conn, category)
             self.apply_category_confirm(chat_id, row, category, reply_to, quiet=True)
-            day = self._fmt_iso_local(store._now()).split(",")[0]
+            day = self._fmt_iso_local(draft.get("occurred_at") or row["received_at"]).split(",")[0]
             ack = T(lang, "journal_saved", category=canonical,
                     n=store.journal_count(self.conn, canonical), date=day)
             lines = journals.draft_lines(lang, draft.get("payload") or {})
@@ -1563,9 +1569,16 @@ class MediaMixin:
             payload, jstatus = journals.extract(
                 self.cfg, self.conn, gdef["entry_type"],
                 row["raw_text"] or summary or "", self.lang())
+            draft = self._journal_draft(row_id) or {}
+            if not draft.get("occurred_at") and not draft.get("date_error"):
+                try:
+                    draft["occurred_at"] = journals.occurred_at(
+                        row["raw_text"], row["received_at"], self.tz_offset())
+                except (ValueError, OverflowError):
+                    draft["date_error"] = True
+            draft.update(payload=payload, status=jstatus)
             store.kv_set(self.conn, f"journal_draft:{row_id}",
-                         json.dumps({"payload": payload, "status": jstatus},
-                                    ensure_ascii=False))
+                         json.dumps(draft, ensure_ascii=False))
         # Index for semantic recall: full text for documents, else summary+facts.
         # For a referential save the thin command isn't worth indexing — the
         # resolved summary is the real content for `ask`. Fetched page content is
@@ -1668,7 +1681,7 @@ class MediaMixin:
             # Journal-intent card (plan v1.1 §4.5/§8.2): core fields shown BEFORE
             # save; Add / Edit / Cancel — one compact card, same single pending slot.
             draft = self._journal_draft(row_id) or {}
-            day = self._fmt_iso_local(store._now()).split(",")[0]
+            day = self._fmt_iso_local(draft.get("occurred_at") or row["received_at"]).split(",")[0]
             text = T(lang, "journal_capture_card", category=category, date=day,
                      summary=(summary or (row["raw_text"] if row else "") or "")[:300])
             lines = journals.draft_lines(lang, draft.get("payload") or {})
@@ -1676,6 +1689,11 @@ class MediaMixin:
                 text += "\n" + "\n".join(f"• {ln}" for ln in lines)
             keyboard = ingest.build_suggestion_keyboard(row_id, category, [],
                                                         lang=lang, journal=True)
+            if draft.get("date_error"):
+                text += "\n" + T(lang, "journal_date_needed")
+                keyboard = [[b for b in group if not b["callback_data"].startswith("s|")]
+                            for group in keyboard]
+                keyboard = [group for group in keyboard if group]
             result = self.reply(chat_id, text, reply_to,
                                 reply_markup={"inline_keyboard": keyboard})
             if result and result.get("message_id"):

@@ -1,5 +1,37 @@
 # Cara — Solution Specification
 
+## October 25 - Notification and gratitude source binding
+
+Extend the existing reminder/journal services rather than add a new skill or
+process. Delivered-card metadata stays in the existing bounded fired-message
+mapping; it retains the due occurrence, conversation boundary and exact fired
+reminder-event identity. Recurring actions compare that identity with the latest
+fired event. Legacy cards require a unique nearby fired event and a trusted card
+timestamp; missing or ambiguous evidence refuses a recurring mutation. Journal
+content can still inherit an old explicit card's date independently of its action
+eligibility. No schema or transport capability is added.
+
+The deterministic correction path distinguishes ordinary reads and explicitly
+prefixed new entries from retrospective corrections. It selects an exact owner
+note by number, quoted raw source, suggestion reply or recent visible context,
+then previews category/date/raw text/validated fields. A nonce, exact card and
+source hash bind confirmation. A single SQLite transaction changes only the
+confirmed category and journal metadata while preserving original raw text,
+receipt time, entry identity/creation time and full prior metadata in feedback.
+Ambiguous matches request a target. Existing journals use their stored payload
+and event date; a previously nonjournal note uses the unchanged extractor once.
+
+Occurrence dates flow through the existing journal draft into preview, autosave
+when already opted in, confirmation, saved acknowledgement and edited card.
+Invalid dates block only journal saves and retain the pending offer; ordinary
+recategorization remains available. Unrelated live reminder pending rows survive
+correction success, stale refusal and cancel with their original timestamps.
+Pronoun filtering changes validated/displayed named people without rewriting old
+entries or changing extraction prompts, model selection, call limits or budgets.
+
+[Verification and guarded release](docs/cara-notifications-gratitude-2026-10-25.md)
+remain required. This implementation checkpoint does not claim deployment.
+
 ## October 24 - Fleet and project release accepted
 
 Application acceptance completed **2026-10-24 20:56:22 UTC** for source

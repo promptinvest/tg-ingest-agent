@@ -28,9 +28,8 @@ class ReminderConversationTests(unittest.TestCase):
         due = now - timedelta(minutes=1) if fired else now + timedelta(days=2)
         rid = store.reminder_add(self.conn, chat_id, title, due.isoformat(), recurrence)
         if fired:
-            self.conn.execute("UPDATE reminders SET last_fired_at=? WHERE id=?",
-                              (now.isoformat(), rid))
-            self.conn.commit()
+            # A fired fixture includes the durable occurrence event, like the scheduler.
+            store.reminder_touch_fired(self.conn, rid, now.isoformat())
         return rid
 
     def prior_snoozes(self, rid):

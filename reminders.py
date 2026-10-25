@@ -589,10 +589,11 @@ def fired_keyboard(rid, lang):
     ]}
 
 
-def journal_fired_keyboard(rid, lang):
+def journal_fired_keyboard(rid, lang, *, date=None):
     ru = lang == "ru"
     return {"inline_keyboard": [
-        [{"text": "Сегодня без записи" if ru else "Skip today",
+        [{"text": ((f"Без записи за {date}" if ru else f"Skip {date}") if date
+                   else ("Сегодня без записи" if ru else "Skip today")),
           "callback_data": f"rm|skip|{rid}"},
          {"text": "+1 ч" if ru else "+1 h", "callback_data": f"rm|h1|{rid}"}],
     ]}

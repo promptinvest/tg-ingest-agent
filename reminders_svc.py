@@ -10,6 +10,7 @@ helpers stay in `reminders.py`; the thin create/list/cancel/calendar handlers st
 """
 import json
 import re
+import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -629,17 +630,28 @@ class ReminderMixin:
             data = {}
         return data if isinstance(data, dict) else {}
 
-    def _remember_fired_message(self, tg_message_id, reminder_id):
+    def _remember_fired_message(self, tg_message_id, reminder_id, *, occurrence_rows=None, chat_id=None):
         """Map a DELIVERED fired-notification Telegram message to its reminder —
         or, for a batch card (ADR-0002), to its id SET (`{"ids": [...], "done": []}`,
         `done` tracking the members already resolved from that card)."""
         if not tg_message_id:
             return
         data = self._fired_messages()
-        if isinstance(reminder_id, (list, tuple)):
-            data[str(int(tg_message_id))] = {"ids": [int(r) for r in reminder_id], "done": []}
+        ids = [int(r) for r in reminder_id] if isinstance(reminder_id, (list, tuple)) else [int(reminder_id)]
+        record = {"ids": ids, "done": [], "fired_event_ids": {}}
+        if occurrence_rows:
+            record.update({
+                "chat_id": int(chat_id),
+                "occurred_at": {str(r["id"]): r["due_utc"] for r in occurrence_rows},
+                "delivered_at": datetime.now(timezone.utc).isoformat(),
+                "conversation_id": store.convo_last_id(self.conn, chat_id),
+            })
         else:
-            data[str(int(tg_message_id))] = int(reminder_id)
+            for rid in ids:
+                event = self._latest_fired_event(rid)
+                if event:
+                    record["fired_event_ids"][str(rid)] = event["id"]
+        data[str(int(tg_message_id))] = record
         for key in sorted(data, key=int)[:-self._FIRED_MSGS_KEEP]:
             del data[key]
         store.kv_set(self.conn, self._FIRED_MSGS_KV, json.dumps(data))
@@ -668,6 +680,243 @@ class ReminderMixin:
         member of a batch card), or None."""
         ids = self.fired_reminders_for_message(tg_message_id)
         return ids[0] if ids else None
+
+    def _latest_fired_event(self, rid):
+        return self.conn.execute(
+            "SELECT id,ts FROM reminder_events WHERE reminder_id=? AND event='fired' ORDER BY id DESC LIMIT 1",
+            (rid,)).fetchone()
+
+    def _finalize_fired_notification(self, rid, due_utc):
+        event = self._latest_fired_event(rid)
+        if not event:
+            return
+        data = self._fired_messages()
+        changed = False
+        for record in data.values():
+            if (isinstance(record, dict) and record.get("occurred_at", {}).get(str(rid)) == due_utc
+                    and str(rid) not in record.get("fired_event_ids", {})):
+                record.setdefault("fired_event_ids", {})[str(rid)] = event["id"]
+                changed = True
+        if changed:
+            store.kv_set(self.conn, self._FIRED_MSGS_KV, json.dumps(data))
+
+    def _fired_notification_current(self, chat_id, rid, message_id, telegram_date=None):
+        row = store.reminder_get(self.conn, rid)
+        if row is None or row["chat_id"] != chat_id:
+            return False
+        if row["recurrence"] == "none":
+            return True
+        if not row["last_fired_at"]:
+            return False
+        event = self._latest_fired_event(rid)
+        if event is None:
+            return False
+        record = self._fired_messages().get(str(message_id))
+        if isinstance(record, dict) and "fired_event_ids" in record:
+            return record["fired_event_ids"].get(str(rid)) == event["id"]
+        # Legacy cards have no event identity. Recover only an unambiguous fire
+        # beside the trusted Telegram timestamp; unknown dates never authorize a
+        # recurring mutation. Journal content may still use the old card's date.
+        if rid not in self.fired_reminders_for_message(message_id) or not telegram_date:
+            return False
+        try:
+            sent = datetime.fromtimestamp(int(telegram_date), timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        matches = []
+        for candidate in self.conn.execute(
+                "SELECT id,ts FROM reminder_events WHERE reminder_id=? AND event='fired'", (rid,)):
+            fired = reminders.parse_iso_utc(candidate["ts"])
+            if fired and abs((fired-sent).total_seconds()) <= 10:
+                matches.append(candidate["id"])
+        return matches == [event["id"]]
+
+    def gratitude_invitation(self, chat_id, msg, *, delayed=False):
+        reply = msg.get("reply_to_message") or {}
+        reply_id = reply.get("message_id")
+        messages = self._fired_messages()
+        keys = [str(reply_id)] if reply_id else sorted(messages, key=int, reverse=True)
+        for key in keys:
+            record = messages.get(key)
+            if isinstance(record, dict):
+                ids = record.get("ids") or []
+                if record.get("chat_id", chat_id) != chat_id:
+                    continue
+            else:
+                ids = [record] if record is not None else []
+            if len(ids) != 1:
+                if not reply_id:
+                    return None
+                continue
+            row = store.reminder_get(self.conn, ids[0])
+            if row is None or row["chat_id"] != chat_id:
+                continue
+            if not self._journal_for_reminder_title(row["title"]):
+                if not reply_id:
+                    return None
+                continue
+            stamp = (record.get("occurred_at", {}).get(str(row["id"]))
+                     if isinstance(record, dict) else None)
+            if not stamp and reply_id and reply.get("date"):
+                try:
+                    stamp = datetime.fromtimestamp(int(reply["date"]), timezone.utc).isoformat()
+                except (ValueError, TypeError, OverflowError):
+                    continue
+            stamp = stamp or row["last_fired_at"]
+            if not stamp:
+                continue
+            if reply_id:
+                return {"title": row["title"], "occurred_at": stamp}
+            if not delayed or not isinstance(record, dict) or row["status"] != "active":
+                continue
+            now = datetime.now(timezone.utc)
+            occurrence = reminders.parse_iso_utc(stamp)
+            if occurrence is None or (now + timedelta(hours=self.tz_offset())).date() != (
+                    occurrence + timedelta(hours=self.tz_offset())).date():
+                continue
+            after = record.get("conversation_id")
+            if not isinstance(after, int):
+                continue
+            current = store.convo_last_id(self.conn, chat_id)
+            intervening = self.conn.execute(
+                "SELECT 1 FROM conversation WHERE chat_id=? AND id>? AND id<? LIMIT 1",
+                (chat_id, after, current)).fetchone()
+            if intervening:
+                return None
+            return {"title": row["title"], "occurred_at": stamp}
+        return None
+
+    def resolve_gratitude_correction(self, chat_id, lang, msg, text, pending):
+        if (msg.get("forward_origin") or any(msg.get(k) for k in ("photo", "document", "voice", "audio"))
+                or not journals.correction_intent(text)):
+            return False
+        category = self._active_gratitude_category()
+        if not category:
+            return False
+        if pending and pending["kind"] not in {"category", "reminder_fired"}:
+            self.reply(chat_id, T(lang, "journal_edit_slot_busy"))
+            return True
+        rows = self.conn.execute(
+            "SELECT * FROM messages WHERE chat_id=? AND status NOT IN ('duplicate','failed') "
+            "ORDER BY id DESC LIMIT 50", (chat_id,)).fetchall()
+        number = re.search(r"(?:#|\bnote\s+|\bзаметк\w*\s+)(\d+)", text, re.I)
+        quotes = re.findall(r'["«“]([^"»”]+)["»”]', text)
+        reply_id = (msg.get("reply_to_message") or {}).get("message_id")
+        if number:
+            rows = [r for r in rows if r["note_no"] == int(number.group(1))]
+        elif quotes:
+            quoted = {q.strip().casefold() for q in quotes}
+            rows = [r for r in rows if (r["raw_text"] or "").strip().casefold() in quoted]
+        elif reply_id and any(r["suggestion_message_id"] == reply_id for r in rows):
+            rows = [r for r in rows if r["suggestion_message_id"] == reply_id]
+        elif pending and pending["kind"] == "category":
+            rows = [r for r in rows if r["id"] == pending["payload"].get("row_id")]
+        else:
+            visible = [r for r in rows if r["suggestion_message_id"]]
+            rows = visible[:1]
+            if rows:
+                received = reminders.parse_iso_utc(rows[0]["received_at"])
+                if received is None or datetime.now(timezone.utc) - received > timedelta(days=2):
+                    rows = []
+        if len(rows) != 1:
+            self.reply(chat_id, T(lang, "journal_correction_target"))
+            return True
+        row = rows[0]
+        if pending and pending["kind"] == "category" and pending["payload"].get("row_id") != row["id"]:
+            self.reply(chat_id, T(lang, "journal_edit_slot_busy"))
+            return True
+        old_entry = store.journal_entry_get(self.conn, row["id"])
+        try:
+            event_at = journals.occurred_at(
+                text, datetime.now(timezone.utc).isoformat(), self.tz_offset(),
+                invitation_at=old_entry["occurred_at"] if old_entry else row["received_at"])
+        except (ValueError, OverflowError):
+            self.reply(chat_id, T(lang, "journal_date_needed"))
+            return True
+        if old_entry:
+            payload, status = journals.validate_payload(
+                "gratitude", store.journal_entry_payload(old_entry), row["raw_text"] or "")
+        else:
+            payload, status = journals.extract(self.cfg, self.conn, "gratitude", row["raw_text"] or "", lang)
+        draft = {"row_id": row["id"], "category": category, "occurred_at": event_at,
+                 "payload": payload, "status": status, "source_hash": store.journal_source_hash(self.conn, row["id"]),
+                 "nonce": secrets.token_hex(12)}
+        if pending:
+            previous = self.conn.execute(
+                "SELECT kind,payload,created_at,expires_at FROM pending_actions WHERE chat_id=?",
+                (chat_id,)).fetchone()
+            if previous:
+                draft["previous_pending"] = dict(previous)
+        self._send_journal_correction(chat_id, lang, draft, row)
+        return True
+
+    def _send_journal_correction(self, chat_id, lang, draft, row):
+        draft = dict(draft, nonce=secrets.token_hex(12))
+        preview = T(lang, "journal_correction_preview", n=self.note_no(row["id"]), category=draft["category"],
+                    date=self._fmt_iso_local(draft["occurred_at"]).split(",")[0],
+                    text=(row["raw_text"] or "")[:2200])
+        fields = journals.draft_lines(lang, draft["payload"])
+        if fields:
+            preview += "\n" + "\n".join("• " + line for line in fields)
+        buttons = [[{"text": T(lang, "journal_correction_accept"),
+                     "callback_data": "jc|" + draft["nonce"] + "|yes"},
+                    {"text": T(lang, "journal_correction_cancel"), "callback_data": "jc|" + draft["nonce"] + "|no"}]]
+        sent = self.reply(chat_id, preview, reply_markup={"inline_keyboard": buttons})
+        if isinstance(sent, dict) and sent.get("message_id"):
+            draft["card_id"] = sent["message_id"]
+            store.pending_set(self.conn, chat_id, "journal_correction", draft)
+
+    def resolve_journal_correction(self, chat_id, lang, pending, answer, *, card_id=None, nonce=None):
+        if not pending or pending["kind"] != "journal_correction":
+            return False
+        draft = pending["payload"]
+        if ((nonce is not None and nonce != draft.get("nonce"))
+                or (card_id is not None and card_id != draft.get("card_id"))):
+            self.reply(chat_id, T(lang, "journal_correction_stale"))
+            return True
+        value = str(answer).strip().casefold().rstrip(".!")
+        if value in {"no", "нет", "отмена", "cancel"}:
+            self._finish_journal_correction(chat_id, draft, cancelled=True)
+            self.reply(chat_id, T(lang, "cancelled"))
+            return True
+        if re.fullmatch(
+                r"(?:нет[, ]+|no[, ]+)?(?:за\s+|for\s+|on\s+)?"
+                r"(?:вчера|сегодня|позавчера|yesterday|today|day before yesterday|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})",
+                value, re.I):
+            try:
+                draft["occurred_at"] = journals.occurred_at(
+                    value, datetime.now(timezone.utc).isoformat(), self.tz_offset())
+            except (ValueError, OverflowError):
+                self.reply(chat_id, T(lang, "journal_date_needed"))
+                return True
+            row = store.get_message(self.conn, draft["row_id"])
+            if row is None or store.journal_source_hash(self.conn, row["id"]) != draft["source_hash"]:
+                self._finish_journal_correction(chat_id, draft)
+                self.reply(chat_id, T(lang, "journal_correction_stale"))
+                return True
+            self._send_journal_correction(chat_id, lang, draft, row)
+            return True
+        if value not in {"yes", "да", "ага", "верно", "ок", "okay", "ok", "сохрани", "сохранить", "confirm", "подтверждаю"}:
+            return False
+        ok = store.journal_apply_correction(
+            self.conn, chat_id, draft["row_id"], draft["category"], draft["occurred_at"],
+            draft["payload"], draft["status"], draft["source_hash"])
+        self._finish_journal_correction(chat_id, draft)
+        self.reply(chat_id, T(lang, "journal_correction_saved" if ok else "journal_correction_stale"))
+        return True
+
+    def _finish_journal_correction(self, chat_id, draft, *, cancelled=False):
+        store.pending_clear(self.conn, chat_id)
+        previous = draft.get("previous_pending")
+        # A successful correction consumes its own category offer, but never an
+        # unrelated alarm. Restore the original timestamps, without extending TTL.
+        if previous and (cancelled or previous["kind"] == "reminder_fired"):
+            expires = reminders.parse_iso_utc(previous["expires_at"])
+            if expires and expires > datetime.now(timezone.utc):
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO pending_actions(chat_id,kind,payload,created_at,expires_at) VALUES(?,?,?,?,?)",
+                    (chat_id, previous["kind"], previous["payload"], previous["created_at"], previous["expires_at"]))
+                self.conn.commit()
 
     def _mark_fired_message_done(self, tg_message_id, rid):
         """Remember that member `rid` of a batch card was resolved; returns the
@@ -777,6 +1026,11 @@ class ReminderMixin:
         if parsed is None:
             return False
         action, params = parsed
+        if reply_rid is not None and any(not self._fired_notification_current(
+                chat_id, rid, getattr(self, "turn_reply_message_id", None),
+                getattr(self, "turn_reply_date", None)) for rid in member_ids):
+            self.reply(chat_id, T(lang, "reminder_notification_stale"))
+            return True
         if action == "clarify_time":
             # Remove the short yes/no pending: after this clarification a bare
             # «да» must not accidentally ACK/close the fired reminder. The
@@ -995,9 +1249,15 @@ class ReminderMixin:
             row = rows[0]
             journal = self._journal_for_reminder_title(row["title"])
             if journal:
-                return self.reply(chat_id, T(lang, "reminder_fired_journal", name=name,
-                                             title=row["title"]),
-                                  reply_markup=reminders.journal_fired_keyboard(row["id"], lang))
+                due = reminders.parse_iso_utc(row["due_utc"])
+                offset = timedelta(hours=self.tz_offset())
+                late = due is not None and (due + offset).date() != (
+                    datetime.now(timezone.utc) + offset).date()
+                date = self._fmt_iso_local(row["due_utc"]).split(",")[0] if late else None
+                text = (T(lang, "reminder_fired_journal_dated", name=name, title=row["title"], date=date)
+                        if late else T(lang, "reminder_fired_journal", name=name, title=row["title"]))
+                return self.reply(chat_id, text,
+                                  reply_markup=reminders.journal_fired_keyboard(row["id"], lang, date=date))
             return self.reply(chat_id, T(lang, "reminder_fired", name=name, title=row["title"]),
                               reply_markup=reminders.fired_keyboard(row["id"], lang))
         items = "\n".join(f"{i}) {r['title']}" for i, r in enumerate(rows, start=1))
@@ -1073,7 +1333,8 @@ class ReminderMixin:
                 # THIS exact reminder (or this card's id set) for close/snooze.
                 if isinstance(delivered, dict):
                     self._remember_fired_message(delivered.get("message_id"),
-                                                 ids if len(ids) > 1 else ids[0])
+                                                 ids if len(ids) > 1 else ids[0],
+                                                 occurrence_rows=fresh, chat_id=chat_id)
                 # The pending slot is single (PK = chat_id). A firing reminder must NOT
                 # clobber a confirmation the boss is mid-way through (a reminder draft,
                 # an ingest suggestion, a typed purge phrase): his next "да" would then
@@ -1099,6 +1360,7 @@ class ReminderMixin:
                 # boss explicitly acks ('готово') or cancels it; last_fired_at stops it
                 # re-firing. (Old behavior closed it here, which read as 'why did you close it'.)
                 store.reminder_touch_fired(self.conn, rid)
+                self._finalize_fired_notification(rid, r["due_utc"])
                 self._reminder_stamp_owed.pop(rid, None)
                 log(f"reminder #{rid} fired" + (" (stamp recovered)" if r in owed else ""))
             if fresh:
@@ -1388,6 +1650,11 @@ class ReminderMixin:
             self.answer_callback(callback_id, T(lang, "card_reopened"))
             self.edit_message(chat_id, message_id, base_text + "\n— " + T(lang, "card_reopened"))
             self.reply(chat_id, text)
+            return
+        target_ids = rid if isinstance(rid, list) else [rid]
+        if any(not self._fired_notification_current(chat_id, target, message_id, msg.get("date"))
+               for target in target_ids):
+            self.answer_callback(callback_id, T(lang, "reminder_notification_stale"))
             return
         if op == "alld":
             payload = {"reminder_ids": rid, "reminder_id": rid[0]}

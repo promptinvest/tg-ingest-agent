@@ -29,3 +29,13 @@ nothing
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
 - 2026-09-07: implemented in `0a2639a` (Phase A batch) — journal variant of the fired card; «готово» there = skip today; plain text under the card and the «В благодарности —» prefix go to `_deterministic_capture` (no router, no summary call; the prefix is stripped from the stored note text only); the imperative guard was widened; opt-in `gratitude_autosave` pref with the «убери J#N» hint; `_META_SUMMARY_RE` widened.
+
+- 2026-10-25: delayed same-day gratitude context and exact old-card event dates
+  survive timeout/restart; unrelated questions keep their ordinary routes.
+  Retrospective correction previews an exact existing source and needs ordinary
+  owner confirmation, card/nonce/source binding and an atomic history-preserving
+  update. Invalid dates retain editable pending state; pronouns are not people.
+  All date surfaces agree, real names remain and extraction prompts/profiles and
+  budgets are unchanged. Existing entries are not automatically rewritten.
+  Guarded release is pending; see
+  [release record](../cara-notifications-gratitude-2026-10-25.md).
