@@ -180,7 +180,10 @@ additional or unbounded trials. Acceptance includes the normal once-only native
 notice, with no manual Telegram test message, historical replay, facts/source
 refresh, recovery-key copying or historical data repair.
 
-The owner does not know the independently retained recovery artifact/key
-locations. Recovery after host loss remains unverified; a working-copy
-decryption test alone does not prove provenance or survival. This release does
-not copy keys or establish a new backup destination.
+Owner clarification, 2026-10-25: encrypted off-box backup archives are delivered
+through the TG notification bot, using the existing fleet notification path.
+The independently retained recovery-key location remains unknown. Recovery after
+host loss remains unverified; the archive destination and a working-copy
+decryption test do not establish independent key availability or a successful
+host-loss restore. This documentation update retrieves no backup, copies no key
+and changes no backup destination or runtime behavior.

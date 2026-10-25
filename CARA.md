@@ -37,8 +37,9 @@ completion. Tag: `production-2026-10-25-assistant-reliability`.
   content-free status; edited/deleted sources and tampered bindings stay silent.
 - Independent recovery has an explicit artifact/key rehearsal API; successful
   decryption alone does not establish off-box provenance or key escrow.
-  The owner does not know the independent artifact/key locations; recovery after
-  host loss remains unverified.
+  The owner confirmed on 2026-10-25 that encrypted off-box backups are delivered
+  through the TG notification bot. The independently retained recovery-key
+  location remains unknown; recovery after host loss remains unverified.
 
 Existing owner/confirmation gates, language behavior, budgets, models/providers,
 notification preferences, source/facts evidence dates, old data/history and
@@ -2111,6 +2112,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   (default 7) for the independently recorded off-box cadence. It
   encrypts every **off‑box** copy with AES‑256‑CBC/PBKDF2 (200,000 iterations) using
   `BACKUP_ENCRYPTION_KEY_FILE` before sending it to Spaces or the fleet notify chat.
+  The owner confirmed on 2026-10-25 that the off-box archives are delivered
+  through the TG notification bot (the existing fleet notification path).
   A missing key or failed transfer makes the durable job retry; plaintext is refused.
   With no target, the snapshot stays local and logs a WARNING. The passphrase recovery
   copy must live outside the VPS and repo. `BACKUP_ENABLED=false` disables.

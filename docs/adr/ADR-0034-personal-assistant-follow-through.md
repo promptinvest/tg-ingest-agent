@@ -45,5 +45,8 @@ See [release record](../cara-assistant-reliability-2026-10-25.md).
   and the native once-only notice pass. The failed first transition remains;
   separate forward completion corrects only the authenticated Daily Lingo release
   binding in one host policy, with no reinstall, migration or additional model
-  qualification. The owner does not know the independent artifact/key locations;
-  recovery after host loss remains unverified.
+  qualification. The independently retained recovery-key location remains
+  unknown; recovery after host loss remains unverified.
+- 2026-10-25 owner clarification: encrypted off-box backups are delivered through
+  the TG notification bot. This identifies the archive location; independently
+  retained key availability and a host-loss restore remain unverified.

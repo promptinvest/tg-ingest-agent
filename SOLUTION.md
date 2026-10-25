@@ -43,8 +43,9 @@ follow-through while preserving tampered-source silence and no automatic replay.
 Explicit independent-artifact recovery verification reports the limits of its
 provenance. Local restore checks remain distinct from verified off-box recovery;
 neither documentation nor a successful decrypt proves key escrow.
-The owner does not know the independent artifact/key locations, so recovery
-after host loss remains unverified.
+The owner confirmed on 2026-10-25 that encrypted off-box backups are delivered
+through the TG notification bot. The independently retained recovery-key location
+remains unknown, and recovery after host loss remains unverified.
 
 Acceptance binds the exact installed modules to full normal/shuffled Linux gates,
 CI and finite model evidence. The migration preserves the original tables and
@@ -1604,6 +1605,8 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   ANY failure — ours or an `OSError` from the scratch copy, ENOSPC being the likeliest —
   logs and raises a `backup_restore_failed` issue and holds the retry a day; the month is
   stamped only on success, so a failed month keeps trying.
+  The owner confirmed on 2026-10-25 that the off-box archives are delivered
+  through the TG notification bot, using the existing fleet notification path.
   **The manual restore is one line** (the same cipher, KDF and iteration count the code
   uses — pinned by a doc-invariant test so raising `backup.PBKDF2_ITERATIONS` cannot leave
   this block silently wrong). Work under `umask 077` in a 0700 directory: the intermediate
