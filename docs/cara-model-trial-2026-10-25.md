@@ -1,4 +1,4 @@
-# Cara model trial ? October 25, 2026
+# Cara model trial - October 25, 2026
 
 Owner request: try the proposed models, monitor for a few days and revert if needed.
 This is a reversible configuration trial through the existing DigitalOcean
@@ -101,7 +101,7 @@ proof checks the actual Pro identity and retains all original profile-equality c
 
 Accepted **2026-10-25T13:36:17.924552+00:00**. Observation ends
 **2026-10-28T13:36:17.924552+00:00**; the last absolute timer entry is rounded up
-to13:36:18 UTC (16:36 Moscow). The [sanitized verification receipt](cara-model-trial-2026-10-25-verification.json)
+to 13:36:18 UTC (16:36 Moscow). The [sanitized verification receipt](cara-model-trial-2026-10-25-verification.json)
 records every binding without raw conversations or credentials.
 
 - Candidate environment: `46d9c31a9dd24770b51f9830a6150ce407700912a04304abf1c153c29d1f9db5`.
@@ -112,30 +112,34 @@ records every binding without raw conversations or credentials.
 - Observer manifest: `c50b91764b72cbc9f0045af574e76fd357899055828e8158ddab630ce395e0dd`.
 
 The model operator remains frozen separately from the observer. Preflight found
-the private database directory mode0700 and SQLite/WAL/SHM mode0600 owned by Cara.
+the private database directory mode 0700 and SQLite/WAL/SHM mode 0600 owned by Cara.
 The observer therefore needs `CAP_DAC_READ_SEARCH` with fixed root identity and
 read-only mounts; it has no write-bypass capability. No ACL, ownership or data-mode
-change was made. The independent observer's26 Linux tests pass and its actual
-sandboxed initial snapshot succeeds. Its twelve absolute dates cover+6 through+72h.
+change was made. The independent observer's 26 Linux tests pass and its actual
+sandboxed initial snapshot succeeds. Its twelve absolute dates cover +6 through +72h.
 No paid probes, owner messages or automatic model reversion are included.
 
-Selected runtime/source parity, online/stopped backups and exact stopped56-table
+Selected runtime/source parity, online/stopped backups and exact stopped 56-table
 data/schema preservation pass. Only the main process restarted; all peer processes,
-native deployment marker,91 installed runtime files,78 protected identities except
+native deployment marker, 91 installed runtime files, 78 protected identities except
 the selected environment hash, and native deployment-notification receipt remain.
-Three final samples and a fresh post-monitor check pass; mainPID3143963 has zero
+Three final samples and a fresh post-monitor check pass; main PID 3143963 has zero
 automatic restarts. No database restore, migration or application install occurred.
 
-All21 changed-role cases pass finite functional and independent semantic review.
-The final replay makes zero new paid calls;59 total qualification calls across
+All 21 changed-role cases pass finite functional and independent semantic review.
+The final replay makes zero new paid calls; 59 total qualification calls across
 baseline, failed and selected evidence cost USD0.357269084 in the conservative
 application ledger, with zero unknown charges. This is not a provider invoice.
-Both native Linux orders pass2987 tests/nine existing skips;154 model-operator
-checks and26 observer checks pass. [Exact model-operator/source CI](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40197607609)
+Both native Linux orders pass 2,987 tests/nine existing skips; 154 model-operator
+checks and 26 observer checks pass. [Exact model-operator/source CI](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40197607609)
 passes at af3dcb7350358009dae7350f7f22b30b7a8be9c2. The earlier failed CI and all
 failed/consumed originals remain retained. Never replay started controllers.
 
 The first observation correctly reports insufficient ordinary traffic. Metadata
 does not establish answer quality, long-term reliability or end-to-end delivery
-latency. Review actual conversations together with the72-hour reports before
+latency. Review actual conversations together with the 72-hour reports before
 choosing whether to keep or revert the new roles.
+
+Fresh 13:40:31 UTC checks retain the same main PID and zero automatic restarts,
+zero unknown inference outcomes since acceptance, unchanged runtime/protected files
+and the active timer. No ordinary model calls had occurred yet.
