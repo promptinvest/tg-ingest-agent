@@ -49,6 +49,14 @@ explanation requests; it verifies stale-date refusal restores unrelated pending
 context and that previews display real line breaks. Independent narrow source
 review cleared the final code; test evidence remains a separate gate.
 
+The first published CI (`84a1899`, run 40178152480) caught an undeclared final
+verb in the date-clarification template; 2,893 tests ran with one catalogue error
+and 62 optional-environment skips. Original logs remain. The clarification now
+makes no completion claim, and the correction success template explicitly maps
+to confirmed state after its atomic transaction. The original catalogue assertion
+is unchanged. This adds the reviewed lifecycle declaration in `action_truth.py`
+to the eight-file production delta; model-facing prompts/calls remain exact.
+
 Final canonical Git archive, full normal/shuffled distro-Python tests, compilation,
 undefined-name checks, shell syntax/shellcheck and exact public-head CI remain
 required. Preserve all original 47 regression specifications and 15 MCP/parity

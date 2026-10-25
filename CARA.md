@@ -28,6 +28,11 @@ model prompts, profiles, budgets, delivery policy and recovery controls remain.
 [Scope, verification and release gates](docs/cara-notifications-gratitude-2026-10-25.md).
 Deployment acceptance is pending; the October 24 release remains installed.
 
+The full catalogue gate caught an undeclared final-action template. The correction
+success template now declares the confirmed lifecycle and is emitted only after
+its atomic commit; date clarification has no completion claim. Original action-
+truth assertions remain intact. Fresh full-source verification is required.
+
 ## October 24 - Fleet and project release accepted
 
 Application acceptance completed **2026-10-24 20:56:22 UTC** for source

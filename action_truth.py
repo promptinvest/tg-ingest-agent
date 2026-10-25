@@ -541,6 +541,8 @@ TEMPLATE_STATES = {
     "correction_learned": "done",
     "correction_needs_code": "done",
     "journal_saved": "done",
+    # Only after the exact-source journal correction transaction committed.
+    "journal_correction_saved": "confirmed",
     "problem_logged": "done",
     "reminder_no_prev": "done",
     "files_empty": "done",

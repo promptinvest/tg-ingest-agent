@@ -1110,8 +1110,8 @@ TEXTS = {
         "en": "Which entry should I correct? Send its number or exact text.",
     },
     "journal_date_needed": {
-        "ru": "Уточни дату записи: например, «вчера» или «24.10.2026». До этого не сохраняю.",
-        "en": "Please clarify the entry date, for example yesterday or 2026-10-24. I have not saved it.",
+        "ru": "Уточни дату записи: например, «вчера» или «24.10.2026».",
+        "en": "Please clarify the entry date, for example yesterday or 2026-10-24.",
     },
     "journal_correction_preview": {
         "ru": "📔 Исправить существующую запись #{n}: «{category}», за {date}?\n📝 {text}",
