@@ -19,6 +19,8 @@ records exact-source verification and guarded installed acceptance.
   model transport and settles on the SQLite owner thread, with stale-memory and
   unknown-paid-outcome containment. Due reminders retain service during normal
   inference waits without nested inbound dispatch or new model calls.
+  A preparation/database failure cannot repeat a reservation or dispatch; only
+  an exactly identified, provably unsent reservation may be released.
 - Equal-priority standing guidance prefers recent instructions. A bounded,
   read-only current-work view derives valid tasks, next steps, live confirmation
   and reminder state from existing records. It never creates goals or authority.

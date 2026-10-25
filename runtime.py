@@ -116,6 +116,7 @@ class InferenceJob(PendingJob):
         self.started = False
         self.unsent_reservation = None
         self.unsent_needs_rollback = False
+        self.unsent_prepare_probe = None
 
     def _phase(self, phase):
         if self.job_id is None:
@@ -130,11 +131,24 @@ class InferenceJob(PendingJob):
         self.conn.commit()
 
     def _settle_unsent(self):
+        if self.unsent_needs_rollback:
+            self.conn.rollback()
+            self.unsent_needs_rollback = False
+        if self.unsent_prepare_probe is not None:
+            watermark, model = self.unsent_prepare_probe
+            # prepare_chat is synchronous on this sole connection owner, and
+            # transport cannot start before it returns. Release only one exact
+            # new reservation. An absent/ambiguous/mismatched row keeps its
+            # conservative charge; historical or unrelated rows are untouched.
+            rows = self.conn.execute(
+                "SELECT id,skill,kind,model FROM llm_usage WHERE id>? ORDER BY id",
+                (watermark,)).fetchall()
+            if (len(rows) == 1 and rows[0]["skill"] == "memory_curator"
+                    and rows[0]["kind"] == "unknown_chat" and rows[0]["model"] == model):
+                self.unsent_reservation = rows[0]["id"]
+            self.unsent_prepare_probe = None
         if self.unsent_reservation is not None:
             import call_budget
-            if self.unsent_needs_rollback:
-                self.conn.rollback()
-                self.unsent_needs_rollback = False
             call_budget.settle(self.conn, self.unsent_reservation, "rejected_chat")
             self.unsent_reservation = None
 
@@ -257,13 +271,28 @@ class InferenceJob(PendingJob):
         # Time waiting for shared capacity cannot become a fresh full timeout.
         options["timeout"] = min(float(options["timeout"]), remaining)
         try:
+            watermark = None
             try:
+                watermark = self.conn.execute("SELECT COALESCE(MAX(id),0) FROM llm_usage").fetchone()[0]
                 self.prepared = llm.prepare_chat(
                     self.cfg, self.conn, "memory_curator", self.request["messages"], meta=meta, **options)
             except llm.LLMError as exc:
                 lease.release_if_idle()
                 self._profile(error=exc)
                 return self.done
+            except Exception as exc:
+                # prepare_chat may commit its reservation then fail while
+                # constructing the request or clearing model-success state.
+                # Mark terminal before any cleanup DB work: neither a busy
+                # cleanup nor the next poll may prepare/reserve another call.
+                lease.release_if_idle()
+                exc.background_no_retry = True
+                self.done, self.error = True, exc
+                self.unsent_needs_rollback = True
+                if watermark is not None:
+                    self.unsent_prepare_probe = (watermark, options.get("model") or self.cfg.do_model)
+                self._settle_unsent()
+                return True
             try:
                 self._phase("started")
             except Exception as exc:

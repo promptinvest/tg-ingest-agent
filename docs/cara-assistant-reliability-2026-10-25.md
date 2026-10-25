@@ -46,6 +46,14 @@ publication/CI, independent review, exact additive schema/original-data rehearsa
 fresh operator fixtures/prepared-input gate, protected preflight/backups,
 monitor/readiness bindings and installed acceptance. No deployment is claimed.
 
+The first published candidate `9ae0cb3` passed exact-head CI. Its root Linux
+harness incorrectly assigned its temporary parent to the non-root test account,
+so protected-root ancestry checks failed; the original logs are preserved.
+The corrected harness uses root-owned fixtures for root gates. A subsequent
+source review also found a preparation error could repeat a cost reservation.
+The corrected candidate terminally contains that error and releases only an
+exact provably unsent reservation. A fresh canonical full gate is required.
+
 Prompt/context changes are explicit. Existing sealed model evidence remains
 bound to its original source and cannot be relabeled fresh candidate evidence.
 No paid qualification, manual Telegram message, historical replay, facts/source

@@ -270,6 +270,100 @@ class BackgroundMaintenanceTests(unittest.TestCase):
         reservation = store.usage_add(conn, skill, "unknown_chat", "fixture", cost_usd=.01)
         return {"reserved": reservation, "messages": messages}
 
+    def test_prepare_failure_before_reservation_is_terminal_without_reprepare(self):
+        session = self._unsent_session()
+        runtime.register("test", "prepare-before", lambda *args: session)
+        jid = jobs.add_job(self.conn, "test", "prepare-before")
+        original_prepare = llm.prepare_chat
+        with mock.patch.object(llm, "prepare_chat", wraps=original_prepare) as prepare, \
+                mock.patch.object(llm, "_check_budget", side_effect=sqlite3.OperationalError("fixture pre-reserve outage")), \
+                mock.patch.object(llm, "transport_chat") as transport:
+            self.assertEqual(runtime.drain(self.conn, self.ctx), 1)
+            self.assertEqual(runtime.poll(self.conn, self.ctx), 0)
+            self.assertEqual(runtime.drain(self.conn, self.ctx), 0)
+        self.assertEqual(prepare.call_count, 1)
+        transport.assert_not_called()
+        self.assertTrue(session.error.background_no_retry)
+        self.assertEqual(self.conn.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone()[0], "failed")
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM llm_usage").fetchone()[0], 0)
+
+    def test_actual_prepare_kv_failure_releases_only_new_committed_unsent_reservation(self):
+        old = store.usage_add(self.conn, "memory_curator", "unknown_chat", self.cfg.do_model, cost_usd=.02)
+        session = self._unsent_session()
+        runtime.register("test", "prepare-after", lambda *args: session)
+        jid = jobs.add_job(self.conn, "test", "prepare-after")
+        original_prepare, original_kv = llm.prepare_chat, store.kv_set
+
+        def failed_success_clear(conn, key, value):
+            if key.startswith("model_chat_success:"):
+                raise sqlite3.OperationalError("fixture post-reserve KV outage")
+            return original_kv(conn, key, value)
+
+        with mock.patch.object(llm, "prepare_chat", wraps=original_prepare) as prepare, \
+                mock.patch.object(store, "kv_set", side_effect=failed_success_clear), \
+                mock.patch.object(llm, "transport_chat") as transport:
+            self.assertEqual(runtime.drain(self.conn, self.ctx), 1)
+            self.assertEqual(runtime.poll(self.conn, self.ctx), 0)
+            self.assertEqual(runtime.drain(self.conn, self.ctx), 0)
+        self.assertEqual(prepare.call_count, 1)
+        transport.assert_not_called()
+        self.assertFalse(runtime.has_pending(self.ctx))
+        self.assertEqual(self.conn.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone()[0], "failed")
+        rows = self.conn.execute("SELECT id,kind,cost_usd FROM llm_usage ORDER BY id").fetchall()
+        self.assertEqual([tuple(row) for row in rows], [(old, "unknown_chat", .02), (old + 1, "rejected_chat", 0)])
+
+    def test_prepare_failure_cleanup_outage_keeps_terminal_session_without_reserving_again(self):
+        session = self._unsent_session()
+        runtime.register("test", "prepare-cleanup", lambda *args: session)
+        jid = jobs.add_job(self.conn, "test", "prepare-cleanup")
+
+        def prepare_then_fail(cfg, conn, skill, messages, **options):
+            store.usage_add(conn, skill, "unknown_chat", options["model"], cost_usd=.01)
+            raise sqlite3.OperationalError("fixture prepare failed after commit")
+
+        with mock.patch.object(llm, "prepare_chat", side_effect=prepare_then_fail) as prepare, \
+                mock.patch.object(llm, "transport_chat") as transport:
+            with mock.patch.object(call_budget, "settle", side_effect=sqlite3.OperationalError("fixture cleanup outage")):
+                with self.assertRaises(sqlite3.Error):
+                    runtime.drain(self.conn, self.ctx)
+                self.assertTrue(session.done)
+                self.assertTrue(runtime.has_pending(self.ctx))
+                self.assertEqual(self.conn.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone()[0], "claimed")
+                with self.assertRaises(sqlite3.Error):
+                    runtime.poll(self.conn, self.ctx)
+            self.assertEqual(runtime.poll(self.conn, self.ctx), 1)
+        self.assertEqual(prepare.call_count, 1)
+        transport.assert_not_called()
+        self.assertEqual(self.conn.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone()[0], "failed")
+        self.assertEqual(tuple(self.conn.execute("SELECT kind,cost_usd FROM llm_usage").fetchone()), ("rejected_chat", 0))
+
+    def test_prepare_failure_keeps_unprovable_new_charges_conservative(self):
+        for mode in ("multiple", "other-skill", "other-model"):
+            with self.subTest(mode=mode):
+                session = self._unsent_session()
+                runtime.register("test", "prepare-unproven", lambda *args: session)
+                jid = jobs.add_job(self.conn, "test", "prepare-unproven")
+                before = self.conn.execute("SELECT COALESCE(MAX(id),0) FROM llm_usage").fetchone()[0]
+
+                def prepare_then_fail(cfg, conn, skill, messages, **options):
+                    store.usage_add(conn, "unrelated" if mode == "other-skill" else skill,
+                                    "unknown_chat", "unrelated" if mode == "other-model" else options["model"], cost_usd=.01)
+                    if mode == "multiple":
+                        store.usage_add(conn, skill, "unknown_chat", options["model"], cost_usd=.02)
+                    raise sqlite3.OperationalError("fixture unprovable prepare failure")
+
+                with mock.patch.object(llm, "prepare_chat", side_effect=prepare_then_fail) as prepare, \
+                        mock.patch.object(llm, "transport_chat") as transport:
+                    self.assertEqual(runtime.drain(self.conn, self.ctx), 1)
+                    self.assertEqual(runtime.poll(self.conn, self.ctx), 0)
+                    self.assertEqual(runtime.drain(self.conn, self.ctx), 0)
+                self.assertEqual(prepare.call_count, 1)
+                transport.assert_not_called()
+                self.assertEqual(self.conn.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone()[0], "failed")
+                rows = self.conn.execute("SELECT kind,cost_usd FROM llm_usage WHERE id>? ORDER BY id", (before,)).fetchall()
+                expected = [("unknown_chat", .01), ("unknown_chat", .02)] if mode == "multiple" else [("unknown_chat", .01)]
+                self.assertEqual([tuple(row) for row in rows], expected)
+
     def test_phase_start_write_failure_releases_unsent_reservation_without_redispatch(self):
         session = self._unsent_session()
         runtime.register("test", "unsent", lambda *args: session)

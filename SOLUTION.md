@@ -20,6 +20,9 @@ settle on the owner thread. Unknown dispatched paid work is terminally contained
 after a crash. A cooperative inference wait heartbeat services due reminders
 without nested inbound dispatch, stealing confirmations or changing the current
 turn's reminder target. Original limits, budgets and synchronous helper APIs stay.
+Preparation failures terminally contain the session before database cleanup;
+cleanup may release only its exact provably unsent reservation, never an unrelated
+or uncertain charge. A failed cleanup cannot reopen preparation or transport.
 
 Conversation and routing receive a compact current-work projection from existing,
 source-valid tasks, pending cards and reminders. This read-only projection creates
