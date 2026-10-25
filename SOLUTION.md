@@ -15,11 +15,19 @@ Implementation and qualification are underway; the accepted context/evidence
 runtime below remains live. The initial analysis candidate was rejected by
 real-model qualification: resolved planning gaps leaked into the final answer,
 and an unsuccessful literal search was repeated without useful result context.
-The corrected candidate retains planning history, reassesses gaps against current
+The next candidate retains planning history, reassesses gaps against current
 evidence, and gives the planner completed-read results plus the existing literal
-search contract. The original failed results and their charges remain retained;
-the cumulative qualification ceiling is unchanged. October28 was a proposed model-observation
-checkpoint, not a technical dependency. An earlier transition would require a
+search contract. A second real-model cohort passed five scenarios but its source
+injection scenario could not deliver a usable comparison: the unchanged action
+truth guard rejected ordinary prose containing "saved". The bounded correction
+now receives the exact rejected fragment as untrusted user-level diagnostic data;
+the prompt asks for the comparison without unnecessary workflow narratives. Both
+global action guards and their original behavior remain. All failed evidence and
+charges remain. A recorded operator-selected finite evaluation allowance is
+USD0.60 across all analysis qualification attempts, replacing the initial USD0.40
+allowance; application USD2/day, USD12/month and task guards remain exact. A fresh
+full six-case cohort against the final source is required. October28 was a proposed
+model-observation checkpoint, not a technical dependency. An earlier transition would require a
 new authenticated source epoch, observer and conditional model-only reversion,
 preserving the original deadline, prior evidence, data and protections. The owner
 selected deployment as soon as qualification passes, with a separate trial
