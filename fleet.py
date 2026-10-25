@@ -1,5 +1,6 @@
 """Natural-language fleet investigations and exact-card maintenance approvals."""
 import json
+import action_delivery
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -493,6 +494,7 @@ class _FleetCore:
     def _fleet_recent(self, chat_id, text=""):
         return fleet_context.recent(self.conn, chat_id, text)
 
+    @action_delivery.caller_finalized
     def do_fleet(self, chat_id, lang, text, msg_id=None, allow_maintenance=False, view_override=None):
         if fleet_lifecycle.admission_paused(self.conn):
             self.reply(chat_id, "Fleet work is paused while the confirmed content purge settles." if lang != "ru" else "Проверки флота приостановлены на время подтверждённого удаления содержимого.")
@@ -568,6 +570,7 @@ class _FleetCore:
         except (ValueError, OSError, llm.LLMError, llm.BudgetExceeded, worker_client.WorkerError):
             self.reply(chat_id, "Проверка сейчас недоступна; измерений пока нет." if lang == "ru" else "The investigation is unavailable right now; I have no measurements yet.")
 
+    @action_delivery.caller_finalized
     def _fleet_approval(self, row, payload, inventory):
         if fleet_investigation.retained(payload):
             raise ValueError("retained admission cannot request an approval")
@@ -682,6 +685,7 @@ class _FleetCore:
         self._fleet_deliver_result(row, payload)
         return False
 
+    @action_delivery.caller_finalized
     def _fleet_deliver_result(self, row, payload):
         if payload.get("catalog_answer_pages") and not payload.get("catalog_combined"):
             payload["answer_pages"] = payload["catalog_answer_pages"] + payload.get("answer_pages", [payload["answer"]])
@@ -722,7 +726,7 @@ class _FleetCore:
                 operation = payload["operation"]
                 if payload.get("version") == 2 and operation["operation"] == "inspect":
                     if not self._fleet_request_authority_current(row, payload):
-                        self._fleet_fail_async(row, payload, ValueError("request authority changed"), notify=False)
+                        self._fleet_fail_stale_authority(row, payload)
                         continue
                 source = store.assistant_task_source(self.conn, row["chat_id"], row["source_update"])
                 if source is None or tasking.source_hash(source["text"]) != payload["source_hash"]:

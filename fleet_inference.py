@@ -16,6 +16,7 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor
 import call_budget
 import common
 import llm
+import inference_io
 
 
 # Keep one of inference_io's unchanged two global slots for foreground owner
@@ -23,20 +24,15 @@ import llm
 MAX_ACTIVE_TRANSPORTS = 1
 _pool = ThreadPoolExecutor(max_workers=MAX_ACTIVE_TRANSPORTS,
                            thread_name_prefix="fleet-inference")
-_slots = threading.BoundedSemaphore(MAX_ACTIVE_TRANSPORTS)
+_slots = inference_io.background_slots
 _BINDING_FIELDS = frozenset({
     "request_id", "phase", "nonce", "input_hash", "source_hash",
     "inventory_hash", "facts_hash", "capability_hash", "policy_version",
 })
 
 
-def _transport(context, prepared):
-    try:
-        return context.run(llm.transport_chat, prepared)
-    finally:
-        # Release before the future becomes ready, so the next owner tick can
-        # dispatch queued work without a completion-callback scheduling race.
-        _slots.release()
+def _transport(context, prepared, lease):
+    return context.run(lease.run, llm.transport_chat, prepared)
 
 
 class StalePhase(ValueError):
@@ -212,7 +208,8 @@ class ProfileCall:
 
         # Backpressure precedes the first profile step and reservation: queued
         # work spends nothing and its execution deadline has not started yet.
-        if not _slots.acquire(blocking=False):
+        lease = inference_io.BackgroundLease(_slots)
+        if not lease.acquire():
             return False
         dispatched = False
         try:
@@ -246,7 +243,7 @@ class ProfileCall:
                 if not self._current():
                     raise StalePhase("inference authority changed before dispatch")
                 context = contextvars.copy_context()
-                self.future = _pool.submit(_transport, context, self.prepared)
+                self.future = _pool.submit(_transport, context, self.prepared, lease)
                 dispatched = True
             except Exception as exc:
                 # Nothing left this process. Release only this reservation; do
@@ -255,9 +252,9 @@ class ProfileCall:
                 call_budget.settle(self.conn, self.prepared["reserved"], "rejected_chat")
                 return True
             self.future.add_done_callback(
-                lambda future: _slots.release() if future.cancelled() else None)
+                lambda future: lease.release_if_idle() if future.cancelled() else None)
             self.state = "started"
             return False
         finally:
             if not dispatched:
-                _slots.release()
+                lease.release_if_idle()

@@ -1,5 +1,6 @@
 """Versioned fleet inference phases; network I/O never runs on the owner loop."""
 import json
+import action_delivery
 import secrets
 from pathlib import Path
 
@@ -96,8 +97,13 @@ class AsyncMixin:
         phase["binding"] = dict(authority, request_id=row["id"], phase=name,
                                 nonce=phase["nonce"], source_hash=payload["source_hash"],
                                 input_hash=protocol.digest(self._fleet_phase_messages(payload, inventory)))
+        # This permits a content-free final status after a genuine revision
+        # change, without treating a changed nonce/input as that revision.
+        # It never substitutes for the existing execution/consumption guards.
+        phase["authority_binding_hash"] = protocol.digest(phase["binding"])
         self._fleet_save(row, name + "_queued", payload, "inference_phase_queued")
 
+    @action_delivery.caller_finalized
     def _fleet_begin_async(self, chat_id, lang, text, msg_id, maintenance, update, inventory, previous, *, external_waiter=None, task_waiter=None):
         request_id = external_waiter["request_id"] if external_waiter is not None else secrets.token_hex(16)
         payload = {"version": 2, "question": text, "source_hash": tasking.source_hash(text),
@@ -202,6 +208,77 @@ class AsyncMixin:
                 phase["raw"] = call.result
         fleet_investigation.save_accounted(self, row, phase["name"] + "_completed", payload, "inference_phase_completed")
 
+    def _fleet_revision_status_allowed(self, row, payload):
+        """A changed configuration may end valid work, never revive its result."""
+        import fleet
+        try:
+            if (fleet_investigation.retained(payload) or payload.get("terminal_status_notice")
+                    or not getattr(self.cfg, "fleet_enabled", False)
+                    or fleet_lifecycle.admission_paused(self.conn)
+                    or row["chat_id"] not in getattr(self.cfg, "allowed_chat_ids", ())):
+                return False
+            fresh = self.conn.execute("SELECT state,payload FROM fleet_requests WHERE id=?", (row["id"],)).fetchone()
+            if fresh is None or fresh["state"] not in STATES + ("queued", "inspection_started", "ready"):
+                return False
+            source = store.assistant_task_source(self.conn, row["chat_id"], row["source_update"])
+            if (source is None or source["text"] != payload.get("question")
+                    or tasking.source_hash(source["text"]) != payload.get("source_hash")):
+                return False
+            phase = payload.get("inference", {})
+            binding = phase.get("binding", {})
+            saved = json.loads(fresh["payload"])
+            if (set(binding) != fleet_inference._BINDING_FIELDS
+                    or saved.get("inference", {}).get("binding") != binding
+                    or phase.get("nonce") != binding["nonce"] or binding["request_id"] != row["id"]
+                    or binding["source_hash"] != payload["source_hash"]
+                    or binding["phase"] != phase.get("name")
+                    or payload.get("catalog_hash") != binding["inventory_hash"]):
+                return False
+            inventory = fleet.catalog(self.cfg)
+            authority = self._fleet_authority(inventory)
+            if (binding["policy_version"] != authority["policy_version"]
+                    or not any(binding[key] != authority[key] for key in
+                               ("inventory_hash", "facts_hash", "capability_hash"))):
+                return False
+            sealed = phase.get("authority_binding_hash")
+            if sealed is not None:
+                return sealed == protocol.digest(binding)
+            # Older rows retain their original recovery contract. A matching
+            # live prompt or independently recomputable input can establish
+            # notice eligibility; an unverifiable old row remains silent.
+            call = getattr(self, "_fleet_inference_calls", {}).get(row["id"])
+            if call is not None:
+                return call.binding == binding and protocol.digest(call.messages) == binding["input_hash"]
+            return (binding["inventory_hash"] == authority["inventory_hash"]
+                    and protocol.digest(self._fleet_phase_messages(payload, inventory)) == binding["input_hash"])
+        except (ValueError, TypeError, KeyError, AttributeError, OSError):
+            return False
+
+    @action_delivery.caller_finalized
+    def _fleet_fail_stale_authority(self, row, payload):
+        notify = self._fleet_revision_status_allowed(row, payload)
+        if notify:
+            # Commit an at-most-once attempt before sending. A lost Telegram
+            # receipt must not replay a notice or any original investigation.
+            payload["terminal_status_notice"] = {"version": 1, "reason": "authority_revision_changed",
+                                                 "state": "attempted", "attempted_at": protocol.now()}
+        self._fleet_fail_async(row, payload, fleet_inference.StalePhase(), notify=False)
+        if not notify:
+            return
+        text = ("Проверка остановлена: изменились её настройки. Результат не отправлен; автоматически её не повторяла."
+                if payload["lang"] == "ru" else
+                "The check stopped because its configuration changed. No result was delivered; I did not repeat it automatically.")
+        try:
+            sent = self.reply(row["chat_id"], text)
+        except Exception:
+            sent = None
+        notice = payload["terminal_status_notice"]
+        notice["state"] = "sent" if isinstance(sent, dict) and type(sent.get("message_id")) is int else "ambiguous"
+        if notice["state"] == "sent":
+            notice["message_id"] = sent["message_id"]
+        self._fleet_save(row, "failed", payload, "authority_revision_status_settled_no_replay")
+
+    @action_delivery.caller_finalized
     def _fleet_fail_async(self, row, payload, error, notify=True):
         # Persist terminal state before an optional best-effort notice. A crash
         # never turns that notice or a failed paid phase into an automatic replay.
@@ -235,7 +312,7 @@ class AsyncMixin:
     def _fleet_consume_phase(self, row, payload, inventory):
         phase = payload["inference"]
         if not self._fleet_phase_current(row, payload, phase["binding"]):
-            self._fleet_fail_async(row, payload, fleet_inference.StalePhase(), notify=False)
+            self._fleet_fail_stale_authority(row, payload)
             return
         if phase["name"] == "planning":
             if row["state"] != "planning_consumed":
@@ -321,7 +398,7 @@ class AsyncMixin:
                         if call.advance():
                             fleet_investigation.account_discarded(self, row, payload)
                             calls.pop(row["id"], None)
-                    self._fleet_fail_async(row, payload, fleet_inference.StalePhase(), notify=False)
+                    self._fleet_fail_stale_authority(row, payload)
                     continue
                 inventory = fleet.catalog(self.cfg)
                 if row["state"].endswith(("_completed", "_consumed")):
@@ -347,6 +424,9 @@ class AsyncMixin:
                 row = self.conn.execute("SELECT * FROM fleet_requests WHERE id=?", (row["id"],)).fetchone()
                 self._fleet_consume_phase(row, json.loads(row["payload"]), inventory)
             except (ValueError, OSError) as exc:
-                self._fleet_fail_async(row, payload, exc,
-                                       notify=not isinstance(exc, fleet_inference.StalePhase) and fleet_investigation.fallback_allowed(self, row, payload, exc))
+                if isinstance(exc, fleet_inference.StalePhase):
+                    self._fleet_fail_stale_authority(row, payload)
+                else:
+                    self._fleet_fail_async(row, payload, exc,
+                                           notify=fleet_investigation.fallback_allowed(self, row, payload, exc))
         return len(rows)

@@ -208,8 +208,68 @@ class FleetAsyncExecution(unittest.TestCase):
                             self.agent.check_fleet_requests()
                     self.agent.check_fleet_requests()
                 self.assertEqual(self.row(update_id)["state"], "failed")
-                self.assertEqual(len(self.sent), before)
+                if change == "nonce":
+                    self.assertEqual(len(self.sent), before)
+                    self.assertNotIn("terminal_status_notice", self.payload(update_id))
+                else:
+                    self.assertEqual(len(self.sent), before + 1)
+                    self.assertEqual(self.sent[-1][1], "The check stopped because its configuration changed. No result was delivered; I did not repeat it automatically.")
+                    self.assertEqual(self.payload(update_id)["terminal_status_notice"]["state"], "sent")
+                    self.assertNotIn("answer_pages", self.payload(update_id))
                 self.assertEqual(send.call_count, 1)
+
+    def test_inventory_revision_before_dispatch_emits_one_content_free_final_status(self):
+        self.start()
+        changed = inventory()
+        changed["hosts"]["host-a"]["label"] = "New descriptive host label"
+        (self.root / "inventory.json").write_text(protocol.canonical(changed), encoding="utf-8")
+        with mock.patch.object(llm, "transport_chat") as send:
+            self.agent.check_fleet_requests()
+            self.agent.check_fleet_requests()
+        self.assertEqual(self.row()["state"], "failed")
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.payload()["terminal_status_notice"]["state"], "sent")
+        self.assertNotIn("New descriptive host label", self.sent[-1][1])
+        self.assertNotIn("answer_pages", self.payload())
+        send.assert_not_called()
+
+    def test_revision_notice_requires_unchanged_source_and_original_input_binding(self):
+        for change in ("deleted_source", "input_hash", "phase_and_binding_nonce"):
+            with self.subTest(change=change):
+                update = {"deleted_source": 1, "input_hash": 2, "phase_and_binding_nonce": 3}[change]
+                self.start(update)
+                before = len(self.sent)
+                payload = self.payload(update)
+                if change == "deleted_source":
+                    self.conn.execute("DELETE FROM conversation WHERE update_id=?", (update,))
+                    self.conn.commit()
+                elif change == "input_hash":
+                    payload["inference"]["binding"]["input_hash"] = "f" * 64
+                    self.agent._fleet_save(self.row(update), self.row(update)["state"], payload, "fixture_input_changed")
+                else:
+                    payload["inference"]["nonce"] = "f" * 32
+                    payload["inference"]["binding"]["nonce"] = "f" * 32
+                    self.agent._fleet_save(self.row(update), self.row(update)["state"], payload, "fixture_nonce_changed")
+                with mock.patch.object(self.agent, "_fleet_facts_revision", return_value="f" * 64), \
+                        mock.patch.object(llm, "transport_chat") as send:
+                    self.agent.check_fleet_requests()
+                self.assertEqual(self.row(update)["state"], "failed")
+                self.assertEqual(len(self.sent), before)
+                self.assertNotIn("terminal_status_notice", self.payload(update))
+                send.assert_not_called()
+
+    def test_ambiguous_revision_notice_is_not_repeated_after_a_lost_send_receipt(self):
+        self.start()
+        before = len(self.sent)
+        with mock.patch.object(self.agent, "_fleet_facts_revision", return_value="f" * 64), \
+                mock.patch.object(self.agent, "reply", side_effect=OSError("lost fixture receipt")) as send:
+            self.agent.check_fleet_requests()
+            self.agent.check_fleet_requests()
+            self.agent._fleet_fail_stale_authority(self.row(), self.payload())
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(len(self.sent), before)
+        self.assertEqual(self.row()["state"], "failed")
+        self.assertEqual(self.payload()["terminal_status_notice"]["state"], "ambiguous")
 
     def test_crash_after_started_planning_never_replays_unknown_paid_work(self):
         with mock.patch.object(llm, "transport_chat", side_effect=self.transport) as send:

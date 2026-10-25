@@ -350,7 +350,46 @@ def _confirmed_wins(keep, drops, status_of):
     return keep, [i for i in group if i != keep]
 
 
+def _drive_sync(steps, cfg, conn):
+    """Keep existing synchronous entry points on their original profile gateway."""
+    import llm
+    try:
+        request = next(steps)
+        while True:
+            try:
+                reply = llm.chat_profile(cfg, conn, "memory_curator", request["messages"],
+                                         profile=request["profile"])
+            except Exception as exc:
+                request = steps.throw(exc)
+            else:
+                request = steps.send(reply)
+    except StopIteration as finished:
+        return finished.value
+
+
+class StaleConsolidation(RuntimeError):
+    """Owner memory changed while the grouping model was working."""
+
+
+def _memory_revision(conn):
+    # Exclude usage/jobs/traces: only memory changes invalidate a model verdict.
+    return tuple(tuple(tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY id"))
+                 for table in ("boss_profile_items", "memory_candidates", "cara_life"))
+
+
+def _memory_request(conn, messages):
+    revision = _memory_revision(conn)
+    reply = yield {"messages": messages, "profile": "memory_consolidate"}
+    if _memory_revision(conn) != revision:
+        raise StaleConsolidation("memory changed during consolidation; stale verdict discarded")
+    return reply
+
+
 def _merge_groups(conn, cfg, items, max_items=120, status_of=None):
+    return _drive_sync(_merge_groups_steps(conn, cfg, items, max_items, status_of), cfg, conn)
+
+
+def _merge_groups_steps(conn, cfg, items, max_items=120, status_of=None):
     """Ask the model to GROUP duplicate items (a list of (id, text)). Returns a list of
     (keep_id, [drop_ids]) for genuine duplicates only. [] when <8 items or on failure.
     Never invents — only references the given ids; tolerates int OR string ids.
@@ -368,11 +407,9 @@ def _merge_groups(conn, cfg, items, max_items=120, status_of=None):
     listing = "\n".join(f"{i}: {common.neutralize_untrusted(v)}"
                         for i, v in items[:max_items])
     try:
-        reply = llm.chat_profile(
-            cfg, conn, "memory_curator",
+        reply = yield from _memory_request(conn,
             [{"role": "system", "content": _CONSOLIDATE_SYSTEM},
-             {"role": "user", "content": listing}],
-            profile="memory_consolidate")
+             {"role": "user", "content": listing}])
     except (llm.BudgetExceeded, llm.LLMError):
         return []
     parsed = llm.parse_llm_json(reply) or {}
@@ -442,6 +479,11 @@ def _batches(seq, run_day=None, size=BATCH_SIZE):
 
 
 def consolidate(conn, cfg, max_items=120, now=None, report=None):
+    return _drive_sync(consolidate_steps(conn, cfg, max_items, now, report,
+                                          asynchronous=False), cfg, conn)
+
+
+def consolidate_steps(conn, cfg, max_items=120, now=None, report=None, *, asynchronous=True):
     """De-duplicate Cara's memory: an LLM groups genuine duplicate items and we KEEP the
     richest — except that a CONFIRMED boss fact always outranks an inferred paraphrase and
     is never the one folded. Boss facts: the rest are marked 'merged' (reversible). Her
@@ -469,7 +511,8 @@ def consolidate(conn, cfg, max_items=120, now=None, report=None):
                 items.append((row["id"], val))
                 status_of[row["id"]] = (status, row["confidence"], row["source_table"])
     for batch in _batches(items, now):
-        for _keep, drops in _merge_groups(conn, cfg, batch, status_of=status_of):
+        groups = (yield from _merge_groups_steps(conn, cfg, batch, status_of=status_of)) if asynchronous else _merge_groups(conn, cfg, batch, status_of=status_of)
+        for _keep, drops in groups:
             keeper = status_of.get(_keep, ("", 0, None))
             for d in drops:
                 dropped = status_of.get(d, ("", 0, None))
@@ -491,7 +534,8 @@ def consolidate(conn, cfg, max_items=120, now=None, report=None):
     # 2) Cara's life flavour -> demote redundant duplicates, keep the richest of each
     life = [(r["id"], r["text"]) for r in store.life_all(conn) if (r["text"] or "").strip()]
     for batch in _batches(life, now):
-        for _keep, drops in _merge_groups(conn, cfg, batch):
+        groups = (yield from _merge_groups_steps(conn, cfg, batch)) if asynchronous else _merge_groups(conn, cfg, batch)
+        for _keep, drops in groups:
             for d in drops:
                 if store.life_set_status(conn, d, "merged"):
                     merged += 1
@@ -499,11 +543,11 @@ def consolidate(conn, cfg, max_items=120, now=None, report=None):
     #    that CONTRADICT a confirmed fact ('superseded') and ones that merely DUPLICATE another
     #    ('merged'). Semantic, not token-overlap: catches "пьёт кофе, а не чай" vs a verbose
     #    confirmed "пьёт чай…" and folds the "Иван Доронин ×N" restatements.
-    merged += _tidy_candidates(conn, cfg, max_items)
+    merged += (yield from _tidy_candidates_steps(conn, cfg, max_items)) if asynchronous else _tidy_candidates(conn, cfg, max_items)
     # 4) Stored INFERRED facts that CONTRADICT a confirmed fact -> demote to 'merged' (reversible).
     #    An auto-learned guess must not coexist with confirmed truth (inferred "пьёт кофе" next to
     #    confirmed "пьёт чай"); the confirmed fact wins.
-    merged += _tidy_inferred(conn, cfg, max_items)
+    merged += (yield from _tidy_inferred_steps(conn, cfg, max_items)) if asynchronous else _tidy_inferred(conn, cfg, max_items)
     return merged
 
 
@@ -523,6 +567,10 @@ _CANDIDATE_HYGIENE_SYSTEM = (
 
 
 def _tidy_candidates(conn, cfg, max_items=120):
+    return _drive_sync(_tidy_candidates_steps(conn, cfg, max_items), cfg, conn)
+
+
+def _tidy_candidates_steps(conn, cfg, max_items=120):
     """LLM hygiene over pending candidates: drop contradictions-with-confirmed ('superseded')
     and duplicates ('merged'). Returns count folded. Best-effort: 0 on <2 candidates or failure."""
     import llm
@@ -540,12 +588,10 @@ def _tidy_candidates(conn, cfg, max_items=120):
     cand_listing = "\n".join(f"{c['id']}: {common.neutralize_untrusted(c['proposed_text'])}"
                              for c in pending)
     try:
-        reply = llm.chat_profile(
-            cfg, conn, "memory_curator",
+        reply = yield from _memory_request(conn,
             [{"role": "system", "content": _CANDIDATE_HYGIENE_SYSTEM},
              {"role": "user",
-              "content": f"CONFIRMED facts:\n{conf_listing}\n\nCANDIDATES:\n{cand_listing}"}],
-            profile="memory_consolidate")
+              "content": f"CONFIRMED facts:\n{conf_listing}\n\nCANDIDATES:\n{cand_listing}"}])
     except (llm.BudgetExceeded, llm.LLMError):
         return 0
     parsed = llm.parse_llm_json(reply) or {}
@@ -585,6 +631,10 @@ _INFERRED_HYGIENE_SYSTEM = (
 
 
 def _tidy_inferred(conn, cfg, max_items=120):
+    return _drive_sync(_tidy_inferred_steps(conn, cfg, max_items), cfg, conn)
+
+
+def _tidy_inferred_steps(conn, cfg, max_items=120):
     """Demote stored INFERRED facts that CONTRADICT a confirmed fact to 'merged' (reversible).
     Conservative: only direct contradictions with a CONFIRMED fact (confirmed wins). 0 on
     nothing-to-do or failure."""
@@ -603,11 +653,9 @@ def _tidy_inferred(conn, cfg, max_items=120):
     listing = "\n".join(f"{i}: {common.neutralize_untrusted(v)}" for i, v in inferred)
     conf = "\n".join(f"- {common.neutralize_untrusted(v)}" for v in confirmed)
     try:
-        reply = llm.chat_profile(
-            cfg, conn, "memory_curator",
+        reply = yield from _memory_request(conn,
             [{"role": "system", "content": _INFERRED_HYGIENE_SYSTEM},
-             {"role": "user", "content": f"CONFIRMED facts:\n{conf}\n\nINFERRED:\n{listing}"}],
-            profile="memory_consolidate")
+             {"role": "user", "content": f"CONFIRMED facts:\n{conf}\n\nINFERRED:\n{listing}"}])
     except (llm.BudgetExceeded, llm.LLMError):
         return 0
     parsed = llm.parse_llm_json(reply) or {}

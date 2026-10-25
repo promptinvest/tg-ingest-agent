@@ -337,8 +337,8 @@ def standing_guidance(conn, max_items=8, max_chars=600):
     for status in ("confirmed", "inferred"):
         rows += store.boss_items(conn, status, sensitivities=("normal",), limit=40,
                                  kinds=GUIDANCE_KINDS)
-    rows.sort(key=lambda r: (-(r["confidence"] or 0.0), -(r["recurrence_count"] or 1),
-                             str(r["last_seen_at"] or "")), reverse=False)
+    rows.sort(key=lambda r: (r["confidence"] or 0.0, r["recurrence_count"] or 1,
+                             str(r["last_seen_at"] or "")), reverse=True)
     tone = [r for r in rows if r["kind"] == "tone"]
     ordered = tone[:TONE_SLOTS] + [r for r in rows if r not in tone[:TONE_SLOTS]]
     out, used, seen = [], 0, set()

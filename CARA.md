@@ -1,5 +1,38 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 25 - Personal assistant reliability candidate
+
+The owner requested implementation of the architecture-review fixes, with Cara's
+primary role as a personal AI assistant. Source implementation is a candidate
+until the [dated release record](docs/cara-assistant-reliability-2026-10-25.md)
+records exact-source verification and guarded installed acceptance.
+
+- Reminder effects, exact confirmation consumption and new reply intents share
+  a local transaction. Source-bound receipts recover the original result after
+  a crash; display numbers are never re-resolved to a different reminder.
+- `action_delivery.py` owns new action receipts and reply delivery records in
+  additive tables. Known undelivered attempts may retry delivery alone;
+  interrupted or uncertain sends remain ambiguous with no automatic resend.
+  There is no historical backfill. Purge also scrubs/cancels applicable new copies.
+- Slow backup/restore work uses one bounded connection-free background worker;
+  snapshots open their own read-only connection. Memory consolidation yields
+  model transport and settles on the SQLite owner thread, with stale-memory and
+  unknown-paid-outcome containment. Due reminders retain service during normal
+  inference waits without nested inbound dispatch or new model calls.
+- Equal-priority standing guidance prefers recent instructions. A bounded,
+  read-only current-work view derives valid tasks, next steps, live confirmation
+  and reminder state from existing records. It never creates goals or authority.
+  Current requested format/detail wins over the concise conversational default.
+- Fleet execution skips retained terminal requests before its original attempt
+  cap. Genuine authority changes finish a still-valid owner request with a
+  content-free status; edited/deleted sources and tampered bindings stay silent.
+- Independent recovery has an explicit artifact/key rehearsal API; successful
+  decryption alone does not establish off-box provenance or key escrow.
+
+Existing owner/confirmation gates, language behavior, budgets, models/providers,
+notification preferences, source/facts evidence dates, old data/history and
+restricted executor boundaries remain. See ADR-0034 for the architecture decision.
+
 ## October 25 - Notification and gratitude corrections
 
 Delivered gratitude invitations retain their occurrence date across the ordinary
@@ -2051,11 +2084,12 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   it never deletes the parent, rewinds the evidence cursor, or resets call usage.
   Reviewed issue cleanup uses fingerprint + last-observation compare-and-swap, so
   a fresh recurrence remains open rather than being bulk-closed as stale.
-- **Weekly DB backup (cadence changed 2026‑08‑21; hardened 2026‑07‑10):** when the
-  last successful UTC backup date is at least `BACKUP_INTERVAL_DAYS` old (default 7), a
+- **Daily local DB backup, weekly off-box delivery:** when the
+  last successful UTC local backup is at least `BACKUP_LOCAL_INTERVAL_DAYS` old (default 1), a
   durable job (`maintenance`/`db_backup`) snapshots `ingest.db` consistently (sqlite3
-  online‑backup API), keeps the newest `BACKUP_KEEP` (7; seven weekly recovery points with
-  the defaults) gzipped copies under `/var/lib/tg-ingest-agent/backups`, and
+  online‑backup API), retains daily snapshots plus protected weekly recovery points
+  under `/var/lib/tg-ingest-agent/backups`, and uses `BACKUP_INTERVAL_DAYS`
+  (default 7) for the independently recorded off-box cadence. It
   encrypts every **off‑box** copy with AES‑256‑CBC/PBKDF2 (200,000 iterations) using
   `BACKUP_ENCRYPTION_KEY_FILE` before sending it to Spaces or the fleet notify chat.
   A missing key or failed transfer makes the durable job retry; plaintext is refused.
@@ -2941,7 +2975,7 @@ source before she offers to auto‑confirm that source (§3; the offer still nee
 
 Backup: `BACKUP_ENABLED=true` · `BACKUP_INTERVAL_DAYS=7` · `BACKUP_KEEP=7` ·
 `BACKUP_ENCRYPTION_KEY_FILE=/etc/tg-ingest-agent-backup.key` (local gzip plus encrypted
-off‑box copy; recovery key retained separately from the VPS/repo) ·
+off‑box copy; independently retained recovery key must be verified, not inferred) ·
 `DISK_ALERT_MIN_FREE_PCT=10` (low‑disk alert, 0 disables; added 2026‑07‑25).
 
 Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /

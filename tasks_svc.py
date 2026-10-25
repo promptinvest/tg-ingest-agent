@@ -2,6 +2,7 @@
 """Telegram UX for governed chief-of-staff tasks and improvement proposals."""
 import hashlib
 import json
+import action_delivery
 import os
 import re
 import secrets
@@ -223,6 +224,7 @@ def _safe_artifact_bytes(cfg, row):
 class TasksMixin:
     """Handlers kept inside Cara's one-process skill architecture."""
 
+    @action_delivery.caller_finalized
     def do_task_start(self, chat_id, lang, text, msg_id=None):
         update_id = getattr(self, "_current_update_id", None)
         if update_id is None:
@@ -556,6 +558,7 @@ class TasksMixin:
                    "Got it—this becomes an auditable improvement signal.",
                    record=False)
 
+    @action_delivery.caller_finalized
     def send_task_approval(self, approval):
         preview = json.loads(approval["preview_json"])
         lang = self.lang()

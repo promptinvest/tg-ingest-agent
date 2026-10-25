@@ -7,6 +7,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 import action_truth
+import action_delivery
 import common
 import converse
 import knowledge
@@ -191,6 +192,9 @@ class ConverseMixin:
         if threads:
             parts.append("Open threads right now (mention only if it fits): " + "; ".join(threads))
         owner_chat = chat_id if chat_id is not None else self._owner_chat()
+        work = relationship.current_work_context(self.conn, owner_chat)
+        if work:
+            parts.append(work)
         # Her own active reminders — so when he asks about one ("почему не закрыла #1?",
         # "что там с напоминаниями?") she answers from the REAL list and its status, not
         # by searching his notes. A fired one-shot stays open until he confirms "готово".
@@ -663,8 +667,19 @@ class ConverseMixin:
             if not reaction:
                 self.reply(chat_id, T(lang, "llm_error"))
             return
-        if self.reply(chat_id, reply):
-            # Learn only from dialogue that was actually delivered.
+        metadata = getattr(self, "_reply_delivery_metadata", None)
+        epoch = getattr(self, "_converse_delivery_finalization_epoch", 0)
+        self._reply_delivery_metadata = {"kind": "converse_reply", "converse": {
+            "state": "pending", "chat_id": chat_id, "lang": lang,
+            "source_text": text, "source_hash": action_delivery._digest(text),
+            "correction": self.looks_like_correction(text)}}
+        try:
+            sent = self.reply(chat_id, reply)
+        finally:
+            self._reply_delivery_metadata = metadata
+        if sent and getattr(self, "_converse_delivery_finalization_epoch", 0) == epoch:
+            # Preserve nonstandard/mocked reply callers. Normal immediate and
+            # delayed sends finalize once through the durable outbox instead.
             self.maybe_curate_conversation(chat_id, lang=lang,
                                            force=self.looks_like_correction(text))
 

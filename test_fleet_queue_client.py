@@ -259,6 +259,23 @@ class FleetExecutorClientLifecycle(unittest.TestCase):
         marker = json.loads(self.cancel_marker(envelope).read_text())
         self.assertEqual(marker["nonce"], envelope["nonce"])
 
+    def test_authority_revision_cancels_queued_execution_and_sends_only_one_final_status(self):
+        self.ready()
+        self.start()
+        envelope = self.envelope()
+        before = len(self.agent.messages)
+        with mock.patch.object(self.agent, "_fleet_facts_revision", return_value="f" * 64), \
+                mock.patch.object(worker_client, "poll", side_effect=AssertionError("stale result consumed")):
+            self.agent.check_fleet_requests()
+            self.agent.check_fleet_requests()
+        self.assertEqual(self.row()["state"], "failed")
+        self.assertTrue(self.cancel_marker(envelope).exists())
+        self.assertEqual(len(self.agent.messages), before + 1)
+        self.assertEqual(self.agent.messages[-1][1], "The check stopped because its configuration changed. No result was delivered; I did not repeat it automatically.")
+        self.assertEqual(self.payload()["terminal_status_notice"]["state"], "sent")
+        self.assertEqual(self.send.call_count, 1)
+        self.assertNotIn("result", self.payload())
+
     def test_success_without_required_start_receipt_cannot_be_accepted(self):
         self.ready()
         self.start()

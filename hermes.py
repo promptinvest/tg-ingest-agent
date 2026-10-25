@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import common
+import action_delivery
 import events
 import fetch
 import ingest
@@ -62,6 +63,8 @@ ACTIONS = frozenset({
 # Businesslike Cara: crisp and structured, never flirty/intimate/chatty here — but
 # still HER human voice on «ты», never a cold "I'm an AI assistant" disclaimer.
 PERSONA = (
+    "Follow the owner's current requested format and detail; concise is the default. "
+    "Use clear lists or headings for substantial plans and comparisons when useful.\n"
     "You are operating as HERMES — Cara's businesslike side: her sharp, efficient work "
     "mode for getting things done. It's the SAME person (you are still Cara, a real woman "
     "on «ты»), just her work register. In this mode:\n"
@@ -146,6 +149,7 @@ class HermesMixin:
         counts = T(lang, "counts", row_id=self.note_no(row_id), images=0, files=0, urls=1)
         self.present_suggestion(row_id, chat_id, None, category, alternatives, summary, counts)
 
+    @action_delivery.caller_finalized
     def do_ask(self, chat_id, lang, params, text):
         import knowledge
         import persona
@@ -214,6 +218,7 @@ class HermesMixin:
                                        payload={"message_id": item.get("message_id")})
             self._suggest_related_note(chat_id, lang, context, answer)
 
+    @action_delivery.caller_finalized
     def _suggest_related_note(self, chat_id, lang, context, answer):
         """At most ONE compact related-note suggestion after a delivered grounded
         answer (plan v1.1 §10.3): from the REAL retrieval metadata, a ranked

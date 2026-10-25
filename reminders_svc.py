@@ -15,6 +15,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import journals
+import action_delivery
 import reminders
 import reminder_time
 import store
@@ -40,6 +41,7 @@ class ReminderMixin:
                                   (json.dumps(payload, ensure_ascii=False), chat_id, kind))
                 self.conn.commit()
 
+    @action_delivery.caller_finalized
     def _send_partial_reminder_prompt(self, chat_id, lang, draft):
         sent = self.reply(chat_id, T(lang, "reminder_need_" + draft["need"]))
         self._bind_reminder_prompt(chat_id, "reminder_partial", draft, sent)
@@ -75,6 +77,7 @@ class ReminderMixin:
         self.reply(chat_id, T(lang, "reminder_schedule_unsupported"))
         return True
 
+    @action_delivery.reminder_action()
     def do_reschedule(self, chat_id, lang, params, text=None):
         """Move an existing reminder to a new time (applied immediately, like
         cancel). Targets by id/title; a bare 'это/последнее' reference uses the
@@ -123,12 +126,14 @@ class ReminderMixin:
         if not (row["last_fired_at"] is None
                 and reminders.parse_iso_utc(row["due_utc"]) == due):
             store.reminder_update_due(self.conn, row["id"], due.isoformat())
+        action_delivery.mark_completed(self)
         self._remember_reminder(row["id"])
         self.reply(chat_id, T(lang, "reminder_rescheduled",
                               rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
                               when_local=reminders.fmt_local(due.isoformat(), self.tz_offset()))
                    + "\n\n" + self._reminder_list_body(chat_id, lang))
 
+    @action_delivery.reminder_action()
     def do_rename_reminder(self, chat_id, lang, params, text=None):
         """Retitle an existing reminder IN PLACE (keeps id/time/recurrence/history).
         The new name is params['new_title']; the target is resolved by id/title_query/
@@ -280,6 +285,7 @@ class ReminderMixin:
             params["title"] = subject
         return params
 
+    @action_delivery.reminder_action()
     def do_reminder_undo(self, chat_id, lang, params):
         """Undo the last reschedule ('верни предыдущее время', 'отмени перенос')
         by swapping due_utc back to the remembered previous time."""
@@ -330,6 +336,7 @@ class ReminderMixin:
                 and pending["payload"].get("reminder_id") == rid):
             store.pending_clear(self.conn, chat_id)
 
+    @action_delivery.reminder_action()
     def resolve_snooze_choice_text(self, chat_id, lang, pending, text):
         """Keep the day-or-close question bound to the already re-armed row.
 
@@ -411,7 +418,7 @@ class ReminderMixin:
                 store.pending_set(self.conn, chat_id, "reminder_op",
                                   {"op": "reschedule", "due_utc": due,
                                    "ids": [r["id"] for r in matches]})
-            self.reply(chat_id, T(lang, "reschedule_which") + "\n"
+            self.reply_prompt(chat_id, T(lang, "reschedule_which") + "\n"
                        + reminders.format_list(matches, self.tz_offset(), lang))
             return True
         row = matches[0]
@@ -831,7 +838,7 @@ class ReminderMixin:
                 text, datetime.now(timezone.utc).isoformat(), self.tz_offset(),
                 invitation_at=old_entry["occurred_at"] if old_entry else row["received_at"])
         except (ValueError, OverflowError):
-            self.reply(chat_id, T(lang, "journal_date_needed"))
+            self.reply_prompt(chat_id, T(lang, "journal_date_needed"))
             return True
         if old_entry:
             payload, status = journals.validate_payload(
@@ -887,7 +894,7 @@ class ReminderMixin:
                 draft["occurred_at"] = journals.occurred_at(
                     value, datetime.now(timezone.utc).isoformat(), self.tz_offset())
             except (ValueError, OverflowError):
-                self.reply(chat_id, T(lang, "journal_date_needed"))
+                self.reply_prompt(chat_id, T(lang, "journal_date_needed"))
                 return True
             row = store.get_message(self.conn, draft["row_id"])
             if row is None or store.journal_source_hash(self.conn, row["id"]) != draft["source_hash"]:
@@ -1096,6 +1103,7 @@ class ReminderMixin:
                 return r
         return None
 
+    @action_delivery.reminder_action()
     def _resolve_reminder_op(self, chat_id, lang, pending, text):
         """Apply a remembered reschedule/rename to the reminder the boss just picked
         (pending reminder_op). Returns True if handled; False if his message isn't a
@@ -1273,6 +1281,9 @@ class ReminderMixin:
                         if max_defer and max_defer > 0 else None)
         by_chat = {}
         for row in store.reminders_due(self.conn, now_iso):
+            if (self._reminder_stamp_owed.get(row["id"]) != row["due_utc"]
+                    and action_delivery.reminder_delivery_unknown(self.conn, row["id"], row["due_utc"])):
+                continue
             # A reminder is an EXPLICIT alarm the boss set for a chosen time: it fires at that
             # time even inside quiet hours (quiet hours only silences Cara's PROACTIVE outreach
             # — nudges/brief). The ONLY
@@ -1304,8 +1315,20 @@ class ReminderMixin:
             delivered = None
             if fresh:
                 try:
-                    delivered = self._send_fired_card(chat_id, fresh)
-                except sqlite3.Error:
+                    prior_key = getattr(self, "_reply_delivery_key", None)
+                    prior_metadata = getattr(self, "_reply_delivery_metadata", None)
+                    self._reply_delivery_metadata = {
+                        "reminder_occurrences": [[r["id"], r["due_utc"]] for r in fresh]}
+                    self._reply_delivery_key = "reminder-fire:" + str(chat_id) + ":" + ":".join(
+                        f"{r['id']}@{r['due_utc']}" for r in fresh)
+                    try:
+                        delivered = self._send_fired_card(chat_id, fresh)
+                    finally:
+                        self._reply_delivery_key = prior_key
+                        self._reply_delivery_metadata = prior_metadata
+                except sqlite3.Error as exc:
+                    if getattr(exc, "reply_request_not_sent", False):
+                        raise
                     # reply() records the conversation turn AFTER Telegram accepted
                     # the send — a sqlite error here means the card IS (or may
                     # well be) on his screen. Treat it as delivered-but-unstamped;
@@ -1341,7 +1364,8 @@ class ReminderMixin:
                 # ack THIS reminder instead of confirming what he was asked — the draft
                 # silently lost. If a pending exists, keep it; the fired reminder stays
                 # addressable via last_reminder_id ("готово"/"закрой её" still lands).
-                if existing is None or existing.get("kind") == "reminder_fired":
+                if (not getattr(self, "_inference_turn_in_flight", False)
+                        and (existing is None or existing.get("kind") == "reminder_fired")):
                     payload = {"reminder_id": ids[0], "title": fresh[0]["title"],
                                "reminder_ids": ids, "titles": [r["title"] for r in fresh]}
                     if len(fresh) == 1:
@@ -1363,7 +1387,7 @@ class ReminderMixin:
                 self._finalize_fired_notification(rid, r["due_utc"])
                 self._reminder_stamp_owed.pop(rid, None)
                 log(f"reminder #{rid} fired" + (" (stamp recovered)" if r in owed else ""))
-            if fresh:
+            if fresh and not getattr(self, "_inference_turn_in_flight", False):
                 self._remember_reminder(ids[-1])  # "готово/перенеси это" binds to the just-fired one
 
     def expiry_notice_enabled(self):
@@ -1380,15 +1404,15 @@ class ReminderMixin:
             self._reping_stale_fired(now)
         except Exception as exc:  # noqa: BLE001 — must not kill the loop
             log(f"reminder re-ping sweep error: {exc!r}")
+        return self._expire_reminders_with_notice(now)
+
+    @action_delivery.reminder_action()
+    def _expire_reminders_with_notice(self, now):
         days = self.cfg.reminder_fired_expire_days
         if not days or days <= 0:
             return
         cutoff = (now - timedelta(days=days)).isoformat()
-        try:
-            rows = store.reminders_expire_stale(self.conn, cutoff)
-        except Exception as exc:  # noqa: BLE001 — must not kill the loop
-            log(f"reminder expiry sweep error: {exc!r}")
-            return
+        rows = store.reminders_expire_stale(self.conn, cutoff)
         if not rows:
             return
         log(f"auto-expired {len(rows)} stale fired reminder(s)")
@@ -1403,8 +1427,13 @@ class ReminderMixin:
             if len(chat_rows) > 5:
                 items += " …"
             ids = [r["id"] for r in chat_rows]
-            sent = self.reply(chat_id, T(lang, "reminders_expired_notice", items=items),
-                              reply_markup=reminders.reopen_keyboard(ids, lang))
+            prior_metadata = getattr(self, "_reply_delivery_metadata", None)
+            self._reply_delivery_metadata = {"kind": "reminder_expired", "payload": {"reminder_ids": ids}}
+            try:
+                sent = self.reply(chat_id, T(lang, "reminders_expired_notice", items=items),
+                                  reply_markup=reminders.reopen_keyboard(ids, lang))
+            finally:
+                self._reply_delivery_metadata = prior_metadata
             # «верни» as plain text works while the notice is the open question; the
             # single pending slot is never taken from a confirmation in flight.
             if sent and store.pending_get(self.conn, chat_id) is None:
@@ -1433,10 +1462,15 @@ class ReminderMixin:
             if store.reminder_has_event(self.conn, row["id"], "repinged"):
                 continue
             lang = self.lang()
-            sent = self.reply(row["chat_id"], T(
-                lang, "reminder_repinged", name=self.owner_name(), title=row["title"],
-                fired_rel=reminders.fmt_relative(row["last_fired_at"], offset, lang, now)),
-                reply_markup=reminders.fired_keyboard(row["id"], lang))
+            prior_key = getattr(self, "_reply_delivery_key", None)
+            self._reply_delivery_key = f"reminder-reping:{row['id']}@{row['last_fired_at']}"
+            try:
+                sent = self.reply(row["chat_id"], T(
+                    lang, "reminder_repinged", name=self.owner_name(), title=row["title"],
+                    fired_rel=reminders.fmt_relative(row["last_fired_at"], offset, lang, now)),
+                    reply_markup=reminders.fired_keyboard(row["id"], lang))
+            finally:
+                self._reply_delivery_key = prior_key
             if not sent:
                 continue
             store.reminder_event(self.conn, row["id"], "repinged")
@@ -1470,6 +1504,7 @@ class ReminderMixin:
                             r"reopen|restore|bring (?:them |it )?back|yes|да)[.! ]*$")
     _REOPEN_NO_RE = re.compile(r"^(?:нет|не надо|не нужно|no|nope|пусть)[.! ]*$")
 
+    @action_delivery.reminder_action()
     def resolve_expired_reopen_text(self, chat_id, lang, pending, text):
         """«верни» / «нет» while the expiry notice is the open question."""
         if not pending or pending.get("kind") != "reminder_expired":
@@ -1566,6 +1601,8 @@ class ReminderMixin:
             for rid, title in zip(ids, titles):
                 eff, real_title = self._apply_snooze(chat_id, rid, title, due)
                 done.append((rid, eff, real_title))
+            if done:
+                action_delivery.mark_completed(self)
             if len(done) == 1:
                 rid, eff, title = done[0]
                 confirmation = T(lang, "reminder_snoozed", title=title, when_rel=when_rel)
@@ -1627,6 +1664,9 @@ class ReminderMixin:
             payload["title"] = keep[0]
         store.pending_set(self.conn, chat_id, "reminder_fired", payload, ttl_seconds=1800)
 
+    @action_delivery.reminder_action(lambda self, callback_id, chat_id, msg, data:
+        bool((parsed := reminders.parse_callback(data)) and
+             (parsed[0] != 'dr' or parsed[1] in {'set', 'move', 'no'})))
     def handle_reminder_callback(self, callback_id, chat_id, msg, data):
         """Inline buttons on fired / batch / re-ping / expiry cards (`rm|…`) and on the
         draft card (`dr|…`). Deterministic — no LLM; the card is edited in place to
@@ -1710,6 +1750,7 @@ class ReminderMixin:
                 # A delayed/repeated absolute-day click is already satisfied.
                 # Preserve the event count and previous due date for undo.
                 self._clear_snooze_choice(chat_id, rid)
+                action_delivery.mark_completed(self)
                 self._drop_from_fired_pending(chat_id, rid)
                 outcome = T(lang, "card_snoozed",
                             when_rel=reminders.fmt_relative(due, offset, lang))
@@ -1740,6 +1781,7 @@ class ReminderMixin:
             # itself now — say it once in chat too so the question is not only a caption.
             self.reply(chat_id, text)
 
+    @action_delivery.reminder_action(lambda self, callback_id, chat_id, msg, op, rid: op in {'set', 'move', 'no'})
     def _handle_draft_callback(self, callback_id, chat_id, msg, op, rid):
         lang = self.lang()
         message_id = msg.get("message_id")

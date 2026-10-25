@@ -65,7 +65,7 @@ deploy_source_dirty=false
 [ -n \"\$(git -C '$SRC' status --porcelain 2>/dev/null)\" ] && deploy_source_dirty=true
 DEPLOY_SOURCE_REVISION=\"\$deploy_source_revision\" \
 DEPLOY_SOURCE_DIRTY=\"\$deploy_source_dirty\" \
-DEPLOY_TEST_SUMMARY='full VPS unittest discovery passed' \
+DEPLOY_TEST_SUMMARY=\"\${deploy_test_summary:-full VPS unittest discovery passed}\" \
 STAGE_DIR='$SRC' bash '$SRC/install-tg-ingest-agent-pilot-remote.sh' 2>&1 | tail -5
 if [ -f '$SRC/verify-cara-runtime.sh' ]; then
   echo '--- live verification ---'
@@ -139,6 +139,7 @@ git rev-parse --verify --quiet '$REF^{commit}' >/dev/null || {
   echo 'not a commit on the box: $REF' >&2; exit 2; }
 git checkout --quiet '$REF' --
 echo \"rolled back to \$(git rev-parse --short HEAD): \$(git log -1 --format=%s)\"
+deploy_test_summary='not run by legacy rollback path'
 $install_verify
 echo '(return to latest with: ./deploy.sh --pull)'"
     ;;

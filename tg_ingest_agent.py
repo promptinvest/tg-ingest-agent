@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import action_truth
+import action_delivery
 import backup
 import boss_model
 import common
@@ -207,6 +208,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         tool_broker.assert_registry()
         self.cfg = cfg
         self.conn = store.open_db(cfg.db_path)
+        action_delivery.recover(self.conn)
         improvement.ensure_golden_corpus(self.conn)
         cfg.media_dir.mkdir(parents=True, exist_ok=True)
         for name in cfg.seed_categories:
@@ -243,7 +245,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                          lambda ctx, conn, payload, job: ctx.run_backup_verify(conn))
         # A crash mid-job leaves the row 'claimed' with no owner; reclaim so the
         # job kind isn't wedged forever (has_pending would block re-enqueue).
-        requeued, dead = jobs.reclaim_stale(self.conn)
+        requeued, dead = runtime.reclaim_stale(self.conn)
         if requeued or dead:
             log(f"reclaimed stale jobs after restart: {requeued} requeued, {dead} failed")
         task_requeued, task_blocked = store.assistant_task_reclaim_stale(self.conn)
@@ -392,27 +394,16 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         # just vanish and leave the note pending forever).
         if not (reply_to or 0) > 0:
             reply_to = None
-        try:
-            result = tg_call(
-                self.cfg.token,
-                "sendMessage",
-                {
-                    "chat_id": chat_id,
-                    "text": text[:4000],
-                    "reply_to_message_id": reply_to,
-                    "allow_sending_without_reply": True,
-                    "reply_markup": reply_markup,
-                },
-            )
-        except TelegramError as exc:
-            log(f"sendMessage failed: {exc}")
-            return None
-        # Conversation history is a record of what the boss actually received.
-        # Recording before Telegram acknowledged delivery created phantom turns
-        # that the next LLM call treated as visible conversation.
-        if record:
-            store.convo_add(self.conn, chat_id, "bot", text)
-        return result
+        return action_delivery.send(self, "sendMessage", {
+            "chat_id": chat_id, "text": text[:4000],
+            "reply_to_message_id": reply_to, "allow_sending_without_reply": True,
+            "reply_markup": reply_markup,
+        }, tg_call, record=record, history_text=text)
+
+    @action_delivery.caller_finalized
+    def reply_prompt(self, *args, **kwargs):
+        """A plain interactive question stays with its current pending owner."""
+        return self.reply(*args, **kwargs)
 
     def reply_chunks(self, chat_id, text):
         """Send a long message in <=4000-char pieces split on line boundaries — a long
@@ -447,6 +438,10 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             pass
 
     def answer_callback(self, callback_id, text):
+        if getattr(self, "_reminder_transaction", None) is not None:
+            action_delivery.enqueue(self, "answerCallbackQuery", {
+                "callback_query_id": callback_id, "text": text[:200]})
+            return
         try:
             tg_call(
                 self.cfg.token,
@@ -465,6 +460,11 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         a list he was shown."""
         if not message_id:
             return False
+        if getattr(self, "_reminder_transaction", None) is not None:
+            action_delivery.enqueue(self, "editMessageText", {
+                "chat_id": chat_id, "message_id": message_id,
+                "text": text[:4000], "reply_markup": reply_markup})
+            return True
         try:
             tg_call(self.cfg.token, "editMessageText", {
                 "chat_id": chat_id, "message_id": message_id,
@@ -716,8 +716,13 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 attempts = store.telegram_update_attempt(self.conn, update_id)
                 tid = trace.start(self.conn, "inbound", chat_id)
                 try:
-                    with inference_io.turn_budget():
-                        deferred = self.handle_update(update) == "defer"
+                    self._active_update_id = update_id
+                    self._reply_sequence = 0
+                    try:
+                        with inference_io.turn_budget(), inference_io.on_wait(self._inference_wait_tick):
+                            deferred = self.handle_update(update) == "defer"
+                    finally:
+                        self._active_update_id = None
                 except ShutdownInterrupt:
                     log(f"update {update_id} left for redelivery (shutdown)")
                     trace.finish(self.conn, tid, "suppressed", "shutdown mid-update")
@@ -809,6 +814,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     SCHEDULER_TICKS = (
         "check_assistant_tasks",
         "fire_due_reminders",
+        "check_reply_deliveries",
         "check_budget_notice",
         "check_weekly_review",
         "check_morning_brief",
@@ -975,7 +981,38 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     # that arrives during getUpdates without creating another polling thread.
     PENDING_WORK_POLL_SECONDS = 2
 
+    def check_reply_deliveries(self):
+        return action_delivery.drain(self, tg_call)
+
+    def _inference_wait_tick(self):
+        """Let due alarms progress while a transport thread waits, on the DB owner."""
+        now = time.monotonic()
+        if now - getattr(self, "_last_inference_wait_tick", 0) < 1:
+            return
+        self._last_inference_wait_tick = now
+        language = self.turn_lang
+        trace_id = current_trace()
+        update_id = getattr(self, "_active_update_id", None)
+        in_flight = getattr(self, "_inference_turn_in_flight", False)
+        scope = getattr(self, "_reminder_scope", None)
+        try:
+            self.turn_lang = None
+            self._active_update_id = None
+            self._reminder_scope = None
+            self._inference_turn_in_flight = True
+            common.set_current_trace(None)
+            self._tick("runtime.poll", lambda: runtime.poll(self.conn, self))
+            self._tick("fire_due_reminders", self.fire_due_reminders)
+        finally:
+            self.turn_lang = language
+            self._active_update_id = update_id
+            self._inference_turn_in_flight = in_flight
+            self._reminder_scope = scope
+            common.set_current_trace(trace_id)
+
     def _pending_work_poll_timeout(self):
+        if runtime.has_pending(self):
+            return min(self.PENDING_WORK_POLL_SECONDS, self.cfg.poll_timeout)
         if getattr(self, "_fleet_mcp_facts_pending", None):
             return min(self.PENDING_WORK_POLL_SECONDS, self.cfg.poll_timeout)
         if self.albums or getattr(self, "voice_jobs", {}):
@@ -1000,6 +1037,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     def run(self):
         self.fleet_async = True
         self.voice_async = True
+        self.background_maintenance = True
         try:
             tg_call(self.cfg.token, "deleteWebhook", {"drop_pending_updates": False})
         except TelegramError as exc:
@@ -1025,6 +1063,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             now = time.time()
             self.watchdog_ping()
             self.turn_lang = None  # scheduler replies use the stored preference
+            self._tick("runtime.poll", lambda: runtime.poll(self.conn, self))
             # Each scheduler tick runs under a uniform guard: an UNEXPECTED failure in one tick
             # (e.g. a sqlite3.OperationalError from disk-full/IO) must NOT propagate out of run()
             # and crash the poll loop. Ticks already handle their own domain errors; this is the
@@ -2301,6 +2340,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         store.pending_set(self.conn, chat_id, "reminder", draft)
         self._send_reminder_draft(chat_id, lang, draft, twin=twin)
 
+    @action_delivery.reminder_action()
     def do_reminder_cancel(self, chat_id, lang, params):
         rows = store.reminders_active(self.conn, chat_id)
         # «закрой все» / «закрой #1 и #3» (ADR-0002): the same all/ids grammar as
@@ -2369,7 +2409,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 if due is not None:
                     payload["due_utc"] = due.isoformat()
                 store.pending_set(self.conn, chat_id, "calendar_partial", payload)
-                self.reply(chat_id, T(lang, "calendar_need_details"))
+                self.reply_prompt(chat_id, T(lang, "calendar_need_details"))
 
     def continue_partial_calendar(self, chat_id, lang, pending, action, params):
         """Complete a calendar draft without turning it into a saved note."""
@@ -2397,7 +2437,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         draft = reminders.validate_draft(merged)
         if not draft:
             store.pending_set(self.conn, chat_id, "calendar_partial", merged)
-            self.reply(chat_id, T(lang, "calendar_need_details"))
+            self.reply_prompt(chat_id, T(lang, "calendar_need_details"))
             return True
         self.do_calendar_add(chat_id, lang, draft)
         return True
@@ -2410,7 +2450,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if not fields:
             # This single forward belongs to the open calendar handoff. Falling
             # through would file it as a note — the exact production failure.
-            self.reply(chat_id, T(lang, "calendar_need_details"))
+            self.reply_prompt(chat_id, T(lang, "calendar_need_details"))
             return True
         return self.continue_partial_calendar(chat_id, lang, pending, "amend", fields)
 
@@ -2442,6 +2482,21 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         self.do_converse(chat_id, lang, text, msg_id)
 
     def dispatch(self, chat_id, msg, text):
+        prior = getattr(self, "_reminder_scope", None)
+        update_id = getattr(self, "_active_update_id", None)
+        fragment = getattr(self, "_compound_fragment_index", None)
+        scoped_text = text if fragment is None else f"fragment:{fragment}:{text}"
+        key = action_delivery.scope_for_update(update_id, scoped_text) if update_id is not None else None
+        self._reminder_scope = key
+        try:
+            if key and action_delivery.receipt(self.conn, key):
+                action_delivery.deliver_action(self, key)
+                return
+            return self._dispatch(chat_id, msg, text)
+        finally:
+            self._reminder_scope = prior
+
+    def _dispatch(self, chat_id, msg, text):
         lang = self.lang()
         # She always signals that she is working (ADR-0007): the router or an
         # ingest call is 2–20 s of silence otherwise.
@@ -2957,8 +3012,10 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                                                 "action": "multi_action",
                                                 "fragments": len(fragments)})
         self._in_compound = True
+        prior_fragment = getattr(self, "_compound_fragment_index", None)
         try:
             for i, fragment in enumerate(fragments):
+                self._compound_fragment_index = i
                 self.dispatch(chat_id, msg, fragment)
                 rest = fragments[i + 1:]
                 if rest and store.pending_get(self.conn, chat_id) is not None:
@@ -2969,6 +3026,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                     return
         finally:
             self._in_compound = False
+            self._compound_fragment_index = prior_fragment
 
     def _resume_compound(self, chat_id):
         """After a turn (a message or a button) that may have answered the card a
@@ -3009,6 +3067,9 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
 
     # -- Pending-action resolution (conversational confirmation)
 
+    @action_delivery.reminder_action(lambda self, chat_id, action, params, pending, lang:
+                                     bool(pending and pending['kind'] in {'reminder', 'reminder_fired', 'reminder_expired'}
+                                          and not (pending['kind'] == 'reminder' and action == 'amend')))
     def resolve_pending(self, chat_id, action, params, pending, lang):
         if not pending:
             self.reply(chat_id, T(lang, "nothing_pending"))
@@ -3255,6 +3316,10 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     # -- Calendar
 
     def send_to_calendar(self, chat_id, event):
+        transaction = getattr(self, "_reminder_transaction", None)
+        if transaction is not None:
+            transaction["after_commit"].append(lambda: self.send_to_calendar(chat_id, event))
+            return False
         lang = self.lang()
         if gcal.configured(self.cfg):
             try:
@@ -3576,7 +3641,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 store.pending_set(self.conn, chat_id, "boss_sensitive",
                                   {"value": value, "kind": kind, "sensitivity": sensitivity,
                                    "src_msg_id": msg_id})
-                self.reply(chat_id, T(lang, "boss_sensitive_confirm", s=sensitivity))
+                self.reply_prompt(chat_id, T(lang, "boss_sensitive_confirm", s=sensitivity))
 
     def do_style_update(self, chat_id, lang, params):
         tone = str(params.get("tone") or "").strip().lower()
@@ -3884,14 +3949,19 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         store.kv_set(conn, "backup_weekly_pins", json.dumps(pins))
         if last and not store.kv_get(conn, "backup_offsite_day"):
             store.kv_set(conn, "backup_offsite_day", last)
-        result = backup.run(self.cfg, conn, offsite_due=offsite_due, protected_names=pins)
-        if result.get("offsite") not in (None, "", "not-due", backup.OFFBOX_BLOCKED):
-            store.kv_set(conn, "backup_offsite_day", now.strftime("%Y-%m-%d"))
-            pins = (pins + [result["file"]])[-self.cfg.backup_keep:]
-            store.kv_set(conn, "backup_weekly_pins", json.dumps(pins))
-        store.kv_set(conn, "backup_day", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-        store.kv_set(conn, "backup_retry_at", "")
-        return result
+        def completed(result):
+            if result.get("offsite") not in (None, "", "not-due", backup.OFFBOX_BLOCKED):
+                store.kv_set(conn, "backup_offsite_day", now.strftime("%Y-%m-%d"))
+                kept_pins = (pins + [result["file"]])[-self.cfg.backup_keep:]
+                store.kv_set(conn, "backup_weekly_pins", json.dumps(kept_pins))
+            store.kv_set(conn, "backup_day", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+            store.kv_set(conn, "backup_retry_at", "")
+            return result
+
+        if getattr(self, "background_maintenance", False):
+            return backup.start_background(self.cfg, conn, offsite_due=offsite_due,
+                                           protected_names=pins, finish=completed)
+        return completed(backup.run(self.cfg, conn, offsite_due=offsite_due, protected_names=pins))
 
     # A failed restore self-check must not re-enqueue on every sweep for the rest
     # of the month: hold it a day (the job's own two attempts still run).
@@ -3919,15 +3989,23 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         (log + a `backup_restore_failed` issue); here it only arms the backoff so a
         permanent cause (a missing key file) doesn't re-snapshot-check hourly."""
         now = datetime.now(timezone.utc)
-        try:
-            result = backup.verify_restore(self.cfg, conn)
-        except Exception:
+        def completed(result):
+            store.kv_set(conn, "backup_verify_month", now.strftime("%Y-%m"))
+            store.kv_set(conn, "backup_verify_retry_at", "")
+            return result
+
+        def failed(_error):
             store.kv_set(conn, "backup_verify_retry_at",
                          (now + timedelta(hours=self.BACKUP_VERIFY_RETRY_HOURS)).isoformat())
+
+        if getattr(self, "background_maintenance", False):
+            return backup.start_verify_background(self.cfg, conn, finish=completed, failed=failed)
+        try:
+            result = backup.verify_restore(self.cfg, conn)
+        except Exception as error:
+            failed(error)
             raise
-        store.kv_set(conn, "backup_verify_month", now.strftime("%Y-%m"))
-        store.kv_set(conn, "backup_verify_retry_at", "")
-        return result
+        return completed(result)
 
     # A failed consolidation job must not be re-queued on every tick; the weekly
     # stamp is written only by a SUCCESSFUL run (ADR-0012), this one by the enqueue.
@@ -3973,12 +4051,17 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         except ValueError:
             run_day = None
         report = {}
-        n = memory_curator.consolidate(conn, self.cfg, now=run_day, report=report)
-        pairs = report.get("pairs") or []
-        log("memory consolidation: merged %d item(s)%s" % (
-            n, ("; " + ", ".join(f"{keep}→{drop}" for keep, drop in pairs)) if pairs else ""))
-        store.kv_set(conn, "memory_consolidate_at", datetime.now(timezone.utc).isoformat())
-        return {"merged": n, "pairs": pairs}
+        def completed(n):
+            pairs = report.get("pairs") or []
+            log("memory consolidation: merged %d item(s)%s" % (
+                n, ("; " + ", ".join(f"{keep}→{drop}" for keep, drop in pairs)) if pairs else ""))
+            store.kv_set(conn, "memory_consolidate_at", datetime.now(timezone.utc).isoformat())
+            return {"merged": n, "pairs": pairs}
+
+        if getattr(self, "background_maintenance", False):
+            steps = memory_curator.consolidate_steps(conn, self.cfg, now=run_day, report=report)
+            return runtime.InferenceJob(self.cfg, conn, steps, finish=completed)
+        return completed(memory_curator.consolidate(conn, self.cfg, now=run_day, report=report))
 
     def do_memory_cleanup(self, chat_id, lang):
         """On-demand: 'почисти память' — fold duplicate remembered items now.
@@ -4008,6 +4091,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                  weekday=review.weekday_name(lang, self.cfg.review_weekday),
                  date=local.strftime("%d.%m"), time=local.strftime("%H:%M"))
 
+    @action_delivery.caller_finalized
     def check_proactive(self):
         """Evaluate the proactive heartbeat at most once per interval; it sends
         at most one gentle, suggestion-only nudge (throttle/quiet-hours/manifest
@@ -4509,6 +4593,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     SCHED_SEND_RETRY_MINUTES = 15
     SCHED_SEND_MAX_ATTEMPTS = 3
 
+    @action_delivery.caller_finalized
     def _send_all(self, text):
         """Send to every allowed chat; True when at least one delivery succeeded
         (reply() swallows TelegramError and returns None on failure)."""
@@ -4544,6 +4629,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         retry_at = store.kv_get(self.conn, f"{key}_retry_at")
         return bool(retry_at) and retry_at > now.isoformat()
 
+    @action_delivery.caller_finalized
     def check_morning_brief(self):
         """Opt-in daily brief (off unless the boss turned it on): once a day at/
         after the morning hour, respecting proactive on/off and quiet hours."""
@@ -4708,7 +4794,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 return
             store.pending_set(self.conn, chat_id, "journal_edit", {"row_id": row_id})
             self.answer_callback(callback_id, "✏️")
-            self.reply(chat_id, T(lang, "journal_edit_prompt"))
+            self.reply_prompt(chat_id, T(lang, "journal_edit_prompt"))
             return
         if kind == "discard":
             if ours:
@@ -4903,7 +4989,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             event_at = journals.occurred_at(text, datetime.now(timezone.utc).isoformat(),
                                             self.tz_offset(), invitation_at=previous.get("occurred_at") or row["received_at"])
         except (ValueError, OverflowError):
-            self.reply(chat_id, T(lang, "journal_date_needed"))
+            self.reply_prompt(chat_id, T(lang, "journal_date_needed"))
             store.pending_set(self.conn, chat_id, "journal_edit", {"row_id": row_id})
             return
         store.kv_set(self.conn, f"journal_draft:{row_id}",
@@ -4919,7 +5005,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         lang = self.lang()
         draft = self._journal_draft(row["id"]) or {}
         if store.is_journal(self.conn, category) and draft.get("date_error"):
-            self.reply(chat_id, T(lang, "journal_date_needed"))
+            self.reply_prompt(chat_id, T(lang, "journal_date_needed"))
             return
         canonical = store.ensure_category(self.conn, category)
         # The confirm boundary: for a structured journal the stashed validated
@@ -4990,7 +5076,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 "source_title": row["forward_origin_title"],
                 "category": category,
             })
-            self.reply(chat_id, T(lang, "habit_proposal", n=streak,
+            self.reply_prompt(chat_id, T(lang, "habit_proposal", n=streak,
                                   source=row["forward_origin_title"] or source,
                                   category=category))
 

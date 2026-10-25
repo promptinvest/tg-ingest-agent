@@ -226,8 +226,10 @@ def build_system(conn, lang, extra_context=None):
         )
 
     parts.append(
-        "Keep replies short and human — usually a sentence or three, like a text "
-        "message. No bullet lists, no headings, no robotic sign-offs. Be warm."
+        "Keep replies short and human by default — usually a sentence or three, like a text "
+        "message. Follow his current requested format and detail. For a plan, comparison "
+        "or substantial explanation, use a clear list or headings when they help. "
+        "No robotic sign-offs. Be warm."
     )
     parts.append(
         "NEVER narrate physical actions or stage directions in asterisks "

@@ -171,8 +171,11 @@ def run_once(root=ROOT, config=CONFIG):
         request_name = old.name.replace(".started.json", ".json")
         if not (spool / "requests" / request_name).exists() and time.time() - old.stat().st_mtime > 86400:
             old.unlink()
-    paths = sorted((spool / "requests").glob("w_*.json"), key=_queue_order)[:20]
+    paths = sorted((spool / "requests").glob("w_*.json"), key=_queue_order)
+    processed = 0
     for path in paths:
+        if processed >= 20:
+            break
         if fleet_lifecycle.executor_gate(spool):
             return
         if not re.fullmatch(r"w_[0-9]+_[0-9]+_[a-f0-9]{32}\.json", path.name):
@@ -213,6 +216,12 @@ def run_once(root=ROOT, config=CONFIG):
                 # nonce-bound cancellation must prevent any new dispatch too.
                 reply = fleet_queue.terminal(envelope, "cancelled")
             if reply is None:
+                protocol.request(envelope["input"], catalog)
+            # Count an eligible attempt before dispatch, including a later
+            # transport/publication failure. Old or malformed files consume no
+            # slot, while the original twenty-operation bound still holds.
+            processed += 1
+            if reply is None:
                 try:
                     if control is None:
                         result = execute(catalog, transport, envelope["input"], root)
@@ -235,6 +244,8 @@ def run_once(root=ROOT, config=CONFIG):
         except Exception:
             # Malformed requests/receipts never run or get silently rewritten.
             # The owner records a bounded unavailable/timeout and does not replay.
+            # Files rejected before dispatch and retained terminal receipts do
+            # not consume a slot or hide every later request behind old failures.
             continue
 
 

@@ -9,6 +9,7 @@ is the Agent: `self.reply`/`self.conn`/`self.finalize`/`self.tz_offset()`/`self.
 all resolve on it exactly as before. Pure relocation, no behaviour change.
 """
 import json
+import action_delivery
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -325,7 +326,7 @@ class NotesMixin:
         hour = journals.parse_prompt_hour(params.get("time"), default=21)
         store.pending_set(self.conn, chat_id, "journal_prompt",
                           {"slug": gdef["slug"], "hour": hour, "display": display})
-        self.reply(chat_id, T(lang, "journal_prompt_confirm", category=display,
+        self.reply_prompt(chat_id, T(lang, "journal_prompt_confirm", category=display,
                               hour=hour))
 
     # -- notes / inbox (stage 2) ----------------------------------------------
@@ -485,6 +486,7 @@ class NotesMixin:
             buttons.append({"text": T(lang, "page_next"), "callback_data": f"pg|{token}|{cur + 1}"})
         return {"inline_keyboard": [buttons]}
 
+    @action_delivery.caller_finalized
     def do_list_items(self, chat_id, lang, params):
         """Browse saved notes with inline ◀/▶ pagination (edits one message in place instead
         of flooding the chat or capping the list at 10). An explicit `state`
@@ -557,6 +559,8 @@ class NotesMixin:
             "learning_lessons": ("правил обучения" if ru else "learned procedures"),
             "updates_scrubbed": ("служебных копий входящих сообщений" if ru else
                                  "raw copies of incoming messages"),
+            "reply_deliveries": ("служебных копий ответов" if ru else
+                                  "stored reply deliveries"),
             "fleet_requests": ("запросов о флоте" if ru else "fleet requests"),
             "fleet_events": ("событий/отчётов флота" if ru else "fleet events/reports"),
             "fleet_context_bindings": ("привязок контекста флота" if ru else "fleet context bindings"),
@@ -593,6 +597,7 @@ class NotesMixin:
             info.update(fleet_lifecycle._counts(hook()))
         return info
 
+    @action_delivery.purge_control
     def do_purge(self, chat_id, lang, params):
         scope = str(params.get("scope") or "").strip().lower()
         if scope not in store.PURGE_SCOPES:
@@ -616,7 +621,7 @@ class NotesMixin:
         if not any(info.get(k) for k in ("messages", "reminders",
                                          "reminders_closed", "categories",
                                          "issues", "feedback", "conversation",
-                                         "note_outcomes", "updates_scrubbed",
+                                         "note_outcomes", "updates_scrubbed", "reply_deliveries",
                                          "assistant_tasks", "task_artifacts",
                                          "task_feedback", "evaluation_cases",
                                          "evaluation_runs",
@@ -646,6 +651,7 @@ class NotesMixin:
                               impact=self._purge_impact_text(lang, anticipated),
                               phrase=phrase), record=False)
 
+    @action_delivery.purge_control
     def resolve_purge(self, chat_id, lang, pending, text):
         payload = pending["payload"]
         store.pending_clear(self.conn, chat_id)
@@ -1094,7 +1100,7 @@ class NotesMixin:
         store.pending_set(self.conn, chat_id, "note_retitle",
                           {"row_id": row["id"], "note_no": note_no,
                            "new_summary": new_summary})
-        self.reply(chat_id, T(
+        self.reply_prompt(chat_id, T(
             lang, "note_edit_confirm", row_id=note_no,
             category=row["category"] or row["suggested_category"] or "?",
             old=self._ellipsize(old.replace("\n", " "), 200) or "—",
@@ -1335,6 +1341,7 @@ class NotesMixin:
                 return [row] if row is not None else []
         return None
 
+    @action_delivery.caller_finalized
     def do_note_review(self, chat_id, lang, params=None, preset_ids=None):
         """«Покажи, что стоит пересмотреть»: at most three snapshotted items,
         each with a deterministic reason. Suggestion-only — every action goes
@@ -1445,7 +1452,7 @@ class NotesMixin:
             ids = [r["id"] for r in rows]
             store.pending_set(self.conn, chat_id, "note_archive", {"row_ids": ids})
             listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
-            self.reply(chat_id, T(lang, "note_archive_confirm_multi",
+            self.reply_prompt(chat_id, T(lang, "note_archive_confirm_multi",
                                   n=len(ids), ids=listing))
             return
         purpose = str(params.get("purpose") or "").strip().lower()
@@ -1506,11 +1513,11 @@ class NotesMixin:
             row = rows[0]
             store.pending_set(self.conn, chat_id, "delete", {"row_ids": [row["id"]]})
             snippet = (row["summary"] or row["raw_text"] or "")[:60].replace("\n", " ")
-            self.reply(chat_id, T(lang, "delete_confirm", row_id=self.note_no(row["id"]),
+            self.reply_prompt(chat_id, T(lang, "delete_confirm", row_id=self.note_no(row["id"]),
                                   category=row["category"] or row["suggested_category"] or "?",
                                   snippet=snippet))
         else:
             ids = [r["id"] for r in rows]
             store.pending_set(self.conn, chat_id, "delete", {"row_ids": ids})
             listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
-            self.reply(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
+            self.reply_prompt(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))

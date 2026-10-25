@@ -1,5 +1,37 @@
 # Cara — Solution Specification
 
+## October 25 - Personal assistant reliability candidate
+
+ADR-0034 extends existing reminder, delivery and maintenance mechanisms for the
+owner's architecture-review implementation request. This is a source candidate;
+the [dated release record](docs/cara-assistant-reliability-2026-10-25.md) separates
+implementation, offline verification, model evidence and installed acceptance.
+
+`action_delivery.py` adds source-bound action receipts and outbound intents.
+Reminder effect, exact confirmation consumption and result intents commit once;
+replay recovers that same result. Definite delivery rejection can retry transport;
+uncertain delivery cannot rerun an effect or automatically duplicate a send.
+New copies participate in existing purge semantics, with no old-send backfill.
+
+Maintenance handlers may return owner-thread `runtime.PendingJob` sessions.
+One bounded background slot performs file/transport work without the main SQLite
+connection; all accounting, memory merges, cadence stamps and job transitions
+settle on the owner thread. Unknown dispatched paid work is terminally contained
+after a crash. A cooperative inference wait heartbeat services due reminders
+without nested inbound dispatch, stealing confirmations or changing the current
+turn's reminder target. Original limits, budgets and synchronous helper APIs stay.
+
+Conversation and routing receive a compact current-work projection from existing,
+source-valid tasks, pending cards and reminders. This read-only projection creates
+no objective or permission. Recent equal-priority guidance survives crowded
+profiles, and current requested structure/detail overrides concise defaults.
+Fleet queue fairness and an exact terminal stale-authority status improve
+follow-through while preserving tampered-source silence and no automatic replay.
+
+Explicit independent-artifact recovery verification reports the limits of its
+provenance. Local restore checks remain distinct from verified off-box recovery;
+neither documentation nor a successful decrypt proves key escrow.
+
 ## October 25 - Notification and gratitude source binding
 
 Extend the existing reminder/journal services rather than add a new skill or
@@ -1658,7 +1690,8 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   for final-action wording, and a catalogue-wide test checks every language and
   variant; Cara won't claim a real-world action she didn't perform.
 - Off-box DB snapshots are encrypted before leaving the host; plaintext backup
-  uploads are rejected and the recovery key is held outside the VPS/repo.
+  uploads are rejected. An independently retained recovery key outside the VPS/repo
+  must be verified; its existence is not inferred from a successful local check.
 - Secrets in `/etc/tg-ingest-agent.env` (0600), staged via files during rotation
   — never in argv, shell history, or the journal; access keys redacted from
   logged HTTP errors.

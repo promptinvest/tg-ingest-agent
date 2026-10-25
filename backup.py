@@ -14,12 +14,14 @@ Runs as a durable weekly-by-default job ("maintenance"/"db_backup"): retried on 
 survives restarts, never blocks the live request path.
 """
 import gzip
+import hashlib
 import os
 import re
 import shutil
 import sqlite3
 import stat
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -232,24 +234,32 @@ def encrypt_snapshot(cfg, gz_path):
     return enc_path
 
 
-def _size_alert(conn, size):
+def _size_alert(conn, size, events=None):
     """One issue row when the encrypted snapshot nears the Telegram cap — not one
     per day: a kv flag holds the announced state (budget-notice pattern) and is
     cleared once the size drops back."""
-    if conn is None:
+    if conn is None and events is None:
         return
-    warned = store.kv_get(conn, "backup_size_warned") == "1"
+    warned = (events["size_warned"] if events is not None else
+              store.kv_get(conn, "backup_size_warned") == "1")
     if size > TG_UPLOAD_WARN:
         if not warned:
-            store.issue_add(conn, None, "backup_offbox_near_limit",
-                            f"encrypted snapshot {size} bytes — nearing the "
-                            f"{TG_UPLOAD_LIMIT} byte Telegram off-box limit")
-            store.kv_set(conn, "backup_size_warned", "1")
+            detail = (f"encrypted snapshot {size} bytes — nearing the "
+                      f"{TG_UPLOAD_LIMIT} byte Telegram off-box limit")
+            if events is not None:
+                events["issues"].append(("backup_offbox_near_limit", detail))
+                events["kv"].append(("backup_size_warned", "1"))
+            else:
+                store.issue_add(conn, None, "backup_offbox_near_limit", detail)
+                store.kv_set(conn, "backup_size_warned", "1")
     elif warned:
-        store.kv_set(conn, "backup_size_warned", "0")
+        if events is not None:
+            events["kv"].append(("backup_size_warned", "0"))
+        else:
+            store.kv_set(conn, "backup_size_warned", "0")
 
 
-def offsite(cfg, encrypted_path, conn=None):
+def offsite(cfg, encrypted_path, conn=None, *, events=None):
     """Copy the snapshot off-box. Returns a short description of where it
     went, OFFBOX_BLOCKED when the only target refuses it, or '' when no off-box
     target is configured/possible. Raises (StorageError / TelegramError) on a
@@ -270,12 +280,14 @@ def offsite(cfg, encrypted_path, conn=None):
         # review) and report the blocked state to the caller.
         if len(data) > TG_UPLOAD_LIMIT:
             log(f"backup too big for the Telegram off-box copy ({len(data)} bytes)")
-            if conn is not None:
-                store.issue_add(conn, None, "backup_offbox_blocked",
-                                f"encrypted snapshot {len(data)} bytes exceeds the "
-                                f"{TG_UPLOAD_LIMIT} byte Telegram limit — no off-box copy")
+            detail = (f"encrypted snapshot {len(data)} bytes exceeds the "
+                      f"{TG_UPLOAD_LIMIT} byte Telegram limit — no off-box copy")
+            if events is not None:
+                events["issues"].append(("backup_offbox_blocked", detail))
+            elif conn is not None:
+                store.issue_add(conn, None, "backup_offbox_blocked", detail)
             return OFFBOX_BLOCKED
-        _size_alert(conn, len(data))
+        _size_alert(conn, len(data), events)
         tg_send_document(cfg.fleet_notify_token, cfg.fleet_notify_chat_id,
                          encrypted_path.name, data,
                          caption=f"🗄 {cfg.fleet_notify_label} — encrypted DB backup",
@@ -284,7 +296,7 @@ def offsite(cfg, encrypted_path, conn=None):
     return ""  # unreachable, kept defensive for future target types
 
 
-def run(cfg, conn, *, offsite_due=True, protected_names=()):
+def run(cfg, conn, *, offsite_due=True, protected_names=(), events=None):
     """The scheduled backup job body; returns a result dict for the job log.
 
     Pings the watchdog between its phases (2026-07-27): `runtime.drain` pings
@@ -314,7 +326,11 @@ def run(cfg, conn, *, offsite_due=True, protected_names=()):
     common.watchdog_ping()
     upload_path = encrypt_snapshot(cfg, gz) if offsite_configured(cfg) else gz
     common.watchdog_ping()
-    where = offsite(cfg, upload_path, conn) if offsite_due else "not-due"
+    if offsite_due:
+        where = (offsite(cfg, upload_path, events=events) if events is not None
+                 else offsite(cfg, upload_path, conn))
+    else:
+        where = "not-due"
     blocked = where == OFFBOX_BLOCKED
     if blocked:
         log("backup WARNING: the encrypted snapshot is too big for the only "
@@ -485,7 +501,7 @@ def integrity_check(db_path):
     return len(tables)
 
 
-def verify_restore(cfg, conn=None):
+def verify_restore(cfg, conn=None, *, events=None):
     """Prove the newest snapshot restores. Returns a result dict for the job log;
     raises when it does not — ANY failure (BackupRestoreError, or an OSError from
     the scratch copy) is logged and recorded as a `backup_restore_failed` issue
@@ -550,7 +566,9 @@ def verify_restore(cfg, conn=None):
         # `job_failed` as the only trace, and only after the retries ran out.
         detail = str(exc) or repr(exc)
         log(f"backup restore self-check FAILED: {detail}")
-        if conn is not None:
+        if events is not None:
+            events["issues"].append(("backup_restore_failed", str(exc)[:300]))
+        elif conn is not None:
             try:
                 store.issue_add(conn, None, "backup_restore_failed", str(exc)[:300])
             except Exception as issue_exc:  # noqa: BLE001
@@ -562,3 +580,125 @@ def verify_restore(cfg, conn=None):
         raise
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _background_events(conn):
+    return {"size_warned": store.kv_get(conn, "backup_size_warned") == "1",
+            "issues": [], "kv": []}
+
+
+def _apply_background_events(conn, events):
+    for kind, detail in events["issues"]:
+        store.issue_add(conn, None, kind, detail)
+    for key, value in events["kv"]:
+        store.kv_set(conn, key, value)
+
+
+def start_background(cfg, conn, *, offsite_due=True, protected_names=(), finish=None,
+                     failed=None):
+    """Prepare on the owner; snapshot using a separately opened read-only source.
+
+    Only immutable configuration/pins and a plain event buffer reach the worker.
+    It cannot write usage, jobs, preferences or issue rows. Existing encryption,
+    weekly offsite policy and retention are unchanged; the caller still owns the
+    success/retry stamps, through owner-thread finish/failed callbacks.
+    """
+    import copy
+    import runtime
+    worker_cfg = copy.copy(cfg)
+    db_uri = cfg.db_path.resolve().as_uri() + "?mode=ro"
+    pins = tuple(protected_names)
+    events = _background_events(conn)
+
+    def work():
+        source = sqlite3.connect(db_uri, uri=True, timeout=5)
+        try:
+            source.execute("PRAGMA query_only=ON")
+            return run(worker_cfg, source, offsite_due=offsite_due,
+                       protected_names=pins, events=events)
+        finally:
+            source.close()
+
+    def complete(result):
+        _apply_background_events(conn, events)
+        return finish(result) if finish else result
+
+    def reject(error):
+        _apply_background_events(conn, events)
+        if failed:
+            failed(error)
+
+    return runtime.BackgroundJob(work, finish=complete, failed=reject)
+
+
+def start_verify_background(cfg, conn, *, finish=None, failed=None):
+    """Keep the existing local restore check, moving only file work off-thread."""
+    import copy
+    import runtime
+    worker_cfg = copy.copy(cfg)
+    events = _background_events(conn)
+
+    def complete(result):
+        _apply_background_events(conn, events)
+        return finish(result) if finish else result
+
+    def reject(error):
+        _apply_background_events(conn, events)
+        if failed:
+            failed(error)
+
+    return runtime.BackgroundJob(lambda: verify_restore(worker_cfg, events=events),
+                                 finish=complete, failed=reject)
+
+
+def verify_independent_recovery(artifact, key_file, expected_sha256, *,
+                                max_bytes=1024 * 1024 * 1024):
+    """Explicit rehearsal of an already retrieved recovery artifact and key.
+
+    No network, scheduler hook, live database access or secret copying. The
+    operator supplies the independently obtained paths and trusted archive hash;
+    a successful result proves those supplied bytes decrypt and restore here.
+    It does not infer key escrow, off-box provenance or current backup freshness.
+    The existing scheduled local self-check remains unchanged.
+    """
+    from types import SimpleNamespace
+    if not isinstance(expected_sha256, str) or not re.fullmatch("[a-f0-9]{64}", expected_sha256):
+        raise BackupRestoreError("an exact trusted artifact SHA256 is required")
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or not 1 <= max_bytes <= 4 * 1024**3:
+        raise BackupRestoreError("invalid independent recovery expansion bound")
+    artifact, key_file = Path(artifact).resolve(), Path(key_file).resolve()
+    if not artifact.is_file() or not key_file.is_file() or artifact == key_file:
+        raise BackupRestoreError("separate existing artifact and key files are required")
+    if not artifact.name.endswith(".db.gz.enc"):
+        raise BackupRestoreError("expected an encrypted Cara recovery archive")
+    size = artifact.stat().st_size
+    if size > max_bytes:
+        raise BackupRestoreError("recovery artifact exceeds the explicit byte bound")
+    with tempfile.TemporaryDirectory(prefix="cara-independent-restore-") as scratch:
+        scratch = Path(scratch)
+        os.chmod(scratch, 0o700)
+        if shutil.disk_usage(scratch).free < max_bytes + 2 * size + RESTORE_FREE_MARGIN:
+            raise BackupRestoreError("not enough space for the bounded independent restore")
+        # Hash the private encrypted working copy, so replacement of the supplied
+        # source between hashing and openssl cannot substitute unverified bytes.
+        frozen = scratch / "supplied.db.gz.enc"
+        digest = hashlib.sha256()
+        with artifact.open("rb") as source, frozen.open("xb") as copied:
+            os.chmod(frozen, 0o600)
+            total = 0
+            for chunk in iter(lambda: source.read(1 << 20), b""):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise BackupRestoreError("recovery artifact exceeds the explicit byte bound")
+                digest.update(chunk)
+                copied.write(chunk)
+        if digest.hexdigest() != expected_sha256:
+            raise BackupRestoreError("recovery artifact SHA256 mismatch")
+        gz_path, db_path = scratch / "restored.db.gz", scratch / "restored.db"
+        _decrypt_snapshot(SimpleNamespace(backup_encryption_key_file=key_file), frozen, gz_path)
+        os.chmod(gz_path, 0o600)
+        written = _gunzip(gz_path, db_path, max_bytes)
+        tables = integrity_check(db_path)
+    return {"artifact_sha256": expected_sha256, "bytes": written, "tables": tables,
+            "integrity": "ok", "scope": "operator-supplied artifact and key",
+            "offbox_provenance_verified": False}

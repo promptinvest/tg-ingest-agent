@@ -71,6 +71,60 @@ class FleetQueueLifecycle(unittest.TestCase):
     def run_once(self):
         cara_fleet.run_once(self.root, self.config)
 
+    def test_twenty_retained_terminal_requests_do_not_starve_a_fresh_request(self):
+        originals = []
+        for number in range(1, 21):
+            envelope = self.request(number, lifecycle=self.lifecycle(age=300))
+            path = self.spool / "requests" / (envelope["job_id"] + ".json")
+            os.utime(path, (number, number))
+            originals.append((path, path.read_bytes()))
+        with mock.patch.object(cara_fleet, "remote", side_effect=AssertionError("expired work dispatched")):
+            self.run_once()
+        terminal_bytes = {path.name: (self.spool / "results" / path.name).read_bytes()
+                          for path, _ in originals}
+        newest = self.request(21)
+        os.utime(self.spool / "requests" / (newest["job_id"] + ".json"), (21, 21))
+        with mock.patch.object(cara_fleet, "remote", side_effect=lambda transport, host, request: observation(host)) as remote:
+            self.run_once()
+            self.run_once()
+        self.assertEqual(remote.call_count, len(inventory()["hosts"]))
+        self.assertEqual(self.result(newest)["status"], "ok")
+        for path, original in originals:
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual((self.spool / "results" / path.name).read_bytes(), terminal_bytes[path.name])
+
+    def test_malformed_older_requests_do_not_consume_the_dispatch_batch(self):
+        originals = []
+        for number in range(1, 21):
+            envelope = self.request(number)
+            path = self.spool / "requests" / (envelope["job_id"] + ".json")
+            path.write_bytes(b"{malformed retained request")
+            os.utime(path, (number, number))
+            originals.append(path)
+        newest = self.request(21)
+        os.utime(self.spool / "requests" / (newest["job_id"] + ".json"), (21, 21))
+        with mock.patch.object(cara_fleet, "remote", side_effect=lambda transport, host, request: observation(host)) as remote:
+            self.run_once()
+        self.assertEqual(remote.call_count, len(inventory()["hosts"]))
+        self.assertEqual(self.result(newest)["status"], "ok")
+        for path in originals:
+            self.assertEqual(path.read_bytes(), b"{malformed retained request")
+            self.assertFalse((self.spool / "results" / path.name).exists())
+
+    def test_new_terminal_receipts_still_have_a_twenty_request_batch_limit(self):
+        envelopes = []
+        for number in range(1, 22):
+            envelope = self.request(number, lifecycle=self.lifecycle(age=300))
+            os.utime(self.spool / "requests" / (envelope["job_id"] + ".json"), (number, number))
+            envelopes.append(envelope)
+        with mock.patch.object(cara_fleet, "remote", side_effect=AssertionError("expired work dispatched")):
+            self.run_once()
+            self.assertTrue(all((self.spool / "results" / (value["job_id"] + ".json")).exists()
+                                for value in envelopes[:20]))
+            self.assertFalse((self.spool / "results" / (envelopes[-1]["job_id"] + ".json")).exists())
+            self.run_once()
+        self.assertEqual(self.result(envelopes[-1])["error"], "queue_expired")
+
     def test_executor_readiness_is_exact_immutable_and_source_bound(self):
         self.assertIsNone(queue.readiness(self.cfg))
         with self.assertRaises(queue.QueueError):

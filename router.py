@@ -9,6 +9,7 @@ JSON only; transactional/system text always comes from texts.py templates.
 """
 import json
 import re
+import relationship
 from datetime import datetime, timedelta, timezone
 
 import common
@@ -525,6 +526,9 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
         if fleet.resolved_view(conn, chat_id, text):
             return {"action": "fleet_investigate", "params": {}, "confidence": 1.0}
     system = build_system_prompt(cfg, pending)
+    work = relationship.current_work_context(conn, chat_id)
+    if work:
+        system += "\n" + work + "\nThe current message chooses the route; open work never implies confirmation."
     if getattr(cfg, "fleet_enabled", False):
         import fleet
         try:

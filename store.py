@@ -971,9 +971,16 @@ class _CachedConn(sqlite3.Connection):
     A plain `sqlite3.Connection` does NOT support weak references, so the cache
     above cannot key on it directly (and `weakref.finalize` is unavailable for
     the same reason). A subclass is a heap type and therefore weakly
-    referenceable; it adds nothing else. A raw `sqlite3.connect()` connection
+    referenceable. A raw `sqlite3.connect()` connection
     still works everywhere — it simply goes uncached.
     """
+
+    def commit(self):
+        # Only action_delivery.local_transaction owns this flag. Existing
+        # reminder helpers may request commits; the outer action commits their
+        # effects, consumed card and outbound intent as one local transaction.
+        if not getattr(self, "_local_action_transaction", False):
+            return super().commit()
 
 VEC_GEN_KEY = "vec_gen"
 
@@ -1483,7 +1490,8 @@ def open_db(path):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
+    from action_delivery import SCHEMA as DELIVERY_SCHEMA
+    conn.executescript(SCHEMA + DELIVERY_SCHEMA)
     _migrate(conn)
     conn.commit()
     return conn
@@ -3962,6 +3970,9 @@ def purge_preview(conn, scope, category=None):
         info["note_outcomes"] = count("SELECT COUNT(*) FROM note_outcomes")
         info["updates_scrubbed"] = count(
             "SELECT COUNT(*) FROM telegram_updates " + _SCRUBBABLE_UPDATES)
+        delivery_count = count("SELECT COUNT(*) FROM reply_outbox WHERE record_conversation=1 AND params_json!='{}'")
+        if delivery_count:
+            info["reply_deliveries"] = delivery_count
         info["assistant_tasks"] = count("SELECT COUNT(*) FROM assistant_tasks")
         info["task_artifacts"] = count("SELECT COUNT(*) FROM task_artifacts")
         info["task_feedback"] = count("SELECT COUNT(*) FROM task_feedback")
@@ -4065,6 +4076,11 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
         # accepted residue rather than a second verbatim archive.)
         conn.execute("UPDATE telegram_updates SET payload = '{}', last_error = NULL "
                      + _SCRUBBABLE_UPDATES)
+        # Keep opaque delivery/action identities for dedupe, never their deleted
+        # content. Queued messages from before the purge cannot send afterwards.
+        conn.execute("UPDATE reply_outbox SET params_json='{}',metadata_json='{}',result_json=NULL,error=NULL,record_conversation=0,"
+                     "delivery_key=CASE WHEN delivery_key LIKE 'reminder-fire:%' OR delivery_key LIKE 'reminder-reping:%' THEN 'purged:'||id ELSE delivery_key END,"
+                     "state=CASE WHEN state IN ('pending','sending') THEN 'failed' ELSE state END")
         _purge_all_message_kv(conn)
         _purge_reminder_kv(conn)
         _reset_note_counters(conn)
@@ -4105,6 +4121,11 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
         # ones while months of closed titles stayed behind was the same broken
         # promise one scope over. Cascade takes reminder_events.
         conn.execute("DELETE FROM reminders")
+        conn.execute("UPDATE reply_outbox SET params_json='{}',metadata_json='{}',result_json=NULL,error=NULL,record_conversation=0,"
+                     "delivery_key=CASE WHEN delivery_key LIKE 'reminder-fire:%' OR delivery_key LIKE 'reminder-reping:%' THEN 'purged:'||id ELSE delivery_key END,"
+                     "state=CASE WHEN state IN ('pending','sending') THEN 'failed' ELSE state END "
+                     "WHERE delivery_key LIKE 'reminder-fire:%' OR delivery_key LIKE 'reminder-reping:%' "
+                     "OR action_key IN (SELECT action_key FROM action_receipts)")
         _purge_reminder_kv(conn)
     elif scope == "messages":
         protected = _non_journal_message_ids(conn)  # journals are spared

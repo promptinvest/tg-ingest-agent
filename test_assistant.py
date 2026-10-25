@@ -8765,12 +8765,11 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
         self.assertGreater(row["due_utc"], now.isoformat())   # recurrence advanced
 
     def test_a_restart_during_the_outage_refires_once_then_stamps(self):
-        # The owed map is in-memory BY DESIGN — the database is the broken
-        # component, so there is nowhere durable to write it. The documented
-        # other half of that choice (code comment + CARA.md) was untested: a
-        # process death during the outage loses the map, and the new process
-        # re-fires the delivered-but-unstamped alarm exactly ONCE
-        # (at-least-once), then stamps (2026-07-27).
+        # Legacy, pre-outbox delivery has only the in-memory owed map. A
+        # process death during that historical outage loses its sole evidence;
+        # current startup must still re-fire that UNRECORDED alarm exactly
+        # once, then stamp it (2026-07-27). Newly recorded outbox sends have a
+        # different, explicit ambiguity contract, tested in test_action_delivery.
         now = datetime.now(timezone.utc)
         rid = store.reminder_add(self.agent.conn, 111, "позвонить в клинику",
                                  (now - timedelta(minutes=1)).isoformat(), "none")
@@ -8781,11 +8780,23 @@ class CrashLoopContainment20260725Tests(unittest.TestCase):
                 sends.append(payload["text"])
             return {"message_id": len(sends)}
 
+        def legacy_reply(chat_id, text, reply_to=None, reply_markup=None, record=True):
+            # Model the actual pre-outbox boundary, rather than deleting a new
+            # receipt or weakening the original two-send/recovered-stamp checks.
+            sent = self.mod.tg_call(self.cfg.token, "sendMessage", {
+                "chat_id": chat_id, "text": text[:4000],
+                "reply_to_message_id": reply_to, "reply_markup": reply_markup})
+            if record:
+                store.convo_add(self.agent.conn, chat_id, "bot", text)
+            return sent
+
         with mock.patch.object(self.mod, "tg_call", side_effect=fake_tg_call):
             with mock.patch.object(store, "convo_add", side_effect=self._readonly_db), \
-                    mock.patch.object(store, "pending_get", side_effect=self._readonly_db):
+                    mock.patch.object(store, "pending_get", side_effect=self._readonly_db), \
+                    mock.patch.object(self.agent, "reply", side_effect=legacy_reply):
                 with self.assertRaises(sqlite3.OperationalError):
                     self.agent.fire_due_reminders()   # delivered, stamp owed
+            self.assertEqual(self.agent.conn.execute("SELECT COUNT(*) FROM reply_outbox").fetchone()[0], 0)
             # The process dies here; the in-memory owed map dies with it.
             second = self.mod.Agent(self.cfg)
             try:
