@@ -1,6 +1,6 @@
 # ADR-0034: Reliable action outcomes and personal-assistant continuity
 
-- Status: Accepted; implementation candidate, verification/deployment pending
+- Status: Implemented and deployed `ee1a319`; accepted 2026-10-25 11:37:18 UTC
 - Date: 2026-10-25
 - Authority: owner “implement these fixes” after the current architecture review;
   primary purpose is the owner's personal AI assistant. Implementation includes
@@ -36,3 +36,14 @@ a fresh protected deployment window/package. Prompt/context changes cannot be
 described as unchanged-model-facing-source qualification.
 
 See [release record](../cara-assistant-reliability-2026-10-25.md).
+
+## Status log
+
+- 2026-10-25 11:37:18 UTC: guarded acceptance completed for `ee1a319`, build
+  `de3e62ab43f8`. Exact-source offline/CI/model qualification, additive migration
+  and stopped original-data parity, namespace/MCP/scoped reads, restart, health
+  and the native once-only notice pass. The failed first transition remains;
+  separate forward completion corrects only the authenticated Daily Lingo release
+  binding in one host policy, with no reinstall, migration or additional model
+  qualification. The owner does not know the independent artifact/key locations;
+  recovery after host loss remains unverified.

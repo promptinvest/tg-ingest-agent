@@ -1,11 +1,14 @@
 # Cara — Capabilities, Features & Architecture
 
-## October 25 - Personal assistant reliability candidate
+## October 25 - Personal assistant reliability accepted
 
 The owner requested implementation of the architecture-review fixes, with Cara's
-primary role as a personal AI assistant. Source implementation is a candidate
-until the [dated release record](docs/cara-assistant-reliability-2026-10-25.md)
-records exact-source verification and guarded installed acceptance.
+primary role as a personal AI assistant. Deployed and accepted **2026-10-25
+11:37:18 UTC** (14:37 Moscow), source `ee1a319`, build `de3e62ab43f8`, deployment
+`ad778b10272c813105b7080a`. The
+[dated release record](docs/cara-assistant-reliability-2026-10-25.md) records
+exact-source qualification, the preserved failed transition and guarded forward
+completion. Tag: `production-2026-10-25-assistant-reliability`.
 
 - Reminder effects, exact confirmation consumption and new reply intents share
   a local transaction. Source-bound receipts recover the original result after
@@ -34,10 +37,20 @@ records exact-source verification and guarded installed acceptance.
   content-free status; edited/deleted sources and tampered bindings stay silent.
 - Independent recovery has an explicit artifact/key rehearsal API; successful
   decryption alone does not establish off-box provenance or key escrow.
+  The owner does not know the independent artifact/key locations; recovery after
+  host loss remains unverified.
 
 Existing owner/confirmation gates, language behavior, budgets, models/providers,
 notification preferences, source/facts evidence dates, old data/history and
 restricted executor boundaries remain. See ADR-0034 for the architecture decision.
+
+Full normal/shuffled Linux checks, exact-head CI and bounded model qualification
+pass. Guarded acceptance verifies all installed modules, the additive two-table
+migration, original data at stopped boundaries, actual namespace/MCP/scoped reads,
+final restart, health and the once-only native notice. Forward completion corrects
+only Daily Lingo's nine release-binding values in one host integration policy;
+the other 71 protected entries remain exact from the qualified preflight. Strict
+source and freshness checks, grants, budgets and alert preferences remain unchanged.
 
 ## October 25 - Notification and gratitude corrections
 

@@ -1,11 +1,14 @@
 # Cara — Solution Specification
 
-## October 25 - Personal assistant reliability candidate
+## October 25 - Personal assistant reliability accepted
 
 ADR-0034 extends existing reminder, delivery and maintenance mechanisms for the
-owner's architecture-review implementation request. This is a source candidate;
-the [dated release record](docs/cara-assistant-reliability-2026-10-25.md) separates
-implementation, offline verification, model evidence and installed acceptance.
+owner's architecture-review implementation request. Source `ee1a319`, build
+`de3e62ab43f8`, deployment `ad778b10272c813105b7080a` was deployed and accepted
+**2026-10-25 11:37:18 UTC** (14:37 Moscow), tag
+`production-2026-10-25-assistant-reliability`. The
+[dated release record](docs/cara-assistant-reliability-2026-10-25.md) separates
+exact-source qualification, the preserved failed transition and forward completion.
 
 `action_delivery.py` adds source-bound action receipts and outbound intents.
 Reminder effect, exact confirmation consumption and result intents commit once;
@@ -40,6 +43,19 @@ follow-through while preserving tampered-source silence and no automatic replay.
 Explicit independent-artifact recovery verification reports the limits of its
 provenance. Local restore checks remain distinct from verified off-box recovery;
 neither documentation nor a successful decrypt proves key escrow.
+The owner does not know the independent artifact/key locations, so recovery
+after host loss remains unverified.
+
+Acceptance binds the exact installed modules to full normal/shuffled Linux gates,
+CI and finite model evidence. The migration preserves the original tables and
+history at stopped boundaries and adds only action receipts and reply delivery.
+Fresh namespace/MCP/scoped-read gates, a quiescent final restart, health samples
+and the native once-only notice pass. An old Daily Lingo release binding stopped
+the first transition before verification. A separately authenticated forward
+completion changes only nine release-binding values in one host policy, with the
+other 71 protected entries exact from preflight; it performs no reinstall or
+migration.
+Original grants, freshness caps, models/budgets and alert policy remain unchanged.
 
 ## October 25 - Notification and gratitude source binding
 
