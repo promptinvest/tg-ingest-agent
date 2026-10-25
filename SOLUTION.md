@@ -12,7 +12,13 @@ answers and direct recorded-work reads remain compatible. Existing Sol task
 profiles, DeepSeek conversation, fallbacks and budget limits remain.
 
 Implementation and qualification are underway; the accepted context/evidence
-runtime below remains live. October28 was a proposed model-observation
+runtime below remains live. The initial analysis candidate was rejected by
+real-model qualification: resolved planning gaps leaked into the final answer,
+and an unsuccessful literal search was repeated without useful result context.
+The corrected candidate retains planning history, reassesses gaps against current
+evidence, and gives the planner completed-read results plus the existing literal
+search contract. The original failed results and their charges remain retained;
+the cumulative qualification ceiling is unchanged. October28 was a proposed model-observation
 checkpoint, not a technical dependency. An earlier transition would require a
 new authenticated source epoch, observer and conditional model-only reversion,
 preserving the original deadline, prior evidence, data and protections. The owner

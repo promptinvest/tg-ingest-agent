@@ -171,6 +171,159 @@ class AnalysisOutcomes(unittest.TestCase):
         self.assertIn("Plan Alpha", adaptive[-1]["content"])
         self.assertTrue(all(s["receipt_id"] for s in steps))
 
+    def _assert_resolved_planning_gap_outcome(self, *, correction):
+        question = self.case["text"] + " Also check the live current prices."
+        update_id = self.case["update_id"] + 10
+        store.telegram_update_receive(self.conn, {"update_id": update_id, "message": {
+            "message_id": update_id, "chat": {"id": 111}, "from": {"id": 111}, "text": question}}, 111)
+        store.convo_add(self.conn, 111, "user", question, source="boss", update_id=update_id,
+                        tg_message_id=update_id)
+        self.case.update(text=question, update_id=update_id)
+        self.agent._current_update_id = update_id
+        resolved = "Beta terms remain unknown until note2 is read."
+        unavailable = "Current live prices cannot be verified in this read-only mode."
+        initial_gap = "Must read note2 before concluding the comparison."
+        self.initial["unknowns"] = [initial_gap, unavailable]
+        self.adaptive = {"reads": [{"tool": "knowledge.read", "input": {"note_no": 2},
+                                   "reason": "Resolve the remaining Beta evidence gap"}],
+                         "unknowns": [resolved]}
+        final_prompts = []
+        original_model = self.model
+
+        def reassess(prepared):
+            messages = json.loads(prepared["request"].data)["messages"]
+            if "PHASE=" in messages[-1]["content"]:
+                return original_model(prepared)
+            self.prompts.append(messages)
+            final_prompts.append(messages)
+            content = messages[-1]["content"]
+            gaps = json.loads(re.search(r"<EARLIER_PLANNING_GAPS_UNTRUSTED>\n(.*?)\n</EARLIER_PLANNING_GAPS_UNTRUSTED>", content, re.S)[1])
+            self.assertEqual(gaps, [initial_gap, unavailable, resolved])
+            self.assertIn(question, content)
+            self.assertIn("Discard retrieval gaps resolved by completed reads", messages[0]["content"])
+            sources = json.loads(re.search(r"<SOURCES>\n(.*?)\n</SOURCES>", content, re.S)[1])
+            beta = next(s for s in sources if s.get("note_no") == 2 and not s["partial"])
+            facts = [{"source_id": beta["id"], "quote": beta["text"][:65]}]
+            value = {"facts": facts, "conclusion": {"text": "Beta's recorded terms are available; current live prices remain unverified.",
+                     "source_ids": [beta["id"]]}, "conflicts": [], "unknowns": [unavailable]}
+            if correction and len(final_prompts) == 1:
+                value["facts"][0]["quote"] = "Invented Beta terms absent from the saved source."
+            return completion(value)
+
+        with mock.patch.object(llm, "transport_chat", side_effect=reassess):
+            self.start(); task = self.drain()
+        self.assertEqual(task["status"], "completed", task["final_summary"])
+        self.assertEqual(task["delivery_status"], "delivered")
+        self.assertEqual(task["model_calls"], 4 if correction else 3)
+        self.assertEqual(len(final_prompts), 2 if correction else 1)
+        if correction:
+            self.assertIn("Fact quote does not occur in its source", final_prompts[-1][0]["content"])
+        state = json.loads(task["plan_json"])["analysis_state"]
+        self.assertEqual(state["unknowns"], [initial_gap, unavailable, resolved])
+        decisions = [p["decision"] for p in state["phases"] if "decision" in p]
+        self.assertEqual([d["unknowns"] for d in decisions], [[initial_gap, unavailable], [resolved]])
+        steps = store.assistant_task_steps(self.conn, self.task_id)
+        beta_read = next(s for s in steps if s["tool"] == "knowledge.read")
+        self.assertEqual(beta_read["status"], "succeeded")
+        self.assertTrue(beta_read["receipt_id"])
+        receipt = store.task_receipt_by_idempotency(self.conn, engine._controller(self.conn, self.task_id)["idempotency_key"])
+        final = json.loads(receipt["data_json"])["value"]["analysis"]
+        self.assertEqual(final["unknowns"], [unavailable])
+        self.assertIn(unavailable, task["final_summary"])
+        self.assertNotIn(initial_gap, task["final_summary"])
+        self.assertNotIn(resolved, task["final_summary"])
+
+    def test_final_assessment_removes_resolved_read_gaps_but_keeps_real_capability_limit(self):
+        self._assert_resolved_planning_gap_outcome(correction=False)
+
+    def test_final_correction_reassesses_same_gaps_without_weakening_quote_guard(self):
+        self._assert_resolved_planning_gap_outcome(correction=True)
+
+    def test_empty_search_receipt_is_visible_before_a_model_selected_shorter_query(self):
+        failed_query = "Plan Alpha Plan Beta cancellation costs"
+        self.initial["reads"][0]["input"]["query"] = failed_query
+        observed = []
+        original_model = self.model
+
+        def recover_query(prepared):
+            messages = json.loads(prepared["request"].data)["messages"]
+            content = messages[-1]["content"]
+            self.assertIn("one case-insensitive contiguous substring", messages[0]["content"] if "PHASE=" in content else self.prompts[0][0]["content"])
+            reads = json.loads(re.search(r"<COMPLETED_READS>\n(.*?)\n</COMPLETED_READS>", content, re.S)[1])
+            if "PHASE=adaptive" in content:
+                self.prompts.append(messages)
+                observed.extend(reads)
+                self.assertEqual(len(reads), 1)
+                self.assertEqual((reads[0]["tool"], reads[0]["input"]["query"], reads[0]["status"], reads[0]["source_count"]),
+                                 ("knowledge.search", failed_query, "ok", 0))
+                self.assertIn("No confirmed saved notes matched", reads[0]["summary"])
+                return completion({"reads": [{"tool": "knowledge.search", "input": {"query": "Plan", "limit": 8},
+                                               "reason": "Use one literal term after the combined query missed"}], "unknowns": []})
+            if "PHASE=" not in content:
+                self.assertEqual([r["input"]["query"] for r in reads], [failed_query, "Plan"])
+                self.assertEqual([r["source_count"] for r in reads], [0, 3])
+                self.assertIn("not that local reading is unavailable or unperformed", messages[0]["content"])
+            return original_model(prepared)
+
+        with mock.patch.object(llm, "transport_chat", side_effect=recover_query):
+            self.start(); task = self.drain()
+        self.assertEqual(task["status"], "completed", task["final_summary"])
+        self.assertEqual(task["model_calls"], 3)
+        self.assertEqual(task["delivery_status"], "delivered")
+        search = next(s for s in store.assistant_task_steps(self.conn, self.task_id) if s["tool"] == "knowledge.search")
+        receipt = store.task_receipt_by_idempotency(self.conn, search["idempotency_key"])
+        self.assertEqual(observed[0]["receipt_id"], receipt["id"])
+        self.assertEqual(observed[0]["receipt_hash"], engine.digest(dict(receipt)))
+        self.assertEqual(json.loads(receipt["data_json"])["value"]["results"], [])
+
+    def test_literal_search_then_partial_preview_drives_actual_full_read(self):
+        decisive = "Decisive condition: Alpha has no cancellation fee."
+        raw = "Plan Alpha: basic service. " * 70 + decisive
+        self.conn.execute("UPDATE messages SET raw_text=?,summary=? WHERE note_no=1", (raw, raw[:1200]))
+        self.conn.commit()
+        question = "Compare cancellation costs of Plan Alpha and Plan Beta from my saved notes; read beyond partial previews and recommend one."
+        update_id = self.case["update_id"] + 20
+        store.telegram_update_receive(self.conn, {"update_id": update_id, "message": {
+            "message_id": update_id, "chat": {"id": 111}, "from": {"id": 111}, "text": question}}, 111)
+        store.convo_add(self.conn, 111, "user", question, source="boss", update_id=update_id, tg_message_id=update_id)
+        self.case.update(text=question, update_id=update_id)
+        self.agent._current_update_id = update_id
+        original_model = self.model
+
+        def choose_full_read(prepared):
+            messages = json.loads(prepared["request"].data)["messages"]
+            content = messages[-1]["content"]
+            if "PHASE=initial" in content:
+                return original_model(prepared)
+            self.prompts.append(messages)
+            reads = json.loads(re.search(r"<COMPLETED_READS>\n(.*?)\n</COMPLETED_READS>", content, re.S)[1])
+            sources = json.loads(re.search(r"<SOURCES>\n(.*?)\n</SOURCES>", content, re.S)[1])
+            if "PHASE=adaptive" in content:
+                self.assertEqual([(r["tool"], r["input"]["query"], r["source_count"]) for r in reads],
+                                 [("knowledge.search", "Plan", 3)])
+                alpha = next(s for s in sources if s.get("note_no") == 1)
+                self.assertTrue(alpha["partial"])
+                self.assertNotIn(decisive, alpha["text"])
+                return completion({"reads": [{"tool": "knowledge.read", "input": {"note_no": 1},
+                                               "reason": "Read beyond the partial cancellation evidence"}], "unknowns": []})
+            self.assertEqual([r["tool"] for r in reads], ["knowledge.search", "knowledge.read"])
+            self.assertEqual(reads[-1]["input"], {"note_no": 1})
+            self.assertEqual(reads[-1]["source_count"], 1)
+            alpha = next(s for s in sources if s.get("note_no") == 1 and not s["partial"])
+            self.assertIn(decisive, alpha["text"])
+            return completion({"facts": [{"source_id": alpha["id"], "quote": decisive}],
+                               "conclusion": {"text": "Alpha avoids the recorded cancellation fee; confirm current terms before choosing.",
+                                              "source_ids": [alpha["id"]]}, "conflicts": [], "unknowns": ["Current terms are unverified."]})
+
+        with mock.patch.object(llm, "transport_chat", side_effect=choose_full_read):
+            self.start(); task = self.drain()
+        self.assertEqual(task["status"], "completed", task["final_summary"])
+        self.assertEqual(task["model_calls"], 3)
+        self.assertIn(decisive, task["final_summary"])
+        steps = store.assistant_task_steps(self.conn, self.task_id)
+        self.assertEqual([s["tool"] for s in steps], ["analysis.reason", "knowledge.search", "knowledge.read"])
+        self.assertTrue(all(s["receipt_id"] for s in steps))
+
     def test_only_local_tools_and_source_bound_note_ids_can_be_selected(self):
         for tool, inputs in [("source.fetch", {"url": "https://example.com"}), ("fleet.investigate", {"query": "x"}),
                              ("reminder.propose", {}), ("analysis.reason", {"question": "x"}), ("knowledge.read", {"note_no": 999})]:
