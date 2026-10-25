@@ -91,13 +91,17 @@ class MonitorTests(unittest.TestCase):
     def test_service_is_restrictive_and_writes_only_observation_directory(self):
         raw = self.plan()["service_raw"].decode()
         for required in ("User=root", "ProtectSystem=strict", "ProtectHome=read-only",
-                         "RestrictAddressFamilies=AF_UNIX", "CapabilityBoundingSet=\n",
+                         "RestrictAddressFamilies=AF_UNIX", "CapabilityBoundingSet=CAP_DAC_READ_SEARCH\n",
                          "ReadOnlyPaths=" + str(monitor.DATABASE.parent),
                          "ReadWritePaths=" + str(self.root / "observations")):
             self.assertIn(required, raw)
         self.assertEqual(raw.count("ReadWritePaths="), 1)
         self.assertNotIn("/bin/sh", raw)
         self.assertNotIn("OnFailure", raw)
+        self.assertEqual([line for line in raw.splitlines() if line.startswith("CapabilityBoundingSet=")],
+                         ["CapabilityBoundingSet=CAP_DAC_READ_SEARCH"])
+        self.assertNotIn("CAP_DAC_OVERRIDE", raw)
+        self.assertNotIn("AmbientCapabilities=", raw)
 
     def test_arbitrary_root_unit_or_extended_period_rejected(self):
         with self.assertRaisesRegex(monitor.MonitorError, "unapproved_trial_root"):

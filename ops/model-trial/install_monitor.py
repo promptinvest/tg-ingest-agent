@@ -152,7 +152,7 @@ def make_plan(root, accepted_raw, prepared_raw, wrapper_raw, observer_raw):
                "[Service]\nType=oneshot\nUser=root\nGroup=root\nUMask=0077\n"
                f"ExecStart={command}\n"
                "Environment=PYTHONDONTWRITEBYTECODE=1\nNoNewPrivileges=yes\n"
-               "CapabilityBoundingSet=\nProtectSystem=strict\nProtectHome=read-only\n"
+               "CapabilityBoundingSet=CAP_DAC_READ_SEARCH\nProtectSystem=strict\nProtectHome=read-only\n"
                "PrivateTmp=yes\nPrivateDevices=yes\nRestrictAddressFamilies=AF_UNIX\n"
                "ProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\n"
                "ProtectClock=yes\nRestrictSUIDSGID=yes\nLockPersonality=yes\n"

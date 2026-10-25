@@ -1,20 +1,35 @@
 # Cara — Solution Specification
 
-## October 25 - Qualified-role model trial prepared
+## October 25 - Qualified-role model trial live
 
-The owner's model-trial request selects Haiku 5.5 for routing/ingest/memory
-candidates, Sonnet 5.5 for KB/consolidation and GPT-6.1 Sol for task planning and
-synthesis through the existing DigitalOcean gateway. Conversation keeps its exact
-original DeepSeek v4 Pro profile: Sonnet and Sol both failed task-context repair checks.
-Those failed trials remain retained and are excluded from the selected scope.
-All profile controls, fallbacks, USD2/day and USD12/month guards remain. The flat
-pricing meter uses conservative context-tier ceilings for the new models.
-The [trial record](docs/cara-model-trial-2026-10-25.md) binds 21 cases for seven
-changed active profiles, an unchanged-conversation proof, acceptance and bounded
-72-hour read-only monitoring. This section records preparation, not activation.
-Reversion changes only model settings and preserves later data and history.
-An expired reminder timestamp in one offline fixture now uses a future date;
-every original assertion and all application behavior remain unchanged.
+Accepted **2026-10-25 13:36:17 UTC** (16:36 Moscow). Haiku 5.5 handles routing,
+ingest and memory candidates; Sonnet 5.5 handles KB answers and memory
+consolidation; GPT-6.1 Sol handles task planning and synthesis. Conversation keeps
+its exact original DeepSeek v4 Pro profile after both proposed replacements failed
+task-context repair checks. Failed conversation trials remain retained and are
+excluded from the selected scope. No conversation repair code is included.
+
+All profile controls, existing fallbacks, USD2/day and USD12/month guards remain.
+New-model reservations use conservative context-tier ceilings. The installed
+application remains ee1a319/de3e62ab43f8/ad778b10272c813105b7080a; no code install,
+schema change or database restore occurred. All 91 runtime files and 78 protected
+files pass, with only four model environment keys changed. Exact stopped data
+across 56 tables, peers, notification receipts and final health checks pass.
+
+All 21 cases for seven changed active profiles pass functional and semantic review;
+conversation is separately hash-bound unchanged. Both full native Linux orders
+pass 2,987 tests/nine existing skips; model-operator checks pass154 and independent
+observer checks pass26. Qualification including failed attempts costs USD0.357269084
+in the conservative ledger, with zero unknown charges. CI af3dcb7 passes.
+
+Read-only monitoring runs every six hours through **October28 13:36:18 UTC**
+(16:36 Moscow), then its dedicated timer stops. The initial sandboxed snapshot
+succeeded; it makes no model calls or owner messages. A separate observer package
+uses only the read/search capability needed for the private SQLite directory;
+data permissions, existing services and SQL read-only enforcement remain.
+Model-only reversion is prepared and preserves later data/history. No automatic
+quality decision or reversion is scheduled. The [trial record](docs/cara-model-trial-2026-10-25.md)
+and [sanitized receipt](docs/cara-model-trial-2026-10-25-verification.json) bind the evidence.
 
 ## October 25 - Personal assistant reliability accepted
 

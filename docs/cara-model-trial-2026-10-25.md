@@ -89,11 +89,53 @@ later unrelated environment edits, all stored data, usage and conversation histo
 It takes a fresh stopped backup and never restores the old database or application.
 Conflicting later model/runtime changes require review before any overwrite.
 
-Status: prepared; final qualification, acceptance and monitor receipts are recorded
-below only after their checks pass.
+Status: accepted; exact qualification, activation and monitoring evidence follows.
 
 The retained conversation identity is the verified explicit `deepseek-v4-pro`,
 with the original Kimi/Flash/OSS fallback order. An initial partial-proof helper
 incorrectly assumed the default Flash primary and rejected before its phase marker,
 output or paid call; that failed helper evidence remains retained. The corrected
 proof checks the actual Pro identity and retains all original profile-equality checks.
+
+## Accepted trial and bounded observation
+
+Accepted **2026-10-25T13:36:17.924552+00:00**. Observation ends
+**2026-10-28T13:36:17.924552+00:00**; the last absolute timer entry is rounded up
+to13:36:18 UTC (16:36 Moscow). The [sanitized verification receipt](cara-model-trial-2026-10-25-verification.json)
+records every binding without raw conversations or credentials.
+
+- Candidate environment: `46d9c31a9dd24770b51f9830a6150ce407700912a04304abf1c153c29d1f9db5`.
+- Acceptance: `e67a3251c6591197dabab561a52307ea6436480da92cb1a429a19bbaa9f68c1e`.
+- Qualification: `3dda2a884f12e6ad49655d84008219cb83c7256f26bdc342db39468f8d04d8a1`.
+- Frozen model operator package: `6e8ca8736dbdde7b0bcf38c47ee244af306ec7d01dcf2f429e014e2a106230df`.
+- Independent observer package: `2dbd5ab869052edc9bf3aab64b623f6d0986a5a7a25613f1f7b9e2a225c2ad7a`.
+- Observer manifest: `c50b91764b72cbc9f0045af574e76fd357899055828e8158ddab630ce395e0dd`.
+
+The model operator remains frozen separately from the observer. Preflight found
+the private database directory mode0700 and SQLite/WAL/SHM mode0600 owned by Cara.
+The observer therefore needs `CAP_DAC_READ_SEARCH` with fixed root identity and
+read-only mounts; it has no write-bypass capability. No ACL, ownership or data-mode
+change was made. The independent observer's26 Linux tests pass and its actual
+sandboxed initial snapshot succeeds. Its twelve absolute dates cover+6 through+72h.
+No paid probes, owner messages or automatic model reversion are included.
+
+Selected runtime/source parity, online/stopped backups and exact stopped56-table
+data/schema preservation pass. Only the main process restarted; all peer processes,
+native deployment marker,91 installed runtime files,78 protected identities except
+the selected environment hash, and native deployment-notification receipt remain.
+Three final samples and a fresh post-monitor check pass; mainPID3143963 has zero
+automatic restarts. No database restore, migration or application install occurred.
+
+All21 changed-role cases pass finite functional and independent semantic review.
+The final replay makes zero new paid calls;59 total qualification calls across
+baseline, failed and selected evidence cost USD0.357269084 in the conservative
+application ledger, with zero unknown charges. This is not a provider invoice.
+Both native Linux orders pass2987 tests/nine existing skips;154 model-operator
+checks and26 observer checks pass. [Exact model-operator/source CI](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40197607609)
+passes at af3dcb7350358009dae7350f7f22b30b7a8be9c2. The earlier failed CI and all
+failed/consumed originals remain retained. Never replay started controllers.
+
+The first observation correctly reports insufficient ordinary traffic. Metadata
+does not establish answer quality, long-term reliability or end-to-end delivery
+latency. Review actual conversations together with the72-hour reports before
+choosing whether to keep or revert the new roles.
