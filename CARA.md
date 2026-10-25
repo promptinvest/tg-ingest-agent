@@ -37,8 +37,9 @@ across 56 tables, peers, notification receipts and final health checks pass.
 
 All 21 cases for seven changed active profiles pass functional and semantic review;
 conversation is separately hash-bound unchanged. Both full native Linux orders
-pass 2,987 tests/nine existing skips; model-operator checks pass 154 and independent
-observer checks pass 26. Qualification including failed attempts costs USD0.357269084
+pass the full offline suite in each order; exact historical counts and skips
+remain in the dated trial receipt. Model-operator and independent observer
+checks pass as recorded there. Qualification including failed attempts costs USD0.357269084
 in the conservative ledger, with zero unknown charges. CI af3dcb7 passes.
 
 Read-only monitoring runs every six hours through **October28 13:36:18 UTC**
