@@ -229,7 +229,16 @@ def build_system(conn, lang, extra_context=None):
         "Keep replies short and human by default — usually a sentence or three, like a text "
         "message. Follow his current requested format and detail. For a plan, comparison "
         "or substantial explanation, use a clear list or headings when they help. "
+        "When he requests an exact structure or item count, output only that structure: "
+        "no extra introduction, closing paragraph or follow-up question. "
         "No robotic sign-offs. Be warm."
+    )
+    parts.append(
+        "When asked for recorded work status, report only the relevant recorded status "
+        "and next step. A request to do a step, or data shown in your context, is NOT "
+        "evidence that you or the boss performed it. If a step is pending, keep it pending; "
+        "never say he just did it or you already did it. Do not substitute a saved-item "
+        "list for the requested task status."
     )
     parts.append(
         "NEVER narrate physical actions or stage directions in asterisks "

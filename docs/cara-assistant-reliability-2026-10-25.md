@@ -54,6 +54,17 @@ source review also found a preparation error could repeat a cost reservation.
 The corrected candidate terminally contains that error and releases only an
 exact provably unsent reservation. A fresh canonical full gate is required.
 
+Candidate `d9a2e14` passed canonical compile, normal and shuffled Linux gates
+(2,982 tests in each order, nine existing skips), static checks and exact-head
+CI. Its finite five-case model trial cost USD0.01560504 with no unknown attempts.
+Manual review rejected the current-work answer: it called the recorded step
+pending while also saying the owner had just performed it. The structured reply
+also added unsolicited opening/closing text. Those raw responses and charges
+remain preserved; no passing model proof or application deployment is claimed.
+The prompt correction explicitly separates displayed context from performed work
+and makes exact requested structures exclusive. Fresh exact-source qualification
+must include the prior charge within the same total USD0.15 ceiling.
+
 Prompt/context changes are explicit. Existing sealed model evidence remains
 bound to its original source and cannot be relabeled fresh candidate evidence.
 No paid qualification, manual Telegram message, historical replay, facts/source

@@ -25,6 +25,8 @@ records exact-source verification and guarded installed acceptance.
   read-only current-work view derives valid tasks, next steps, live confirmation
   and reminder state from existing records. It never creates goals or authority.
   Current requested format/detail wins over the concise conversational default.
+  Status replies cannot infer execution from a request or displayed context;
+  exact requested structures omit extra introductions and closing questions.
 - Fleet execution skips retained terminal requests before its original attempt
   cap. Genuine authority changes finish a still-valid owner request with a
   content-free status; edited/deleted sources and tampered bindings stay silent.

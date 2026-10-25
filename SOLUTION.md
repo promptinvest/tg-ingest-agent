@@ -28,6 +28,8 @@ Conversation and routing receive a compact current-work projection from existing
 source-valid tasks, pending cards and reminders. This read-only projection creates
 no objective or permission. Recent equal-priority guidance survives crowded
 profiles, and current requested structure/detail overrides concise defaults.
+Showing context is not evidence of executing a pending step or of the owner
+reading it. Exact requested structures exclude unsolicited opening/closing text.
 Fleet queue fairness and an exact terminal stale-authority status improve
 follow-through while preserving tampered-source silence and no automatic replay.
 
