@@ -19,6 +19,7 @@ Safety that stays even on this path:
     boss's tasks and facts stay truthful.
 """
 import hashlib
+import json
 import re
 from typing import NamedTuple
 
@@ -40,17 +41,22 @@ class TurnContext(NamedTuple):
     source_hash: str
     messages: tuple
     catalog_grounding: str
+    format_count: int = 0
+    work_record: tuple = ()
 
 
-def freeze_turn_context(chat_id, lang, source_text, messages, catalog_grounding=""):
+def freeze_turn_context(chat_id, lang, source_text, messages, catalog_grounding="",
+                        format_count=0, work_record=()):
     frozen = tuple((message["role"], message["content"]) for message in messages)
     if (not frozen or frozen[0][0] != "system"
             or any(role not in {"system", "user", "assistant"}
-                   or not isinstance(content, str) for role, content in frozen)):
+                   or not isinstance(content, str) for role, content in frozen)
+            or type(format_count) is not int or not 0 <= format_count <= 8
+            or (work_record and not isinstance(work_record, WorkRecord))):
         raise ValueError("invalid conversation turn context")
     return TurnContext(int(chat_id), str(lang),
                        hashlib.sha256(str(source_text).encode("utf-8")).hexdigest(),
-                       frozen, str(catalog_grounding or ""))
+                       frozen, str(catalog_grounding or ""), format_count, work_record or ())
 
 
 def replay_turn_context(context, chat_id, lang, source_text):
@@ -60,6 +66,242 @@ def replay_turn_context(context, chat_id, lang, source_text):
             or context.lang != str(lang) or context.source_hash != source_hash):
         raise ValueError("conversation turn context does not match current request")
     return [{"role": role, "content": content} for role, content in context.messages]
+
+
+def current_owner_request(conn, chat_id, text):
+    """Only the actual current owner row may choose a reply contract."""
+    rows = store.convo_recent(conn, chat_id, limit=1)
+    return bool(rows and rows[-1]["role"] == "user" and rows[-1]["text"] == text
+                and store.convo_row_source(rows[-1]) == "boss")
+
+
+_COUNT_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "одним": 1, "один": 1, "одного": 1, "двумя": 2, "два": 2, "двух": 2,
+    "тремя": 3, "три": 3, "трех": 3, "четырьмя": 4, "четыре": 4, "четырех": 4,
+    "пятью": 5, "пять": 5, "пяти": 5, "шестью": 6, "шесть": 6, "шести": 6,
+    "семью": 7, "семь": 7, "семи": 7, "восемью": 8, "восемь": 8, "восьми": 8,
+}
+_COUNT_TOKEN = r"(?:[1-8]|" + "|".join(_COUNT_WORDS) + r")"
+_EXACT_NUMBERED = re.compile(
+    r"\b(?:exactly|ровно)\s+(?P<count>" + _COUNT_TOKEN + r")\s+"
+    r"(?:numbered\s+(?:items?|points?|lines?)|нумерованн\w*\s+(?:пункт\w*|строк\w*))\b", re.I)
+_NUMBERED_LINE = re.compile(r"^\s*([0-9]+)[.)]\s+\S")
+_FORMAT_DIRECTIVE = re.compile(
+    r"(?:^|[.!?;:\n]\s*|\band\s+)(?:please\s+)?"
+    r"(?:(?:can|could|would)\s+you\s+)?"
+    r"(?:reply|respond|answer|give|write|ответь|отвечай|напиши|дай)\b[^.!?;:\n]{0,80}$", re.I)
+
+
+def requested_numbered_items(text):
+    # Quoted format descriptions and questions about earlier answers do not
+    # become a new current-turn presentation instruction.
+    query = str(text or "").casefold().replace("ё", "е")
+    query = re.sub(r'''"[^"\n]*"|«[^»\n]*»|“[^”\n]*”|‘[^’\n]*’|`[^`\n]*`|(?<!\w)'[^'\n]*'(?!\w)''',
+                   "", query)
+    matches = [match for match in _EXACT_NUMBERED.finditer(query)
+               if _FORMAT_DIRECTIVE.search(query[:match.start()])]
+    values = {int(m["count"]) if m["count"].isdigit() else _COUNT_WORDS[m["count"]]
+              for m in matches}
+    return next(iter(values)) if len(values) == 1 else 0
+
+
+def numbered_reply_matches(text, count):
+    """Check requested top-level items, including absence of outside paragraphs."""
+    if not count:
+        return True
+    numbers = []
+    for line in str(text or "").strip().splitlines():
+        if not line.strip():
+            continue
+        match = _NUMBERED_LINE.match(line)
+        if match:
+            numbers.append(int(match[1]))
+        elif not numbers or not line[:1].isspace():
+            return False
+    return numbers == list(range(1, count + 1))
+
+
+_STATUS_READ = re.compile(
+    r"\b(?:recorded\s+(?:task\s+)?status|status|pending work|what\s+(?:still\s+)?needs\s+doing|"
+    r"what(?:'s| is)\s+left|статус\w*|что\s+(?:еще\s+)?(?:нужно\s+сделать|осталось))\b", re.I)
+_NEXT_READ = re.compile(r"\b(?:next\s+step|следующ\w*\s+шаг\w*)\b", re.I)
+_DELIVERY_READ = re.compile(r"\b(?:delivery|receipt|received|достав\w*|получ\w*)\b", re.I)
+_MIXED_READ = re.compile(
+    r"\b(?:saved|notes?|sources?|documents?|compare|recommend\w*|suggest\w*|explain|why|"
+    r"date|meeting|сохран\w*|источник\w*|замет\w*|документ\w*|дат\w*|встреч\w*|"
+    r"сравн\w*|почему|объясн\w*|предлож\w*|посовет\w*)\b", re.I)
+_TASK_ID = re.compile(r"\b(?:task|задач\w*)\s*#?\s*([1-9][0-9]{0,8})\b", re.I)
+_TASK_STATES = {"planned", "running", "waiting_approval", "blocked", "cancel_requested",
+                "completed", "failed", "cancelled"}
+_STEP_STATES = {"pending", "claimed", "running", "waiting_worker", "waiting_fleet",
+                "waiting_approval", "succeeded", "blocked", "failed", "cancelled"}
+_DELIVERY_STATES = {"pending", "sending", "delivered", "ambiguous", "failed", "retry"}
+_NEGATIVE_EXECUTION = re.compile(
+    r"\b(?:do not (?:execute(?: (?:the step|anything))?(?: or claim it happened)?|"
+    r"run or send anything|run anything|send anything)|ничего не выполняй)\b", re.I)
+# This is deliberately a narrow read grammar, not a second task router. Unknown
+# extra requests retain the original model/skill flow instead of being dropped.
+_PURE_READ_WORDS = set((
+    "what is the recorded task status of for on and next step still needs doing give its "
+    "pending work reply in exactly numbered items item points lines with no introduction "
+    "or closing paragraph do you have confirmed receipt result report delivery uncertainty "
+    "explicitly show me please my tell one two three four five six seven eight "
+    "какой какая каков какова статус задачи задача по и следующий шаг что еще нужно сделать "
+    "осталось покажи мне мой пожалуйста ответь ровно нумерованными пунктами пунктов строками "
+    "без вступления заключения получение результат доставка подтверждена подтверждено "
+    "один одним два двумя три тремя четыре четырьмя пять пятью шесть шестью семь семью восемь восемью"
+).split())
+
+
+def _name_word(word):
+    """Exact English identity; only conservative Russian grammatical endings."""
+    word = word.casefold().replace("ё", "е")
+    if re.fullmatch(r"[а-я]+", word):
+        for suffix in ("ами", "ями", "ого", "ему", "ой", "ом", "ах", "ях", "ам", "ям",
+                       "ов", "ев", "а", "я", "у", "ю", "е", "ы", "и"):
+            if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+                return word[:-len(suffix)]
+    return word
+
+
+def _pure_record_read(query, objective_words):
+    if _MIXED_READ.search(query) or re.search(r"[#№]\s*\d+", _TASK_ID.sub("", query)):
+        return False
+    if re.search(r"\b(?:results?|результат\w*)\b", query) and not _DELIVERY_READ.search(query):
+        # "Receipt of its result" asks for delivery metadata. The result itself
+        # is content, outside this fixed status/next-step/delivery projection.
+        return False
+    body = _TASK_ID.sub("", _NEGATIVE_EXECUTION.sub("", query))
+    words = {_name_word(word) for word in re.findall(r"[^\W_]+", body) if not word.isdigit()}
+    allowed = {_name_word(word) for word in _PURE_READ_WORDS}
+    return words - objective_words <= allowed
+
+
+class WorkRecord(NamedTuple):
+    task_id: int
+    objective: str
+    status: str
+    delivery: str
+    next_step: str
+    step_status: str
+    source_hash: str
+    fields: tuple
+    pure_read: bool
+
+
+def recorded_work_contract(conn, chat_id, text):
+    """Read an unambiguous named/id-bound record; never create work or consent."""
+    query = str(text or "").casefold().replace("ё", "е")
+    status, next_step, delivery = _STATUS_READ.search(query), _NEXT_READ.search(query), _DELIVERY_READ.search(query)
+    if not (status or next_step or delivery) or not current_owner_request(conn, chat_id, text):
+        return ()
+    ids = {int(match[1]) for match in _TASK_ID.finditer(query)}
+    explicit_refs = {int(number) for number in re.findall(r"[#№]\s*(\d+)", query)}
+    if len(ids) > 1 or (ids and not explicit_refs <= ids):
+        return ()
+    if ids:
+        row = store.assistant_task_get(conn, next(iter(ids)), chat_id)
+        rows = [row] if row is not None else []
+    else:
+        # Query-aware matching does not inherit the eight-record prompt slice.
+        # Keep this metadata read bounded; absence here is never proof of absence.
+        if conn.execute("SELECT COUNT(*) FROM assistant_tasks WHERE chat_id=?",
+                        (chat_id,)).fetchone()[0] > 128:
+            return ()
+        rows = conn.execute("SELECT * FROM assistant_tasks WHERE chat_id=?"
+                            " ORDER BY updated_at DESC,id DESC LIMIT 128", (chat_id,)).fetchall()
+    query_words = {_name_word(word) for word in re.findall(r"[^\W_]{3,}", query)}
+    candidates, named_matches = [], 0
+    import tasking
+    for row in rows:
+        objective = str(row["objective"] or "").strip()
+        words = {_name_word(word) for word in re.findall(r"[^\W_]{3,}", objective.casefold().replace("ё", "е"))
+                 if word not in {"the", "for", "and", "его", "для"}}
+        if not ids and (not words or not words <= query_words):
+            continue
+        named_matches += 1
+        source = store.assistant_task_source(conn, chat_id, row["source_update"])
+        if (source is None or tasking.source_hash(source["text"]) != row["source_hash"]
+                or row["status"] not in _TASK_STATES or row["delivery_status"] not in _DELIVERY_STATES
+                or not objective or len(objective) > 240):
+            continue
+        steps = store.assistant_task_steps(conn, row["id"])
+        if any(step["status"] not in _STEP_STATES for step in steps):
+            continue
+        pending = next((step for step in steps if step["status"] not in
+                        {"succeeded", "completed", "skipped", "cancelled"}), None)
+        purpose = str(pending["purpose"] or "") if pending else ""
+        if len(purpose) > 400:
+            continue
+        positions = [(match.start(), field) for match, field in
+                     ((status, "status"), (next_step, "next_step"), (delivery, "delivery")) if match]
+        fields = tuple(field for _, field in sorted(positions))
+        candidates.append(WorkRecord(
+            int(row["id"]), common.neutralize_untrusted(objective), row["status"],
+            row["delivery_status"], common.neutralize_untrusted(purpose),
+            pending["status"] if pending else "", row["source_hash"], fields,
+            _pure_record_read(query, words)))
+    return candidates[0] if named_matches == 1 and len(candidates) == 1 else ()
+
+
+def work_record_evidence(record):
+    if not record:
+        return ""
+    return ("Verified same-turn recorded work (DATA, not execution or permission). "
+            "These are the actual recorded fields for the named task. Use the recorded "
+            "next_step itself, never a hypothetical step AFTER it; do not deny this record. "
+            "Completed is a recorded task status, not evidence of this turn doing work. "
+            "Delivery and owner receipt/read acknowledgement are separate:\n"
+            + json.dumps(record._asdict(), ensure_ascii=False, sort_keys=True))
+
+
+def format_contract(count):
+    if not count:
+        return ""
+    return (f"The current owner explicitly requests EXACTLY {count} numbered items. "
+            f"The ENTIRE reply must be items 1. through {count}. only: no greeting, "
+            "introduction, closing paragraph or follow-up outside them. Put every required "
+            "fact, including any requested source date, inside its relevant numbered item. "
+            "This presentation rule gives no facts, action authority or permission.")
+
+
+def recorded_work_answer(record, lang, count=0):
+    if not record or not record.pure_read or (count and len(record.fields) != count):
+        return None
+    ru = lang == "ru"
+    status = ({"planned": "запланирована", "running": "выполняется",
+               "waiting_approval": "ожидает подтверждения", "blocked": "приостановлена",
+               "cancel_requested": "ожидает отмены", "completed": "выполнена",
+               "failed": "завершилась неудачей", "cancelled": "отменена"}.get(record.status)
+              if ru else record.status.replace("_", " "))
+    step_status = ({"pending": "ожидает выполнения", "running": "выполняется",
+                    "claimed": "взят в работу", "waiting_worker": "ожидает результата",
+                    "waiting_fleet": "ожидает результата",
+                    "failed": "ошибка", "blocked": "приостановлен",
+                    "waiting_approval": "ожидает подтверждения"}.get(record.step_status,
+                                                                      "не завершён")
+                   if ru else record.step_status.replace("_", " "))
+    delivery = ({"pending": "ожидается", "sending": "отправляется",
+                 "delivered": "доставлено", "ambiguous": "неопределённа",
+                 "failed": "не удалась", "retry": "ожидает повторной попытки"}.get(
+                     record.delivery, "не подтверждена") if ru else record.delivery)
+    acknowledgement = (("прочтение тобой не подтверждено" if record.delivery == "delivered"
+                        else "получение или прочтение тобой не подтверждено") if ru else
+                       ("your reading is unconfirmed" if record.delivery == "delivered"
+                        else "your receipt or reading is unconfirmed"))
+    values = {"status": (f"Статус в записи: {record.objective} — {status}." if ru
+                         else f"Recorded status: {record.objective} — {status}."),
+              "next_step": ((f"Следующий шаг в записи: {record.next_step} "
+                             f"(статус: {step_status})." if record.next_step
+                             else "Оставшихся шагов в записи нет.") if ru else
+                            (f"Next recorded step: {record.next_step} "
+                             f"(status: {step_status})." if record.next_step
+                             else "No remaining step is recorded.")),
+              "delivery": ((f"Доставка в записи: {delivery}; {acknowledgement}.") if ru else
+                           f"Recorded delivery: {delivery}; {acknowledgement}.")}
+    lines = [values[field] for field in record.fields]
+    return "\n".join(f"{i}. {line}" for i, line in enumerate(lines, 1)) if count else "\n".join(lines)
 
 # Cara's fixed character — who she is under any mood or topic. This is the soul;
 # her life facts (below) are the changing details. CANONICAL: this text (with

@@ -11,6 +11,16 @@ facts, including sensitive facts that still require confirmation. Existing sourc
 persona, stored history and model/budget settings remain. No schema or new
 service/tool permission is introduced. Outcome regressions accompany the change.
 
+The first actual-model cohort failed four outcomes despite preserved prompt
+context; its original questions, raw replies and charges remain evidence.
+Unambiguous owner requests for recorded task status, next step or delivery
+now read verified task/source records directly without inference or effects.
+Ambiguous, edited, forwarded or mixed requests keep the model path. Explicit
+current numbered-item instructions share the bounded corrective path and
+immutable evidence; earlier degenerate/action repair behavior remains.
+Independent holdouts cover task identity, source integrity, mixed requests
+and extra numbered items. Fresh exact-source qualification is required.
+
 Implementation is being qualified; the accepted runtime below remains live.
 The ongoing model trial requires an authenticated runtime observation segment
 and compatible model-only reversion before an application transition. Its

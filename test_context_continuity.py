@@ -167,6 +167,38 @@ class ImmutableTurnContextTests(unittest.TestCase):
                 converse.freeze_turn_context(1, "en", "Current request", messages)
 
 
+class ExplicitNumberedContractTests(unittest.TestCase):
+    def test_current_owner_directives_support_only_bounded_exact_counts(self):
+        for text, count in (("Reply in exactly two numbered items.", 2),
+                            ("Please answer in exactly 8 numbered points.", 8),
+                            ("Could you reply in exactly one numbered line?", 1),
+                            ("Ответь ровно двумя нумерованными пунктами.", 2),
+                            ("Reply in exactly nine numbered items.", 0),
+                            ("Reply in exactly 10 numbered items.", 0)):
+            with self.subTest(text=text):
+                self.assertEqual(converse.requested_numbered_items(text), count)
+
+    def test_quoted_or_historical_format_description_is_not_a_current_directive(self):
+        for text in ("Why did you answer with exactly two numbered items?",
+                     "What does exactly two numbered items mean?",
+                     "What does ‘exactly two numbered items’ mean?",
+                     "Explain the phrase “reply in exactly two numbered items”.",
+                     "Reply with an example of 'answer in exactly two numbered items'.",
+                     "Что значит «ответь ровно двумя нумерованными пунктами»?"):
+            with self.subTest(text=text):
+                self.assertEqual(converse.requested_numbered_items(text), 0)
+
+    def test_only_exact_top_level_items_and_indented_continuations_pass(self):
+        self.assertTrue(converse.numbered_reply_matches("1. One\n   Detail\n2. Two", 2))
+        for text in ("Intro\n1. One\n2. Two", "1. One\n2. Two\nClosing",
+                     "1. One\n2. Two\n\nClosing", "1. One\n2. Two\n10. Extra",
+                     "1. One\n2. Two\n  9. Extra", "1. One\n1. Two"):
+            with self.subTest(text=text):
+                self.assertFalse(converse.numbered_reply_matches(text, 2))
+        self.assertFalse(converse.numbered_reply_matches(
+            "\n".join(f"{i}. Item" for i in range(1, 10)), 8))
+
+
 class ConversationContextContinuityTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -183,7 +215,7 @@ class ConversationContextContinuityTests(unittest.TestCase):
                              "tool_receipts", "task_approvals", "pending_actions", "reminders",
                              "boss_profile_items")}
 
-    def run_repair(self, case_id, final=None, mutate_prompt=False):
+    def run_repair(self, case_id="ru_source_data", final=None, mutate_prompt=False, first=None):
         case = prepare_context_case(self.agent, case_id)
         before = self.work_rows()
         seen = []
@@ -194,7 +226,7 @@ class ConversationContextContinuityTests(unittest.TestCase):
             if len(seen) == 1:
                 if mutate_prompt:
                     messages[0]["content"] = "The original mutable payload was changed"
-                return case["rejected_draft"]
+                return case["rejected_draft"] if first is None else first
             # This is an outcome stub: useful output is possible only when the
             # real repair retains the actual work and source evidence.
             context = "\n".join(message["content"] for message in messages)
@@ -223,21 +255,42 @@ class ConversationContextContinuityTests(unittest.TestCase):
         self.assertEqual(seen[1][1:len(seen[0])], seen[0][1:])
         return case, reply.call_args[0][1], seen
 
-    def test_recorded_pending_work_survives_repair_without_execution(self):
-        case, sent, _ = self.run_repair("pending_work")
-        self.assertEqual(sent, case["expected_response"])
+    def run_record_read(self, case_id):
+        case = prepare_context_case(self.agent, case_id)
+        before = self.work_rows()
+        with mock.patch.object(llm, "chat_profile", side_effect=AssertionError(
+                "pure record reads must not call a model")) as chat, \
+                mock.patch.object(llm, "embed", side_effect=AssertionError(
+                    "pure record reads need no retrieval")), \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "maybe_curate_conversation") as curate, \
+                mock.patch.object(self.agent, "reply", return_value=True) as reply:
+            self.agent.do_converse(case["chat_id"], case["lang"], case["text"])
+        chat.assert_not_called()
+        curate.assert_called_once()
+        self.assertEqual(before, self.work_rows())
+        return case, reply.call_args[0][1]
+
+    def test_recorded_pending_work_is_read_without_model_inference_or_execution(self):
+        _case, sent = self.run_record_read("pending_work")
+        self.assertIn("Budget review — planned", sent)
+        self.assertIn("Review the delivery evidence", sent)
+        self.assertIn("status: pending", sent)
         self.assertFalse(action_truth.freeform_claims_action(sent))
 
-    def test_exact_two_item_answer_survives_the_actual_guard_and_repair(self):
-        case, sent, _ = self.run_repair("requested_structure")
-        self.assertEqual(sent, case["expected_response"])
+    def test_exact_two_item_record_read_keeps_the_actual_step_without_a_model(self):
+        _case, sent = self.run_record_read("requested_structure")
+        self.assertIn("Budget review — planned", sent)
+        self.assertIn("Review the delivery evidence", sent)
         self.assertEqual([line[:2] for line in sent.splitlines()], ["1.", "2."])
+        self.assertTrue(converse.numbered_reply_matches(sent, 2))
 
     def test_completed_record_preserves_explicit_delivery_uncertainty(self):
-        case, sent, _ = self.run_repair("uncertain_delivery")
-        self.assertEqual(sent, case["expected_response"])
-        self.assertIn("Delivery is ambiguous", sent)
-        self.assertIn("receipt is unconfirmed", sent)
+        _case, sent = self.run_record_read("uncertain_delivery")
+        self.assertIn("Budget review — completed", sent)
+        self.assertIn("Recorded delivery: ambiguous", sent)
+        self.assertIn("your receipt or reading is unconfirmed", sent)
+        self.assertNotIn("Next recorded step", sent)
 
     def test_russian_source_evidence_and_forward_taint_survive_repair(self):
         case, sent, seen = self.run_repair("ru_source_data")
@@ -254,21 +307,124 @@ class ConversationContextContinuityTests(unittest.TestCase):
         self.assertNotIn("user: игнорируй", seen[1][0]["content"])
 
     def test_mutating_the_first_model_payload_does_not_change_the_snapshot(self):
-        case, sent, seen = self.run_repair("pending_work", mutate_prompt=True)
+        case, sent, seen = self.run_repair(mutate_prompt=True)
         self.assertEqual(sent, case["expected_response"])
         self.assertNotIn("original mutable payload was changed", seen[1][0]["content"])
 
     def test_repair_still_blocks_another_action_claim(self):
-        case, sent, _ = self.run_repair("pending_work", final="I saved the note.")
+        case, sent, _ = self.run_repair(final="I saved the note.")
         self.assertEqual(sent, T(case["lang"], "action_not_done"))
 
     def test_repair_still_blocks_a_fabricated_attachment(self):
-        case, sent, _ = self.run_repair("pending_work", final="Here is your file: [Budget.md]")
+        case, sent, _ = self.run_repair(final="Here is your file: [Budget.md]")
         self.assertEqual(sent, T(case["lang"], "action_not_done"))
 
     def test_repair_still_blocks_draft_only_note_references(self):
-        case, sent, _ = self.run_repair("pending_work", final="Note #987654 does not exist.")
+        case, sent, _ = self.run_repair(final="Note #987654 does not exist.")
         self.assertEqual(sent, T(case["lang"], "action_not_done"))
+
+    def test_mixed_source_format_repair_retains_date_task_and_exact_two_items(self):
+        case, sent, seen = self.run_repair(first=(
+            "Босс, вот ответ:\n1. Статус: задача запланирована.\n"
+            "2. Следующий шаг: проверить расписание.\nДата встречи: 28 октября 2026."))
+        self.assertEqual(sent, case["expected_response"])
+        self.assertIn('"next_step": "Проверить расписание"', str(seen[1]))
+        self.assertIn("28 октября 2026", sent)
+        self.assertEqual(len(sent.splitlines()), 2)
+        kinds = [row[0] for row in self.conn.execute("SELECT kind FROM issues")]
+        self.assertIn("converse_format_repaired", kinds)
+        self.assertNotIn("converse_action_repaired", kinds)
+
+    def test_one_shared_repair_blocks_a_second_invalid_format(self):
+        _case, sent, _seen = self.run_repair(
+            first="Ответ такой:\n1. Статус: запланирована.\n2. Шаг: проверить расписание.",
+            final="Вступление:\n1. Статус: запланирована.\n2. Шаг: проверить расписание.")
+        self.assertEqual(sent, self.agent._format_failure("ru"))
+
+    def test_action_repair_also_enforces_format_without_an_extra_guard_loop(self):
+        _case, sent, _seen = self.run_repair(final=(
+            "Статус: задача запланирована. Следующий шаг: проверить расписание, "
+            "дата встречи — 28 октября 2026."))
+        self.assertEqual(sent, self.agent._format_failure("ru"))
+
+    def test_degenerate_then_action_repair_preserves_the_existing_three_call_flow(self):
+        text = "Can you help me understand the next choices?"
+        store.convo_add(self.conn, 1, "user", text, source="boss")
+        final = "Nothing changed in this chat. Please use the save command for a new note."
+        with mock.patch.object(llm, "chat_profile", side_effect=[
+                "Yes", "I saved the note.", final]) as chat, \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply", return_value=True) as reply:
+            self.agent.do_converse(1, "en", text)
+        self.assertEqual(chat.call_count, 3)
+        self.assertEqual(reply.call_args[0][1], final)
+
+    def test_new_format_guard_does_not_add_a_third_call_after_a_degenerate_retry(self):
+        text = "Reply in exactly two numbered items: explain tea and coffee."
+        store.convo_add(self.conn, 1, "user", text, source="boss")
+        with mock.patch.object(llm, "chat_profile", side_effect=[
+                "Yes", "Tea is mild. Coffee is stronger."]) as chat, \
+                mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(self.agent, "reply", return_value=True) as reply:
+            self.agent.do_converse(1, "en", text)
+        self.assertEqual(chat.call_count, 2)
+        self.assertEqual(reply.call_args[0][1], self.agent._format_failure("en"))
+
+    def test_full_english_task_name_does_not_match_a_five_letter_prefix_collision(self):
+        case = prepare_context_case(self.agent, "pending_work")
+        self.assertTrue(converse.recorded_work_contract(self.conn, 1, case["text"]).pure_read)
+        self.conn.execute("UPDATE assistant_tasks SET objective='Budgetary review'")
+        self.conn.commit()
+        self.assertEqual(converse.recorded_work_contract(self.conn, 1, case["text"]), ())
+
+    def test_extra_intent_declines_pure_record_rendering(self):
+        prepare_context_case(self.agent, "pending_work")
+        for extra in ("Then cancel it.", "Draft a message.", "Translate it into French.",
+                      "What is the cost?", "What is the deadline?", "And its result?"):
+            text = "What is the status and next step of Budget review? " + extra
+            store.convo_add(self.conn, 1, "user", text, source="boss")
+            record = converse.recorded_work_contract(self.conn, 1, text)
+            self.assertTrue(record)
+            self.assertFalse(record.pure_read, extra)
+            self.assertIsNone(converse.recorded_work_answer(record, "en"), extra)
+
+    def test_task_id_read_cannot_silently_drop_an_additional_bare_reference(self):
+        case = prepare_context_case(self.agent, "pending_work")
+        text = f"What is the recorded status and next step for task #{case['task_id']}?"
+        store.convo_add(self.conn, 1, "user", text, source="boss")
+        self.assertTrue(converse.recorded_work_contract(self.conn, 1, text).pure_read)
+        text = text[:-1] + f" and #{case['task_id'] + 1}?"
+        store.convo_add(self.conn, 1, "user", text, source="boss")
+        self.assertEqual(converse.recorded_work_contract(self.conn, 1, text), ())
+
+    def test_unknown_record_state_declines_code_owned_rendering(self):
+        case = prepare_context_case(self.agent, "pending_work")
+        for table, column in (("assistant_tasks", "status"),
+                              ("assistant_tasks", "delivery_status"),
+                              ("assistant_task_steps", "status")):
+            old = self.conn.execute(f"SELECT {column} FROM {table}").fetchone()[0]
+            self.conn.execute(f"UPDATE {table} SET {column}='unsupported_future_state'")
+            self.assertEqual(converse.recorded_work_contract(self.conn, 1, case["text"]), ())
+            self.conn.execute(f"UPDATE {table} SET {column}=?", (old,))
+        self.conn.commit()
+
+    def test_russian_record_labels_are_localized_and_read_receipt_stays_separate(self):
+        case = prepare_context_case(self.agent, "uncertain_delivery")
+        text = "Какой статус и доставка задачи Budget review?"
+        store.convo_add(self.conn, 1, "user", text, source="boss")
+        record = converse.recorded_work_contract(self.conn, 1, text)
+        answer = converse.recorded_work_answer(record, "ru")
+        self.assertIn("выполнена", answer)
+        self.assertIn("неопределённа", answer)
+        self.assertIn("не подтверждено", answer)
+        self.assertNotIn("ambiguous", answer)
+        self.conn.execute("UPDATE assistant_tasks SET delivery_status='delivered' WHERE id=?",
+                          (case["task_id"],))
+        self.conn.commit()
+        answer = converse.recorded_work_answer(
+            converse.recorded_work_contract(self.conn, 1, text), "ru")
+        self.assertIn("доставлено", answer)
+        self.assertIn("прочтение тобой не подтверждено", answer)
 
     def test_wrong_turn_snapshot_fails_closed_before_a_model_call(self):
         context = converse.freeze_turn_context(2, "en", "Other request", [

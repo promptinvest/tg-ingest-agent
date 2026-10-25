@@ -42,3 +42,10 @@ unchanged and the original observation end remains.
 
 - 2026-10-25: owner said “go” after the architecture review and recommended first
   release. Implementation underway; no deployment claimed by this record.
+
+- 2026-10-25: first actual-model cohort rejected: context was present, but four
+  answers lost a required field or structure. Preserve that failed cohort and
+  its charges. Add narrowly bound code-owned recorded-work reads and a shared
+  format correction; mixed/ambiguous requests retain inference. Independent
+  holdouts protect identity, untrusted/edited sources and extra intents.
+  No model, budget, schema or tool permission change. New qualification pending.
