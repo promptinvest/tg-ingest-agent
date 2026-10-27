@@ -392,6 +392,10 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
 
     # -- Telegram helpers
 
+    def _action_delivery_sender(self):
+        """Return this running entry module's current, patchable transport."""
+        return tg_call
+
     def reply(self, chat_id, text, reply_to=None, reply_markup=None, record=True):
         # A note with no real Telegram message behind it (a fetched page) carries a
         # SYNTHETIC negative tg_message_id — a storage key, never a message id. It

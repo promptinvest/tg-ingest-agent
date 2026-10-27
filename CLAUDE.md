@@ -161,6 +161,15 @@ weaken the closed-world router.
   `| tail` pipes.
 - Idempotent installer; reinstall keeps the service running (the
   `=REPLACE_ME` grep must keep the `=`).
+- Every deployment must pass `verify_installed_layout.py` against the exact
+  packaged and installed runtime, with `agent.py` as the sole entry filename.
+  Use fresh isolated processes, synthetic state and fake model/Telegram
+  boundaries; deny real network and subprocess effects inside scenarios.
+  Exercise ordinary dispatch, no-op reminder maintenance and delivery recovery,
+  including known-unsent and ambiguous outcomes. Run the gate before mutation,
+  after copy before the first business-service restart, and during native
+  runtime verification. Process health or source-layout unit tests alone cannot
+  satisfy this gate. Preserve all original tests and failed artifacts.
 - Commit, then push to `promptinvest/tg-ingest-agent` — never leave commits
   local-only.
 - Update AND extend tests in the same change.

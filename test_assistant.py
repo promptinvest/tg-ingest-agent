@@ -5120,7 +5120,9 @@ class InstallerModulesTests(unittest.TestCase):
         for mod in modules:  # everything listed must exist to stage
             self.assertTrue((repo / mod).is_file(), f"MODULES lists missing file {mod}")
         local = {p.stem for p in repo.glob("*.py")}
-        installed = {Path(m).stem for m in modules} | {"tg_ingest_agent"}
+        # The source entry point is renamed on install; it is NOT importable
+        # under its repository name in the packaged application.
+        installed = {Path(m).stem for m in modules} | {"agent"}
         missing = {}
         for fname in ["tg_ingest_agent.py"] + modules:
             tree = astmod.parse((repo / fname).read_text(encoding="utf-8"))

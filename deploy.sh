@@ -59,6 +59,10 @@ fi"
 # pipes here return tail's exit 0 and mask a FAILED test run or a mid-way
 # installer abort (deploy printed green while the box kept running old code).
 install_verify="
+# Current releases qualify the renamed payload; old rollback sources predate it.
+if [ -f '$SRC/verify_installed_layout.py' ]; then
+  python3 -I -B '$SRC/verify_installed_layout.py' --source-root '$SRC'
+fi
 echo '--- install ---'
 deploy_source_revision=\$(git -C '$SRC' rev-parse --short HEAD 2>/dev/null || echo unknown)
 deploy_source_dirty=false
@@ -182,7 +186,9 @@ test_scratch=\$(mktemp -d /dev/shm/cara-tests.XXXXXX)
 trap 'case \"\$test_scratch\" in /dev/shm/cara-tests.??????) rm -rf -- \"\$test_scratch\";; esac' EXIT
 nice -n 10 ionice -c 3 unshare --net env -i PATH=/usr/bin:/bin HOME=\"\$test_scratch\" \
   PYTHONIOENCODING=utf-8 TMPDIR=\"\$test_scratch\" CARA_TEST_RUNTIME_ROOT=\"\$test_scratch/runtime\" \
-  python3 run_tests.py${TEST_TARGETS} 2>&1 | tail -85"
+  python3 run_tests.py${TEST_TARGETS} 2>&1 | tail -85
+echo '--- packaged entry-point qualification ---'
+python3 -I -B verify_installed_layout.py --source-root '$STAGE'"
     if [ "$MODE" != "--test" ]; then
       remote_script+="
 # ADR-0017: a deploy that fails AFTER the install wrote a fresh manifest marks it

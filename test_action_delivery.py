@@ -1,4 +1,5 @@
 """Crash/rejection qualification for reminder effects and delivery-only recovery."""
+import builtins
 import json
 import sqlite3
 import tempfile
@@ -58,6 +59,68 @@ class ActionDeliveryTests(unittest.TestCase):
     def pending(self, draft=None):
         store.pending_set(self.conn, 1, "reminder", draft or self.draft())
         return store.pending_get(self.conn, 1)
+
+    def reject_source_entry_import(self):
+        original = builtins.__import__
+
+        def guarded(name, *args, **kwargs):
+            if name == "tg_ingest_agent":
+                raise ModuleNotFoundError("No module named 'tg_ingest_agent'")
+            return original(name, *args, **kwargs)
+
+        return mock.patch.object(builtins, "__import__", side_effect=guarded)
+
+    def test_delivery_resolves_live_transport_after_agent_creation(self):
+        pending = self.pending()
+        self.scope("yes", 991)
+        replacement_calls = []
+
+        def replacement(*args, **kwargs):
+            replacement_calls.append((args, kwargs))
+            return {"message_id": 200, "text": args[2].get("text", "")}
+
+        self.assertIs(self.agent._action_delivery_sender(), self.transport)
+        with mock.patch.object(entry, "tg_call", side_effect=replacement) as current:
+            self.assertIs(self.agent._action_delivery_sender(), current)
+            with self.reject_source_entry_import():
+                self.agent.resolve_pending(1, "confirm", {}, pending, "en")
+        self.assertEqual(len(replacement_calls), 1)
+        self.assertEqual(len(self.sent), 0)
+        self.assertIs(self.agent._action_delivery_sender(), self.transport)
+        self.assertEqual(self.conn.execute("SELECT state FROM reply_outbox").fetchone()[0], "sent")
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), 1)
+
+    def test_noop_expiry_sweep_needs_no_source_entry_module_or_transport(self):
+        with self.reject_source_entry_import(), mock.patch.object(self.agent, "_reping_stale_fired"), \
+                mock.patch.object(llm, "chat_profile", side_effect=AssertionError("no model call")):
+            self.agent.check_reminder_expiry()
+        self.assertEqual(len(self.sent), 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM action_receipts").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reply_outbox").fetchone()[0], 0)
+        self.assertEqual(store.reminders_active(self.conn, 1), [])
+
+    def test_ordinary_dispatch_crosses_declined_reminder_handlers_without_source_import(self):
+        with self.reject_source_entry_import(), mock.patch.object(self.agent, "send_chat_action"), \
+                mock.patch.object(entry.router, "route", return_value={"action": "reminder_list", "params": {}, "confidence": 1}) as route, \
+                mock.patch.object(llm, "chat_profile", side_effect=AssertionError("no model call")):
+            self.agent.dispatch(1, {"message_id": 51}, "show my reminders")
+        route.assert_called_once()
+        self.assertEqual([method for method, _params in self.sent], ["sendMessage"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reply_outbox WHERE state='sent'").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM action_receipts").fetchone()[0], 0)
+
+    def test_draft_callback_delivers_once_without_source_entry_import(self):
+        self.pending()
+        self.scope("callback", 992)
+        with self.reject_source_entry_import(), \
+                mock.patch.object(llm, "chat_profile", side_effect=AssertionError("no model call")):
+            self.agent.handle_reminder_callback("cb", 1, {"message_id": 77, "text": "draft"}, "dr|set")
+            self.agent.handle_reminder_callback("cb", 1, {"message_id": 77, "text": "draft"}, "dr|set")
+        self.assertEqual(len(store.reminders_active(self.conn, 1)), 1)
+        self.assertIsNone(store.pending_get(self.conn, 1))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM action_receipts").fetchone()[0], 1)
+        self.assertEqual([method for method, _params in self.sent], ["sendMessage", "answerCallbackQuery", "editMessageText"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reply_outbox WHERE state='sent'").fetchone()[0], 3)
 
     def test_failed_reply_retries_delivery_after_inbound_is_done(self):
         update = {"update_id": 901, "message": {"message_id": 1, "chat": {"id": 1}, "from": {"id": 1}, "text": "hi"}}

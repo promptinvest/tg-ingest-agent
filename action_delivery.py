@@ -413,11 +413,11 @@ def send(agent, method, params, sender, *, record=False, history_text=None):
 
 
 def deliver_action(agent, key):
-    # Resolve at runtime so the same transport seam remains patchable by the
-    # original offline tests; this module never owns a second Telegram client.
-    import tg_ingest_agent
+    # The entry point is installed as agent.py and may run as __main__. Resolve
+    # its live transport through the instance, preserving the patchable seam
+    # without importing the source filename or creating a second entry module.
     for row in agent.conn.execute("SELECT * FROM reply_outbox WHERE action_key=? ORDER BY id", (key,)).fetchall():
-        deliver(agent, row, tg_ingest_agent.tg_call)
+        deliver(agent, row, agent._action_delivery_sender())
 
 
 def recover(conn):

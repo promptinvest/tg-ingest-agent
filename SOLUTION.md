@@ -1,5 +1,26 @@
 # Cara — Solution Specification
 
+## October 27 - Installed-layout delivery recovery
+
+The owner requested correction of the deployed import failure and permanent
+coverage of the actual deployment layout. Delivery-only recovery now obtains the
+live Agent's current Telegram sender instead of importing the repository entry
+filename. The installed entry remains `agent.py`; no source-name alias, second
+client, model change or schema migration is introduced.
+
+A shipped offline verifier exercises the exact packaged/installed artifact in
+fresh isolated processes with only installed filenames. Ordinary dispatch,
+no-op reminder expiry, committed action recovery, known-unsent rejection and
+ambiguous delivery use synthetic state and fake model/Telegram boundaries.
+Deployment checks run before installation, after copying exact runtime bytes and
+before the first service restart, and in native runtime verification. A mismatch
+or behavioral failure aborts the transition. Existing receipts, unknown outcomes,
+confirmation/action guards, profiles and budget limits remain unchanged.
+
+Implementation and qualification are in progress; production acceptance is not
+claimed here. All failed incoming updates and previous trial evidence remain
+preserved without manual replay. See the [incident and release record](docs/cara-installed-layout-recovery-2026-10-27.md).
+
 ## October 25 - Read-only grounded analysis accepted
 
 Deployed and accepted **2026-10-25 20:04:47 UTC** (23:04 Moscow), source

@@ -8,6 +8,9 @@ fail() {
 }
 
 [ "$(id -u)" -eq 0 ] || fail "run as root"
+# Synthetic packaged behavior, using only installed bytes and a scratch DB.
+/usr/bin/python3 -I -B /opt/tg-ingest-agent/verify_installed_layout.py \
+  --installed-root /opt/tg-ingest-agent
 systemctl is-active --quiet tg-ingest-agent || fail "Cara service is not active"
 systemctl is-active --quiet cara-worker || fail "worker service is not active"
 for retired in cara-mentor cara-mentor-runner; do

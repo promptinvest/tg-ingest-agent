@@ -36,7 +36,7 @@ MENTOR_UNIT_SRC=cara-mentor.service
 MENTOR_RUNNER_UNIT_SRC=cara-mentor-runner.service
 ENV_TEMPLATE=tg-ingest-agent.env.example
 
-MODULES="action_delivery.py answer_policy.py fleet_answers.py fleet_project_report.py fleet_broker.py fleet_project.py fleet_project_adapters.py fleet_monitor_adapters.py fleet_project_publish.py fleet_development_publish.py fleet_shared_reads.py fleet_investigation.py fleet_mcp_admission.py fleet_mcp.py fleet_mcp_client.py fleet_lifecycle.py fleet_lifecycle_svc.py fleet_async.py fleet_catalog.py fleet_facts.py fleet_facts_publish.py fleet_inference.py fleet_queries.py fleet_queue.py fleet_context.py fleet_report.py fleet.py fleet_protocol.py fleet_host.py fleet_relay.py cara_fleet.py learning.py media_svc.py converse_svc.py reminder_time.py call_budget.py inference_io.py voice_svc.py issue_digest.py common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py web_search.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py analysis_engine.py analysis_lifecycle.py task_runner.py tasks_svc.py worker_client.py improvement.py deployment_notice.py cara_worker.py mentor_protocol.py mentor_client.py cara_mentor.py mentor_runner.py verify_task_runtime.py verify_mentor_runtime.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
+MODULES="verify_installed_layout.py action_delivery.py answer_policy.py fleet_answers.py fleet_project_report.py fleet_broker.py fleet_project.py fleet_project_adapters.py fleet_monitor_adapters.py fleet_project_publish.py fleet_development_publish.py fleet_shared_reads.py fleet_investigation.py fleet_mcp_admission.py fleet_mcp.py fleet_mcp_client.py fleet_lifecycle.py fleet_lifecycle_svc.py fleet_async.py fleet_catalog.py fleet_facts.py fleet_facts_publish.py fleet_inference.py fleet_queries.py fleet_queue.py fleet_context.py fleet_report.py fleet.py fleet_protocol.py fleet_host.py fleet_relay.py cara_fleet.py learning.py media_svc.py converse_svc.py reminder_time.py call_budget.py inference_io.py voice_svc.py issue_digest.py common.py texts.py store.py tg_api.py llm.py router.py ingest.py reminders.py reminders_svc.py notes_svc.py spend.py gcal.py review.py sysinfo.py fetch.py web_search.py storage.py backup.py knowledge.py skill_manifest.py tool_broker.py tasking.py analysis_engine.py analysis_lifecycle.py task_runner.py tasks_svc.py worker_client.py improvement.py deployment_notice.py cara_worker.py mentor_protocol.py mentor_client.py cara_mentor.py mentor_runner.py verify_task_runtime.py verify_mentor_runtime.py trace.py events.py jobs.py runtime.py self_model.py boss_model.py persona.py converse.py memory_curator.py relationship.py action_truth.py proactive.py pdftext.py hermes.py journals.py media.py"
 
 # The unit file and the env template are STAGED FILES now, not heredocs in this
 # script: one copy of each, versioned in the repo. A stage dir that predates that
@@ -60,6 +60,9 @@ if [ -f "$ENV_FILE" ]; then
     exit 1
   fi
 fi
+
+# Exercise the exact renamed payload before any installation mutation.
+python3 -I -B "$STAGE_DIR/verify_installed_layout.py" --source-root "$STAGE_DIR"
 
 # Pre-install backups: each one holds a copy of the env file (secrets), and they
 # used to accumulate forever — disk growth plus a widening secrets footprint.
@@ -163,6 +166,9 @@ done
 install -m 0755 "$STAGE_DIR/verify-cara-runtime.sh" \
   "$APP_DIR/verify-cara-runtime.sh"
 rm -rf "$APP_DIR/__pycache__"
+# Verify the copied bytes and both offline entry points before any startup.
+python3 -I -B "$STAGE_DIR/verify_installed_layout.py" \
+  --source-root "$STAGE_DIR" --installed-root "$APP_DIR"
 
 # Immutable, secret-free source snapshot for Mentor analysis and candidate
 # testing. It is rebuilt atomically from the exact tested stage; no .git,
