@@ -2,24 +2,30 @@
 
 ## October 27 - Installed-layout delivery recovery
 
-The owner requested correction of the deployed import failure and permanent
-coverage of the actual deployment layout. Delivery-only recovery now obtains the
-live Agent's current Telegram sender instead of importing the repository entry
-filename. The installed entry remains `agent.py`; no source-name alias, second
-client, model change or schema migration is introduced.
+Deployed and accepted **2026-10-27 07:45:35 UTC** (10:45 Moscow), source
+`d9343ad`, build `447464bdaf47`, deployment `78582200ef0e63991778091e`.
+The actual sandbox observer passed at 07:48:12 UTC; the independent final audit
+passed at 08:32:44 UTC. The remotely verified annotated tag
+`production-2026-10-27-installed-layout` points to the exact installed source.
 
-A shipped offline verifier exercises the exact packaged/installed artifact in
-fresh isolated processes with only installed filenames. Ordinary dispatch,
-no-op reminder expiry, committed action recovery, known-unsent rejection and
-ambiguous delivery use synthetic state and fake model/Telegram boundaries.
-Deployment checks run before installation, after copying exact runtime bytes and
-before the first service restart, and in native runtime verification. A mismatch
-or behavioral failure aborts the transition. Existing receipts, unknown outcomes,
-confirmation/action guards, profiles and budget limits remain unchanged.
+Delivery-only recovery obtains the live Agent's current Telegram sender instead
+of importing the repository entry filename. The installed entry remains
+`agent.py`. A permanent offline gate exercises the exact packaged/installed
+artifact in fresh isolated import and script processes, with synthetic state and
+fake model/Telegram boundaries. It covers ordinary dispatch, no-op reminder
+expiry, committed recovery, known-unsent retry and ambiguous-send containment.
+The gate runs before installation, after runtime copying and before service
+startup, and through native verification. The original defect reproduces in the
+exact older installed layout; corrected-source normal/shuffled Linux, exact-head
+CI and network-isolated operator/kernel checks pass.
 
-Implementation and qualification are in progress; production acceptance is not
-claimed here. All failed incoming updates and previous trial evidence remain
-preserved without manual replay. See the [incident and release record](docs/cara-installed-layout-recovery-2026-10-27.md).
+No model-facing prompt, profile, action guard, budget or schema change is
+included. Five failed updates and their fifteen failed attempts remain preserved
+without replay. The audit preserves runtime, protected configuration, prior
+usage and historical unknowns; no new owner inbound traffic had arrived at the
+08:32 UTC health check. A fourth source epoch retains earlier trial evidence and the
+original October 28 end; this incident is application failure evidence, not a
+clean model-quality comparison. See the [incident and release record](docs/cara-installed-layout-recovery-2026-10-27.md).
 
 ## October 25 - Read-only grounded analysis accepted
 
