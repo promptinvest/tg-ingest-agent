@@ -19,6 +19,16 @@ with its registry. Its original three records and assertions are now pinned;
 an additional current-registry check preserves exact history. Production code
 is unchanged by that fixture correction; fresh full qualification is required.
 
+The first actual response cohort rejected six of fifteen outcomes despite the
+full normal/shuffled Linux suites passing. The next candidate distinguishes
+current text receipt from broader health, preserves exact owner-requested
+historical quotations, treats legacy notices as reported claims during dated
+recall, and permits a narrowly verified recorded-task status without accepting
+a new save claim. Every failed response remains evidence. Exact literal requests
+retain the native conversation path; existing deterministic task-status reads
+remain explicitly separate from paid model-quality evidence. The cumulative
+USD0.25/twenty-reservation qualification ceiling remains unchanged.
+
 ## October 27 - Installed-layout delivery recovery
 
 Deployed and accepted **2026-10-27 07:45:35 UTC** (10:45 Moscow), source

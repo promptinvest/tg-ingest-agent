@@ -58,3 +58,24 @@ the guarded operator transition. Preserve backups, stopped 56-table parity,
 protected artifacts, readiness checks and source-bound monitor/reverter evidence.
 The fifth trial segment keeps the original October28 end. No manual message,
 production-update replay, data restore or model-only revert is part of this work.
+
+## Actual response qualification correction
+
+The published candidate `f279f13` passed 3,199 tests in both root Linux orders
+(nine skips), the corresponding nonroot suites, and CI. Its first actual model
+cohort passed nine of fifteen semantic cases and failed six, so it is blocked
+from deployment. Ten known native calls cost USD0.04818656; accounting reconciled
+without changing earlier rows or historical unknowns. All raw replies, rejected
+drafts and independent reviews remain preserved.
+
+The failures cover an unrelated action-denial fallback after a valid recorded
+status, unsupported broad recovery claims, refusal of an exact historical
+quotation, and converting unverified old notices into proven failure events.
+The corrected candidate must cover these through the actual conversation and
+recall handlers while preserving new-action guards and private-life language.
+The global action-truth rules remain unchanged. Exact canonical notice reads
+requested by the current owner retain the native conversation path, with a
+source-bound literal contract. Existing deterministic task-status reads remain
+separate from model-quality evidence. A failed corrective template cannot satisfy semantic qualification.
+The same fifteen cases and cumulative USD0.25/twenty-native-reservation ceiling
+remain; source and native gates must qualify the corrected combined artifact.

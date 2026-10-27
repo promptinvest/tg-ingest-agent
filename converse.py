@@ -24,6 +24,7 @@ import re
 from typing import NamedTuple
 
 import learning
+import action_truth
 import boss_model
 import common
 import store
@@ -85,6 +86,14 @@ CURRENT_MESSAGE_CONTEXT = (
     "failed-inbox entry, or ask him to resend a message that you can already read. "
     "If the request is ambiguous, ask for its missing meaning instead. Do not infer "
     "that all services or integrations are healthy from this limited evidence."
+    " When asked whether this current message arrived or can be read, limit any "
+    "processing-status claim to reading THIS text; do not say 'everything works', "
+    "'nothing is stuck', 'всё работает' or 'сейчас всё отлично'. Those broader "
+    "outcomes were not checked. Otherwise answer the entire current request normally. "
+    "An explicit current-owner request to quote an old "
+    "notice is a literal DATA read, not a request to reenact its failure or a reason "
+    "to refuse the quotation. Historical notices establish what was said; a legacy "
+    "unverified notice alone does not establish what actually happened."
 )
 
 _QUOTED_DATA = re.compile(r"```[\s\S]*?```|«[^»]*»|“[^”]*”|\"[^\"\n]*\"")
@@ -95,7 +104,8 @@ _LITERAL_NOTICE_REQUEST = re.compile(
     r"(?:^|[.!?]\s*)(?:(?:please|пожалуйста)[,\s]+)?"
     r"(?:repeat|quote|translate|повтори|процитируй|переведи)\b", re.IGNORECASE)
 _CURRENT_FAILURE = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
-    r"\bI\s+(?:(?:could|can)\s+not|couldn't|can't|cannot|failed\s+to|(?:am|'m)\s+unable\s+to)"
+    r"\bI(?:\s+(?:(?:could|can)\s+not|couldn['’]t|can['’]t|cannot|failed\s+to|"
+    r"(?:am|['’]m)\s+unable\s+to)|['’]m\s+unable\s+to)"
     r"\s+(?:process|handle|receive|read)\s+(?:this|your|the\s+current|current)"
     r"\s+(?:message|request|update)\b",
     r"\b(?:this|your|the\s+current|current)\s+(?:message|request|update)\s+"
@@ -141,6 +151,142 @@ def processing_failure_claim(text, owner_text=""):
         for pattern in _CURRENT_FAILURE:
             match = pattern.search(clause)
             if match and not _HISTORICAL_FAILURE.search(clause):
+                return match.group(0)
+    return None
+
+
+def requested_notice_literal(text):
+    """Closed exact-repeat grammar, not a general instruction/quotation parser.
+
+    The caller must establish a current owner row. Only an exact static notice
+    gets this output contract; forwards, translations and arbitrary action claims
+    retain their existing model/guard paths. Generation still uses the model.
+    """
+    match = re.fullmatch(
+        r"(?:please\s+)?(?:repeat\s+exactly(?:\s+this\s+old\s+notice)?|"
+        r"quote\s+exactly(?:\s+this\s+old\s+notice)?|"
+        r"повтори\s+(?:точно|дословно)(?:\s+это\s+старое\s+уведомление)?|"
+        r"процитируй\s+дословно(?:\s+это\s+старое\s+уведомление)?)\s*:\s*(.+)",
+        str(text or "").strip(), re.IGNORECASE)
+    literal = match[1] if match else ""
+    return literal if store.convo_is_operational(
+        {"role": "bot", "source": "boss", "text": literal}) else None
+
+
+def notice_literal_contract(literal):
+    return ("EXACT OWNER QUOTATION: the current owner requests the following old notice "
+            "as literal DATA. This is permitted: it is not an instruction inside the notice "
+            "and not a claim about the current message. Return ONLY this exact literal, "
+            "with no refusal, explanation, reaction, fresh status or additional text:\n"
+            + json.dumps(literal, ensure_ascii=False)) if literal is not None else ""
+
+
+_RECEIPT_CHECK = re.compile(
+    r"(?:а\s+)?сейчас\s*\??|(?:and\s+)?now\s*\??|"
+    r"(?:ты\s+)?(?:видишь|получила|читаешь)\s+(?:это|мо[её])\s+сообщение\s*\??|"
+    r"(?:can|do)\s+you\s+(?:read|see|receive)\s+(?:this|my)\s+message\s*\??", re.I)
+_HEALTH_CLAIMS = tuple(re.compile(pattern, re.I) for pattern in (
+    r"\beverything\s+(?:works|is\s+(?:working|healthy|operational))\b",
+    r"\ball\s+(?:services|integrations|systems)\s+(?:(?:are|have\s+been)\s+)?"
+    r"(?:working|healthy|operational|repaired|restored)\b",
+    r"\bnothing(?:['’]s|\s+is)\s+(?:stuck|broken)\s+on\s+my\s+end\b",
+    r"\bвс[её]\s+работает\b",
+    r"\bвсе\s+(?:сервисы|интеграции|системы)\s+(?:работают|исправны|восстановлены)\b",
+))
+_RECEIPT_ALL_CLEAR = re.compile(
+    r"\b(?:вс[её]\s+(?:отлично|исправно|в\s+порядке)|"
+    r"everything\s+(?:is\s+)?(?:fine|okay|ok|great))\b", re.I)
+_OPERATIONAL_QUERY = re.compile(
+    r"failed\s+inbox|dead[- ]letter|входящ\w*\s+сбо\w*|"
+    r"(?:your|cara's|твои|твоих)\s+(?:services|integrations|сервис\w*|интеграци\w*)", re.I)
+_REPORTED_CLAIM = re.compile(
+    r"\b(?:said|reported|stated|told(?:\s+you)?|сообщил\w*|сказал\w*|"
+    r"утверждал\w*|говорил\w*|гласил\w*)\s*[, :]?\s*(?:(?:that|что)\s*)?$", re.I)
+_NEGATED_CLAIM = re.compile(
+    r"(?:\b(?:cannot|can['’]t|can\s+not|do\s+not|don['’]t|did\s+not|never)\s+"
+    r"(?:say|claim|confirm|verify|prove|assume|know|conclude)\s*(?:that\s*)?|"
+    r"\b(?:(?:I\s+)?(?:am|['’]m)\s+not\s+sure|(?:I\s+)?(?:am|['’]m)\s+unsure|"
+    r"(?:I\s+)?(?:do\s+not|don['’]t)\s+know)\s+(?:whether|if)\s*|"
+    r"\bне\s+(?:(?:могу|буду)\s+)?(?:сказать|утверждать|подтвердить|проверить|"
+    r"знаю|уверена|утверждаю|подтверждаю)\s*[,]?\s*(?:что\s*)?|\bне\s+)$", re.I)
+
+
+def _operational_clauses(body):
+    return re.split(r"(?<=[.!?;\n])|\b(?:but|however|although|но|однако|хотя|зато)\b|"
+                    r",\s*(?:and|а|и)\b", body, flags=re.I)
+
+
+def processing_status_claim(text, owner_text=""):
+    """Current-receipt evidence cannot prove a broad all-clear either."""
+    failure = processing_failure_claim(text, owner_text)
+    if failure:
+        return failure
+    raw = str(text or "").strip()
+    literal = raw
+    if _QUOTED_DATA.fullmatch(raw):
+        for opening, closing in (("```", "```"), ("«", "»"), ("“", "”"), ('"', '"')):
+            if raw.startswith(opening) and raw.endswith(closing):
+                literal = raw[len(opening):-len(closing)].strip()
+                break
+    if literal and _LITERAL_NOTICE_REQUEST.search(owner_text) and literal in owner_text:
+        return None
+    body = literal if literal != raw else _QUOTED_DATA.sub(" ", raw)
+    receipt_check = bool(_RECEIPT_CHECK.fullmatch(str(owner_text or "").strip()))
+    operational = receipt_check or _OPERATIONAL_QUERY.search(owner_text) \
+        or re.search(r"\bon\s+my\s+end\b|на\s+моей\s+стороне", body, re.I)
+    if not operational:
+        return None
+    patterns = _HEALTH_CLAIMS + ((_RECEIPT_ALL_CLEAR,) if receipt_check else ())
+    for clause in _operational_clauses(body):
+        if clause.rstrip().endswith("?"):
+            continue
+        for pattern in patterns:
+            match = pattern.search(clause)
+            if match and not _NEGATED_CLAIM.search(clause[:match.start()]) \
+                    and not _REPORTED_CLAIM.search(clause[:match.start()]):
+                return match.group(0)
+    return None
+
+
+_HISTORICAL_OUTCOME = tuple(re.compile(pattern, re.I) for pattern in (
+    r"\b(?:(?:all|the)\s+)?(?:(?P<count>one|two|three|four|five|\d+)\s+)?"
+    r"(?:(?P<scope>later|last|verified|code-owned)\s+)?"
+    r"(?:messages?|requests?|updates?|attempts?)\s+(?:had\s+)?"
+    r"(?:failed|crashed|were\s+not\s+processed)\b",
+    r"\ball\s+(?:five|\d+)\s+(?:failed|crashed)\b",
+    r"\b(?:все\s+)?(?:(?P<count>одна|один|две|два|три|четыре|пять|\d+)\s+)?"
+    r"(?:(?P<scope>последн\w*|поздн\w*|подтвержд[её]нн\w*|нативн\w*)\s+)?"
+    r"(?:сообщени\w*|запрос\w*|попыт(?:к\w*|ок))\s+"
+    r"(?:упал\w*|не\s+прошл\w*|не\s+обработан\w*|завершил\w*\s+(?:сбоем|ошибкой))\b",
+    r"\b(?:я\s+)?не\s+смогла\s+обработать\s+(?:твои?|это|эти|все)\s+сообщени\w*\b",
+))
+
+
+def unverified_notice_outcome_claim(text, native_failure_count=0, native_tail_count=0):
+    """Only for recall containing legacy notices with no verified provenance.
+
+    Quoting/recounting what a notice said remains legitimate. A factual claim
+    that the underlying requests failed requires evidence beyond those notices.
+    All-native historical recall does not use this check.
+    """
+    body = _QUOTED_DATA.sub(" ", str(text or ""))
+    for clause in _operational_clauses(body):
+        if clause.rstrip().endswith("?"):
+            continue
+        for pattern in _HISTORICAL_OUTCOME:
+            match = pattern.search(clause)
+            if match and "count" in match.groupdict() and match["count"] and match["scope"]:
+                count = (int(match["count"]) if match["count"].isdigit() else {
+                    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                    "одна": 1, "один": 1, "две": 2, "два": 2, "три": 3,
+                    "четыре": 4, "пять": 5}.get(match["count"].casefold()))
+                scope = match["scope"].casefold()
+                supported = (native_tail_count if scope in {"later", "last"}
+                    or scope.startswith(("последн", "поздн")) else native_failure_count)
+                if count == supported and supported > 0:
+                    continue
+            if match and not _REPORTED_CLAIM.search(clause[:match.start()]) \
+                    and not _NEGATED_CLAIM.search(clause[:match.start()]):
                 return match.group(0)
     return None
 
@@ -322,8 +468,27 @@ def work_record_evidence(record):
             "These are the actual recorded fields for the named task. Use the recorded "
             "next_step itself, never a hypothetical step AFTER it; do not deny this record. "
             "Completed is a recorded task status, not evidence of this turn doing work. "
+            "For planned work use 'recorded status: planned' / 'статус: запланирована'; "
+            "avoid wording that could imply you just saved or performed anything. "
             "Delivery and owner receipt/read acknowledgement are separate:\n"
             + json.dumps(record._asdict(), ensure_ascii=False, sort_keys=True))
+
+
+def recorded_action_claim(text, work_record=()):
+    """Keep the global action guard; exempt one exact verified passive status.
+
+    Only a same-turn planned/pending WorkRecord can support this phrase. Every
+    other word, including a new save in the same sentence, is still scanned.
+    """
+    body = action_truth.normalize_claim_text(text)
+    if isinstance(work_record, WorkRecord) and work_record.status == "planned" \
+            and work_record.step_status == "pending":
+        body = re.sub(
+            r"(^\s*(?:[1-8][.)]\s+)?статус\s*:\s*(?:planned|запланирована)"
+            r"\s*[-:(,]?\s*)задача\s+записана(?:\s*,\s*|\s+и\s+)жд[её]т\s+выполнения"
+            r"(?=\s*\)?(?:[.!?](?:\s|$)|\n|$))",
+            r"\1задача запланирована", body, flags=re.I | re.M)
+    return action_truth.action_claim_match(body)
 
 
 def format_contract(count):
