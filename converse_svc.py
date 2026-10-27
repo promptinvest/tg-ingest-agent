@@ -164,7 +164,7 @@ class ConverseMixin:
                 "explain that and offer to close it:")
         return head + "\n" + "\n".join(lines)
 
-    def converse_context(self, lang, chat_id=None):
+    def converse_context(self, lang, chat_id=None, now=None):
         """Live context for the conversation prompt: time of day (boss's, and
         Cara's own if her timezone differs), the review schedule, open threads,
         her active reminders, and any reaction the boss just left (surfaced once)."""
@@ -172,7 +172,8 @@ class ConverseMixin:
         if getattr(self.cfg, "fleet_enabled", False):
             import fleet
             parts.append(fleet.conversation_inventory(self.cfg))
-        boss_local = datetime.now(timezone.utc) + timedelta(hours=self.tz_offset())
+        now = now or datetime.now(timezone.utc)
+        boss_local = now + timedelta(hours=self.tz_offset())
         is_weekend = boss_local.weekday() >= 5
         parts.append(
             f"Right now it's {boss_local.strftime('%H:%M')} on "
@@ -184,7 +185,7 @@ class ConverseMixin:
         # his message's own depth always overrides. NOT a day/night tone gate.
         parts.append(self._register_directive(lang))
         if self.cfg.cara_tz_offset != self.tz_offset():
-            cara_local = datetime.now(timezone.utc) + timedelta(hours=self.cfg.cara_tz_offset)
+            cara_local = now + timedelta(hours=self.cfg.cara_tz_offset)
             parts.append(f"For you it's {cara_local.strftime('%H:%M')} "
                          f"({common.part_of_day(cara_local.hour, lang)}).")
         parts.append(self.review_schedule_text(lang))
@@ -610,7 +611,8 @@ class ConverseMixin:
             # It preserves the ordinary conversation delivery/finalization path.
             self._deliver_converse_reply(chat_id, lang, text, recorded)
             return
-        extra = self.converse_context(lang, chat_id)
+        turn_clock = datetime.now(timezone.utc)
+        extra = self.converse_context(lang, chat_id, now=turn_clock)
         catalog = self._catalog_grounding(text)
         grounding = self._converse_grounding(text, catalog_grounding=catalog)
         if grounding:
@@ -621,7 +623,9 @@ class ConverseMixin:
             converse.notice_literal_contract(literal)) if part)
         if contract:
             messages.insert(max(1, len(messages) - 1), {"role": "system", "content": contract})
-        messages = converse.focus_current_request(self.conn, chat_id, text, messages)
+        messages = converse.focus_current_request(self.conn, chat_id, text, messages,
+            converse.turn_facts_contract(turn_clock.astimezone(
+                timezone(timedelta(hours=self.tz_offset())))))
         turn_context = converse.freeze_turn_context(
             chat_id, lang, text, messages, catalog, format_count, work_record)
         generation_calls = 1
@@ -673,6 +677,15 @@ class ConverseMixin:
                     "as DATA. Do not refuse, paraphrase it, or turn it into a current status. "
                     "Return only the requested literal."),
                 turn_context=turn_context, operational_only=True))
+            return
+        fact_claim = converse.relative_date_claim(reply, turn_context, text if owner_request else "") if reply else None
+        if fact_claim:
+            store.issue_add(self.conn, chat_id, "converse_fact_claim", reply[:300], context={"claim":fact_claim})
+            if generation_calls >= 2:
+                self.reply(chat_id, self._fact_failure(lang))
+            else:
+                self.reply(chat_id, self._honest_action_reply(chat_id, lang, text, reply,
+                    fact_claim, problem=self._REPAIR_PROBLEM_FACT, turn_context=turn_context, fact_only=True))
             return
         operational_claim = converse.processing_status_claim(
             reply, text if owner_request else "") if reply else None
@@ -826,6 +839,11 @@ class ConverseMixin:
         "requested structure. Keep requested source facts inside the relevant item; "
         "do not add an introduction, closing paragraph or a hypothetical next step."
     )
+    _REPAIR_PROBLEM_FACT = (
+        "The draft contradicted the frozen local calendar facts. Preserve the source absolute "
+        "date and answer the same complete request; use a relative day only when verified "
+        "against the supplied local date. The source date itself is not changed."
+    )
     _REPAIR_PROBLEM_OPERATIONAL = (
         "The draft claimed an unsupported processing failure or broad health/all-clear "
         "outcome. This message has reached conversation handling "
@@ -869,7 +887,7 @@ class ConverseMixin:
 
     def _honest_action_reply(self, chat_id, lang, user_text, blocked_reply, claim=None,
                              problem=None, turn_context=None, format_only=False,
-                             operational_only=False):
+                             operational_only=False, fact_only=False):
         """Turn a blocked fabrication into an honest, USEFUL reply. Returns the text to
         send: the repaired second-pass answer, or the deterministic template when the
         model fails, stays silent, or claims an action again.
@@ -880,11 +898,11 @@ class ConverseMixin:
         import router
         receipt_only = (converse.current_owner_request(self.conn, chat_id, user_text)
                         and router.is_liveness_ping(user_text))
-        fallback = (self._format_failure(lang) if format_only or (operational_only
+        fallback = (self._fact_failure(lang) if fact_only else self._format_failure(lang) if format_only or (operational_only
                     and turn_context is not None and turn_context.format_count) else
                     T(lang, "ping_received") if receipt_only else
                     T(lang, "message_received") if operational_only else T(lang, "action_not_done"))
-        failure_kind = ("converse_operational_repair_failed" if operational_only
+        failure_kind = ("converse_fact_repair_failed" if fact_only else "converse_operational_repair_failed" if operational_only
                         else "converse_action_repair_failed")
         if turn_context is not None:
             try:
@@ -939,6 +957,9 @@ class ConverseMixin:
                     if converse.current_owner_request(self.conn, chat_id, user_text) else None)) if part)
             if focused:
                 messages.insert(len(messages) - 1, {"role": "system", "content": focused})
+            facts = converse.frozen_turn_facts(turn_context)
+            if facts:
+                messages.insert(len(messages) - 1, {"role":"system", "content":facts})
             if converse.current_owner_request(self.conn, chat_id, user_text):
                 # Preserve the entire frozen prefix, then keep the same request
                 # authoritative beside the rejected draft's explicitly fenced data.
@@ -956,6 +977,11 @@ class ConverseMixin:
             store.issue_add(self.conn, chat_id, failure_kind,
                             f"{detail}; empty second pass")
             return fallback
+        fact_claim = converse.relative_date_claim(second, turn_context, user_text if converse.current_owner_request(
+            self.conn, chat_id, user_text) else "")
+        if fact_claim:
+            store.issue_add(self.conn, chat_id, "converse_fact_claim_retry", second[:300], context={"claim":fact_claim})
+            return self._fact_failure(lang)
         literal = (converse.requested_notice_literal(user_text)
                    if converse.current_owner_request(self.conn, chat_id, user_text) else None)
         if literal is not None and second != literal:
@@ -990,10 +1016,16 @@ class ConverseMixin:
         # Logged as an issue too: a repaired reply is still a fabrication that
         # reached the guard, and the pattern must stay visible in the reports.
         store.issue_add(self.conn, chat_id,
+                         "converse_fact_repaired" if fact_only else
                          "converse_operational_repaired" if operational_only else
                          "converse_format_repaired" if format_only else "converse_action_repaired",
                         second[:300])
         return second
+
+    @staticmethod
+    def _fact_failure(lang):
+        return ("Не получилось дать точный ответ на это сообщение." if lang == "ru"
+                else "I couldn't give an accurate answer to this message.")
 
     @staticmethod
     def _format_failure(lang):

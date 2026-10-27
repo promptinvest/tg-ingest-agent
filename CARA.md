@@ -24,8 +24,21 @@ Actual action requests retain their existing guard and confirmation behavior.
 No provider/profile, production budget, schema, stored history or existing task
 authority changes are included. The owner approved a cumulative 47-call/USD0.25
 test ceiling for fresh qualification, retaining all prior 29 calls/USD0.139814352.
-Qualification and guarded deployment are still pending;
-passing mocked regression checks is not a claim of general model quality.
+Candidate `2aeecb9` is blocked by actual semantic qualification failures:
+unsupported recovery reassurance and an incorrect relative-date claim. The
+correction adds concise, code-owned current-turn facts beside the request and
+replays the same frozen facts during repair. The local date/time, receipt of this
+text, unverified earlier outcomes and global health stay distinct. A scoped
+recovery guard and a narrow explicit calendar-contradiction guard preserve quotes,
+translations, historical narratives, uncertainty and unrelated conversation.
+Fact-repair failures use neutral containment and remain failed quality outcomes.
+Reporting changes only register those factual correction outcomes. No new agent,
+provider, profile, schema or production budget is introduced.
+
+The cumulative test ledger is now 41 calls / USD0.199338752 under the approved
+47-call / USD0.25 bound. A complete fresh cohort needs another explicit test-limit
+decision; the earlier failed replies and usage remain unchanged. The corrective
+candidate is not deployed. Offline checks do not establish actual model quality.
 See [the current-request repair record](docs/cara-current-request-2026-10-27.md).
 
 ## October 27 - Functional review fixes accepted

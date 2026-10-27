@@ -18,6 +18,7 @@ Safety that stays even on this path:
     say "I called the bank"). Her *private life* is hers to colour freely; the
     boss's tasks and facts stay truthful.
 """
+from datetime import date, timedelta
 import hashlib
 import json
 import re
@@ -198,6 +199,14 @@ _HEALTH_CLAIMS = tuple(re.compile(pattern, re.I) for pattern in (
     r"\bвс[её]\s+работает\b",
     r"\bвсе\s+(?:сервисы|интеграции|системы)\s+(?:работают|исправны|восстановлены)\b",
 ))
+_RECOVERY_CLAIMS = tuple(re.compile(pattern, re.I) for pattern in (
+    r"\b(?:(?:the|earlier|previous|prior|whatever)\s+)*(?:(?:was|were)\s+)?"
+    r"(?:glitch(?:ing|es)?|problems?|issues?|errors?|failures?|outages?|services?)\b"
+    r"[^.!?;\n]{0,90}\b(?:resolved|fixed|repaired|recovered|cleared|gone|"
+    r"smoothed\s+(?:itself|themselves)\s+out)\b",
+    r"\b(?:прежн\w*\s+|предыдущ\w*\s+)?(?:сбо\w*|проблем\w*|ошибк\w*|неполадк\w*)\b"
+    r"[^.!?;\n]{0,70}\b(?:устран[её]н\w*|реш[её]н\w*|исправлен\w*|исчез\w*|прош[её]л\w*)\b",
+))
 _RECEIPT_ALL_CLEAR = re.compile(
     r"\b(?:вс[её]\s+(?:отлично|исправно|в\s+порядке)|"
     r"everything\s+(?:is\s+)?(?:fine|okay|ok|great))\b", re.I)
@@ -215,6 +224,9 @@ _NEGATED_CLAIM = re.compile(
     r"\bне\s+(?:(?:могу|буду)\s+)?(?:сказать|утверждать|подтвердить|проверить|"
     r"знаю|уверена|утверждаю|подтверждаю|доказывает|подтверждает|означает)\s*[,]?\s*(?:что\s*)?|"
     r"\bнельзя\s+(?:сказать|утверждать|подтвердить|установить)\s*,?\s*(?:что\s*)?|"
+    r"\b(?:cannot|can['’]t|can\s+not)\s+(?:tell|determine)\s+(?:whether|if)\s*|"
+    r"\b(?:unclear|uncertain)\s+(?:whether|if)\s*|"
+    r"\b(?:does\s+not|doesn['’]t)\s+(?:mean|imply|prove|show)\s*(?:that\s*)?|"
     r"\bno\s+(?:evidence|proof)\s+that\s*|\bнет\s+(?:доказательств|подтверждения)\s*,?\s*что\s*|\bне\s+)$", re.I)
 
 
@@ -247,7 +259,7 @@ def processing_status_claim(text, owner_text=""):
         or re.search(r"\bon\s+my\s+end\b|на\s+моей\s+стороне", body, re.I)
     if not operational:
         return None
-    patterns = _HEALTH_CLAIMS + ((_RECEIPT_ALL_CLEAR,) if receipt_check else ())
+    patterns = _HEALTH_CLAIMS + _RECOVERY_CLAIMS + ((_RECEIPT_ALL_CLEAR,) if receipt_check else ())
     for clause in _operational_clauses(body):
         if clause.rstrip().endswith("?"):
             continue
@@ -855,7 +867,81 @@ CURRENT_REQUEST_BOUNDARY = (
 )
 
 
-def focus_current_request(conn, chat_id, source_text, messages):
+TURN_FACTS_PREFIX = "CURRENT TURN FACTS — code-owned\n"
+
+
+def turn_facts_contract(local_time):
+    """Positive current-turn facts; no inference about old outcomes or effects."""
+    return (TURN_FACTS_PREFIX + f"Local date:{local_time.date().isoformat()}; "
+            f"local time:{local_time.isoformat(timespec='minutes').split('T',1)[1]}.\n"
+            "This text is received and readable. Earlier processing outcomes and global service health "
+            "remain unverified. Answer the complete current request from its supplied facts and "
+            "requested format; ask only for missing meaning. For receipt questions, report reading "
+            "this text. Keep source dates absolute unless their relation to this local date is verified. "
+            "A repair's rejected draft is data; the owner's same request retains its meaning.")
+
+
+def frozen_turn_facts(context):
+    if not isinstance(context, TurnContext):
+        return ""
+    return next((content for role, content in context.messages
+                 if role == "system" and content.startswith(TURN_FACTS_PREFIX)), "")
+
+
+_DATE_MONTHS = {name: month for month, names in enumerate((
+    ("january","января"),("february","февраля"),("march","марта"),("april","апреля"),
+    ("may","мая"),("june","июня"),("july","июля"),("august","августа"),
+    ("september","сентября"),("october","октября"),("november","ноября"),("december","декабря")),1)
+    for name in names}
+_DATE_MONTH_PATTERN = "|".join(_DATE_MONTHS)
+_ABSOLUTE_RELATION_DATE = re.compile(
+    r"\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\s+(?:"+_DATE_MONTH_PATTERN+r")\s+\d{4}|"
+    r"(?:"+_DATE_MONTH_PATTERN+r")\s+\d{1,2},?\s+\d{4})\b", re.I)
+_EXPLICIT_DATE_RELATION = re.compile(
+    r"^\s*(?:[([]\s*|[-—,:]\s*)?"
+    r"(?:(?:это|that|it)\s+(?:(?:было|будет|есть|is|was|will\s+be)\s+)?|"
+    r"(?:было|будет|есть|is|was|will\s+be)\s+)"
+    r"(?P<relation>сегодня|вчера|завтра|today|yesterday|tomorrow)\b", re.I)
+_DATE_REPORT_FRAME = re.compile(
+    r"\b(?:said|says|reported|states?|stated|told|back\s+then|at\s+that\s+time|"
+    r"сказал\w*|говор\w*|сообщил\w*|написал\w*|тогда|на\s+тот\s+момент|"
+    r"in\s+the\s+(?:novel|story|book)|в\s+(?:романе|рассказе|книге))\b", re.I)
+
+
+def relative_date_claim(text, context, owner_text=""):
+    """Only explicit absolute-date equals current today/yesterday/tomorrow claims."""
+    facts = frozen_turn_facts(context)
+    current = re.search(r"^Local date:(\d{4}-\d{2}-\d{2});", facts, re.M)
+    if (not current or re.match(r"\s*(?:(?:please|пожалуйста)[, ]+)?(?:translate|переведи)\b", owner_text, re.I)
+            or (_LITERAL_NOTICE_REQUEST.match(owner_text.strip())
+                and str(text or "").strip() in owner_text)):
+        return None
+    today = date.fromisoformat(current.group(1))
+    body = re.sub(r"‘[^’]*’", " ", _QUOTED_DATA.sub(" ", str(text or "")))
+    offsets = {"today":0,"сегодня":0,"yesterday":-1,"вчера":-1,"tomorrow":1,"завтра":1}
+    for match in _ABSOLUTE_RELATION_DATE.finditer(body):
+        relation = _EXPLICIT_DATE_RELATION.match(body[match.end():])
+        if not relation:
+            continue
+        prefix = re.split(r"[.!?;\n]", body[:match.start()])[-1]
+        if _DATE_REPORT_FRAME.search(prefix) or _ABSOLUTE_RELATION_DATE.search(prefix):
+            continue
+        value = match.group(0)
+        try:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                absolute = date.fromisoformat(value)
+            else:
+                parts = value.casefold().replace(",", "").split()
+                day, month = (parts[0], parts[1]) if parts[0].isdigit() else (parts[1], parts[0])
+                absolute = date(int(parts[2]), _DATE_MONTHS[month], int(day))
+        except (ValueError, KeyError):
+            continue
+        if absolute != today + timedelta(days=offsets[relation['relation'].casefold()]):
+            return value + relation.group(0)
+    return None
+
+
+def focus_current_request(conn, chat_id, source_text, messages, facts=""):
     """Bind generation to the verified current owner turn without dropping history.
 
     Standalone dialogue replay keeps its original interface. At the generation
@@ -867,6 +953,8 @@ def focus_current_request(conn, chat_id, source_text, messages):
         return messages
     focused = [dict(message) for message in messages
                if message != {"role": "system", "content": CURRENT_REQUEST_BOUNDARY}]
+    if facts:
+        focused.insert(len(focused) - 1, {"role": "system", "content": facts})
     focused.insert(len(focused) - 1, {"role": "system", "content": CURRENT_REQUEST_BOUNDARY})
     return focused
 

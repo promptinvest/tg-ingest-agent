@@ -977,6 +977,22 @@ TEXTS = {
         "ru": "исправленные сообщения о сбое обработки",
         "en": "corrected processing-status replies",
     },
+    "issue_kind_converse_fact_claim": {
+        "ru": "заблокированные неподтверждённые утверждения",
+        "en": "blocked unsupported factual claims",
+    },
+    "issue_kind_converse_fact_claim_retry": {
+        "ru": "повторные неподтверждённые утверждения",
+        "en": "repeat unsupported factual claims",
+    },
+    "issue_kind_converse_fact_repaired": {
+        "ru": "исправленные фактические утверждения",
+        "en": "corrected factual replies",
+    },
+    "issue_kind_converse_fact_repair_failed": {
+        "ru": "неудавшиеся исправления фактических утверждений",
+        "en": "factual rewrites that failed",
+    },
     "issue_kind_converse_format_mismatch": {
         "ru": "ответы, не соблюдавшие запрошенный формат",
         "en": "replies that missed your requested format",

@@ -151,6 +151,8 @@ def collect(conn, period):
                   "converse_action_claim_retry", "converse_action_repair_failed",
                   "converse_operational_claim", "converse_operational_claim_retry",
                   "converse_operational_repair_failed",
+                  "converse_fact_claim", "converse_fact_claim_retry",
+                  "converse_fact_repair_failed",
                   "converse_format_mismatch", "converse_format_repair_failed",
                   "converse_ungrounded_number", "correction_unresolved",
                   "router_invalid_output", "converse_degenerate")
@@ -649,6 +651,7 @@ FAILURE_ISSUE_KINDS = ("llm_error", "ingest_failed", "stt_failed", "sched_send_f
                        "budget_stop", "db_stalled", "backup_failed", "dead_letter",
                        "converse_action_repair_failed", "converse_degenerate",
                        "converse_operational_repair_failed",
+                       "converse_fact_repair_failed",
                        "converse_format_repair_failed", "router_invalid_output")
 
 
