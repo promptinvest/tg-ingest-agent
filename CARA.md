@@ -29,6 +29,15 @@ retain the native conversation path; existing deterministic task-status reads
 remain explicitly separate from paid model-quality evidence. The cumulative
 USD0.25/twenty-reservation qualification ceiling remains unchanged.
 
+Candidate `d984f44` then passed fourteen of fifteen response cases, including
+the actual literal quote and task/source/date replies. Its dated recall still
+inferred that a code scenario ran from two legacy notice rows whose origin was
+unverified. That candidate remains blocked. The next correction gives recall
+compact verified origin counts and checks unsupported execution-provenance
+claims without changing raw history or the fourteen already working flows.
+Nineteen cumulative native test calls cost USD0.090743872; no extra calls or
+extension of the selected twenty-call limit is implied by this implementation.
+
 ## October 27 - Installed-layout delivery recovery
 
 Deployed and accepted **2026-10-27 07:45:35 UTC** (10:45 Moscow), source

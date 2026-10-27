@@ -79,3 +79,14 @@ source-bound literal contract. Existing deterministic task-status reads remain
 separate from model-quality evidence. A failed corrective template cannot satisfy semantic qualification.
 The same fifteen cases and cumulative USD0.25/twenty-native-reservation ceiling
 remain; source and native gates must qualify the corrected combined artifact.
+
+The next published candidate `d984f44` passed all 3,218 root Linux tests in both
+orders (nine skips), CI and fourteen of fifteen actual response cases. Its dated
+answer still called the notices a code placeholder that proved a scenario ran;
+two of those rows have unverified legacy provenance. This remains a semantic
+failure and blocks deployment. Nine additional known calls bring the cumulative
+cohort to nineteen reservations and USD0.090743872, with no unknown outcomes.
+The next correction grounds recall in a compact origin summary and rejects
+unsupported code-execution claims, while preserving valid dated attributions,
+native notice evidence and the exact earlier regression tests. The selected
+twenty-call bound remains; this record authorizes no extra paid requests.

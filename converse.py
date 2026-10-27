@@ -106,7 +106,7 @@ _LITERAL_NOTICE_REQUEST = re.compile(
 _CURRENT_FAILURE = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
     r"\bI(?:\s+(?:(?:could|can)\s+not|couldn['’]t|can['’]t|cannot|failed\s+to|"
     r"(?:am|['’]m)\s+unable\s+to)|['’]m\s+unable\s+to)"
-    r"\s+(?:process|handle|receive|read)\s+(?:this|your|the\s+current|current)"
+    r"\s+(?:process|handle|receive|read)\s+(?:this(?:\s+current)?|your|the\s+current|current)"
     r"\s+(?:message|request|update)\b",
     r"\b(?:this|your|the\s+current|current)\s+(?:message|request|update)\s+"
     r"(?:(?:is|was|has\s+been)\s+(?:in\s+the\s+failed\s+inbox|dead[- ]lettered|"
@@ -150,7 +150,12 @@ def processing_failure_claim(text, owner_text=""):
                            body, flags=re.IGNORECASE):
         for pattern in _CURRENT_FAILURE:
             match = pattern.search(clause)
-            if match and not _HISTORICAL_FAILURE.search(clause):
+            historical_report = (match and _REPORTED_CLAIM.search(clause[:match.start()])
+                and re.search(r"\bcould(?:\s+not|n['’]t)\b|\bне\s+(?:смогла|удалось|получилось)\b",
+                              match.group(0), re.I)
+                and not re.search(r"\b(?:now|current|сейчас|текущ\w*)\b", clause, re.I))
+            if match and not _HISTORICAL_FAILURE.search(clause) \
+                    and not historical_report:
                 return match.group(0)
     return None
 
@@ -203,12 +208,14 @@ _REPORTED_CLAIM = re.compile(
     r"\b(?:said|reported|stated|told(?:\s+you)?|сообщил\w*|сказал\w*|"
     r"утверждал\w*|говорил\w*|гласил\w*)\s*[, :]?\s*(?:(?:that|что)\s*)?$", re.I)
 _NEGATED_CLAIM = re.compile(
-    r"(?:\b(?:cannot|can['’]t|can\s+not|do\s+not|don['’]t|did\s+not|never)\s+"
+    r"(?:\b(?:cannot|can['’]t|can\s+not|do\s+not|don['’]t|does\s+not|doesn['’]t|did\s+not|never)\s+"
     r"(?:say|claim|confirm|verify|prove|assume|know|conclude)\s*(?:that\s*)?|"
     r"\b(?:(?:I\s+)?(?:am|['’]m)\s+not\s+sure|(?:I\s+)?(?:am|['’]m)\s+unsure|"
     r"(?:I\s+)?(?:do\s+not|don['’]t)\s+know)\s+(?:whether|if)\s*|"
     r"\bне\s+(?:(?:могу|буду)\s+)?(?:сказать|утверждать|подтвердить|проверить|"
-    r"знаю|уверена|утверждаю|подтверждаю)\s*[,]?\s*(?:что\s*)?|\bне\s+)$", re.I)
+    r"знаю|уверена|утверждаю|подтверждаю|доказывает|подтверждает|означает)\s*[,]?\s*(?:что\s*)?|"
+    r"\bнельзя\s+(?:сказать|утверждать|подтвердить|установить)\s*,?\s*(?:что\s*)?|"
+    r"\bno\s+(?:evidence|proof)\s+that\s*|\bнет\s+(?:доказательств|подтверждения)\s*,?\s*что\s*|\bне\s+)$", re.I)
 
 
 def _operational_clauses(body):
@@ -259,10 +266,64 @@ _HISTORICAL_OUTCOME = tuple(re.compile(pattern, re.I) for pattern in (
     r"(?:сообщени\w*|запрос\w*|попыт(?:к\w*|ок))\s+"
     r"(?:упал\w*|не\s+прошл\w*|не\s+обработан\w*|завершил\w*\s+(?:сбоем|ошибкой))\b",
     r"\b(?:я\s+)?не\s+смогла\s+обработать\s+(?:твои?|это|эти|все)\s+сообщени\w*\b",
+    r"\b(?:сработал\w*|запустил\w*|выполнил\w*)\s+"
+    r"(?:(?:данн\w*|эт\w*|сам\w*)\s+)?(?:сценари\w*|обработчик\w*|код)\b",
+    r"\b(?:(?:the|this|that)\s+)?(?:handler|scenario|fallback|code\s+path)\s+"
+    r"(?:has\s+)?(?:ran|run|fired|executed|triggered|was\s+triggered)\b",
 ))
+_ORIGIN_CLAIMS = _HISTORICAL_OUTCOME[-2:]
+_NATIVE_NOTICE_SCOPE = re.compile(
+    r"\b(?:for|для|по)\s+(?P<count>[1-9][0-9]{0,3}|[a-zа-яё]+)\s+"
+    r"(?:code-owned|verified|native|подтвержд[её]нн\w*|нативн\w*)\s+"
+    r"(?:notices|уведомлени\w*)\s*[, :]?\s*$", re.I)
+_GENERIC_ORIGIN = re.compile(
+    r"(?:сработал\s+(?:данный\s+)?(?:обработчик|код|сценарий)|"
+    r"(?:the\s+)?(?:handler|scenario|fallback|code\s+path)\s+(?:ran|fired|was\s+triggered))", re.I)
 
 
-def unverified_notice_outcome_claim(text, native_failure_count=0, native_tail_count=0):
+class NoticeHistory(NamedTuple):
+    """Provenance of the selected recall rows, never inferred from notice prose."""
+    requested_since_utc: str
+    requested_until_utc: str
+    selection: str
+    selected_rows: int
+    code_owned_notices: int
+    unverified_legacy_notices: int
+    native_failed_update_notices: int
+    native_tail_failed_update_notices: int
+
+
+def notice_history_evidence(rows, since_utc, until_utc, selection="window"):
+    notices = [row for row in rows if store.convo_is_operational(row)]
+    if not notices:
+        return ()
+    native = sum(store.convo_row_source(row) in store.CONVO_OPERATIONAL_SOURCES for row in notices)
+    failures = sum(store.convo_row_source(row) == "operational:update_dead_letter" for row in notices)
+    tail = 0
+    for row in reversed(notices):
+        if store.convo_row_source(row) != "operational:update_dead_letter":
+            break
+        tail += 1
+    return NoticeHistory(str(since_utc), str(until_utc), str(selection), len(rows),
+                         native, len(notices)-native, failures, tail)
+
+
+def notice_history_context(evidence):
+    if not evidence:
+        return ""
+    return ("Code-owned recall provenance for the selected rows only (DATA, partial selection). "
+            "Counts below come from stored source tags, never from matching the wording of a notice. "
+            "A code-owned notice has native origin. An unverified legacy notice has UNKNOWN origin: "
+            "matching a standard template does NOT prove that code, a handler, a fallback or a "
+            "scenario ran. Do not call that text proof of a technical code path. Preserve the "
+            "native/legacy distinction, including in a mixed window. For an ordinary question "
+            "about what you said, quote or report the notice and its date in ordinary words; "
+            "do not invent a backend explanation or turn uncertain claims into verified events.\n"
+            + json.dumps(evidence._asdict(), ensure_ascii=False, sort_keys=True))
+
+
+def unverified_notice_outcome_claim(text, native_failure_count=0, native_tail_count=0,
+                                    native_notice_count=0):
     """Only for recall containing legacy notices with no verified provenance.
 
     Quoting/recounting what a notice said remains legitimate. A factual claim
@@ -275,6 +336,14 @@ def unverified_notice_outcome_claim(text, native_failure_count=0, native_tail_co
             continue
         for pattern in _HISTORICAL_OUTCOME:
             match = pattern.search(clause)
+            if match and pattern in _ORIGIN_CLAIMS and _GENERIC_ORIGIN.fullmatch(match.group(0)) \
+                    and not clause[match.end():].strip(" .!\t"):
+                native_scope = _NATIVE_NOTICE_SCOPE.search(clause[:match.start()])
+                if native_scope:
+                    word = native_scope["count"].casefold().replace("ё", "е")
+                    count = int(word) if word.isdigit() else _COUNT_WORDS.get(word)
+                    if count == native_notice_count and native_notice_count > 0:
+                        continue
             if match and "count" in match.groupdict() and match["count"] and match["scope"]:
                 count = (int(match["count"]) if match["count"].isdigit() else {
                     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
