@@ -42,8 +42,12 @@ has been eliminated.
 ## Verification and release requirements
 
 Meaningful failing reproductions precede the fixes. Existing outcome assertions
-remain; one media callback fixture is corrected to the message ID returned by its
-own fake transport, with all saved-note/fact assertions preserved. Run the full
+remain; the media callback fixture uses its own fake transport's delivered ID.
+The original completed-handling fixture explicitly seeds its original three
+records; a separate registry-wide test verifies every current handled category
+and exact unchanged historical rows. Every original assertion is preserved.
+The first candidate's CI failure and full verification evidence remain; its
+production bytes are unchanged by these fixture corrections. Run the full
 normal/shuffled Linux gates and the exact installed `agent.py` artifact gate.
 Model qualification uses synthetic state and fake Telegram, the native profiles
 and meter, a selected USD0.25/max20-native-call ceiling, and unchanged native

@@ -24,6 +24,13 @@ class OperationalReportingTests(unittest.TestCase):
         store.issue_add(self.conn, 1, "converse_operational_repaired", "synthetic repaired answer")
         self.assertEqual(issue_digest.text(self.conn, "en"), "")
 
+    def test_all_current_completed_handling_keeps_exact_history(self):
+        for kind in issue_digest.COMPLETED_HANDLING:
+            store.issue_add(self.conn, 1, kind, "synthetic completed handling")
+        before = [tuple(row) for row in self.conn.execute("SELECT * FROM issue_patterns ORDER BY fingerprint")]
+        self.assertEqual(issue_digest.text(self.conn, "en"), "")
+        self.assertEqual([tuple(row) for row in self.conn.execute("SELECT * FROM issue_patterns ORDER BY fingerprint")], before)
+
     def test_failed_repair_is_a_translated_failure(self):
         self.assertIn("converse_operational_repair_failed", review.FAILURE_ISSUE_KINDS)
         store.issue_add(self.conn, 1, "converse_operational_repair_failed", "synthetic private diagnostic")

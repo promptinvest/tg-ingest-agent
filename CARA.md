@@ -14,6 +14,11 @@ these corrections. Full exact-source Linux, real-model qualification and guarded
 installed acceptance remain required; this paragraph does not claim deployment.
 See [the functional review record](docs/cara-functional-review-2026-10-27.md).
 
+The first candidate exposed a completed-handling fixture that implicitly grew
+with its registry. Its original three records and assertions are now pinned;
+an additional current-registry check preserves exact history. Production code
+is unchanged by that fixture correction; fresh full qualification is required.
+
 ## October 27 - Installed-layout delivery recovery
 
 Deployed and accepted **2026-10-27 07:45:35 UTC** (10:45 Moscow), source

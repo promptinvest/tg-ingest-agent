@@ -234,7 +234,9 @@ class DigestContentTests(unittest.TestCase):
         self.assertIn("Напомни в воскресенье", body)
 
     def test_only_completed_handling_stays_quiet_without_resolving_history(self):
-        for kind in issue_digest.COMPLETED_HANDLING:
+        # Pin the original three historical records: extending the registry
+        # must not silently change this fixture's population.
+        for kind in ("correction", "converse_action_repaired", "curation_skipped_after_fabrication"):
             self.add(kind, "Historical handling evidence", "2026-10-06T10:00:00+00:00")
         self.assertEqual(issue_digest.text(self.conn, "en", now=self.NOW), "")
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM issue_patterns WHERE status='open'").fetchone()[0], 3)
