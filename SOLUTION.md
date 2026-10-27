@@ -1,45 +1,34 @@
 # Cara — Solution Specification
 
-## October 27 - Current-request conversation repair in qualification
+## October 27 - Current-request conversation repair accepted
 
-The owner requested "fix & deploy" after a live receipt probe was answered using
-older failed reminder/gratitude requests, then asked whether the conversation
-architecture needed correction. The review supports a focused change inside the
-existing dispatcher and conversation modules; a new agent, skill or model split
-is not justified by this incident.
+Deployed and accepted **2026-10-27 17:28:51.589018 UTC**, source `83e8162`, build
+`ca7db0315cbc`, deployment `ed6cc206f136827168490016`. The owner requested the receipt
+and history bug be fixed and deployed. The change stays within the existing
+router, dispatcher, conversation and reporting modules; this incident did not
+justify another agent or model split.
 
-Standalone owner receipt probes use a narrow bilingual parser and the existing
-durable reply path. They acknowledge only receipt of the current message, skip
-routing, KB embedding/retrieval and conversation curation, and make no claim about
-overall service health. Pending drafts, live task approvals, an open conversation
-question, replies/quotes, forwarded content and media retain their existing paths.
-Ordinary greetings remain generated conversation; commands containing "test" or
-"ping" remain commands.
+Standalone receipt probes now use a narrow bilingual parser and the durable
+reply path, acknowledging only the current message without routing, embedding
+or conversation curation. Existing pending confirmations, open questions,
+replies, forwarded content, media and substantive commands retain their paths.
+Generated conversation and its bounded repair bind the verified current request
+to the same frozen local clock and supported receipt facts. History and source
+fences remain; source dates, earlier processing outcomes and global health stay
+distinct. Scoped recovery and explicit calendar-contradiction checks preserve
+quotation, historical recall, uncertainty and ordinary conversation. Failed
+factual repairs use neutral containment and remain quality failures.
 
-Generated conversation and bounded repair explicitly bind the current verified
-owner request even when historical operational notices separate prior requests.
-History and forwarded-source fences remain intact. Repeated fabricated action
-claims stay blocked; a verified receipt probe uses receipt-specific containment.
-Actual action requests retain their existing guard and confirmation behavior.
-No provider/profile, production budget, schema, stored history or existing task
-authority changes are included. The owner approved a cumulative 47-call/USD0.25
-test ceiling for fresh qualification, retaining all prior 29 calls/USD0.139814352.
-Candidate `2aeecb9` is blocked by actual semantic qualification failures:
-unsupported recovery reassurance and an incorrect relative-date claim. The
-correction adds concise, code-owned current-turn facts beside the request and
-replays the same frozen facts during repair. The local date/time, receipt of this
-text, unverified earlier outcomes and global health stay distinct. A scoped
-recovery guard and a narrow explicit calendar-contradiction guard preserve quotes,
-translations, historical narratives, uncertainty and unrelated conversation.
-Fact-repair failures use neutral containment and remain failed quality outcomes.
-Reporting changes only register those factual correction outcomes. No new agent,
-provider, profile, schema or production budget is introduced.
-
-The cumulative test ledger is now 41 calls / USD0.199338752 under the approved
-47-call / USD0.25 bound. A complete fresh cohort needs another explicit test-limit
-decision; the earlier failed replies and usage remain unchanged. The corrective
-candidate is not deployed. Offline checks do not establish actual model quality.
-See [the current-request repair record](docs/cara-current-request-2026-10-27.md).
+The exact source passed the full offline suite, CI, installed-layout checks and
+independent review of the finite functional and native-model qualification cohort.
+The final live audit (`4697a38a`) confirmed the installed release and server
+observer. Actual native accounting passed within the owner's amended test limits,
+preserving earlier usage and failed replies. This finite check
+does not establish general intelligence or ordinary-traffic quality. Models,
+production budgets, schema, task authority and stored history are unchanged.
+The release adds a separate source segment to the existing trial, whose original
+end remains October 28 at 13:36:17.924552 UTC. See
+[the current-request repair record](docs/cara-current-request-2026-10-27.md).
 
 ## October 27 - Functional review fixes accepted
 

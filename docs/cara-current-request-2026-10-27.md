@@ -1,7 +1,10 @@
 # Cara current-request and ping flow repair — October 27, 2026
 
-Status: candidate `2aeecb9` blocked by actual semantic qualification; focused
-correction implemented and under offline verification. Not deployed.
+Status: corrected source `83e8162` deployed and accepted at
+2026-10-27 17:28:51.589018 UTC. The server observer passed its actual sandbox
+first sample; the final independent live audit passed at 17:32:20 UTC. Candidate
+`2aeecb9`
+and its failed semantic outcomes remain historical evidence.
 
 ## Problem and authorized scope
 
@@ -64,7 +67,8 @@ reversion or manual Telegram test/replay is included.
   the exact failed-history sequence and English probe both fail the zero-model
   receipt contract. The earlier red1 fixture-name mistakes are retained.
 - Ping implementation checks are isolated Linux runs under the same new root.
-  Candidate publication, complete verification and deployment are pending.
+  At that reproduction checkpoint, candidate publication, complete verification
+  and deployment were pending.
 
 - Final focused integration passed 141 cases on Linux at16:04:09UTC, including
   23 new regressions (14 dispatch/delivery, nine current-request/repair), ordinary
@@ -103,7 +107,7 @@ new substantive topic changes produced useful native answers in the requested
 structure. This does not measure model routing: those two routes were explicitly
 stubbed to conversation.
 
-The four failures still block deployment. Two Russian recovery paths exhausted
+Those four failures blocked deployment of that candidate. Two Russian recovery paths exhausted
 the existing correction on unsupported broad health claims and ended in canned
 containment, which is not a semantic pass. An English answer inferred that an
 earlier glitch had recovered without evidence. A source-grounded task answer
@@ -111,11 +115,12 @@ retained the absolute meeting date but incorrectly called it yesterday; the
 supplied current local calendar day was October 27 and that source date was
 October 28. All original native drafts and fallback outcomes remain evidence.
 
-The native accounting receipt passed. Cumulative own-skill usage is now
+At that rejected-candidate checkpoint, the native accounting receipt passed.
+Cumulative own-skill usage was
 **41 reservations / USD0.199338752**, with no own-skill unknown outcomes. The
-47-call / USD0.25 limit remains controlling; a full fresh nineteen-outcome cohort
+47-call / USD0.25 limit remained controlling; a full fresh nineteen-outcome cohort
 needs at least eleven new calls and cannot fit the six remaining reservations.
-An additional call/spend scope is only a proposal until explicitly approved.
+An additional call/spend scope was still a proposal at that checkpoint.
 Native daily/monthly/task limits remain unchanged.
 
 The first qualification launch stopped before its cohort because a new external
@@ -156,8 +161,9 @@ reporting components localize these claim/retry/repaired/failure categories and
 keep completed repairs out of unresolved issue digests. Seven runtime modules are
 in scope for the combined ping, conversation and reporting correction. The
 existing bounded repair path remains; no new agent or model stage, provider/profile
-change, schema or stored-history migration is included. Exact-source full gates and fresh actual semantic qualification remain
-required before deployment.
+change, schema or stored-history migration is included. At that correction
+checkpoint, exact-source full gates and fresh actual semantic qualification
+remained required before deployment.
 
 
 The focused correction passed 113 Linux checks at 16:50:05 UTC, covering the four
@@ -165,6 +171,95 @@ actual failure witnesses, seven independent compatibility methods and the
 existing current-request, frozen-context, operational, dated-recall and source
 qualification regressions. Original assertions were retained. This run used
 synthetic model outputs and no paid calls; full corrected-source gates and real
-semantic qualification are still pending. Evidence remains under
+semantic qualification were still pending at that focused-only checkpoint. Evidence remains under
 `/root/cara-current-request-focus-20261027/facts-correction-attempt1/green1`,
 log `2476e0cd5dc9fb2955b64f427472d42771466e0cac105da5dac4d7bb2870281d`.
+
+## Corrected-source qualification and accepted release
+
+The owner approved a cumulative limit of 59 calls and total test spending
+strictly below USD0.35. This replaced the earlier 47-call/USD0.25 test boundary;
+it did not reset the existing 41 calls/USD0.199338752 or alter Cara's native
+USD2/day, USD12/month, USD0.15/task or four task-profile calls. The actual scope
+receipt is joined to the operator's separately selected source; it does not
+claim a hash-specific owner approval.
+
+Corrected source `83e8162611e34e4cf3b387a8b782160f8a71b8b7`, archive
+`3f7c3b9766c94b0ec429ed593a341e237d4470cdd507b90ff78053bfef05cdb1`, passed
+both exact-source Linux root test orders: 3,266 cases with nine existing skips
+each, at the original 360-second CPU, 1 GiB memory and 480-second wall limits.
+Normal and shuffled runs completed in 215.849 and 233.984 seconds; compile and
+shell checks passed, with source bytes unchanged. Exact-head
+[CI run 40545457748](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40545457748)
+passed both orders with its 62 expected skips each. The exact installed layout
+passed five scenarios through both entry names, with the packaged entry module
+absent and all 94 runtime artifacts exact. All existing tests and assertions
+remain preserved. Focused reporting checks separately passed 47 cases; these
+counts overlap the full suite and are not added to it.
+
+Native qualification launched once at 17:09:59.251292 UTC and finished at
+17:10:30.061383 UTC. The unchanged nineteen-case rubric passed root and
+independent semantic review. Six record-read cases and two actual dispatch ping
+cases are functional evidence. Eleven other outcomes used actual native calls,
+including the two substantive topic changes with explicitly stubbed conversation
+routing; they do not measure router intelligence. Three rejected drafts were
+synthetic repair stimuli and are labeled as such. No canned failure response
+counted as a semantic pass. Source-date replies kept October 28 absolute or
+correctly related it to the frozen October 27 clock. Recovery replies limited
+reassurance to reading the current text, without claiming earlier faults or all
+services had recovered.
+
+Cumulative own-skill accounting is **52 reservations / USD0.254401792**, including
+the exact prior 41 rows and eleven new native transports; no own-skill outcomes
+are unknown. All thirty external unknown rows retain their full reserved charges unchanged,
+including the new healthcheck row; none was settled, relabeled or deleted. A
+separately approved, exact-row deployment exception is recorded in the private
+operator material and does not relax future unknown-outcome handling. The failed
+candidate's fifteen-pass/four-fail semantic record, stopped capture and all
+original raw replies, charges and controller evidence remain intact.
+
+| Evidence | SHA256 |
+| --- | --- |
+| Exact-source Linux verification | `4eca4b8b84ccf27dd906b642ccf46ef455d5b93b45e0c844a7f71624e425ec86` |
+| Actual native cohort raw | `b4a84cdfc39a3e55cdbc92036e48097e3a5f759ed378d022107f7e1615e7e79e` |
+| Native accounting receipt | `9e29c1fd48cd64352bb0c872b6b3025bc86ac55f4464e104f2d3d8d795013d86` |
+| Root semantic review | `af20dd42ae96a25b6c8a00d296fea1e50d196d5ee030ba813e0adb167653007b` |
+| Independent semantic review | `d52b09f77ab8a978fd3e2ad4b1c512ae90fe90a05d87bf2592920d695e921187` |
+| Closed model proof | `7c897719b7f316e8d9c1ebf4a93170acea2a6baa6fe6aba028a6062572026227` |
+| Observer installation | `ec0c4b1e70456abe5c4068d20bbc7e1a5d60912d825edae68d187dd9582aa3cc` |
+| Actual sandbox first sample | `e157cea57b5ff8f11442e9c7fe954ba8deff2e5e8bfb5bf29e246451db8ab065` |
+| Final independent live audit | `4697a38a73e3cdbd349a4ddeb2c0709f2f8d2c7fd2947da3d22aa40bbeba4f34` |
+
+The release was accepted **2026-10-27 17:28:51.589018 UTC**, build `ca7db0315cbc`,
+deployment `ed6cc206f136827168490016`, acceptance `256368fa3f2ac26f2a5010ef37db289113912666a902d83a93a939c7bcf4cddf` and native
+marker `4fa81c3487b2dc88e931c0b59595add900f4ca2779428ab0e49ba248aca58e75`. The exact-source production tag
+`production-2026-10-27-current-request` has annotated object `5143d5bd1a3a641e06834df3864a3b3a73a01f60` and peeled commit
+`83e8162611e34e4cf3b387a8b782160f8a71b8b7`. The reviewed operator package
+`9eeb5b004365a48f0484c47fecab21e41ed1694df22fd8958cd050d607d6ffc7` passed 215 Linux fixtures and three actual kernel probes before its single launch.
+Stopped-data parity preserved all 56 tables/columns/rows and original history;
+all 94 installed runtime artifacts and the protected environment remained exact.
+Original readiness, MCP fact/private fixture, scoped tool and peer-preservation
+gates passed. Both readiness phases, both private MCP fixtures, the scoped tool projection and
+final healthy samples passed. The normal native deployment notice was recorded
+once. The server observer passed an actual sandbox first sample. The independent
+read-only audit passed at 17:32:20.646155 UTC: 94 runtime artifacts, 118 protected
+files plus two observer units, 56 schema tables, all thirty unchanged unknown rows and their reserved charges,
+the exact native environment/budgets and active main, fleet, worker and Whisper
+services with zero unexpected restarts.
+
+Continuation `54d21267e864c286d270c319d321a13899a4f3d70c5d518eb3d3db66ddd8e2fe` records the sixth source segment beginning
+at `2026-10-27 17:26:37.784040 UTC`, including its observed transition gap. The
+observer was rebound and its actual sandbox tick passed at
+`2026-10-27 17:29:53.247227 UTC`; audit
+`4697a38a73e3cdbd349a4ddeb2c0709f2f8d2c7fd2947da3d22aa40bbeba4f34` binds the final live identities and health. The original trial end remains
+**2026-10-28T13:36:17.924552 UTC**; acceptance does not restart exposure or imply a
+clean model-only comparison. Native budgets, models, unrelated host/peer policy
+and data remain unchanged. No manual message, business replay, database restore,
+unknown settlement was performed. Deployment required no model calls beyond the
+reviewed qualification cohort.
+
+The finite qualification supports this correction; it is not proof of ChatGPT
+capability parity or of every future answer. Ordinary traffic observation remains
+necessary, with a separately identified source segment and preserved failed
+outcomes. Follow the current accepted forward-only operator path if containment
+is required; never replay a started/completed controller or restore old data.
