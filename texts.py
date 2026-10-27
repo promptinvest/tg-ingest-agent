@@ -134,6 +134,10 @@ TEXTS = {
         "en": "I couldn't process that message 😔 It's sitting in the failed inbox — "
               "please send it again.",
     },
+    "ping_received": {
+        "ru": "Я здесь, сообщение получила.",
+        "en": "I'm here; I received your message.",
+    },
     "message_received": {
         "ru": "Я здесь, твоё сообщение вижу. Уточни, пожалуйста, что именно проверить?",
         "en": "I'm here and I can see your message. What would you like me to check?",

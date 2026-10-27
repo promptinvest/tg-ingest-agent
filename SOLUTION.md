@@ -1,5 +1,33 @@
 # Cara — Solution Specification
 
+## October 27 - Current-request conversation repair in qualification
+
+The owner requested "fix & deploy" after a live receipt probe was answered using
+older failed reminder/gratitude requests, then asked whether the conversation
+architecture needed correction. The review supports a focused change inside the
+existing dispatcher and conversation modules; a new agent, skill or model split
+is not justified by this incident.
+
+Standalone owner receipt probes use a narrow bilingual parser and the existing
+durable reply path. They acknowledge only receipt of the current message, skip
+routing, KB embedding/retrieval and conversation curation, and make no claim about
+overall service health. Pending drafts, live task approvals, an open conversation
+question, replies/quotes, forwarded content and media retain their existing paths.
+Ordinary greetings remain generated conversation; commands containing "test" or
+"ping" remain commands.
+
+Generated conversation and bounded repair explicitly bind the current verified
+owner request even when historical operational notices separate prior requests.
+History and forwarded-source fences remain intact. Repeated fabricated action
+claims stay blocked; a verified receipt probe uses receipt-specific containment.
+Actual action requests retain their existing guard and confirmation behavior.
+No provider/profile, production budget, schema, stored history or existing task
+authority changes are included. The owner approved a cumulative 47-call/USD0.25
+test ceiling for fresh qualification, retaining all prior 29 calls/USD0.139814352.
+Qualification and guarded deployment are still pending;
+passing mocked regression checks is not a claim of general model quality.
+See [the current-request repair record](docs/cara-current-request-2026-10-27.md).
+
 ## October 27 - Functional review fixes accepted
 
 Deployed and accepted **2026-10-27 14:06:34.824392 UTC** (17:06:34.824392 Moscow),

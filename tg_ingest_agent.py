@@ -2592,6 +2592,26 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         store.kv_set(self.conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
         msg_id = msg.get("message_id")
         pending = store.pending_get(self.conn, chat_id)
+        # A standalone receipt probe cannot benefit from routing, saved-note
+        # retrieval or memory curation. Resolve it before a stale gratitude
+        # invitation can mistake it for journal content. Live drafts, approvals,
+        # quoted replies and media keep their existing interpretation instead.
+        if (pending is None and router.is_liveness_ping(text)
+                and str(msg.get("text") or "").strip() == str(text).strip()
+                and not getattr(self, "_in_compound", False)
+                and not getattr(self, "_own_photo_turn", False)
+                and not getattr(self, "_own_media_parts", None)
+                and not any(msg.get(key) for key in (
+                    "reply_to_message", "external_reply", "quote", "forward_origin",
+                    "forward_from", "forward_from_chat", "forward_sender_name",
+                    "photo", "document", "voice", "audio", "video", "video_note",
+                    "animation", "sticker", "contact", "location", "venue", "poll",
+                    "media_group_id", "caption"))
+                and not store.task_approvals_live(self.conn, chat_id)
+                and not self._last_bot_turn_asked(chat_id)):
+            self._trace_route("converse", "liveness_ping")
+            self.reply(chat_id, T(lang, "ping_received"))
+            return
         # ADR-0019: a correction within ten minutes of a state-changing route is
         # the cheapest evidence that the route was wrong — one issue row for the
         # weekly review, never a behavior change by itself.

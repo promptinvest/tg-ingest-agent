@@ -238,7 +238,11 @@ def processing_status_claim(text, owner_text=""):
     if literal and _LITERAL_NOTICE_REQUEST.search(owner_text) and literal in owner_text:
         return None
     body = literal if literal != raw else _QUOTED_DATA.sub(" ", raw)
-    receipt_check = bool(_RECEIPT_CHECK.fullmatch(str(owner_text or "").strip()))
+    # Use the same complete receipt intent as dispatch; a ping never proves
+    # global health even when a pending/contextual turn needed generation.
+    import router
+    receipt_check = (router.is_liveness_ping(owner_text)
+                     or bool(_RECEIPT_CHECK.fullmatch(str(owner_text or "").strip())))
     operational = receipt_check or _OPERATIONAL_QUERY.search(owner_text) \
         or re.search(r"\bon\s+my\s+end\b|на\s+моей\s+стороне", body, re.I)
     if not operational:
@@ -849,6 +853,22 @@ CURRENT_REQUEST_BOUNDARY = (
     "Do not answer older requests again or assume their requested actions were performed. "
     "Use earlier messages only as relevant context."
 )
+
+
+def focus_current_request(conn, chat_id, source_text, messages):
+    """Bind generation to the verified current owner turn without dropping history.
+
+    Standalone dialogue replay keeps its original interface. At the generation
+    boundary, only a matching native boss row and its exact final payload may
+    gain the static current-request instruction; forwarded data never does.
+    """
+    if (not current_owner_request(conn, chat_id, source_text) or not messages
+            or messages[-1] != {"role": "user", "content": source_text.strip()}):
+        return messages
+    focused = [dict(message) for message in messages
+               if message != {"role": "system", "content": CURRENT_REQUEST_BOUNDARY}]
+    focused.insert(len(focused) - 1, {"role": "system", "content": CURRENT_REQUEST_BOUNDARY})
+    return focused
 
 
 def build_messages(conn, chat_id, lang, extra_context=None):

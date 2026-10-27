@@ -621,6 +621,7 @@ class ConverseMixin:
             converse.notice_literal_contract(literal)) if part)
         if contract:
             messages.insert(max(1, len(messages) - 1), {"role": "system", "content": contract})
+        messages = converse.focus_current_request(self.conn, chat_id, text, messages)
         turn_context = converse.freeze_turn_context(
             chat_id, lang, text, messages, catalog, format_count, work_record)
         generation_calls = 1
@@ -876,8 +877,12 @@ class ConverseMixin:
         The repair runs in CHARACTER (she never breaks it) and on the same real
         catalog grounding the first pass had, so it can tell 'never existed' from
         'exists, saved earlier' instead of confidently denying a real save."""
+        import router
+        receipt_only = (converse.current_owner_request(self.conn, chat_id, user_text)
+                        and router.is_liveness_ping(user_text))
         fallback = (self._format_failure(lang) if format_only or (operational_only
                     and turn_context is not None and turn_context.format_count) else
+                    T(lang, "ping_received") if receipt_only else
                     T(lang, "message_received") if operational_only else T(lang, "action_not_done"))
         failure_kind = ("converse_operational_repair_failed" if operational_only
                         else "converse_action_repair_failed")
@@ -934,6 +939,11 @@ class ConverseMixin:
                     if converse.current_owner_request(self.conn, chat_id, user_text) else None)) if part)
             if focused:
                 messages.insert(len(messages) - 1, {"role": "system", "content": focused})
+            if converse.current_owner_request(self.conn, chat_id, user_text):
+                # Preserve the entire frozen prefix, then keep the same request
+                # authoritative beside the rejected draft's explicitly fenced data.
+                messages.insert(len(messages) - 1, {
+                    "role": "system", "content": converse.CURRENT_REQUEST_BOUNDARY})
         try:
             second = llm.chat_profile(self.cfg, self.conn, "converse", messages,
                                       profile="converse_warm")
@@ -961,7 +971,8 @@ class ConverseMixin:
                 self.conn, chat_id, user_text) else ""):
             store.issue_add(self.conn, chat_id, "converse_operational_claim_retry", second[:300])
             return (self._format_failure(lang) if turn_context is not None
-                    and turn_context.format_count else T(lang, "message_received"))
+                    and turn_context.format_count else T(lang, "ping_received")
+                    if receipt_only else T(lang, "message_received"))
         allowed_refs = set(self._note_ref_numbers(user_text))
         leaked_refs = sorted(set(self._note_ref_numbers(second)) - allowed_refs)
         if leaked_refs:

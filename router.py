@@ -372,6 +372,24 @@ def split_compound(text, max_fragments=COMPOUND_MAX_FRAGMENTS):
     return parts
 
 
+_LIVENESS_PINGS = frozenset({
+    "тест", "пинг", "просто пинг", "это был пинг", "это был просто пинг",
+    "проверка связи", "просто проверка связи", "это была проверка связи",
+    "ты тут", "ты здесь", "test", "ping", "just a ping", "that was just a ping",
+    "are you there", "just checking you're there",
+})
+
+
+def is_liveness_ping(text):
+    """A complete receipt probe, never a substring of a command or quoted data.
+
+    Dispatch separately checks owner provenance and pending/card/media context;
+    this matcher alone grants no authority and says nothing about system health.
+    """
+    normalized = " ".join(str(text or "").split()).casefold().rstrip(".!?").rstrip()
+    return normalized in _LIVENESS_PINGS
+
+
 def detect_smalltalk(text):
     """Rule-based greeting detection for the common cases — no tokens spent."""
     normalized = str(text or "").strip().casefold().rstrip("!.")
