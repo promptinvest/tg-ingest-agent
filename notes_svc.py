@@ -9,6 +9,7 @@ is the Agent: `self.reply`/`self.conn`/`self.finalize`/`self.tz_offset()`/`self.
 all resolve on it exactly as before. Pure relocation, no behaviour change.
 """
 import json
+import hashlib
 import action_delivery
 import re
 from datetime import datetime, timedelta, timezone
@@ -1077,6 +1078,48 @@ class NotesMixin:
         lines.extend(f"  {row['name']}: {row['n']}" for row in rows)
         return "\n".join(lines)
 
+    @staticmethod
+    def _note_confirmation_fingerprint(row):
+        """Identity and displayed/source content, without retaining another copy."""
+        fields = ("id", "note_no", "raw_text", "summary", "category", "suggested_category", "status")
+        data = {key: row[key] for key in fields}
+        return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False,
+                                         separators=(",", ":")).encode()).hexdigest()
+
+    def note_confirmation_current(self, payload):
+        versions = payload.get("row_versions")
+        if versions is None:
+            return True  # preserve already-issued legacy pending shapes/TTL
+        ids = payload.get("row_ids") or ([payload["row_id"]] if payload.get("row_id") else [])
+        if set(versions) != {str(rid) for rid in ids}:
+            return False
+        for rid in ids:
+            row = store.get_message(self.conn, rid)
+            if row is None or self._note_confirmation_fingerprint(row) != versions[str(rid)]:
+                return False
+        return True
+
+    def _bind_note_confirmation_prompt(self, chat_id, kind, payload, sent):
+        if not isinstance(sent, dict) or type(sent.get("message_id")) is not int or sent["message_id"] <= 0:
+            return
+        current = store.pending_get(self.conn, chat_id)
+        if current and current["kind"] == kind and current["payload"] == payload:
+            bound = dict(payload, card_message_id=int(sent["message_id"]))
+            self.conn.execute("UPDATE pending_actions SET payload=? WHERE chat_id=? AND kind=?",
+                              (json.dumps(bound, ensure_ascii=False), chat_id, kind))
+            self.conn.commit()  # a delivered revision does not extend the TTL
+
+    def reject_note_confirmation_reply(self, chat_id, lang, pending):
+        target = getattr(self, "turn_reply_message_id", None)
+        current = pending["payload"].get("card_message_id")
+        if target is None or current is None or target == current:
+            return False
+        self.reply(chat_id, T(lang, "card_expired"))
+        return True
+
+    def reject_note_retitle_reply(self, chat_id, lang, pending):
+        return self.reject_note_confirmation_reply(chat_id, lang, pending)
+
     def do_note_edit(self, chat_id, lang, params, text):
         """Fix a saved note's SUMMARY in place (the LLM-written line shown in lists and the
         detail card) — 'исправь заметку #11 на …', 'поменяй краткое #3 на …'. The original
@@ -1116,14 +1159,16 @@ class NotesMixin:
             return
         old = (row["summary"] or row["raw_text"] or "").strip()
         note_no = self.note_no(row["id"])
-        store.pending_set(self.conn, chat_id, "note_retitle",
-                          {"row_id": row["id"], "note_no": note_no,
-                           "new_summary": new_summary})
-        self.reply_prompt(chat_id, T(
+        row = store.get_message(self.conn, row["id"])  # note_no may just have been assigned
+        payload = {"row_id": row["id"], "note_no": note_no, "new_summary": new_summary,
+                   "row_versions": {str(row["id"]): self._note_confirmation_fingerprint(row)}}
+        store.pending_set(self.conn, chat_id, "note_retitle", payload)
+        sent = self.reply_prompt(chat_id, T(
             lang, "note_edit_confirm", row_id=note_no,
             category=row["category"] or row["suggested_category"] or "?",
             old=self._ellipsize(old.replace("\n", " "), 200) or "—",
             new=self._ellipsize(new_summary.replace("\n", " "), 200)))
+        self._bind_note_confirmation_prompt(chat_id, "note_retitle", payload, sent)
 
     def apply_note_retitle(self, chat_id, lang, payload):
         """His yes to the note_edit confirmation: the summary is replaced.
@@ -1140,6 +1185,11 @@ class NotesMixin:
         new_summary = str(payload.get("new_summary") or "")[:600]
         if not new_summary:
             self.reply(chat_id, T(lang, "note_edit_unclear"))
+            return
+        if not self.note_confirmation_current(payload):
+            # The same stable note changed while this replacement was pending.
+            # Show both current and proposed text again; the old yes writes nothing.
+            self.do_note_edit(chat_id, lang, {"id": row["note_no"], "new_summary": new_summary}, "")
             return
         store.message_update_summary(self.conn, row["id"], new_summary)
         # The semantic index was built from the OLD text. Leaving it stale would
@@ -1469,10 +1519,13 @@ class NotesMixin:
             return
         if op == "archive" and len(rows) > 1:
             ids = [r["id"] for r in rows]
-            store.pending_set(self.conn, chat_id, "note_archive", {"row_ids": ids})
             listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
-            self.reply_prompt(chat_id, T(lang, "note_archive_confirm_multi",
+            versions = {str(i): self._note_confirmation_fingerprint(store.get_message(self.conn, i)) for i in ids}
+            payload = {"row_ids": ids, "row_versions": versions}
+            store.pending_set(self.conn, chat_id, "note_archive", payload)
+            sent = self.reply_prompt(chat_id, T(lang, "note_archive_confirm_multi",
                                   n=len(ids), ids=listing))
+            self._bind_note_confirmation_prompt(chat_id, "note_archive", payload, sent)
             return
         purpose = str(params.get("purpose") or "").strip().lower()
         when = reminders.parse_iso_utc(params.get("when"))
@@ -1530,13 +1583,21 @@ class NotesMixin:
             self.reply(chat_id, T(lang, "items_empty"))
         elif len(rows) == 1:
             row = rows[0]
-            store.pending_set(self.conn, chat_id, "delete", {"row_ids": [row["id"]]})
+            self.note_no(row["id"])
+            row = store.get_message(self.conn, row["id"])
+            payload = {"row_ids": [row["id"]],
+                       "row_versions": {str(row["id"]): self._note_confirmation_fingerprint(row)}}
+            store.pending_set(self.conn, chat_id, "delete", payload)
             snippet = (row["summary"] or row["raw_text"] or "")[:60].replace("\n", " ")
-            self.reply_prompt(chat_id, T(lang, "delete_confirm", row_id=self.note_no(row["id"]),
+            sent = self.reply_prompt(chat_id, T(lang, "delete_confirm", row_id=self.note_no(row["id"]),
                                   category=row["category"] or row["suggested_category"] or "?",
                                   snippet=snippet))
+            self._bind_note_confirmation_prompt(chat_id, "delete", payload, sent)
         else:
             ids = [r["id"] for r in rows]
-            store.pending_set(self.conn, chat_id, "delete", {"row_ids": ids})
             listing = ", ".join(f"#{self.note_no(i)}" for i in ids)
-            self.reply_prompt(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
+            versions = {str(i): self._note_confirmation_fingerprint(store.get_message(self.conn, i)) for i in ids}
+            payload = {"row_ids": ids, "row_versions": versions}
+            store.pending_set(self.conn, chat_id, "delete", payload)
+            sent = self.reply_prompt(chat_id, T(lang, "delete_confirm_multi", n=len(ids), ids=listing))
+            self._bind_note_confirmation_prompt(chat_id, "delete", payload, sent)

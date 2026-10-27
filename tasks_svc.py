@@ -860,7 +860,6 @@ class TasksMixin:
                 delivered_material = (
                     summary[:1000] + "\n"
                     + body.decode("utf-8", errors="ignore"))
-                store.task_artifact_mark_delivered(self.conn, artifact["id"])
             else:
                 result = tg_call(
                     self.cfg.token, "sendMessage", {
@@ -880,6 +879,11 @@ class TasksMixin:
             return False
         try:
             self.conn.execute("BEGIN IMMEDIATE")
+            if artifact_id:
+                self.conn.execute(
+                    "UPDATE task_artifacts SET delivered_at = COALESCE(delivered_at, ?)"
+                    " WHERE id = ? AND task_id = ?",
+                    (datetime.now(timezone.utc).isoformat(), artifact["id"], task["id"]))
             visible_note_numbers = {
                 int(value) for value in re.findall(
                     r"(?:note\s*#|note:#)(\d+)", delivered_material,

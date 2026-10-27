@@ -210,8 +210,10 @@ class MediaMixin:
                         return False, None
                     # Transport failure and "saw no titles" get different copy —
                     # she never claims she looked when the model never answered.
-                    self.reply(chat_id, T(lang, "llm_error" if unread
-                                          else "media_nothing_extracted"))
+                    if unread:
+                        self.reply_operational(chat_id, T(lang, "llm_error"), "llm_error")
+                    else:
+                        self.reply(chat_id, T(lang, "media_nothing_extracted"))
                     return True, None
                 # A caption that NAMED the kind is his statement about the work,
                 # not a hint: it is applied BEFORE enrichment, so the lookups run
@@ -302,9 +304,9 @@ class MediaMixin:
                 log("media capture (forwarded): budget stop — falling back to ingest")
                 return False, None
             store.issue_add(self.conn, chat_id, "budget_stop", "media capture")
-            self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent,
+            self.reply_operational(chat_id, T(lang, "budget_stop", spent=exc.spent,
                                   limit=exc.limit,
-                                  period=T(lang, f"period_{exc.period}")))
+                                  period=T(lang, f"period_{exc.period}")), "budget_stop")
             return True, None
         finally:
             # The owner decision: the photo exists on disk only for the span of
@@ -759,6 +761,15 @@ class MediaMixin:
                          f"(#{self.note_no(row_id)})")
         return lines
 
+    def reject_media_confirmation_reply(self, chat_id, lang):
+        """An explicit reply may only confirm/cancel the media card it names."""
+        target = getattr(self, "turn_reply_message_id", None)
+        current = self._media_stash(chat_id).get("card_message_id")
+        if target is None or current is None or target == current:
+            return False
+        self.reply(chat_id, T(lang, "card_expired"))
+        return True
+
     def handle_media_callback(self, callback_id, chat_id, msg, data):
         """✅/✖️ on the media confirmation card. The kv stash (not the pending
         slot) is the source of truth, so the card stays answerable even when
@@ -767,6 +778,12 @@ class MediaMixin:
         stash = self._media_stash(chat_id)
         if not stash.get("entries"):
             self.answer_callback(callback_id, T(lang, "nothing_pending"))
+            return
+        if (stash.get("card_message_id") is not None
+                and msg.get("message_id") != stash["card_message_id"]):
+            # Removing an old keyboard is best-effort; an already in-flight
+            # callback still names that old card, never its replacement.
+            self.answer_callback(callback_id, T(lang, "card_expired"))
             return
         if data == "mcap|y":
             # The confirm can RE-DRAW instead of storing (the catalog moved
@@ -908,9 +925,8 @@ class MediaMixin:
                     if chat_id:
                         store.issue_add(self.conn, chat_id, "album_failed",
                                         f"group={group_id}: {exc!r}"[:220])
-                        self.reply(chat_id, T(self.lang(),
-                                              "album_failed" if buffer.get("store", True)
-                                              else "own_album_failed"))
+                        kind = "album_failed" if buffer.get("store", True) else "own_album_failed"
+                        self.reply_operational(chat_id, T(self.lang(), kind), kind)
                     # Dead-letter the part rows (payloads preserved for recovery)
                     # instead of consuming them. Own-media parts are deferred too
                     # now, so leaving them pending would replay them into the same

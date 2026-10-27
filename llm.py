@@ -847,10 +847,14 @@ def profile_steps(cfg, conn, skill, messages, *, profile, max_tokens=None,
     raise last_exc or LLMError(f"profile {profile}: all models failed")
 
 
-def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_required=None):
+def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_required=None,
+                 before_dispatch=None, retry_unknown=True):
     """Drive the shared failover policy synchronously for existing skills."""
+    if before_dispatch is not None and not callable(before_dispatch):
+        raise TypeError("before_dispatch must be callable")
     steps = profile_steps(cfg, conn, skill, messages, profile=profile,
-                          max_tokens=max_tokens, json_required=json_required)
+                          max_tokens=max_tokens, json_required=json_required,
+                          retry_unknown=retry_unknown)
     operation = next(steps)
     while True:
         try:
@@ -858,7 +862,26 @@ def chat_profile(cfg, conn, skill, messages, *, profile, max_tokens=None, json_r
                 time.sleep(operation["seconds"])
                 result = None
             else:
-                result = chat(cfg, conn, skill, messages, **operation["options"])
+                if before_dispatch is None:
+                    result = chat(cfg, conn, skill, messages, **operation["options"])
+                else:
+                    options = dict(operation["options"])
+                    meta = options.pop("meta")
+                    prepared = prepare_chat(cfg, conn, skill, messages, **options)
+                    try:
+                        before_dispatch({"reservation_id": prepared["reserved"],
+                            "model": prepared["model"], "skill": skill,
+                            "timeout": prepared["timeout"]})
+                    except BaseException:
+                        # A rejected local dispatch hook cannot have sent a request.
+                        call_budget.settle(conn, prepared["reserved"], "rejected_chat")
+                        raise
+                    try:
+                        data = transport_chat(prepared)
+                    except Exception as exc:
+                        result = finish_chat(cfg, conn, prepared, error=exc, meta=meta)
+                    else:
+                        result = finish_chat(cfg, conn, prepared, data=data, meta=meta)
         except Exception as exc:
             try:
                 operation = steps.throw(exc)

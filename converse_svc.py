@@ -624,13 +624,13 @@ class ConverseMixin:
                                      profile="converse_warm")
         except llm.BudgetExceeded as exc:
             store.issue_add(self.conn, chat_id, "budget_stop", text[:200])
-            self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
-                                  period=T(lang, f"period_{exc.period}")))
+            self.reply_operational(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
+                                             period=T(lang, f"period_{exc.period}")), "budget_stop")
             return
         except llm.LLMError as exc:
             log(f"converse failed: {exc}")
             store.issue_add(self.conn, chat_id, "llm_error", f"converse: {exc}")
-            self.reply(chat_id, T(lang, "llm_error"))
+            self.reply_operational(chat_id, T(lang, "llm_error"), "llm_error")
             return
         if getattr(self.cfg, "fleet_enabled", False):
             import fleet
@@ -655,9 +655,19 @@ class ConverseMixin:
             if not reply2 or self._degenerate_reply(reply2, lang):
                 store.issue_add(self.conn, chat_id, "converse_degenerate", reply[:300],
                                 context={"retry": (reply2 or "")[:200], "lang": lang})
-                self.reply(chat_id, T(lang, "llm_error"))
+                self.reply_operational(chat_id, T(lang, "llm_error"), "llm_error")
                 return
             reaction, reply = reaction2 or reaction, reply2
+        operational_claim = converse.processing_failure_claim(
+            reply, text if owner_request else "") if reply else None
+        if operational_claim:
+            store.issue_add(self.conn, chat_id, "converse_operational_claim", reply[:300],
+                            context={"claim": operational_claim})
+            self.reply(chat_id, self._honest_action_reply(
+                chat_id, lang, text, reply, operational_claim,
+                problem=self._REPAIR_PROBLEM_OPERATIONAL,
+                turn_context=turn_context, operational_only=True))
+            return
         if reply and action_truth.freeform_claims_artifact(reply):
             # Converse cannot create/upload files. Fail closed instead of letting an LLM
             # render a local-looking name or claim an attachment that Telegram never saw.
@@ -712,7 +722,7 @@ class ConverseMixin:
         if not reply:
             # A reaction on its own IS a complete response — not an error.
             if not reaction:
-                self.reply(chat_id, T(lang, "llm_error"))
+                self.reply_operational(chat_id, T(lang, "llm_error"), "llm_error")
             return
         self._deliver_converse_reply(chat_id, lang, text, reply)
 
@@ -800,6 +810,14 @@ class ConverseMixin:
         "requested structure. Keep requested source facts inside the relevant item; "
         "do not add an introduction, closing paragraph or a hypothetical next step."
     )
+    _REPAIR_PROBLEM_OPERATIONAL = (
+        "The draft claimed a processing failure for THIS current message without a "
+        "code-owned failure outcome. This message has reached conversation handling "
+        "and you can read it. Historical notices or earlier model replies cannot "
+        "establish its current status. Answer the SAME request or ask for its missing "
+        "meaning; do not claim it is in a failed inbox or tell him to resend it. "
+        "This limited evidence does not prove global service health or any completed action."
+    )
     _ACTION_REPAIR_SYSTEM = (
         "{problem}\n"
         "Write the message again so that it:\n"
@@ -830,7 +848,8 @@ class ConverseMixin:
     )
 
     def _honest_action_reply(self, chat_id, lang, user_text, blocked_reply, claim=None,
-                             problem=None, turn_context=None, format_only=False):
+                             problem=None, turn_context=None, format_only=False,
+                             operational_only=False):
         """Turn a blocked fabrication into an honest, USEFUL reply. Returns the text to
         send: the repaired second-pass answer, or the deterministic template when the
         model fails, stays silent, or claims an action again.
@@ -838,12 +857,16 @@ class ConverseMixin:
         The repair runs in CHARACTER (she never breaks it) and on the same real
         catalog grounding the first pass had, so it can tell 'never existed' from
         'exists, saved earlier' instead of confidently denying a real save."""
-        fallback = self._format_failure(lang) if format_only else T(lang, "action_not_done")
+        fallback = (self._format_failure(lang) if format_only or (operational_only
+                    and turn_context is not None and turn_context.format_count) else
+                    T(lang, "message_received") if operational_only else T(lang, "action_not_done"))
+        failure_kind = ("converse_operational_repair_failed" if operational_only
+                        else "converse_action_repair_failed")
         if turn_context is not None:
             try:
                 messages = converse.replay_turn_context(turn_context, chat_id, lang, user_text)
             except ValueError as exc:
-                store.issue_add(self.conn, chat_id, "converse_action_repair_failed",
+                store.issue_add(self.conn, chat_id, failure_kind,
                                 f"invalid turn context: {exc}"[:300])
                 return fallback
             grounding = turn_context.catalog_grounding
@@ -894,12 +917,12 @@ class ConverseMixin:
             second = llm.chat_profile(self.cfg, self.conn, "converse", messages,
                                       profile="converse_warm")
         except (llm.BudgetExceeded, llm.LLMError) as exc:
-            store.issue_add(self.conn, chat_id, "converse_action_repair_failed",
+            store.issue_add(self.conn, chat_id, failure_kind,
                             f"{detail}; {exc}"[:300])
             return fallback
         _reaction, second = self._clean_converse_output(second)
         if not second:
-            store.issue_add(self.conn, chat_id, "converse_action_repair_failed",
+            store.issue_add(self.conn, chat_id, failure_kind,
                             f"{detail}; empty second pass")
             return fallback
         if action_truth.freeform_claims_action(second) \
@@ -907,6 +930,11 @@ class ConverseMixin:
             store.issue_add(self.conn, chat_id, "converse_action_claim_retry", second[:300])
             log("second pass ALSO claimed an action — sending the deterministic template")
             return fallback
+        if converse.processing_failure_claim(second, user_text if converse.current_owner_request(
+                self.conn, chat_id, user_text) else ""):
+            store.issue_add(self.conn, chat_id, "converse_operational_claim_retry", second[:300])
+            return (self._format_failure(lang) if turn_context is not None
+                    and turn_context.format_count else T(lang, "message_received"))
         allowed_refs = set(self._note_ref_numbers(user_text))
         leaked_refs = sorted(set(self._note_ref_numbers(second)) - allowed_refs)
         if leaked_refs:
@@ -924,7 +952,8 @@ class ConverseMixin:
         # Logged as an issue too: a repaired reply is still a fabrication that
         # reached the guard, and the pattern must stay visible in the reports.
         store.issue_add(self.conn, chat_id,
-                        "converse_format_repaired" if format_only else "converse_action_repaired",
+                         "converse_operational_repaired" if operational_only else
+                         "converse_format_repaired" if format_only else "converse_action_repaired",
                         second[:300])
         return second
 
@@ -1002,8 +1031,8 @@ class ConverseMixin:
             reply = llm.chat_profile(self.cfg, self.conn, "recall_conversation", messages,
                                      profile="converse_warm")
         except llm.BudgetExceeded as exc:
-            self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
-                                  period=T(lang, f"period_{exc.period}")))
+            self.reply_operational(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
+                                             period=T(lang, f"period_{exc.period}")), "budget_stop")
             return
         except llm.LLMError:
             self.reply(chat_id, transcript[-3500:])  # grounded raw beats nothing

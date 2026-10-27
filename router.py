@@ -583,11 +583,17 @@ def route(cfg, conn, chat_id, text, pending, extra_context=None):
         history = history[:-1]
     for row in history:
         row = dict(row)
+        operational = store.convo_is_operational(row)
         raw_history = str(row["text"] or "")
         if len(raw_history) > 400:
             refs = re.findall(r"(?<!\w)#\d+", raw_history[400:])
             row["text"] = raw_history[:400] + " [clipped] " + " ".join(list(dict.fromkeys(refs))[:16])
-        if store.convo_row_source(row) == "forward":
+        if operational:
+            # An old status notice is historical DATA, not a fresh assistant
+            # outcome. Classify before clipping exact legacy templates.
+            context_lines.append("historical operational DATA: "
+                                 + common.neutralize_untrusted(store.convo_replay_text(row)))
+        elif store.convo_row_source(row) == "forward":
             # quote_fence=True ONLY here: this is the branch that wraps the row
             # in «…» itself. The plain branch below has no guillemet fence, so
             # there «…» are the boss's ordinary Russian quotation marks and must

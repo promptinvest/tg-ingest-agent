@@ -3,6 +3,7 @@
 import hashlib
 import errno
 import json
+import math
 import os
 import re
 import secrets
@@ -29,7 +30,8 @@ def _transient_error(exc):
     if isinstance(exc, llm.BudgetExceeded):
         return False
     if isinstance(exc, llm.LLMError):
-        return bool(getattr(exc, "transient", False))
+        return (bool(getattr(exc, "transient", False))
+                and not getattr(exc, "usage_unknown", False))
     if isinstance(exc, fetch.FetchError):
         return exc.reason == "fetch_failed"
     if isinstance(exc, web_search.WebSearchError):
@@ -312,6 +314,48 @@ def _prior_receipts(conn, task_id, step_keys):
     return out
 
 
+def _synthesis_usage(conn, task_id):
+    """Keep only native reservation identities, never prompts or responses."""
+    raw = store.kv_get(conn, f"task_synthesis_usage:{task_id}")
+    value = json.loads(raw) if raw else {
+        "schema": "task.synthesis-usage/v1", "usage_ids": [], "accounted_cost": 0.0}
+    if (not isinstance(value, dict)
+            or set(value) != {"schema", "usage_ids", "accounted_cost"}
+            or value["schema"] != "task.synthesis-usage/v1"
+            or not isinstance(value["usage_ids"], list)
+            or any(type(i) is not int or i <= 0 for i in value["usage_ids"])
+            or len(set(value["usage_ids"])) != len(value["usage_ids"])
+            or type(value["accounted_cost"]) not in (int, float)
+            or not math.isfinite(value["accounted_cost"])
+            or value["accounted_cost"] < 0):
+        raise TaskBlocked("Task synthesis usage binding is invalid")
+    return value
+
+
+def _sync_synthesis_usage(conn, task_id, usage):
+    rows = []
+    if usage["usage_ids"]:
+        rows = conn.execute(
+            "SELECT id,kind,cost_usd,skill FROM llm_usage WHERE id IN ("
+            + ",".join("?" for _ in usage["usage_ids"]) + ")",
+            usage["usage_ids"]).fetchall()
+    if (len(rows) != len(usage["usage_ids"])
+            or any(row["skill"] != "task_synthesis" or not math.isfinite(row["cost_usd"])
+                   or row["cost_usd"] < 0 for row in rows)):
+        raise TaskBlocked("Task synthesis usage rows are missing or changed")
+    total = sum(row["cost_usd"] for row in rows)
+    delta = total - usage["accounted_cost"]
+    conn.execute("UPDATE assistant_tasks SET task_cost_usd=MAX(0,task_cost_usd+?) WHERE id=?",
+                 (delta, task_id))
+    usage["accounted_cost"] = total
+    store.kv_set(conn, f"task_synthesis_usage:{task_id}", _canonical(usage))
+    task = store.assistant_task_get(conn, task_id)
+    if task is None:
+        raise TaskBlocked("Task synthesis owner was removed")
+    unresolved = any(row["kind"] not in {"chat", "rejected_chat"} for row in rows)
+    return task, unresolved
+
+
 def _synthesize(cfg, conn, task, step, inputs):
     receipts = _prior_receipts(conn, task["id"], inputs["receipt_steps"])
     known_evidence, material = {}, []
@@ -349,28 +393,40 @@ def _synthesize(cfg, conn, task, step, inputs):
         + common.neutralize_untrusted(_canonical(material))
         + "\n</SOURCES>"
     )
-    current = store.assistant_task_get(conn, task["id"])
+    usage = _synthesis_usage(conn, task["id"])
+    current, unresolved = _sync_synthesis_usage(conn, task["id"], usage)
+    if unresolved:
+        raise TaskBlocked("An earlier paid synthesis request must be reconciled before retry")
     if (current["model_calls"] >= cfg.task_model_call_limit
             or current["task_cost_usd"] >= cfg.task_cost_limit_usd):
         raise TaskBlocked("Task model-call or cost budget is exhausted")
-    before = store.usage_total(conn, "day")
+    def before_dispatch(receipt):
+        current, unresolved = _sync_synthesis_usage(conn, task["id"], usage)
+        if unresolved:
+            raise TaskBlocked("An earlier paid synthesis request must be reconciled before failover")
+        _source_for_task(conn, current)
+        if (current["status"] not in {"planned", "running"}
+                or current["model_calls"] >= cfg.task_model_call_limit):
+            raise TaskBlocked("Task model-call budget or execution authority is exhausted")
+        usage["usage_ids"].append(receipt["reservation_id"])
+        current, _ = _sync_synthesis_usage(conn, task["id"], usage)
+        if current["task_cost_usd"] > cfg.task_cost_limit_usd:
+            raise TaskBlocked("Task synthesis reservation exceeds its remaining cost budget")
+        conn.execute("UPDATE assistant_tasks SET model_calls=model_calls+1,updated_at=? WHERE id=?",
+                     (datetime.now(timezone.utc).isoformat(), task["id"]))
+        conn.commit()
+
     try:
         raw = llm.chat_profile(
             cfg, conn, "task_synthesis",
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             profile="task_synthesis", json_required=True,
+            before_dispatch=before_dispatch, retry_unknown=False,
         )
     finally:
-        after = store.usage_total(conn, "day")
-        conn.execute(
-            "UPDATE assistant_tasks SET model_calls = model_calls + 1,"
-            " task_cost_usd = task_cost_usd + ?, updated_at = ?"
-            " WHERE id = ? AND status IN ('planned','running')",
-            (max(0.0, after - before), datetime.now(timezone.utc).isoformat(),
-             task["id"]),
-        )
-        conn.commit()
-    current = store.assistant_task_get(conn, task["id"])
+        current, unresolved = _sync_synthesis_usage(conn, task["id"], usage)
+    if unresolved:
+        raise TaskBlocked("Synthesis usage is unknown; an automatic replacement is not safe")
     if current["task_cost_usd"] > cfg.task_cost_limit_usd:
         raise TaskBlocked("Task cost budget was exceeded by the latest bounded call")
     value = llm.parse_llm_json(raw)

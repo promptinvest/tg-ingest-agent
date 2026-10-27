@@ -2569,7 +2569,7 @@ class MediaCaptureGoldenTests(unittest.TestCase):
 
         self.drive({"callback_query": {
             "id": "cb-nowhere", "from": {"id": 1}, "data": "mcap|y",
-            "message": {"chat": {"id": 1}, "message_id": 5001},
+            "message": {"chat": {"id": 1}, "message_id": self.agent._media_stash(1)["card_message_id"]},
         }})
         rows = self.conn.execute("SELECT * FROM messages").fetchall()
         self.assertEqual(len(rows), 1)

@@ -262,7 +262,7 @@ def curate_conversation(conn, cfg, chat_id, limit=CONVO_WINDOW, correction_mode=
     recurrence → needs-code escalation."""
     import llm  # lazy: keeps the deterministic curator import-light
     turns = [r for r in store.convo_recent(conn, chat_id, limit=limit)
-             if (r["text"] or "").strip()]
+             if (r["text"] or "").strip() and not store.convo_is_operational(r)]
     if len(turns) < 2:
         return {"life": 0, "boss": 0}
     # Fence forwarded turns (convo_replay_text): a forwarded channel post must not be

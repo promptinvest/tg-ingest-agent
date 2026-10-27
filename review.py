@@ -149,6 +149,8 @@ def collect(conn, period):
     actionable = ("unclear_request", "out_of_scope", "stt_failed", "ingest_failed",
                   "converse_artifact_claim", "converse_action_claim",
                   "converse_action_claim_retry", "converse_action_repair_failed",
+                  "converse_operational_claim", "converse_operational_claim_retry",
+                  "converse_operational_repair_failed",
                   "converse_format_mismatch", "converse_format_repair_failed",
                   "converse_ungrounded_number", "correction_unresolved",
                   "router_invalid_output", "converse_degenerate")
@@ -646,6 +648,7 @@ def had_owner_turns(conn, period="week"):
 FAILURE_ISSUE_KINDS = ("llm_error", "ingest_failed", "stt_failed", "sched_send_failed",
                        "budget_stop", "db_stalled", "backup_failed", "dead_letter",
                        "converse_action_repair_failed", "converse_degenerate",
+                       "converse_operational_repair_failed",
                        "converse_format_repair_failed", "router_invalid_output")
 
 

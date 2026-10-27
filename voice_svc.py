@@ -33,10 +33,19 @@ class VoiceMixin:
             if reserved is not None:
                 call_budget.settle(self.conn, reserved, "rejected_stt")
             raise
-        self.send_chat_action(chat_id, "typing")
-        if duration > self.VOICE_LISTENING_NOTICE_SECONDS:
-            self.reply(chat_id, T(self.lang(), "voice_listening", seconds=duration), record=False)
-        future = self.voice_executor.submit(llm.transcribe, self.cfg, None, "stt", path, duration)
+        try:
+            self.send_chat_action(chat_id, "typing")
+            if duration > self.VOICE_LISTENING_NOTICE_SECONDS:
+                self.reply(chat_id, T(self.lang(), "voice_listening", seconds=duration), record=False)
+            future = self.voice_executor.submit(llm.transcribe, self.cfg, None, "stt", path, duration)
+        except Exception:
+            # No transcription was submitted; its reservation is definitely unused.
+            try:
+                if reserved is not None:
+                    call_budget.settle(self.conn, reserved, "rejected_stt")
+            finally:
+                Path(path).unlink(missing_ok=True)
+            raise
         self.voice_jobs[uid] = (future, update, path, duration, reserved)
         return "defer"
 
@@ -46,10 +55,10 @@ class VoiceMixin:
             if not future.done() or self.stop:
                 continue
             chat_id = self._update_chat_id(update)
+            transcribed = False
             try:
                 text = future.result()
-                if not text or common.is_stt_noise(text):
-                    raise llm.LLMError("unusable voice transcript")
+                transcribed = True
                 model = getattr(text, "model", self.cfg.stt_model)
                 cost = 0 if self.cfg.stt_mode in ("local", "local_server") else (
                     max(duration, 1) / 60 * llm.STT_PRICE_PER_MINUTE)
@@ -57,6 +66,8 @@ class VoiceMixin:
                     call_budget.settle(self.conn, reserved, "stt", seconds=duration, cost_usd=cost)
                 else:
                     store.usage_add(self.conn, "stt", "stt", model, seconds=duration, cost_usd=cost)
+                if not text or common.is_stt_noise(text):
+                    raise llm.LLMError("unusable voice transcript")
                 # Durable before routing: an interruption resumes from the transcript.
                 store.kv_set(self.conn, f"voice_transcript:{uid}", str(text))
                 self.process_update_batch([update])
@@ -65,9 +76,14 @@ class VoiceMixin:
                 if row and row[0] == "done":
                     store.kv_set(self.conn, f"voice_transcript:{uid}", "")
             except (llm.LLMError, OSError) as exc:
+                if (reserved is not None and not transcribed
+                        and getattr(exc, "request_not_sent", False)):
+                    call_budget.settle(self.conn, reserved, "rejected_stt")
                 store.issue_add(self.conn, chat_id, "stt_failed", str(exc)[:200])
                 self.reply(chat_id, T(self.lang(), "stt_failed"))
                 store.telegram_update_done(self.conn, uid)
             finally:
-                Path(path).unlink(missing_ok=True)
-                del self.voice_jobs[uid]
+                try:
+                    Path(path).unlink(missing_ok=True)
+                finally:
+                    del self.voice_jobs[uid]

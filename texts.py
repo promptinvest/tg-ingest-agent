@@ -134,6 +134,10 @@ TEXTS = {
         "en": "I couldn't process that message 😔 It's sitting in the failed inbox — "
               "please send it again.",
     },
+    "message_received": {
+        "ru": "Я здесь, твоё сообщение вижу. Уточни, пожалуйста, что именно проверить?",
+        "en": "I'm here and I can see your message. What would you like me to check?",
+    },
     # NB: no final verbs here (action_truth catalogue guard) — it's a decline,
     # nothing was stored.
     "own_photo_not_stored": {
@@ -952,6 +956,22 @@ TEXTS = {
     "issue_kind_converse_action_repair_failed": {
         "ru": "неудавшиеся честные переписывания",
         "en": "honest rewrites that failed",
+    },
+    "issue_kind_converse_operational_claim": {
+        "ru": "заблокированные ложные сообщения о сбое обработки",
+        "en": "blocked false processing-status claims",
+    },
+    "issue_kind_converse_operational_claim_retry": {
+        "ru": "повторные ложные сообщения о сбое обработки",
+        "en": "repeat false processing-status claims",
+    },
+    "issue_kind_converse_operational_repair_failed": {
+        "ru": "неудавшиеся исправления сообщений о сбое обработки",
+        "en": "processing-status rewrites that failed",
+    },
+    "issue_kind_converse_operational_repaired": {
+        "ru": "исправленные сообщения о сбое обработки",
+        "en": "corrected processing-status replies",
     },
     "issue_kind_converse_format_mismatch": {
         "ru": "ответы, не соблюдавшие запрошенный формат",

@@ -13,6 +13,7 @@ MAX_MESSAGE_CHARS = 3800
 # intended. They remain in the journal, but are not unresolved defects.
 COMPLETED_HANDLING = frozenset({
     "correction", "converse_action_repaired", "curation_skipped_after_fabrication",
+    "converse_operational_repaired",
 })
 OWNER_EXAMPLES = frozenset({
     "boss_reported", "correction_unresolved", "unclear_request",

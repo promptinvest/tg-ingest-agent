@@ -192,13 +192,13 @@ class HermesMixin:
                                       profile="ask_grounded")
         except llm.BudgetExceeded as exc:
             store.issue_add(self.conn, chat_id, "budget_stop", question[:200])
-            self.reply(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
-                                  period=T(lang, f"period_{exc.period}")))
+            self.reply_operational(chat_id, T(lang, "budget_stop", spent=exc.spent, limit=exc.limit,
+                                             period=T(lang, f"period_{exc.period}")), "budget_stop")
             return
         except llm.LLMError as exc:
             log(f"ask failed: {exc}")
             store.issue_add(self.conn, chat_id, "llm_error", f"ask: {exc}")
-            self.reply(chat_id, T(lang, "llm_error"))
+            self.reply_operational(chat_id, T(lang, "llm_error"), "llm_error")
             return
         checked = knowledge.checked_answer(answer, context, lang)
         if checked is None:
@@ -338,7 +338,7 @@ class HermesMixin:
                 )
         except TelegramError as exc:
             log(f"review export send failed: {exc}")
-            self.reply(chat_id, T(lang, "llm_error"))
+            self.reply_operational(chat_id, T(lang, "llm_error"), "llm_error")
         log(f"review exported: {reviews_dir / filename}")
 
     def do_export(self, chat_id, lang, params):
@@ -373,7 +373,7 @@ class HermesMixin:
                                    title=filename)
         except TelegramError as exc:
             log(f"export send failed: {exc}")
-            self.reply(chat_id, T(lang, "llm_error"))
+            self.reply_operational(chat_id, T(lang, "llm_error"), "llm_error")
 
     def _category_export_markdown(self, chat_id, lang, params):
         """Md catalog of ONE category's confirmed notes (media-capture plan B2:

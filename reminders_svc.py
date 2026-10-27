@@ -293,7 +293,18 @@ class ReminderMixin:
         if not rows:
             self.reply(chat_id, T(lang, "reminder_not_found"))
             return
+        # A named target never authorizes undo on another moved reminder.
+        # Keep the bare, unique-last-move fallback only for a bare request.
+        ids = params.get("ids")
+        if params.get("id") is None and isinstance(ids, list) and len(ids) == 1:
+            params = dict(params, id=ids[0])
+        has_target = (params.get("id") is not None or bool(params.get("ids"))
+                      or params.get("title_query") or params.get("title"))
         row = reminders.find_by_query(rows, params)
+        if row is None and has_target:
+            self.reply(chat_id, T(lang, "reminder_not_found") + "\n"
+                       + reminders.format_list(rows, self.tz_offset(), lang))
+            return
         if row is None and getattr(self, "turn_reply_reminder_id", None) is not None:
             # Same binding as `_resolve_reminder_target`: a Reply to a fired
             # notification names ITS reminder and nothing else. Undo resolves its

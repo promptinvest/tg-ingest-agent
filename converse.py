@@ -75,6 +75,76 @@ def current_owner_request(conn, chat_id, text):
                 and store.convo_row_source(rows[-1]) == "boss")
 
 
+CURRENT_MESSAGE_CONTEXT = (
+    "CURRENT MESSAGE — code-owned processing evidence: this message has been received "
+    "and has reached the conversation handler. It is being answered now; this is not "
+    "proof that a reply was delivered or that any requested action was performed. "
+    "No processing failure or dead-letter outcome for THIS message is supplied. "
+    "Historical operational notices describe earlier events or unverified earlier "
+    "claims, never the current outcome. Do not repeat one as a fresh error, invent a "
+    "failed-inbox entry, or ask him to resend a message that you can already read. "
+    "If the request is ambiguous, ask for its missing meaning instead. Do not infer "
+    "that all services or integrations are healthy from this limited evidence."
+)
+
+_QUOTED_DATA = re.compile(r"```[\s\S]*?```|«[^»]*»|“[^”]*”|\"[^\"\n]*\"")
+_HISTORICAL_FAILURE = re.compile(
+    r"\b(?:earlier|previous(?:ly)?|yesterday|before|last\s+(?:time|message)|"
+    r"раньше|ранее|вчера|тогда|предыдущ\w*|прошл\w*|\d{4}-\d{2}-\d{2})\b", re.IGNORECASE)
+_LITERAL_NOTICE_REQUEST = re.compile(
+    r"(?:^|[.!?]\s*)(?:(?:please|пожалуйста)[,\s]+)?"
+    r"(?:repeat|quote|translate|повтори|процитируй|переведи)\b", re.IGNORECASE)
+_CURRENT_FAILURE = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
+    r"\bI\s+(?:(?:could|can)\s+not|couldn't|can't|cannot|failed\s+to|(?:am|'m)\s+unable\s+to)"
+    r"\s+(?:process|handle|receive|read)\s+(?:this|your|the\s+current|current)"
+    r"\s+(?:message|request|update)\b",
+    r"\b(?:this|your|the\s+current|current)\s+(?:message|request|update)\s+"
+    r"(?:(?:is|was|has\s+been)\s+(?:in\s+the\s+failed\s+inbox|dead[- ]lettered|"
+    r"not\s+processed)|failed\s+(?:processing|to\s+(?:process|be\s+processed)))\b",
+    r"\b(?:я\s+)?не\s+(?:смогла|могу|удалось|получилось)\s+"
+    r"(?:обработать|прочитать|получить|принять)\s+"
+    r"(?:это|тво[йеёяю]\w*|текущ\w*)\s+(?:сообщени\w*|запрос\w*)\b",
+    r"\b(?:это|тво[йеёяю]\w*|текущ\w*)\s+(?:сообщени\w*|запрос\w*)\s+"
+    r"(?:(?:не\s+обработан\w*)|(?:лежит|остал\w*|попал\w*)\s+"
+    r"(?:во?\s+)?(?:входящих\s+сбоях|ошибках\s+обработки))\b",
+    r"\bоно\s+(?:лежит|остал\w*|попал\w*)\s+во?\s+входящих\s+сбоях\b",
+))
+
+
+def processing_failure_claim(text, owner_text=""):
+    """A bounded current-message failure claim, not a quoted or dated discussion.
+
+    This is used only after the current message reached conversation generation.
+    It does not assess general model correctness or reinterpret stored outcomes.
+    """
+    raw = str(text or "").strip()
+    literal = raw
+    if _QUOTED_DATA.fullmatch(raw):
+        for opening, closing in (("```", "```"), ("«", "»"), ("“", "”"), ('"', '"')):
+            if raw.startswith(opening) and raw.endswith(closing):
+                literal = raw[len(opening):-len(closing)].strip()
+                break
+    # A literal explicitly supplied by the current owner can be repeated as
+    # data. Quotation marks alone cannot turn a fresh false-status answer into
+    # evidence. Callers supply owner_text only after the current-source check.
+    if literal and _LITERAL_NOTICE_REQUEST.search(owner_text) and literal in owner_text:
+        return None
+    body = literal if literal != raw else _QUOTED_DATA.sub(" ", raw).strip()
+    if not body:
+        return None
+    if store.convo_is_operational({"role": "bot", "source": "boss", "text": body}):
+        return body[:160]
+    # A date can follow the historical claim. Conversely, an earlier event in a
+    # different contrast clause cannot authorize a fresh current failure.
+    for clause in re.split(r"[.!?;\n]+|\b(?:but|however|although|though|но|однако|хотя|зато)\b",
+                           body, flags=re.IGNORECASE):
+        for pattern in _CURRENT_FAILURE:
+            match = pattern.search(clause)
+            if match and not _HISTORICAL_FAILURE.search(clause):
+                return match.group(0)
+    return None
+
+
 _COUNT_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
     "одним": 1, "один": 1, "одного": 1, "двумя": 2, "два": 2, "двух": 2,
@@ -534,6 +604,7 @@ def build_system(conn, lang, extra_context=None):
         "texting him, not writing a screenplay. Show feeling through your words, an "
         "emoji, or a reaction — never with described gestures."
     )
+    parts.append(CURRENT_MESSAGE_CONTEXT)
     return "\n\n".join(parts)
 
 
@@ -570,7 +641,11 @@ def build_messages(conn, chat_id, lang, extra_context=None):
         row["role"] == "user" and store.convo_row_source(row) == "boss"
         for row in history[-2:])
     for index, row in enumerate(history):
-        role = "assistant" if row["role"] == "bot" else "user"
+        # Operational outcomes are retained as evidence, not reenacted as Cara's
+        # ordinary dialogue. This also fences exact legacy notices without any
+        # rewrite or deletion of the owner's stored conversation.
+        operational = store.convo_is_operational(row)
+        role = "assistant" if row["role"] == "bot" and not operational else "user"
         if needs_boundary and index == len(history) - 1:
             messages.append({"role": "system", "content": CURRENT_REQUEST_BOUNDARY})
         content = store.convo_replay_text(row).strip()

@@ -1,5 +1,19 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 27 - Functional review fixes (qualification pending)
+
+The owner requested a current functional review and fixes for confirmed bugs.
+The isolated candidate separates historical operational notices from current
+conversation outcomes, preserves useful clarification context, binds new media
+and note confirmations to delivered cards/content versions, preserves explicit
+reminder-undo targets, and corrects voice/task delivery and native-call accounting
+failure paths. Existing history, legacy pending shapes, models and budgets remain.
+
+Failing outcome reproductions and the existing affected-flow checks accompany
+these corrections. Full exact-source Linux, real-model qualification and guarded
+installed acceptance remain required; this paragraph does not claim deployment.
+See [the functional review record](docs/cara-functional-review-2026-10-27.md).
+
 ## October 27 - Installed-layout delivery recovery
 
 Deployed and accepted **2026-10-27 07:45:35 UTC** (10:45 Moscow), source

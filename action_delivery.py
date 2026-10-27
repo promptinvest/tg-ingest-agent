@@ -262,7 +262,11 @@ def _record_sent(conn, row, result):
         if row["record_conversation"]:
             # convo_add commits, so use the same insert shape without a nested
             # commit: the acknowledgement and its history either both land.
-            store.convo_add(conn, params["chat_id"], "bot", metadata.get("history_text", params["text"]))
+            source = metadata.get("conversation_source")
+            if not isinstance(source, str) or source not in store.CONVO_OPERATIONAL_SOURCES:
+                source = "boss"
+            store.convo_add(conn, params["chat_id"], "bot", metadata.get("history_text", params["text"]),
+                            source=source)
         if metadata.get("kind") == "reminder_expired" and store.pending_get(conn, params["chat_id"]) is None:
             store.pending_set(conn, params["chat_id"], "reminder_expired", metadata["payload"], ttl_seconds=24 * 3600)
 
