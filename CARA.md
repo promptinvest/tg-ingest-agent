@@ -40,7 +40,7 @@ The fixes separate historical notices from current outcomes, preserve useful
 clarification and dated recall, bind new note/media confirmations to delivered
 cards and content versions, preserve explicit reminder-undo targets, and correct
 voice/task delivery and native-call accounting failure paths. Both root Linux
-orders completed 3,227 tests (nine skipped each), with exact-source CI and the
+orders completed the full offline suite (nine skipped each), with exact-source CI and the
 exact installed entrypoint gate. All 11,339 original assertions remain. A release-metadata guard
 stopped the first deployment; a reviewed forward continuation completed only
 the unexecuted steps, preserving all 56 stopped tables/schema and prior evidence.

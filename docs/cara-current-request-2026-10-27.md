@@ -79,3 +79,12 @@ reversion or manual Telegram test/replay is included.
   with at most18 more calls and totaltestspend belowUSD0.25. Nineteen outcomes
   comprise the original15, two zero-model dispatch ping cases and two new actual
   model topic-change cases. No paid call has run for this candidate yet.
+
+- Candidate `6c278518`/archive`45103ae7` remains preserved. CI40537529032
+  completed the full test discovery but failed the unchanged living-spec rule
+  against a historical "3,227 tests" phrase introduced in the previous
+  documentation closeout. The two living specifications now say "full offline
+  suite"; the original exact historical count remains in the dated functional
+  release record. No runtime, test expectation or quality gate changed.
+  The new candidate requires fresh exact-source verification. The original
+  installed-layout proof68c0f476 passed; it is retained as earlier-source evidence.
