@@ -1,42 +1,28 @@
 # Cara — Capabilities, Features & Architecture
 
-## October 27 - Functional review fixes (qualification pending)
+## October 27 - Functional review fixes accepted
 
-The owner requested a current functional review and fixes for confirmed bugs.
-The isolated candidate separates historical operational notices from current
-conversation outcomes, preserves useful clarification context, binds new media
-and note confirmations to delivered cards/content versions, preserves explicit
-reminder-undo targets, and corrects voice/task delivery and native-call accounting
-failure paths. Existing history, legacy pending shapes, models and budgets remain.
+Deployed and accepted **2026-10-27 14:06:34.824392 UTC** (17:06:34.824392 Moscow),
+source `3140081`, build `df7a5715a810`, deployment `fac7939fdd950ba5e237d163`.
+The actual sandbox observer passed at 14:07:26 UTC; the independent final audit
+passed at 14:08:44.425238 UTC. The remotely verified annotated tag
+`production-2026-10-27-functional-fixes` points to the exact installed source.
 
-Failing outcome reproductions and the existing affected-flow checks accompany
-these corrections. Full exact-source Linux, real-model qualification and guarded
-installed acceptance remain required; this paragraph does not claim deployment.
-See [the functional review record](docs/cara-functional-review-2026-10-27.md).
+The fixes separate historical notices from current outcomes, preserve useful
+clarification and dated recall, bind new note/media confirmations to delivered
+cards and content versions, preserve explicit reminder-undo targets, and correct
+voice/task delivery and native-call accounting failure paths. Both root Linux
+orders completed 3,227 tests (nine skipped each), with exact-source CI and the
+exact installed entrypoint gate. All 11,339 original assertions remain. A release-metadata guard
+stopped the first deployment; a reviewed forward continuation completed only
+the unexecuted steps, preserving all 56 stopped tables/schema and prior evidence.
 
-The first candidate exposed a completed-handling fixture that implicitly grew
-with its registry. Its original three records and assertions are now pinned;
-an additional current-registry check preserves exact history. Production code
-is unchanged by that fixture correction; fresh full qualification is required.
-
-The first actual response cohort rejected six of fifteen outcomes despite the
-full normal/shuffled Linux suites passing. The next candidate distinguishes
-current text receipt from broader health, preserves exact owner-requested
-historical quotations, treats legacy notices as reported claims during dated
-recall, and permits a narrowly verified recorded-task status without accepting
-a new save claim. Every failed response remains evidence. Exact literal requests
-retain the native conversation path; existing deterministic task-status reads
-remain explicitly separate from paid model-quality evidence. The cumulative
-USD0.25/twenty-reservation qualification ceiling remains unchanged.
-
-Candidate `d984f44` then passed fourteen of fifteen response cases, including
-the actual literal quote and task/source/date replies. Its dated recall still
-inferred that a code scenario ran from two legacy notice rows whose origin was
-unverified. That candidate remains blocked. The next correction gives recall
-compact verified origin counts and checks unsupported execution-provenance
-claims without changing raw history or the fourteen already working flows.
-Nineteen cumulative native test calls cost USD0.090743872; no extra calls or
-extension of the selected twenty-call limit is implied by this implementation.
+All fifteen final response outcomes passed, including a native repair of one
+initial Russian false all-clear; six record reads use no model. Cumulative test
+usage was 29 calls / USD0.139814352, within the owner-approved 30-call / USD0.25
+ceiling. Models and native budgets remain unchanged. The fifth source segment
+keeps the original **October 28 13:36:17.924552 UTC** end; application changes
+confound a model-only comparison. See [the functional review record](docs/cara-functional-review-2026-10-27.md).
 
 ## October 27 - Installed-layout delivery recovery
 
