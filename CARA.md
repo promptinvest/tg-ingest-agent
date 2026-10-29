@@ -14,6 +14,11 @@ OSS120B retains USD0.10/0.70 and no invented cache-read price. Explicit commerci
 overrides remain unchanged. This extends the existing gateway and accounting;
 it introduces no new skill or process.
 
+Initial CI exposed an incomplete historical outage-test fixture: it pinned only
+one profile while model health combines every profile sharing the primary. The
+fixture now explicitly pins its complete two-model chain and retains every
+existing alert assertion. Application behavior is unchanged by this test repair.
+
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
 

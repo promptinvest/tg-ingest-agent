@@ -58,3 +58,21 @@ Sources checked October 29:
 [model catalog](https://docs.digitalocean.com/products/inference/details/models/),
 [pricing](https://docs.digitalocean.com/products/inference/details/pricing/),
 [support policy](https://docs.digitalocean.com/products/inference/details/model-support-policy/).
+
+## First frozen candidate and retained CI failure
+
+Candidate `c4cdb748` (archive `8ff2b0b5`) is published in [PR10](https://github.com/promptinvest/tg-ingest-agent/pull/10).
+Its migration helper suite passed 84 checks. The full CI run reported 3305 tests
+with one failure in the historical outage-alert fixture and 62 skips; all compile,
+undefined-name and helper steps passed. The original [failed run](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40943965967) remains.
+
+The fixture set the old primary and overrode only the router fallback; health
+combines all profiles sharing a primary, so the new default OSS120B remained
+healthy outside the supposed two-model outage. The repair explicitly sets its
+router primary and all same-primary profile fallbacks, asserts the complete chain,
+and preserves all existing outage/recovery assertions. Focused red/green reproduced
+the failure and then passed. No production runtime changed in this repair.
+
+The first frozen Linux verifier and its original receipts remain separate.
+The 43-case qualification plan for that source was prepared without paid calls
+and was not executed; a new frozen source requires fresh preparation and gates.
