@@ -76,12 +76,13 @@ class GatewayTests(unittest.TestCase):
         # the meter (the 2026-06-19 budget spike). Lock the real DO rates in.
         table = llm.pricing_table(make_config())
         for slug, pair in {
-            "deepseek-4-flash": (0.112, 0.224),
-            "deepseek-v4-pro": (1.392, 2.784),
+            # DO published tariffs reconciled 2026-10-29 (no historical repricing).
+            "deepseek-4-flash": (0.14, 0.28),
+            "deepseek-v4-pro": (1.74, 3.48),
             "nemotron-3-nano-omni": (0.50, 0.90),
             "openai-gpt-oss-20b": (0.05, 0.45),
             "kimi-k3": (3.0, 15.0),
-            "kimi-k2.6": (0.76, 3.20),
+            "kimi-k2.6": (0.95, 4.00),
         }.items():
             self.assertEqual(table.get(slug), pair, slug)
             self.assertIn(slug, table)

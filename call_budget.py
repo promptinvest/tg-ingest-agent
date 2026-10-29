@@ -1,4 +1,5 @@
 """Durable, conservative reservations for gateway calls, using existing usage storage."""
+import json
 import store
 
 
@@ -11,10 +12,15 @@ def reserve(cfg, conn, skill, kind, model, cost, budget_limits, error_type):
     return store.usage_add(conn, skill, "unknown_" + kind, model, cost_usd=cost)
 
 
-def settle(conn, row_id, kind, tokens_in=0, tokens_out=0, seconds=None, cost_usd=0):
+def settle(conn, row_id, kind, tokens_in=0, tokens_out=0, seconds=None, cost_usd=0,
+           *, cache_usage=None):
     # Only the row created for this request is updated. Historical usage stays intact.
-    conn.execute("UPDATE llm_usage SET kind=?, tokens_in=?, tokens_out=?, seconds=?, cost_usd=?"
-                 " WHERE id=?", (kind, tokens_in, tokens_out, seconds, cost_usd, row_id))
+    encoded = (json.dumps(cache_usage, ensure_ascii=True, allow_nan=False,
+                          sort_keys=True, separators=(',', ':'))
+               if cache_usage is not None else None)
+    conn.execute("UPDATE llm_usage SET kind=?, tokens_in=?, tokens_out=?, seconds=?, cost_usd=?,"
+                 " cache_usage_json=? WHERE id=?",
+                 (kind, tokens_in, tokens_out, seconds, cost_usd, encoded, row_id))
     conn.commit()
 
 

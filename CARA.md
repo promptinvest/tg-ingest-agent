@@ -1,5 +1,39 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 29 - Prompt-cache reporting accepted
+
+The owner selected measured cache usage and price reconciliation. The release
+extends the existing gateway, usage ledger and spend/review reports. New calls
+record validated cache counters and frozen published-rate estimates; measured
+coverage, reuse and priced coverage remain distinct. Historical rows/unknown
+reservations are preserved, and savings never reduce budget reservations. Four
+stale open-model defaults are reconciled; explicit commercial overrides and all
+dollar limits remain. Prompts, models, API payloads and action behavior are exact.
+Cache lines use distinct labels so existing model-cost warnings remain readable.
+
+Deployed and accepted **2026-10-29 10:32:20.166933 UTC**, exact source `e834c29`,
+build `94d4bd4840c4`, deployment `26718b31810856a7bfcdfbf5`. Independent audit
+passed at 10:33:03.995636 UTC: all four services active, 95 installed artifacts,
+126 protected files and one native completion notice recorded as sent/attempts1.
+Published tag [production-2026-10-29-cache-reporting](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-10-29-cache-reporting)
+points to that exact runtime; remote readback verified the tag target.
+The full Linux offline suite passed in normal and shuffled orders, along with
+installed-layout and CI checks. The final private operator passed its complete
+regression suite and a read-only check against actual inputs.
+
+The nullable column was added once, preserving all 56 tables and original rows
+without backfill. The owner-approved five-record exception retains all 35 unknown
+records and the five records' USD0.0020408 reserve; every new unknown still blocks.
+Failed attempts and pauses remain recorded. A fresh installed-state continuation
+corrected nine authenticated Daily Lingo release identifiers in Cara's read-only
+policy and acknowledged only its archived, completed synthetic read. It performed
+no reinstall, second migration, Daily Lingo mutation or controller replay.
+No measured cache savings or invoice reconciliation is claimed. These acceptance
+and health observations are dated, not a claim of uninterrupted availability.
+See [ADR-0037](docs/adr/ADR-0037-cache-usage-reporting.md) and the
+[release record](docs/cara-cache-usage-2026-10-29.md) with its
+[sanitized deployment receipt](docs/cara-cache-deployment-2026-10-29.json).
+
 ## October 27 - Current-request conversation repair accepted
 
 Deployed and accepted **2026-10-27 17:28:51.589018 UTC**, source `83e8162`, build

@@ -15,6 +15,7 @@ import statistics
 
 import llm
 import proactive
+from spend import cache_lines as cache_report_lines
 import store
 from common import scrub_secrets
 from texts import TEXTS
@@ -162,6 +163,7 @@ def collect(conn, period):
         "SELECT skill, COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost"
         " FROM llm_usage WHERE ts >= ? GROUP BY skill ORDER BY cost DESC", (since,),
     ).fetchall()
+    data["cache_usage"] = store.usage_cache_summary(conn, since=since)
     data["healthcheck_calls"] = sum(
         r["calls"] for r in data["spend_by_skill"] if r["skill"] == "healthcheck")
     data["healthcheck_cost"] = sum(
@@ -880,6 +882,7 @@ def markdown(conn, cfg, period="week"):
         lines.append(f"- {row['skill']}: ${row['cost']:.4f} ({row['calls']} calls)")
     if not data["spend_by_skill"]:
         lines.append("- none")
+    lines.extend(cache_report_lines(data["cache_usage"], "en"))
     latency = data["functional_latency"]
     if latency["calls"]:
         lines.append(f"- functional chat/embed latency: p50 {latency['p50']:.2f}s · "
