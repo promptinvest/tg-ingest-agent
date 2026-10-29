@@ -1,0 +1,93 @@
+{
+  "schema": "cara.cache-reporting-verification/v1",
+  "status": "application_verified_deployment_pending",
+  "source_commit": "e834c2927b411302acd1d015e9e621f89e37eb19",
+  "executed_archive_sha256": "c064f6b3ddef0787713369cdec5cfb5d816fe3733aab3bb2addd894251572863",
+  "git_archive_sha256": "b6db2a5cb3347536402e070f1dc5e8f5221e9072857fe3637a168b062d6a53c2",
+  "file_count": 350,
+  "source_parity": true,
+  "normal": {
+    "tests": 3299,
+    "skipped": 9,
+    "seconds": 229.135,
+    "exit_code": 0,
+    "log_sha256": "8e9c060d9d1bb3d8f5945cb78e99f47f02f8ba4f2da0803f1ad7ee8adfe38be5",
+    "runner_sha256": "ca1d1d9a40568bd06b5262f512b99e573326f5e70f94afe87968345eca0aa9da"
+  },
+  "shuffled": {
+    "tests": 3299,
+    "skipped": 9,
+    "seed": 20261007,
+    "seconds": 225.193,
+    "exit_code": 0,
+    "log_sha256": "ee33193bf43d8c66082b07dca6d3856783889348128cb34f19a63f8df528ef12",
+    "runner_sha256": "3ec621ada13f167f88273ac84e7bf2a0691e1a9a00629b115c9e7aced8d022d9"
+  },
+  "installed_layout": {
+    "status": "passed",
+    "entrypoints": [
+      "agent",
+      "__main__"
+    ],
+    "scenarios": 5,
+    "source_named_module_absent": true,
+    "raw_report_sha256": "f4f5126185471f5d2c7195a49841d960b1d4a87a1ce2b33fa7e88a1bbf7874d8"
+  },
+  "compile": {
+    "exit_code": 0
+  },
+  "shell_syntax": {
+    "files": 5,
+    "exit_code": 0,
+    "evidence": "set-e loop completed before retained PASSED terminal"
+  },
+  "helpers": {
+    "model_trial": 154,
+    "capability_continuation": 21,
+    "analysis_epoch": 6,
+    "cache_release": 29,
+    "status": "passed"
+  },
+  "bounded_execution_roles": [
+    "compile",
+    "normal",
+    "shuffled",
+    "layout"
+  ],
+  "execution_policy": {
+    "uid": 0,
+    "network_namespace_disabled": true,
+    "environment_cleared": true,
+    "cpu_seconds": 360,
+    "address_space_kib": 1048576,
+    "wall_seconds": 480,
+    "nice": 10,
+    "ionice_class": 3,
+    "temporary_filesystem": "tmpfs"
+  },
+  "helper_policy": "network namespace and cleared environment; no claim of same resource limits",
+  "static_policy": "host bash syntax validation; no execution of application shell scripts",
+  "ci": {
+    "conclusion": "success",
+    "head_sha": "e834c2927b411302acd1d015e9e621f89e37eb19",
+    "base_sha": "e60af04dbea975fba1058fd82fcd3f59b9c10008",
+    "checkout": "standard PR merge",
+    "run_id": 40840016002,
+    "job_id": 123333833103,
+    "tests_per_order": 3299,
+    "skipped_per_order": 62,
+    "url": "https://github.com/promptinvest/tg-ingest-agent/actions/runs/40840016002"
+  },
+  "production": {
+    "changed": false,
+    "migration_performed": false,
+    "controller_launched": false,
+    "acceptance": false,
+    "blocker": "five pre-existing current-process healthcheck unknown_chat reservations need owner decision",
+    "unknown_records_sha256": "1ef181aa028690eaed4dca0e383fb2f71edf36992fdaedb106199e222da05748",
+    "unknown_count": 5,
+    "reserved_usd": 0.0020408
+  },
+  "paid_test_calls": 0,
+  "manual_messages": 0
+}

@@ -1,7 +1,9 @@
 # Cara prompt-cache reporting — October 29, 2026
 
-Status: implemented candidate; full verification/publication and production
-acceptance pending. No cache warming, paid model call or manual message.
+Status: implemented and published in PR9; exact runtime candidate `e834c29`
+passed full application verification. Deployment is pending an owner decision
+on existing unresolved health-check reservations. No cache warming, paid model
+call, manual message or production change was performed for this work.
 
 The owner's “proceed” selects cache usage reporting and price reconciliation
 from the preceding DigitalOcean GA review. This extends existing gateway/storage/
@@ -82,3 +84,80 @@ remain unpriced instead of borrowing another model's discount.
 
 Private scratch evidence remains on the VPS under `/root/cara-cache-20261029/`.
 Only sanitized counts, hashes and outcome summaries may be published here.
+
+## Completed application verification
+
+The [sanitized verification receipt](cara-cache-usage-verification-2026-10-29.json)
+binds the exact source, archives, both execution runners and retained test logs.
+
+The exact candidate is `e834c2927b411302acd1d015e9e621f89e37eb19`.
+Both executed archives have SHA256
+`c064f6b3ddef0787713369cdec5cfb5d816fe3733aab3bb2addd894251572863`.
+An independent comparison against the Git archive confirms all 350 file bytes
+match; archive container metadata differs. The canonical Git archive hash is
+`b6db2a5cb3347536402e070f1dc5e8f5221e9072857fe3637a168b062d6a53c2`.
+
+- Linux normal order: 3,299 tests, nine platform skips, 229.135 seconds, exit 0.
+- Linux shuffled order, seed 20261007: 3,299 tests, the same nine skips,
+  225.193 seconds, exit 0.
+- Exact installed-layout gate passed both `agent` and `__main__` entrypoints
+  and all five retained dispatch/delivery scenarios. Compilation, all five root
+  shell syntax checks and helper suites 154/21/6/29 passed.
+- Normal order ran under `full2`; remaining gates completed once in
+  `full2-continuation1` after the original SSH transport ended. The original
+  normal result is preserved; it was not rerun. Evidence binds both actual runners.
+- Compile, normal, shuffled and layout gates used root, cleared environment,
+  isolated networking, tmpfs, 360 CPU seconds, 1 GiB address space, 480 wall
+  seconds, nice10 and ionice3. Helper/static checks do not claim those resource bounds.
+- [CI run 40840016002](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40840016002)
+  passed compilation, undefined-name checks, helpers, both unit orders, shell syntax
+  and ShellCheck. CI tested the standard PR merge of exact head `e834c29` into
+  unchanged main `e60af04`; each order passed 3,299 tests with 62 platform skips.
+
+The gateway still uses Chat Completions. Cache-counter alias tests cover that
+API; this change neither migrates to nor claims a tested Responses API parser.
+Documentation-only follow-up commits do not replace the verified runtime archive.
+
+## Deployment decision required
+
+Read-only checks at October29 08:27:21 UTC found main/worker/fleet/speech active
+with zero restarts, no claimed jobs, pending replies, started task attempts or
+claimed approvals, and no cache column installed. The existing guard nonetheless
+rejects five current-process `unknown_chat` rows. They are Kimi2.6 health checks
+from October28 14:39:41.428833 through 22:44:07.740478 UTC, with zero recorded tokens
+and USD0.0020408 reserved in total. These are unresolved charges, not measured
+spend or proof of continuing provider work. The 30 older unknown records remain.
+
+At 08:29:26 UTC, the five complete records hashed to
+`1ef181aa028690eaed4dca0e383fb2f71edf36992fdaedb106199e222da05748`.
+No raw records, identifiers or provider content are exported here. The old
+single-health-check deployment exception does not cover these records.
+No controller/window/authorization has been selected and no service restart,
+canonical migration, notification or live backup has occurred.
+
+The proposed decision is narrowly to allow deployment with those exact five
+old records preserved as unresolved historical reservations, retaining their
+charges and stopping on any additional unknown or active work. This exception
+has **not** been approved or applied. If selected, its implementation must receive
+fresh private operator qualification and a new live preflight before rollout.
+
+## Private release readiness
+
+Final operator package v4 passed all 294 isolated tests: 215 inherited tests and
+79 additional cache/release cases, plus four actual isolated kernel/import probes.
+Independent review confirmed the source/archive protections and strict unknown
+guard remain intact. Package SHA256:
+`95e16c3554302d1bdffac038bcbc79c2d70fe93cd7f8d7413eb79c5fc3277951`;
+qualification receipt:
+`158784ce0b41069fcb1bbc7c09e753be6c38d9ec466e5f24ba2c38e57e283f86`.
+Failed v1 and v3 preparations and passed v2 remain preserved. The v3 fixture had
+incorrectly expected Python's tar reader to retain redundant terminal directory
+slashes; the corrected test accepts that harmless normalization while retaining
+traversal, duplicate, link and file/directory conflict rejection.
+
+Data-only evidence preparation completed under private `evidence-v1`, producing
+eight source-bound receipts and an explicit `offline_evidence_prepared_live_blocked`
+readiness record. The full verification receipt is
+`4aded823bf9cae52bc402ae808b4abf0b92987fd5c1e0f04c5001ce09d4e9307`.
+It selects no authorization, nonce, window or controller. Live backup, migration,
+readiness and acceptance gates remain pending behind the unresolved-record decision.

@@ -11,9 +11,11 @@ stale open-model defaults are reconciled; explicit commercial overrides and all
 dollar limits remain. Prompts, models, API payloads and action behavior are exact.
 Cache lines use distinct labels so existing model-cost warnings remain readable.
 
-One nullable usage column is added atomically without backfill. Implementation
-does not establish production acceptance or actual observed savings. The full
-offline, installed-layout and fresh post-trial release gates remain required.
+One nullable usage column is added atomically without backfill. Exact candidate
+`e834c29` passed both 3,299-test Linux orders, installed-layout and CI checks.
+Deployment is pending a decision on five old unresolved health-check reservations;
+production remains unchanged. No actual cache savings are claimed before rollout.
+The existing unknown-usage guard remains enforced.
 See [ADR-0037](docs/adr/ADR-0037-cache-usage-reporting.md) and the
 [dated verification record](docs/cara-cache-usage-2026-10-29.md).
 
