@@ -1,8 +1,9 @@
 # ADR-0037 — Measured prompt-cache usage and dated price estimates
 
 Status: Implemented and verified 2026-10-29; owner approved the exact five-record
-reservation exception and guarded deployment. Exception qualification and production
-acceptance remain pending at this checkpoint.
+reservation exception and guarded deployment. Exception qualification passed;
+deployment is forward-paused before migration pending a verified continuation.
+Production acceptance remains pending at this checkpoint.
 
 ## Context
 

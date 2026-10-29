@@ -182,3 +182,39 @@ Only the private deployment guard changes, with failure tests and independent
 review before a fresh package is selected. Original tests, closed trial evidence,
 backups, stopped database parity, both readiness phases and final audit remain.
 The prior v4 package and pending readiness record remain unchanged historical evidence.
+
+## Deployment interruption: original state preserved
+
+Private operator v5 passed 309 tests with the approved fixed-cutoff five-record
+exception. Attempt1 failed fresh preflight before any production mutation because
+four protected Daily Lingo monitor hashes had legitimately changed in its separately
+accepted release. Read-only verification authenticated the current four hashes and
+all other 116 protected files. The old baseline and failed attempt remain intact.
+
+Operator v6 passed all 317 tests and independent review. Its exact package is
+`a3926f5a31df02e2c6d7979b6dfefd3b06aabf4b6cbb9127fd2db0c9903ab70d`;
+qualification receipt `92b90222a972030284d052f295ea2ced68944a9da047fbe4c062b7c8f9728ed0`.
+Attempt2 launched once at09:26:38.374014UTC under the selected09:26:22–10:26:22UTC
+window. It passed fresh preflight, staged installed-layout, online/stopped backups,
+stopped parity and closed-trial preservation, then failed at09:27:11.571170UTC.
+
+The migration snapshot correctly rejected a backup with a WAL sidecar. The private
+tool had passed a WAL-mode backup directly to its standalone-copy reader; its
+SQLite connection context managers also did not close backup handles. No canonical
+migration intent, rehearsal, source installation or completion notice occurred.
+Forward containment stopped main and fleet while preserving current source and data.
+The failed controller and its authorization must never be replayed or rewritten.
+
+Read-only verification at09:32:02.616970UTC confirmed the original94 runtime
+artifacts/source`83e8162`, no cache module/column, all56 database tables, all120
+protected files and all35 unknown records intact. The exact approved five-record
+hash and USD0.0020408 reserve were unchanged, with no active jobs/replies/attempts/
+approvals. Worker and speech remained active with zero restarts; main/fleet were
+inactive. Both retained backup hashes matched their original receipts; the probe
+did not open them through SQLite or alter their metadata.
+
+A new phase-specific continuation is being prepared to authenticate the failed
+attempt, prove fresh paused-state parity, and perform only migration and remaining
+release phases. It will retain the strict standalone-copy guard, use WAL-aware
+SQLite backup into new private copies with explicit connection closure, and leave
+original/live sidecars intact. Acceptance is still absent at this checkpoint.
