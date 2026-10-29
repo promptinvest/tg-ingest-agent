@@ -10,6 +10,7 @@ messages.status lifecycle:
 """
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import weakref
@@ -168,7 +169,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
   tokens_out INTEGER NOT NULL DEFAULT 0,
   seconds REAL,
   cost_usd REAL NOT NULL DEFAULT 0,
-  trace_id TEXT
+  trace_id TEXT,
+  cache_usage_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -1603,6 +1605,10 @@ def _migrate_steps(conn):
     usage_columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_usage)")}
     if "trace_id" not in usage_columns:
         conn.execute("ALTER TABLE llm_usage ADD COLUMN trace_id TEXT")
+    if "cache_usage_json" not in usage_columns:
+        # NULL preserves the distinction between old/unmeasured and a measured miss.
+        # No historical row, token count or reserved charge is backfilled/repriced.
+        conn.execute("ALTER TABLE llm_usage ADD COLUMN cache_usage_json TEXT")
     issue_columns = {row["name"] for row in conn.execute("PRAGMA table_info(issues)")}
     if "trace_id" not in issue_columns:
         conn.execute("ALTER TABLE issues ADD COLUMN trace_id TEXT")
@@ -4225,6 +4231,58 @@ def usage_breakdown(conn, period, by="skill"):
         f" GROUP BY {by} ORDER BY cost DESC",
         (value,),
     ).fetchall()
+
+
+def usage_cache_summary(conn, period="month", *, since=None):
+    """Aggregate frozen per-call estimates, never reprice old budget rows.
+
+    Reports pass their own window: spend uses UTC calendar periods and the
+    engineering review uses a rolling `since`. Missing metadata is not a miss.
+    """
+    where, value = ("ts >= ?", since) if since is not None else usage_period_filter(period)
+
+    def empty():
+        return dict(calls=0, measured_calls=0, priced_calls=0, input_tokens=0,
+                    cached_read_tokens=0, cached_write_tokens=0, write_measured_calls=0,
+                    provider_cost_usd=0.0, savings_usd=0.0)
+
+    total, models = empty(), {}
+    for row in conn.execute(
+            f"SELECT model,cache_usage_json FROM llm_usage WHERE {where}"
+            " AND kind IN ('chat','unknown_chat')", (value,)):
+        model = models.setdefault(row['model'], empty())
+        model['calls'] += 1
+        raw = row['cache_usage_json']
+        if not isinstance(raw, str) or len(raw) > 8192:
+            continue
+        try:
+            item = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(item, dict) or item.get('version') != 1 or item.get('status') != 'known':
+            continue
+        tokens, read = item.get('input_tokens'), item.get('cached_read_tokens')
+        if (type(tokens) is not int or type(read) is not int
+                or not 0 <= read <= tokens <= 2 ** 31 - 1):
+            continue
+        model['measured_calls'] += 1
+        model['input_tokens'] += tokens
+        model['cached_read_tokens'] += read
+        write = item.get('cached_write_tokens')
+        if type(write) is int and 0 <= write <= tokens - read:
+            model['cached_write_tokens'] += write
+            model['write_measured_calls'] += 1
+        cost, savings = item.get('provider_cost_usd'), item.get('savings_usd')
+        if (type(cost) in (int, float) and type(savings) in (int, float)
+                and math.isfinite(cost) and math.isfinite(savings) and cost >= 0):
+            model['priced_calls'] += 1
+            model['provider_cost_usd'] += cost
+            model['savings_usd'] += savings
+    for model in models.values():
+        for key in total:
+            total[key] += model[key]
+    total['models'] = [dict(model=name, **values) for name, values in sorted(models.items())]
+    return total
 
 
 def _week_start(ts):

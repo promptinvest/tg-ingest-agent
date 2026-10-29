@@ -1,5 +1,21 @@
 # Cara — Solution Specification
 
+## October 29 - Prompt-cache reporting candidate
+
+The owner selected measured cache usage and price reconciliation. The candidate
+extends the existing gateway, usage ledger and spend/review reports. New calls
+record validated cache counters and frozen published-rate estimates; measured
+coverage, reuse and priced coverage remain distinct. Historical rows/unknown
+reservations are preserved, and savings never reduce budget reservations. Four
+stale open-model defaults are reconciled; explicit commercial overrides and all
+dollar limits remain. Prompts, models, API payloads and action behavior are exact.
+
+One nullable usage column is added atomically without backfill. Implementation
+does not establish production acceptance or actual observed savings. The full
+offline, installed-layout and fresh post-trial release gates remain required.
+See [ADR-0037](docs/adr/ADR-0037-cache-usage-reporting.md) and the
+[dated verification record](docs/cara-cache-usage-2026-10-29.md).
+
 ## October 27 - Current-request conversation repair accepted
 
 Deployed and accepted **2026-10-27 17:28:51.589018 UTC**, source `83e8162`, build

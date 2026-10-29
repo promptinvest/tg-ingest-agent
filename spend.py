@@ -95,4 +95,45 @@ def format_spend(conn, period, cfg, lang):
         p95 = router_inputs[min(len(router_inputs)-1, int(len(router_inputs)*.95))]
         lines.append((f"Роутер: средний вход {avg:.0f}, p95 {p95} токенов." if lang == "ru"
                       else f"Router input: average {avg:.0f}, p95 {p95} tokens."))
+    lines.extend(cache_lines(store.usage_cache_summary(conn, period), lang))
     return "\n".join(lines)
+
+
+def cache_lines(summary, lang="en"):
+    """Describe measured coverage separately from priced coverage and budget totals."""
+    if not summary['calls']:
+        return []
+    ru = lang == 'ru'
+    calls, measured = summary['calls'], summary['measured_calls']
+    lines = [(f"Кэш промпта: измерено {measured}/{calls} чат-вызовов."
+              if ru else f"Prompt cache: measured {measured}/{calls} chat calls.")]
+    for model in summary['models']:
+        prefix = f"  {model['model']}: {model['measured_calls']}/{model['calls']}"
+        if model['measured_calls']:
+            tokens, read = model['input_tokens'], model['cached_read_tokens']
+            ratio = f" ({100 * read / tokens:.1f}%)" if tokens else ''
+            lines.append(prefix + (f" измерено, {read}/{tokens} входных токенов из кэша{ratio}."
+                                   if ru else f" measured, {read}/{tokens} input tokens reused{ratio}."))
+        else:
+            lines.append(prefix + (" измерено; попадания неизвестны." if ru else
+                                   " measured; cache hits unknown."))
+    if measured:
+        tokens, read = summary['input_tokens'], summary['cached_read_tokens']
+        ratio = f" ({100 * read / tokens:.1f}%)" if tokens else ''
+        lines.append((f"Всего из кэша: {read}/{tokens} входных токенов{ratio}." if ru else
+                      f"Total reused: {read}/{tokens} input tokens{ratio}."))
+    priced = summary['priced_calls']
+    if priced:
+        cost, saving = summary['provider_cost_usd'], summary['savings_usd']
+        lines.append((f"Оценка для {priced}/{calls} вызовов: стоимость ${cost:.6f}, "
+                      f"экономия с учётом записи в кэш ${saving:.6f}." if ru else
+                      f"Estimated for {priced}/{calls} calls: cost ${cost:.6f}, "
+                      f"net cache savings ${saving:.6f}."))
+        lines.append(("Оценки по опубликованным тарифам, не счёт провайдера. "
+                      "Бюджет выше использует настроенные тарифы." if ru else
+                      "Published-rate estimates, not a provider invoice. "
+                      "Budget totals above use configured rates."))
+    else:
+        lines.append((f"Оценка стоимости кэша: 0/{calls} вызовов; данных недостаточно." if ru else
+                      f"Cache cost estimated for 0/{calls} calls; insufficient data."))
+    return lines

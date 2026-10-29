@@ -16,6 +16,7 @@ from urllib.request import Request
 
 import common
 import call_budget
+import cache_usage
 import inference_io
 import store
 from common import log
@@ -37,7 +38,8 @@ class BudgetExceeded(LLMError):
 
 # USD per 1M tokens (input, output); STT priced per audio minute.
 # Override via PRICING_JSON env, e.g. {"openai-gpt-4o": [2.5, 10.0]}.
-# (USD per 1M input, per 1M output). DO Gradient serverless rates, 2026-06
+# (USD per 1M input, per 1M output). Open-model rates reconciled 2026-10-29;
+# commercial overrides retain their deliberately conservative context ceilings.
 # (docs.digitalocean.com/products/inference/details/pricing). Keep slugs in sync
 # with DO_CHAT_MODEL / VISION_MODEL / LLM_PROFILES_JSON — a model MISSING here is
 # billed at DEFAULT_CHAT_PRICE ($3/$15), which silently 3-10x's the meter and
@@ -50,9 +52,9 @@ DEFAULT_PRICING = {
     "openai-gpt-4o": (2.5, 10.0),
     "openai-gpt-4o-mini": (0.15, 0.6),
     # Open-weight models Cara actually runs today
-    "deepseek-v4-pro": (1.392, 2.784),
-    "deepseek-4-flash": (0.112, 0.224),
-    "deepseek-3.2": (0.425, 1.36),
+    "deepseek-v4-pro": (1.74, 3.48),
+    "deepseek-4-flash": (0.14, 0.28),
+    "deepseek-3.2": (0.50, 1.60),
     "nemotron-3-nano-omni": (0.50, 0.90),
     "nemotron-nano-12b-v2-vl": (0.20, 0.60),
     # Vision model (own-photo reactions): open Llama-4 multimodal.
@@ -60,7 +62,7 @@ DEFAULT_PRICING = {
     "openai-gpt-oss-20b": (0.05, 0.45),
     "openai-gpt-oss-120b": (0.10, 0.70),
     "kimi-k3": (3.0, 15.0),
-    "kimi-k2.6": (0.76, 3.20),
+    "kimi-k2.6": (0.95, 4.00),
     "kimi-k2.5": (0.375, 2.025),
     # router:cara was a DO Inference Router (meta-endpoint) that dispatched to a
     # cheap open-weight model; price it at the deepseek-flash rate it targeted.
@@ -406,6 +408,8 @@ def finish_chat(cfg, conn, prepared, data=None, error=None, meta=None):
     call_budget.settle(
         conn, reserved, "unknown_chat" if estimated else "chat", tokens_in, tokens_out,
         seconds=elapsed, cost_usd=cost,
+        cache_usage=cache_usage.capture(model, usage, provider_url=_base_url(cfg),
+                                        response_model=data.get("model")),
     )
     # Metered first (a billed call is always counted), THEN the two loudness
     # signals: an unpriced slug is billing at the punitive default, and an
