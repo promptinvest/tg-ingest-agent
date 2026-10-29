@@ -9,6 +9,7 @@ coverage, reuse and priced coverage remain distinct. Historical rows/unknown
 reservations are preserved, and savings never reduce budget reservations. Four
 stale open-model defaults are reconciled; explicit commercial overrides and all
 dollar limits remain. Prompts, models, API payloads and action behavior are exact.
+Cache lines use distinct labels so existing model-cost warnings remain readable.
 
 One nullable usage column is added atomically without backfill. Implementation
 does not establish production acceptance or actual observed savings. The full

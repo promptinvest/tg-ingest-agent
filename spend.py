@@ -108,7 +108,8 @@ def cache_lines(summary, lang="en"):
     lines = [(f"Кэш промпта: измерено {measured}/{calls} чат-вызовов."
               if ru else f"Prompt cache: measured {measured}/{calls} chat calls.")]
     for model in summary['models']:
-        prefix = f"  {model['model']}: {model['measured_calls']}/{model['calls']}"
+        label = 'Кэш' if ru else 'Cache'
+        prefix = f"  {label} {model['model']}: {model['measured_calls']}/{model['calls']}"
         if model['measured_calls']:
             tokens, read = model['input_tokens'], model['cached_read_tokens']
             ratio = f" ({100 * read / tokens:.1f}%)" if tokens else ''

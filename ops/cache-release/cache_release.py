@@ -29,6 +29,10 @@ CACHE_COLUMN = 'cache_usage_json'
 RUNTIME_CHANGES = frozenset({'llm.py', 'store.py', 'call_budget.py', 'spend.py',
                              'review.py', 'install-tg-ingest-agent-pilot-remote.sh'})
 RUNTIME_ADDITIONS = frozenset({'cache_usage.py'})
+WORKFLOW = '.github/workflows/test.yml'
+WORKFLOW_ADDITION = (b'      - name: Check post-trial cache release preservation contracts\n'
+                     b'        working-directory: ops/cache-release\n'
+                     b"        run: python -B -m unittest discover -p 'test_*.py'\n")
 REQUIRED_RELEASE_GATES = (
     'fresh_runtime_environment_peer_and_idle_preflight',
     'fresh_online_and_stopped_protected_backups',
@@ -134,7 +138,12 @@ def verify_source_delta(before, after):
                 name.startswith(('docs/', 'ops/cache-release/')) or
                 ('/' not in name and name.startswith('test_') and name.endswith('.py')))
     for name in changed:
-        require(name in RUNTIME_CHANGES or nonruntime(name), 'unapproved runtime/source change: ' + name)
+        require(name in RUNTIME_CHANGES or nonruntime(name) or name == WORKFLOW,
+                'unapproved runtime/source change: ' + name)
+    if WORKFLOW in changed:
+        require(after[WORKFLOW].count(WORKFLOW_ADDITION) == 1 and
+                after[WORKFLOW].replace(WORKFLOW_ADDITION, b'', 1) == before[WORKFLOW],
+                'CI may add the cache helper step once; original checks must remain exact')
     for name in added:
         require(name in RUNTIME_ADDITIONS or nonruntime(name), 'unapproved runtime/source addition: ' + name)
     require({'CARA.md', 'SOLUTION.md'} <= changed, 'both living specifications must change')

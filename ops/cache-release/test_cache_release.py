@@ -170,6 +170,22 @@ class PostTrialTests(unittest.TestCase):
 
 
 class SourceDeltaTests(unittest.TestCase):
+    def test_ci_allows_only_exact_additive_helper_step(self):
+        old = {'CARA.md': b'old', 'SOLUTION.md': b'old',
+               release.WORKFLOW: b'original compile\noriginal full test\n'}
+        new = {**old, 'CARA.md': b'new', 'SOLUTION.md': b'new',
+               'cache_usage.py': b'new',
+               release.WORKFLOW: b'original compile\n' + release.WORKFLOW_ADDITION + b'original full test\n'}
+        release.verify_source_delta(old, new)
+        valid = new[release.WORKFLOW]
+        for invalid in (valid.replace(b'original full test\n', b''),
+                        valid.replace(b'original compile', b'weakened compile'),
+                        valid + release.WORKFLOW_ADDITION,
+                        valid.replace(b'ops/cache-release', b'ops/elsewhere')):
+            new[release.WORKFLOW] = invalid
+            with self.assertRaisesRegex(ValueError, 'CI may add'):
+                release.verify_source_delta(old, new)
+
     def test_only_listed_runtime_changes_are_allowed(self):
         old = {'llm.py': b'old', 'router.py': b'router', 'store.py': b'store',
                'CARA.md': b'old', 'SOLUTION.md': b'old'}

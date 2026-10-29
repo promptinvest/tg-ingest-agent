@@ -68,6 +68,15 @@ remain unpriced instead of borrowing another model's discount.
   prices against the original code in a fresh network-isolated VPS scratch root.
 - First focused candidate found a review-export name collision; the original
   failure is retained and the import is corrected without weakening its test.
+- Focused attempt 2 passed all 74 selected gateway/reporting cases and the
+  existing 154 model-trial, 21 continuation, 6 epoch helper cases plus 27 initial
+  cache-release cases. Later preservation checks extend that helper suite.
+- First full/CI candidate `21cf2c9` found a report-label regression: cache appendix
+  model labels shadowed the existing default-price warning when selected by
+  label. Cache lines now have a distinct prefix; the original assertion remains.
+  Failed full/CI evidence is retained. The local SSH connection outlived the
+  completed VPS failure receipt and was closed only after its exit code 1 was
+  confirmed; no server controller was replayed.
 - Subsequent focused/full/CI/layout and release checks are recorded below only
   after completion. No production acceptance is implied by source publication.
 
