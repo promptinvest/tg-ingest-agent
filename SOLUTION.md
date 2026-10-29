@@ -1,5 +1,22 @@
 # Cara — Solution Specification
 
+## October 29 - Retiring DigitalOcean models: selected migration
+
+The owner requested replacement of retiring models while keeping the current
+primary set and updating pricing. The selected change replaces Flash fallbacks
+with `deepseek-v4.1-flash-1017`, OSS20B fallbacks with `openai-gpt-oss-120b`, and
+Maverick vision with `deepseek-v4.1-flash`. Existing Haiku, Sonnet, Sol, DeepSeek
+V4 Pro and Kimi selections, profile controls, ordering and budget limits remain.
+Fresh default configurations use the supported Flash/OSS replacements; vision
+remains opt-in. Historical tariffs and usage rows are retained. Both Flash IDs
+have USD0.30/1.20 per million input/output tokens and USD0.006 cache reads;
+OSS120B retains USD0.10/0.70 and no invented cache-read price. Explicit commercial
+overrides remain unchanged. This extends the existing gateway and accounting;
+it introduces no new skill or process.
+
+Implementation and fresh qualification are in progress. No new deployment or
+model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
+
 ## October 29 - Prompt-cache reporting accepted
 
 The owner selected measured cache usage and price reconciliation. The release
@@ -1078,7 +1095,7 @@ service plus an isolated worker; two retained Mentor services are disabled.
  └────────────────────────────────────────────────────────────────────────────────┘
                             │
               DigitalOcean Gradient serverless inference
-   (chat: deepseek-4-flash · default fallback openai-gpt-oss-20b · embeddings: BGE-M3)
+   (role-specific chat · default fallback openai-gpt-oss-120b · embeddings: BGE-M3)
 ```
 
 ### Module map

@@ -16,6 +16,8 @@ MAX_TOKENS = 10_000_000
 # rates, not the application guard rates or account-specific invoice discounts.
 _HOSTED_RATES = {
     "deepseek-v4-pro": (1.74, 3.48, .348),
+    "deepseek-v4.1-flash-1017": (.30, 1.20, .006),
+    "deepseek-v4.1-flash": (.30, 1.20, .006),
     "deepseek-4-flash": (.14, .28, .028),
     "deepseek-3.2": (.5, 1.6, .15),
     "kimi-k2.6": (.95, 4, .19),

@@ -53,6 +53,9 @@ DEFAULT_PRICING = {
     "openai-gpt-4o-mini": (0.15, 0.6),
     # Open-weight models Cara actually runs today
     "deepseek-v4-pro": (1.74, 3.48),
+    "deepseek-v4.1-flash-1017": (0.30, 1.20),
+    "deepseek-v4.1-flash": (0.30, 1.20),
+    # Retiring slugs remain priced for historical records and explicit overrides.
     "deepseek-4-flash": (0.14, 0.28),
     "deepseek-3.2": (0.50, 1.60),
     "nemotron-3-nano-omni": (0.50, 0.90),
@@ -621,11 +624,10 @@ def default_profiles(cfg):
     one route can still be served. Override wholesale via LLM_PROFILES_JSON."""
     primary = cfg.do_model
     router = cfg.router_model
-    # Default fallback: an open-weight model that's ACTUALLY reachable on this DO tier.
-    # (openai-gpt-4o was the old default but it 403s for the subscription tier — a dead
-    # fallback on any fresh deploy that hasn't set LLM_PROFILES_JSON. gpt-oss-20b is the
-    # slug the live box overrides to, and it's priced in DEFAULT_PRICING.)
-    fb = ["openai-gpt-oss-20b"]
+    # Keep the fallback in the GPT-OSS family: the former GPT-4o default was
+    # tier-locked, and gpt-oss-20b retires November 9, 2026. Its replacement
+    # is priced in DEFAULT_PRICING and remains overridable per profile.
+    fb = ["openai-gpt-oss-120b"]
     # ADR-0014: every model of a profile must be able to answer in the profile's
     # shape. The router's only fallback returned truncated non-JSON at the 200-token
     # cap in 7 of 13 calls — so the router gets a real JSON-capable fallback first
@@ -652,13 +654,13 @@ def default_profiles(cfg):
         # routing; use the stronger open model for bounded plans/synthesis, with
         # Flash as the independent-family availability backstop.
         "task_planner": {"primary": "deepseek-v4-pro",
-                         "fallbacks": ["deepseek-4-flash"],
+                         "fallbacks": ["deepseek-v4.1-flash-1017"],
                          "max_tokens": 1600, "json_required": True, "timeout": 90},
         "task_synthesis": {"primary": "deepseek-v4-pro",
-                           "fallbacks": ["deepseek-4-flash"],
+                           "fallbacks": ["deepseek-v4.1-flash-1017"],
                            "max_tokens": 1200, "json_required": True, "timeout": 90},
         "improvement_evaluator": {"primary": "deepseek-v4-pro",
-                                  "fallbacks": ["deepseek-4-flash"],
+                                  "fallbacks": ["deepseek-v4.1-flash-1017"],
                                   "max_tokens": 1000, "json_required": True, "timeout": 90},
         # (review_balanced retired 2026-07-25: the weekly review is deterministic,
         # nothing requested the profile — a dead entry only invites stale config.)

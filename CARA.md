@@ -1,5 +1,22 @@
 # Cara — Capabilities, Features & Architecture
 
+## October 29 - Retiring DigitalOcean models: selected migration
+
+The owner requested replacement of retiring models while keeping the current
+primary set and updating pricing. The selected change replaces Flash fallbacks
+with `deepseek-v4.1-flash-1017`, OSS20B fallbacks with `openai-gpt-oss-120b`, and
+Maverick vision with `deepseek-v4.1-flash`. Existing Haiku, Sonnet, Sol, DeepSeek
+V4 Pro and Kimi selections, profile controls, ordering and budget limits remain.
+Fresh default configurations use the supported Flash/OSS replacements; vision
+remains opt-in. Historical tariffs and usage rows are retained. Both Flash IDs
+have USD0.30/1.20 per million input/output tokens and USD0.006 cache reads;
+OSS120B retains USD0.10/0.70 and no invented cache-read price. Explicit commercial
+overrides remain unchanged. This extends the existing gateway and accounting;
+it introduces no new skill or process.
+
+Implementation and fresh qualification are in progress. No new deployment or
+model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
+
 ## October 29 - Prompt-cache reporting accepted
 
 The owner selected measured cache usage and price reconciliation. The release
@@ -931,7 +948,7 @@ the exhaustive feature + architecture map.
 |---|---|
 | **Surface** | Telegram bot, single owner, free‑form Russian/English, text + voice + forwards |
 | **Runtime** | owner-facing `tg-ingest-agent`, no-network `cara-worker`, inference-only `cara-mentor`, and no-network `cara-mentor-runner`; stdlib-only Python 3, long polling (no webhooks/ports) |
-| **Inference** | DigitalOcean Gradient (chat default/current `deepseek-4-flash`, default fallback `openai-gpt-oss-20b`, embeddings `BGE‑M3`); STT local `whisper.cpp` |
+| **Inference** | DigitalOcean Gradient (role-specific chat profiles; code default `deepseek-v4.1-flash-1017`, default fallback `openai-gpt-oss-120b`, embeddings `BGE‑M3`); STT local `whisper.cpp`. Dated acceptance above identifies deployed models. |
 | **Storage** | SQLite (WAL) + local media dir; optional DO Spaces (dormant) |
 | **Persona** | a warm, loyal human assistant persona with her own (fictional) life (the in-person companion/relationship side was split off to Nikki, 2026-07-03); **open and personal by the boss's wish** — shares her inner life and talks frankly about any personal matter, no "professional distance"; never breaks character; matches the boss's language |
 | **Safety spine** | owner-only access · closed risk-tiered broker · exact one-time approvals · provenance-bound inputs · budget caps · SSRF guard · action-truth · receipts/full tracing |
@@ -1647,8 +1664,8 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   **every other file** (voice, audio, video, documents…) is **stored**, fetchable later
   — not parsed. When the chat model isn't **vision‑capable** (e.g. open‑weight models),
   a forwarded **photo** is handled by a configured **`VISION_MODEL`**
-  (`llama-4-maverick` — an open multimodal model that actually describes images on this DO
-  tier, where Claude/GPT‑4o vision are 403): it *describes* the image and that is folded into
+  (the October 29 migration selects `deepseek-v4.1-flash`; see its qualification
+  and acceptance status above): it *describes* the image and that is folded into
   the text for categorization. The description is **language‑pinned** (ru/en) and
   **sanity‑checked** (`llm._vision_text_is_garbled`): an open vision model sometimes leaks a
   reply in the **wrong script** (a whole Chinese sentence) or a degenerate stub — that is
@@ -2697,7 +2714,7 @@ weekly redacted evidence
   2026‑07‑25 — the weekly review is deterministic and nothing requested it).
   Failover to a fallback model on error/
   invalid‑JSON, with per‑model cooldowns. The default fallback is an **accessible
-  open‑weight slug** (`openai-gpt-oss-20b`), not the tier‑403 `openai-gpt-4o` that used
+  open‑weight slug** (`openai-gpt-oss-120b`), not the tier‑403 `openai-gpt-4o` that used
   to be a dead fallback on a fresh deploy; a profile added via `LLM_PROFILES_JSON`
   without a `primary` is backfilled with the configured chat model so it can't crash a turn.
   DigitalOcean's `kimi-k2.6` transport requires temperature `1`; the gateway enforces that
@@ -3218,7 +3235,7 @@ Required: `TELEGRAM_BOT_TOKEN`, `ALLOWED_CHAT_IDS` (owner only), `DO_MODEL_ACCES
 
 Common optional (defaults): `BOT_LANGUAGE=ru` · `TIMEZONE_OFFSET_HOURS=3` ·
 `CARA_TIMEZONE_OFFSET_HOURS` (= boss's) · `BUDGET_DAILY_USD=1.0` /
-`BUDGET_MONTHLY_USD=15.0` (runtime‑overridable) · `DO_CHAT_MODEL=deepseek-4-flash`
+`BUDGET_MONTHLY_USD=15.0` (runtime‑overridable) · `DO_CHAT_MODEL=deepseek-v4.1-flash-1017`
 · `ROUTER_MODEL` · `DO_EMBEDDING_MODEL=BGE-M3` · `ROUTER_CONFIDENCE_THRESHOLD=0.6`
 · `ASK_MIN_SCORE=0.25` · `UPDATE_MAX_ATTEMPTS=3`.
 

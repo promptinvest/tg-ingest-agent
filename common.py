@@ -545,7 +545,7 @@ def load_config(env=None):
     # suggestions in the categories table.
     cfg.seed_categories = load_categories(env)
     cfg.fallback_category = (env.get("FALLBACK_CATEGORY") or "uncategorized").strip()
-    cfg.do_model = (env.get("DO_CHAT_MODEL") or "deepseek-4-flash").strip()
+    cfg.do_model = (env.get("DO_CHAT_MODEL") or "deepseek-v4.1-flash-1017").strip()
     cfg.router_model = (env.get("ROUTER_MODEL") or cfg.do_model).strip()
     cfg.embedding_model = (env.get("DO_EMBEDDING_MODEL") or "BGE-M3").strip()
     cfg.do_base_url = (env.get("DO_INFERENCE_BASE_URL") or "https://inference.do-ai.run/v1").strip()
