@@ -360,3 +360,13 @@ All prior failures, backups and observation pauses remain; this is dated
 acceptance evidence, not an uninterrupted-availability claim. Cache reporting is
 now deployed, but the closeout measures neither realized savings nor provider
 invoices. Those remain distinct from the frozen published-rate estimates.
+
+## Documentation closeout CI correction
+
+The October 29 documentation closeout [CI run 40859406604, job 123398497003](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40859406604/job/123398497003)
+ran 3,299 tests with 62 platform skips and failed one documentation contract:
+`test_no_spec_carries_a_hard_coded_test_count`. The new paired spec summaries
+included a fixed test total, contrary to the existing rule against counts that
+become stale. Both specs now refer to the full suites; exact counts remain in
+this dated record. Runtime code and the accepted deployment are unchanged.
+The original failed CI run is retained; no completed deployment is rerun.

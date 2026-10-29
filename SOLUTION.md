@@ -17,8 +17,9 @@ passed at 10:33:03.995636 UTC: all four services active, 95 installed artifacts,
 126 protected files and one native completion notice recorded as sent/attempts1.
 Published tag [production-2026-10-29-cache-reporting](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-10-29-cache-reporting)
 points to that exact runtime; remote readback verified the tag target.
-Both 3,299-test Linux orders, installed-layout and CI checks passed; the final
-private operator passed all 363 tests and a read-only check against actual inputs.
+The full Linux offline suite passed in normal and shuffled orders, along with
+installed-layout and CI checks. The final private operator passed its complete
+regression suite and a read-only check against actual inputs.
 
 The nullable column was added once, preserving all 56 tables and original rows
 without backfill. The owner-approved five-record exception retains all 35 unknown
