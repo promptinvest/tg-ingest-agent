@@ -19,6 +19,15 @@ one profile while model health combines every profile sharing the primary. The
 fixture now explicitly pins its complete two-model chain and retains every
 existing alert assertion. Application behavior is unchanged by this test repair.
 
+The application candidate is frozen at `c25038e8` / archive `2fa941e8`: exact CI,
+3305 normal and shuffled Linux tests, helper suites and installed-layout checks
+pass. Its first-pass replacement-model check remains failed and retained. The
+new operator-only qualification measures the already-existing bounded native
+correction flow separately, with unchanged application prompts, action guards,
+profile controls and budgets. It carries the original first response exactly;
+there is no repeated first-response sampling or third model request. Final model
+quality and deployment remain pending.
+
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
 

@@ -263,6 +263,41 @@ def verify_qualification(plan, prepared, inputs, raw, semantic, hashes):
             'semantic_cases': len(reviews), 'raw_sha256': hashes['raw']}
 
 
+def qualification_helpers(plan):
+    mode = plan.get('qualification_mode')
+    require(mode in (None, 'full_native_existing_correction'), 'unrecognized qualification mode')
+    return {'fullflow_gate.py', 'qualify_nativeflow.py'} if mode else set()
+
+
+def verify_model_gates(plan, evidence, bound_role, source_hashes, fullflow_validator=None):
+    """Dispatch explicit, separately reviewed qualification contracts only."""
+    helpers = qualification_helpers(plan)
+    model, semantics = (evidence[name] for name in ('model_qualification', 'semantic_review'))
+    model_roles, semantic_roles = model['evidence_roles'], semantics['evidence_roles']
+    roles = {'plan', 'inputs', 'raw'} | ({'original_plan', 'original_raw', 'original_case'} if helpers else set())
+    require(set(model_roles) == roles and set(semantic_roles) == {'review'},
+            'model/semantic raw role bindings incomplete')
+    require(model.get('qualification_mode') == semantics.get('qualification_mode') == plan.get('qualification_mode'),
+            'model and semantic gate modes differ from selection')
+    args = (plan, *(bound_role(model, model_roles[key]) for key in ('plan', 'inputs', 'raw')),
+            bound_role(semantics, semantic_roles['review']),
+            {key: model['evidence_files'][filename] for key, filename in model_roles.items()})
+    if not helpers:
+        return verify_qualification(*args)
+    revision = plan['operator_source_commit']
+    require(isinstance(revision, str) and bool(re.fullmatch('[0-9a-f]{40}', revision))
+            and revision != plan['identity']['source_commit'], 'distinct qualified operator revision required')
+    package_sha = sha(canonical(plan['package_sha256s']))
+    for name in ('source_review', 'operator_qualification'):
+        require(evidence[name].get('operator_source_commit') == revision
+                and evidence[name].get('operator_package_sha256') == package_sha,
+                'new operator source review/qualification package binding differs')
+    require(fullflow_validator is not None, 'authenticated nativeflow validator required')
+    return fullflow_validator(*args,
+        *(bound_role(model, model_roles[key]) for key in ('original_plan', 'original_raw', 'original_case')),
+        source_hashes)
+
+
 def mentor_projections(raw, default_timeout=900, max_timeout=1200):
     """Exact native writer projection; original files are restored before startup.
 
@@ -371,13 +406,22 @@ class NativeMethods:
                 'operator package map binding differs')
         expected_helpers = {'native_backend.py', 'release_operator.py', 'env_bytes.py',
                             'transform_config.py', 'collect_preflight.py', 'peer_release.py'}
-        require(expected_helpers <= set(plan['package_sha256s']) and
+        extra_helpers = qualification_helpers(plan)
+        require(expected_helpers | extra_helpers <= set(plan['package_sha256s']) and
                 all(plan['package_sha256s'].get('reference/' + name) == value
                     for name, value in FROZEN_REFERENCES.items()), 'operator helper coverage incomplete')
         for name in expected_helpers:
             module = sys.modules[name[:-3]] if name != 'native_backend.py' else sys.modules[__name__]
             require(Path(module.__file__).resolve() == self.root / name,
                     'imported operator helper is outside authenticated package')
+        fullflow_validator = None
+        if extra_helpers:
+            # Import only after every byte in the selected package is authenticated.
+            # The paid companion is evidence provenance, never an imported release action.
+            spec = importlib.util.spec_from_file_location('cara_authenticated_fullflow_gate', self.root / 'fullflow_gate.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            fullflow_validator = module.verify_fullflow
         files = self._archive(plan['identity']['archive_sha256'])
         modules = self.core.checks.expected_modules(
             (self.source / 'install-tg-ingest-agent-pilot-remote.sh').read_text(),
@@ -403,19 +447,10 @@ class NativeMethods:
             actual = {file: self.core.file_sha(self.core.protected(relative_file(self.root, file)))
                       for file in envelope.get('evidence_files', {})}
             evidence[name] = validate_gate(name, gate, envelope, actual)
-        model_roles = evidence['model_qualification']['evidence_roles']
-        semantic_roles = evidence['semantic_review']['evidence_roles']
-        require(set(model_roles) == {'plan', 'inputs', 'raw'} and set(semantic_roles) == {'review'},
-                'model/semantic raw role bindings incomplete')
         def bound_role(envelope, filename):
             require(filename in envelope['evidence_files'], 'unbound model evidence path')
             return self.core.read_json(relative_file(self.root, filename))
-        model = evidence['model_qualification']
-        semantics = evidence['semantic_review']
-        evidence['model_validation'] = verify_qualification(plan,
-            *(bound_role(model, model_roles[key]) for key in ('plan', 'inputs', 'raw')),
-            bound_role(semantics, semantic_roles['review']),
-            {key: model['evidence_files'][filename] for key, filename in model_roles.items()})
+        evidence['model_validation'] = verify_model_gates(plan, evidence, bound_role, files, fullflow_validator)
         observation_path = relative_file(self.root, plan['baseline_observation_file'])
         require(self.core.file_sha(observation_path) == plan['baseline_observation_sha256'],
                 'selected fresh baseline observation changed')

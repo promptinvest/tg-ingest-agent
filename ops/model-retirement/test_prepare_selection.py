@@ -64,6 +64,27 @@ class PreservationTests(unittest.TestCase):
                 prep.selected_plan({'status':'prepared_not_deployable'}, {}, {},
                                    {'test_summary':value}, '/unused')
 
+    def test_first_pass_operator_binding_remains_unchanged(self):
+        self.assertEqual(prep.operator_revision_binding({'model_qualification':{}},{},{}),{})
+
+    def test_nativeflow_requires_separate_exact_operator_evidence(self):
+        mode='full_native_existing_correction';package={'native_backend.py':'a'*64}
+        inputs={'source_commit':'c'*40,'operator_source_commit':'d'*40}
+        gates={'model_qualification':{'qualification_mode':mode},
+               'semantic_review':{'qualification_mode':mode}}
+        for name in ('source_review','operator_qualification'):
+            gates[name]={'operator_source_commit':'d'*40,'operator_package_sha256':prep.digest(package)}
+        self.assertEqual(prep.operator_revision_binding(gates,inputs,package),
+                         {'qualification_mode':mode,'operator_source_commit':'d'*40})
+        gates['operator_qualification']['operator_package_sha256']='e'*64
+        with self.assertRaisesRegex(ValueError,'separately reviewed exact fullflow operator'):
+            prep.operator_revision_binding(gates,inputs,package)
+
+    def test_nativeflow_cannot_claim_application_ci_as_operator_evidence(self):
+        with self.assertRaisesRegex(ValueError,'distinct fullflow operator'):
+            prep.operator_revision_binding({'model_qualification':{'qualification_mode':'full_native_existing_correction'}},
+                {'source_commit':'c'*40,'operator_source_commit':'c'*40},{})
+
 
 if __name__=='__main__':
     unittest.main()

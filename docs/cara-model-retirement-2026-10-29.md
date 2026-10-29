@@ -76,3 +76,40 @@ the failure and then passed. No production runtime changed in this repair.
 The first frozen Linux verifier and its original receipts remain separate.
 The 43-case qualification plan for that source was prepared without paid calls
 and was not executed; a new frozen source requires fresh preparation and gates.
+
+## Frozen application and distinct native-flow qualification
+
+Application source `c25038e8efd4c466d5ad557faed565ebdfd7ff74` and archive
+`2fa941e8ce655e2a4cf040304a82728ed383bb1582875bfc208172ffb1b5ecc1`
+remain immutable. [Exact-head CI](https://github.com/promptinvest/tg-ingest-agent/actions/runs/40945045503) passed.
+The fresh Linux verifier passed 3305 normal and 3305 shuffled tests (nine skips
+in each), five helper suites (154/21/6/29/84), installed layout and shell syntax.
+Verification `3d1276dc` completed 20:08:58 UTC; the supervisor returned zero,
+and all 16 owned process groups were absent in the later read-only observation
+`0f8ba8a8`. The first Linux failure remains unchanged.
+
+The first paid replacement-model attempt (`qualification2`) stopped at its first
+response and remains FAILED: `deepseek-v4.1-flash-1017` returned the correct
+planned/pending facts but Cara's existing action-truth matcher flagged the noun
+phrase `saved reminders`. The native caller requested its ordinary correction,
+where the single-response test stopped. Exact retained-response replay proved
+that path without changing guards or returning a fabricated passing answer.
+The settled charge is USD0.0012636, with zero new unknown charges; prior history
+and the consumed attempt are preserved. No production configuration changed.
+
+A distinct operator-only companion measures the complete existing native flow.
+It uses the existing pure `repair_cases.py` replay for the three supported
+conversation cases, carries the failed first response and original ledger row
+exactly, and permits at most the caller's one original corrective request. All
+other cases keep their first-pass checks. Deterministic containment is a failed
+answer; transport retries, third calls, altered prompts/guards/caps and repeated
+first-response sampling are forbidden. Every request, response, native result
+and settled charge must be retained and independently reviewed. The original
+first-pass validator and its verdict stay unchanged. This is qualification of
+existing application behavior, not a change to application policy or reuse of
+an earlier trial exception. The aggregate USD0.25 ceiling includes the failed
+first-pass attempt. This distinct full-flow check is not yet accepted.
+
+The application archive stays `c25038e8`; any new qualification/adapter helpers
+are a separately committed, hashed and tested operator package. Source review
+and operator qualification bind that separate revision and package hash.

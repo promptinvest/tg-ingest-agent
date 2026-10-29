@@ -237,6 +237,23 @@ def candidate_runtime(archive_path, expected_archive):
     return modules,runtime,hashlib.sha256(installer).hexdigest()
 
 
+def operator_revision_binding(envelopes, inputs, package_hashes):
+    """The existing-correction operator has separate source/CI evidence."""
+    mode=envelopes['model_qualification'].get('qualification_mode')
+    if mode != 'full_native_existing_correction':
+        return {}
+    revision=inputs.get('operator_source_commit')
+    require(isinstance(revision,str) and re.fullmatch(r'[0-9a-f]{40}',revision)
+            and revision!=inputs['source_commit'], 'distinct fullflow operator source commit required')
+    require(envelopes['semantic_review'].get('qualification_mode')==mode,
+            'fullflow model and semantic evidence modes differ')
+    for name in ('source_review','operator_qualification'):
+        require(envelopes[name].get('operator_source_commit')==revision
+                and envelopes[name].get('operator_package_sha256')==digest(package_hashes),
+                'separately reviewed exact fullflow operator package required: '+name)
+    return {'operator_source_commit':revision,'qualification_mode':mode}
+
+
 def selected_plan(draft, observation, preservation, inputs, package_directory):
     """Pure/data-only final binding. Does not copy, install, launch or call models.
 
@@ -271,10 +288,11 @@ def selected_plan(draft, observation, preservation, inputs, package_directory):
         require(not name.startswith('/') and '\\' not in name and all(part not in ('','.','..')
                 for part in name.split('/')), 'safe package relative path required')
         pinned(package/name,pin)
-    gates={}
+    gates={};envelopes={}
     for name,selected in inputs['gates'].items():
         raw=pinned(package/selected['receipt_file'],selected['receipt_sha256'])
         receipt=json.loads(raw)
+        envelopes[name]=receipt
         require(receipt['schema']=='cara.model-retirement-gate/v1' and receipt['gate']==name
                 and receipt['status']=='passed' and receipt['source_commit']==inputs['source_commit']
                 and receipt['archive_sha256']==inputs['archive_sha256']
@@ -293,6 +311,7 @@ def selected_plan(draft, observation, preservation, inputs, package_directory):
             {'pending','prepared_at','preservation_scope_sha256','historical_closed_trial','historical_closed_trial_files',
              'gates','identity','status','schema','deployment_authority'}}
     result.update(bound)
+    result.update(operator_revision_binding(envelopes,inputs,package_hashes))
     result.update(schema='cara.model-retirement-release/v1',status='qualified_ready_to_deploy',
         release_root=inputs['release_root'],identity={'source_commit':inputs['source_commit'],
             'archive_sha256':inputs['archive_sha256'],'controller_sha256':package_hashes['native_backend.py'],
