@@ -2,7 +2,7 @@
 
 Status: Implemented and verified 2026-10-29; owner approved the exact five-record
 reservation exception and guarded deployment. Exception qualification passed;
-deployment is forward-paused before migration pending a verified continuation.
+deployment is forward-paused after migration/install on a scoped-read gate.
 Production acceptance remains pending at this checkpoint.
 
 ## Context

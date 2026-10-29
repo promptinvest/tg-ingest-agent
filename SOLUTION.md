@@ -14,10 +14,11 @@ Cache lines use distinct labels so existing model-cost warnings remain readable.
 One nullable usage column is added atomically without backfill. Exact candidate
 `e834c29` passed both 3,299-test Linux orders, installed-layout and CI checks.
 The owner approved preserving the five exact old health-check reservations during
-this release. The exception passed private qualification. The second deployment
-attempt stopped before migration on a backup WAL-handling check; main and fleet
-are forward-paused with the original runtime and database preserved. A separately
-verified continuation is being prepared. All new unknown usage still blocks.
+this release. The exception and forward-continuation tool passed qualification.
+The continuation added the column once and installed exact source `e834c29`,
+then failed a scoped-read gate after its first readiness phase. Main and fleet
+are forward-paused with the new runtime and migrated database preserved while
+the retained read result is investigated. All new unknown usage still blocks.
 No actual cache savings are claimed before rollout.
 See [ADR-0037](docs/adr/ADR-0037-cache-usage-reporting.md) and the
 [dated verification record](docs/cara-cache-usage-2026-10-29.md).

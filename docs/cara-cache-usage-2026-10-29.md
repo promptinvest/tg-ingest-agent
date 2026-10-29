@@ -2,8 +2,9 @@
 
 Status: implemented and published in PR9; exact runtime candidate `e834c29`
 passed full application verification. The owner approved the exact five-record
-reservation exception and guarded deployment. The private exception is being
-qualified; production acceptance remains pending at this checkpoint.
+reservation exception and guarded deployment. Migration/install completed;
+main and fleet are forward-paused at a scoped-read gate. Production acceptance
+remains pending at this checkpoint.
 
 The owner's “proceed” selects cache usage reporting and price reconciliation
 from the preceding DigitalOcean GA review. This extends existing gateway/storage/
@@ -218,3 +219,34 @@ attempt, prove fresh paused-state parity, and perform only migration and remaini
 release phases. It will retain the strict standalone-copy guard, use WAL-aware
 SQLite backup into new private copies with explicit connection closure, and leave
 original/live sidecars intact. Acceptance is still absent at this checkpoint.
+
+## Forward continuation: migration/install passed, scoped read failed
+
+Operator v7 passed all330 tests in56.458 seconds: all317 prior tests plus five
+WAL regression and eight continuation cases. Independent review passed. Package
+`1fa90893d42e9d66a11d21125e260010940429997791770959081166f0265212` contains199 files;
+qualification proof `f809768a02f980c6e291b8380a0f6e19022e37760735ef746051858f991072af`.
+The failing reproduction is preserved separately; it is not passing evidence.
+
+Attempt3 launched once at09:45:00.326100UTC with a new09:44:43–10:44:43UTC window.
+Fresh paused preflight passed at09:45:18.598787UTC, proving all56 original table
+projections and the approved reservations unchanged. Retained backup/WAL/SHM files
+were copied into the new private root before SQLite access; originals remained exact.
+The live atomic migration completed once at09:45:48.393984UTC, preserving original
+columns/rows, all35 unknown records and zero historical cache values. Its receipt is
+`4f3ee642811c8b1b1998578dd630b272f19455157414994806059df83cd560b5`.
+
+Native installation and both prestart checks passed, followed by the first actual
+namespace readiness and private MCP fixture. The inherited scoped-read child then
+returned nonzero at09:47:54.093089UTC. Its command helper did not persist stderr,
+so the exact assertion is not established by the generic traceback. Investigation
+must inspect existing durable requests/results; these checks must not be replayed.
+
+Physical forward containment is confirmed at09:49:15.724309UTC: main and fleet are
+inactive/PID0; worker and speech remain active with zero unexpected restarts. The
+controller reported an additional logical-containment error after stopping services;
+the retained scoped-read request may account for it and is not to be cleared silently.
+Failure receipt `cec052ca9adfb527380913eb314919e108dd9d7feb7b2eeada8fa3e04ee4039d`
+and the original exception trace remain. Acceptance, final audit and completion
+notice have not occurred. Preserve installed source and migrated data; never rerun
+migration, installation or either completed controller as recovery.
