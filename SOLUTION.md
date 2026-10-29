@@ -25,8 +25,14 @@ pass. Its first-pass replacement-model check remains failed and retained. The
 new operator-only qualification measures the already-existing bounded native
 correction flow separately, with unchanged application prompts, action guards,
 profile controls and budgets. It carries the original first response exactly;
-there is no repeated first-response sampling or third model request. Final model
-quality and deployment remain pending.
+there is no repeated first-response sampling or third model request. That native
+flow also failed at its first case: the corrective answer repeated the attributive
+phrase "the saved reminders", and the existing guard produced deterministic
+containment. Both failed generations remain. Total settled qualification spend is
+USD0.0028614 with no unknown charges; the remaining 42 cases were not run. No
+production models, prices, guards or services changed. A narrow guard correction
+is being prepared separately for owner review, not applied by this migration.
+Final model quality and deployment remain blocked.
 
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).

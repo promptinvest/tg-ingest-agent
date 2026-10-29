@@ -113,3 +113,29 @@ first-pass attempt. This distinct full-flow check is not yet accepted.
 The application archive stays `c25038e8`; any new qualification/adapter helpers
 are a separately committed, hashed and tested operator package. Source review
 and operator qualification bind that separate revision and package hash.
+
+## Retained native-flow failure
+
+The separate native-flow attempt `nativeflow1` failed October 29 at 20:25:46 UTC.
+It reused the exact paid first response and made only the existing caller's one
+corrective request. The correction again gave the correct planned/pending facts
+but included "the saved reminders". The unchanged action-truth guard again read
+`saved` as a completed-action verb and produced deterministic containment. The
+final answer did not answer the requested status and next step, so the case is
+failed; it is not a model-quality acceptance or a reason to relax the check.
+
+The original qualification cost USD0.0012636 (ledger 24976); the native correction
+cost USD0.0015978 (ledger 24980). The aggregate settled charge is USD0.0028614,
+with zero unknown outcomes and the same USD0.25 aggregate ceiling. Only the first
+of 43 cases ran; OSS120B, the remaining Flash roles and vision are unqualified.
+The raw native-flow result is `8ee21067`, the supervisor result is `5d448dd9`
+(return code 1). A fresh 20:32:42 UTC read-only observation confirmed both owned
+PIDs and process groups absent. No deployment or production configuration change
+has started. Both failed attempts and their exact original evidence are retained;
+no third call, replay, changed prompt or repeated first-response sampling follows.
+
+A private, unapplied proposal will distinguish this attributive phrase from real
+completed-action claims, with regressions for both retained responses and genuine
+claims. It is outside the requested model-ID/pricing change: the owner's standing
+preserve-existing-behavior rule requires approval before applying that behavior
+change. Preparation does not authorize application or deployment of the guard fix.
