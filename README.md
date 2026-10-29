@@ -15,6 +15,13 @@ local tasks. Long polling needs no inbound ports, so the host firewall stays
 SSH-only. The bot runs as systemd service `tg-ingest-agent` under the non-root
 user `tg-ingest`; Mentor and its candidate runner remain disabled.
 
+Current accepted runtime: `e834c29`, build `94d4bd4840c4`, accepted October 29
+at 10:32:20 UTC. Prompt-cache usage reporting and the approved open-model price
+reconciliation are deployed; actual savings have not been measured. See the
+[release record](docs/cara-cache-usage-2026-10-29.md) and
+[sanitized receipt](docs/cara-cache-deployment-2026-10-29.json).
+Published tag: [production-2026-10-29-cache-reporting](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-10-29-cache-reporting).
+
 ## Where the real documentation lives
 
 **[`CARA.md`](CARA.md) and [`SOLUTION.md`](SOLUTION.md) are the maintained

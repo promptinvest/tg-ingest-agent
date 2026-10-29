@@ -1,10 +1,21 @@
 # Cara prompt-cache reporting — October 29, 2026
 
-Status: implemented and published in PR9; exact runtime candidate `e834c29`
-passed full application verification. The owner approved the exact five-record
-reservation exception and guarded deployment. Migration/install completed;
-main and fleet are forward-paused at a scoped-read gate. Production acceptance
-remains pending at this checkpoint.
+Status: **deployed and accepted 2026-10-29 10:32:20.166933 UTC**, exact runtime
+`e834c2927b411302acd1d015e9e621f89e37eb19`, build `94d4bd4840c4`, deployment
+`26718b31810856a7bfcdfbf5`. Attempt5 and the independent final audit exited 0;
+the audit passed at 10:33:03.995636 UTC. The normal completion notice is recorded
+as sent with one attempt. Earlier failed checkpoints below are retained history,
+superseded by this acceptance; none of their controllers was replayed.
+
+The [sanitized deployment receipt](cara-cache-deployment-2026-10-29.json), SHA256
+`739276ca1c06f5e9e5f2c4afca4ab009d85446f9aabef214907269183a7152a9`, is copied
+byte-for-byte from the reviewed closeout collector. It records receipt evidence,
+not a new live probe or a cache-savings measurement. No invoice or realized-savings
+claim is made. Published tag
+[production-2026-10-29-cache-reporting](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-10-29-cache-reporting)
+points to the exact runtime. Remote readback verified annotated tag object
+`4d4117db06f08708056acc98fae93c8fc58ee600` resolves to
+`e834c2927b411302acd1d015e9e621f89e37eb19`.
 
 The owner's “proceed” selects cache usage reporting and price reconciliation
 from the preceding DigitalOcean GA review. This extends existing gateway/storage/
@@ -119,7 +130,7 @@ The gateway still uses Chat Completions. Cache-counter alias tests cover that
 API; this change neither migrates to nor claims a tested Responses API parser.
 Documentation-only follow-up commits do not replace the verified runtime archive.
 
-## Deployment decision required
+## Historical checkpoint: deployment decision required (superseded)
 
 Read-only checks at October29 08:27:21 UTC found main/worker/fleet/speech active
 with zero restarts, no claimed jobs, pending replies, started task attempts or
@@ -142,7 +153,7 @@ charges and stopping on any additional unknown or active work. This exception
 has **not** been approved or applied. If selected, its implementation must receive
 fresh private operator qualification and a new live preflight before rollout.
 
-## Private release readiness
+## Historical checkpoint: private v4 release readiness
 
 Final operator package v4 passed all 294 isolated tests: 215 inherited tests and
 79 additional cache/release cases, plus four actual isolated kernel/import probes.
@@ -250,3 +261,102 @@ Failure receipt `cec052ca9adfb527380913eb314919e108dd9d7feb7b2eeada8fa3e04ee4039
 and the original exception trace remain. Acceptance, final audit and completion
 notice have not occurred. Preserve installed source and migrated data; never rerun
 migration, installation or either completed controller as recovery.
+
+## Installed-state diagnosis and preserved qualification history
+
+The retained terminal result established that the failed scoped read was the
+Daily Lingo runtime capability. Its typed result was valid, but Cara's fixed
+read-only policy still named the October25 peer release. A read-only adapter
+check reported `observer release binding mismatch`; the independently accepted
+October29 peer receipts authenticated the successor. This did not establish a
+Daily Lingo health failure. The original child stderr remains unavailable.
+
+The compatible correction changes exactly nine release-identity leaves in
+Cara's policy: three runtime identifiers and six accepted-release identifiers.
+Paths, source ID, targets, 90/150-second freshness limits and truthful stale-gap
+reporting remain unchanged. The exact policy bytes change from `42e119d2` to
+`452ca5f2`; Daily Lingo configuration, services and data are untouched.
+
+Each private operator version and failed qualification remains immutable:
+
+| Version | Qualification outcome | Change or retained finding |
+| --- | --- | --- |
+| v1 | Failed: 74 tests ran, 15 errors | Import order around the offline socket patch and a schema-AST guard mismatch; original log retained. |
+| v2 | Passed 275 | Corrected those preparation issues. |
+| v3 | Failed one of 292 | Fixture incorrectly rejected tarfile's harmless terminal-directory normalization. |
+| v4 | Passed 294 | Corrected that fixture; traversal, links, duplicates and limits remain rejected. |
+| v5 | Passed 309 | Exact owner-approved five-record guard exception. |
+| v6 | Passed 317 | Authenticated four current peer-monitor pins; preserved the original baseline. |
+| v7 | Passed 330 | Closed standalone SQLite copies and phase-specific continuation; migration/install ran once in attempt3. |
+| v8 | Passed 352 | Installed-state completion and exact policy/owned-terminal reconciliation. |
+| v9 | Passed 355 | Early single-use rejection and exclusive command intents/diagnostics; used by attempt4. |
+| v10 | Passed 356 | Explicit rejection of the real `.started.json` execution marker; qualification only. |
+| v11 | Passed 363 | Exact authenticated peer-receipt hardlink pair and retained attempt4 ancestry; used by accepted attempt5. |
+
+Attempt4 launched once at 10:17:56 UTC and failed fresh paused preflight at
+10:18:07 UTC, before policy correction, acknowledgement or service start. The
+generic single-link guard rejected Daily Lingo's legitimate canonical acceptance
+receipt, published as a hardlink to its retained staging receipt. Physical
+containment was verified; its failure and all 179 recorded artifacts remain.
+The failed attempt was not resumed or rewritten.
+
+V11 permits only those two authenticated aliases of the same root-owned mode 0600
+inode, with exact link count, metadata and accepted hash. It reads both with
+`O_NOFOLLOW` and checks their identity before and after reading. The generic
+single-link guard remains unchanged for all other inputs. The actual read-only
+input check passed at 10:26:16.633640 UTC, validating peer receipts, proposed
+policy bytes, the retained terminal request/result, all 95 installed artifacts,
+the current 56-table snapshot and approved reservations. It invoked no controller,
+service action, acknowledgement or model call. Full qualification then passed
+363 tests in 69.211 seconds, retaining all 215 original operator tests and all
+intermediate regression cases, with zero failures/errors/skips or live actions.
+
+## Accepted installed-state completion and final audit
+
+Attempt5 used a fresh 10:29:13–11:29:13 UTC window and exact v11 package
+`5dabab41f7cd467698219cb727b9f17d41232cbd0cb248c57ce4a966623a8825`.
+Its qualification receipt is
+`000c34022bc2fd668a1a1911bfd7b61a456566efd486b5f1618e8d1df7676b8b`;
+the actual-input read-only proof is
+`8d30ba383b469ca5816ccc14763a2aa24141e0ee82638462bc1be478af830904`.
+Source and archive remained the exact application already verified above.
+
+Fresh paused preflight and a new closed SQLite backup preceded the exact policy
+correction. The one completed synthetic request was checked against its original
+nonce/task/result hashes and absence of owner-work references, archived, then
+acknowledged once through the normal protocol. Its original result remains; no
+old scoped request ID was replayed. Fresh scoped checks used a new identity.
+
+The continuation started the same installed runtime and passed native runtime
+verification, all 60 facts cells, six MCP tools and nine private fixture scenarios
+in each actual non-root readiness phase. All nine scoped reads passed. Quiescent
+final restart produced a fresh process, followed by the second readiness phase,
+three health samples and exact preservation checks. The native manifest was
+marked verified once; the usual completion notice has status `sent`, attempts1.
+No manual message, notification replay, paid qualification, second migration,
+reinstall, database restore or earlier controller replay occurred.
+
+Acceptance completed at **10:32:20.166933 UTC**, receipt
+`33c233dcbb1601a925890ec47ecb5464d8d35d3cca76657f83930477b1f95a79`.
+The separate read-only audit passed at **10:33:03.995636 UTC**, receipt
+`2241154d04d11e302c192aa9ed60db742daf4c215241faec56751e82a109a6a9`.
+Both process exit codes were independently checked as 0. The audit preserved
+release diagnostics and verified the durable single-send row without sending.
+
+At audit, all four services were active with zero systemd restart counts.
+The 95 native artifacts and 126 protected files matched the selected maps; the 122
+pre-continuation protected files include the retained original fixture pair,
+and only four fresh fixture policies were added alongside the exact existing-file
+policy correction. Migration preserved all 56 original tables/projections and
+added only nullable `llm_usage.cache_usage_json`; no old rows were backfilled.
+All 35 unknown records remain, including the exact approved five and their
+USD0.0020408 unresolved reserve. No charge was refunded, settled or repriced by
+the exception. Daily/monthly/task ceilings remain USD2/USD12/USD0.15; prompts,
+models, commercial overrides, request payloads and action behavior are unchanged.
+
+The completed model trial's original October28 13:36:17.924552 UTC end, evidence
+and inactive observers remain intact, with zero new epochs or observer actions.
+All prior failures, backups and observation pauses remain; this is dated
+acceptance evidence, not an uninterrupted-availability claim. Cache reporting is
+now deployed, but the closeout measures neither realized savings nor provider
+invoices. Those remain distinct from the frozen published-rate estimates.
