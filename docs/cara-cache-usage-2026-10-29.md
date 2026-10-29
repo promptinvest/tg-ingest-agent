@@ -1,9 +1,9 @@
 # Cara prompt-cache reporting — October 29, 2026
 
 Status: implemented and published in PR9; exact runtime candidate `e834c29`
-passed full application verification. Deployment is pending an owner decision
-on existing unresolved health-check reservations. No cache warming, paid model
-call, manual message or production change was performed for this work.
+passed full application verification. The owner approved the exact five-record
+reservation exception and guarded deployment. The private exception is being
+qualified; production acceptance remains pending at this checkpoint.
 
 The owner's “proceed” selects cache usage reporting and price reconciliation
 from the preceding DigitalOcean GA review. This extends existing gateway/storage/
@@ -161,3 +161,24 @@ readiness record. The full verification receipt is
 `4aded823bf9cae52bc402ae808b4abf0b92987fd5c1e0f04c5001ce09d4e9307`.
 It selects no authorization, nonce, window or controller. Live backup, migration,
 readiness and acceptance gates remain pending behind the unresolved-record decision.
+
+## Owner decision: narrow exception and deployment approved
+
+The owner answered **“Approve the narrow exception and deployment”** to the
+explicit question covering the five October28 Kimi health-check records and
+USD0.0020408 reserved charge, fresh release checks and the usual single completion
+notice. This supersedes the pending-decision checkpoint above. It does not claim
+separate owner approval of an operator-selected hash or window.
+
+The approved exception preserves those exact complete records, unresolved kinds
+and charges. It does not settle/reprice them, reuse the previous one-row exception,
+permit a new unknown call, change budgets/models, or authorize paid qualification.
+All 30 earlier unknown records remain separately preserved. A read-only recheck
+at08:55:40UTC confirmed the exact same five-record hash; at08:56:09UTC the original
+four services were active with zero restarts and no claimed jobs, pending replies,
+started task attempts or claimed approvals. These are dated predeployment checks.
+
+Only the private deployment guard changes, with failure tests and independent
+review before a fresh package is selected. Original tests, closed trial evidence,
+backups, stopped database parity, both readiness phases and final audit remain.
+The prior v4 package and pending readiness record remain unchanged historical evidence.

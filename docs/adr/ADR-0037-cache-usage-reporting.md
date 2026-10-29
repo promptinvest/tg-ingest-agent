@@ -1,7 +1,8 @@
 # ADR-0037 — Measured prompt-cache usage and dated price estimates
 
-Status: Implemented and verified 2026-10-29; deployment blocked by the existing
-unknown-usage guard, pending an owner decision. Production acceptance remains absent.
+Status: Implemented and verified 2026-10-29; owner approved the exact five-record
+reservation exception and guarded deployment. Exception qualification and production
+acceptance remain pending at this checkpoint.
 
 ## Context
 
