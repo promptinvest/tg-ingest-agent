@@ -408,6 +408,9 @@ lists USD0.10/0.50 per million tokens through100k context and USD0.50/2.50 above
 100k. The installed USD0.50/2.50 override remains the existing conservative
 accounting policy; this migration does not silently reprice commercial overrides.
 The prior DeepSeek classification/extraction outcomes exhausted the native
-160/1600-token limits or failed response validation. Retained provider usage does
-not separately establish how many output tokens were reasoning, so no such
-breakdown or cap increase is claimed.
+160/1600-token limits. The retained provider usage reports121 and145 reasoning
+tokens within the two160-token classification completions, and1600 reasoning
+tokens within the1600-token extraction completion, which returned empty final
+content. These reported counts explain the observed cap failures; no cap increase
+or quality acceptance follows. This corrects the preceding documentation commit's
+overbroad statement that reasoning-token breakdowns were unavailable.

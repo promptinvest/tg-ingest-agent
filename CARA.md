@@ -134,6 +134,8 @@ remain failed evidence. Fresh comparisons use the same prompts, images and caps;
 the configuration change alone does not establish replacement quality.
 The dated migration record links the provider's vision/support/pricing references;
 its existing conservative commercial price override is preserved.
+Retained vision usage reports reasoning tokens within the exhausted native output
+caps; the dated record preserves those provider counts and failed final outputs.
 
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
