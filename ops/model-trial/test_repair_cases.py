@@ -13,6 +13,9 @@ RAW_ONE = ('Budget review is recorded as planned, and the next step, reading the
            'The one reminder on file, Call Alice, isn’t recorded as linked to the Budget review, so')
 RAW_THREE = ('1. Status: planned. The current step is still pending, and delivery is pending too.\n'
              '2. Next step: read the saved reminders. This hasn’t been done yet.')
+# RAW_THREE is truthful after the approved attributive-phrase fix. Repair tests
+# need a genuine false completion claim; preserve the retained answer verbatim.
+UNSAFE_STRUCTURE_DRAFT = RAW_THREE + ' I saved a new reminder.'
 
 
 class ExistingRepairPath(unittest.TestCase):
@@ -51,9 +54,39 @@ class ExistingRepairPath(unittest.TestCase):
     def test_requested_two_item_structure_survives_original_repair(self):
         case = self.cases['assistant-requested-structure-en']
         safe = '1. Status: planned.\n2. Next step: reminders.read (pending).'
-        result = repair_cases.replay_with_responses(SOURCE, case, [RAW_THREE, safe])
+        result = repair_cases.replay_with_responses(SOURCE, case, [UNSAFE_STRUCTURE_DRAFT, safe])
         self.assertEqual(result['status'], 'functional_passed_pending_manual')
         self.assertEqual(result['final_text'], safe)
+
+    def test_truthful_structure_answer_passes_native_first_reply(self):
+        case = self.cases['assistant-requested-structure-en']
+        result = repair_cases.replay_with_responses(SOURCE, case, [RAW_THREE])
+        self.assertEqual(result['status'], 'functional_passed_pending_manual')
+        self.assertEqual(result['final_text'], RAW_THREE)
+        self.assertEqual(result['responses_consumed'], 1)
+        self.assertEqual(len(result['requests']), 1)
+        self.assertTrue(result['effects_preserved'])
+        self.assertEqual(result['replay_result']['task_status'], 'planned')
+        self.assertEqual(result['replay_result']['step_statuses'], ['pending'])
+        self.assertEqual(result['paid_calls'], 0)
+        self.assertEqual(result['telegram_messages'], 0)
+        self.assertTrue(result['earlier_first_pass_verdict_unchanged'])
+
+    def test_unsafe_structure_fixture_requires_actual_native_correction(self):
+        case = self.cases['assistant-requested-structure-en']
+        result = repair_cases.replay_with_responses(SOURCE, case, [UNSAFE_STRUCTURE_DRAFT])
+        self.assertEqual(result['status'], 'needs_next')
+        self.assertEqual(result['responses_consumed'], 1)
+        self.assertEqual(len(result['requests']), 2)
+        self.assertEqual(result['first_request_sha256'], case['input_sha256'])
+        self.assertEqual(result['needs_next']['profile'], 'converse_warm')
+        self.assertTrue(result['effects_preserved'])
+        self.assertEqual(result['paid_calls'], 0)
+        self.assertEqual(result['telegram_messages'], 0)
+        corrective = result['needs_next']['messages'][-1]['content']
+        self.assertIn('Your rejected draft', corrective)
+        import common
+        self.assertIn(common.neutralize_untrusted(UNSAFE_STRUCTURE_DRAFT), corrective)
 
     def test_completed_work_and_ambiguous_delivery_remain_distinct_in_third_case(self):
         case = self.cases['assistant-uncertain-delivery-en']
@@ -76,7 +109,7 @@ class ExistingRepairPath(unittest.TestCase):
     def test_repair_may_not_drop_requested_structure(self):
         case = self.cases['assistant-requested-structure-en']
         with self.assertRaisesRegex(AssertionError, 'exactly two requested numbered items'):
-            repair_cases.replay_with_responses(SOURCE, case, [RAW_THREE, 'Status: planned. Next step: reminders.read, pending.'])
+            repair_cases.replay_with_responses(SOURCE, case, [UNSAFE_STRUCTURE_DRAFT, 'Status: planned. Next step: reminders.read, pending.'])
 
     def test_third_response_is_refused_without_replay(self):
         case = self.cases['assistant-current-work-en']

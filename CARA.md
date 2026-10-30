@@ -43,6 +43,13 @@ is now included in the new application candidate, with portable caller regressio
 coverage. Fresh full verification, actual-model qualification and guarded
 deployment/acceptance are required; no new production state is claimed.
 
+The first integrated guard candidate `1ca8e22` failed CI and full Linux verification
+in two existing model-trial repair fixtures. Their truthful `RAW_THREE` text no
+longer requests repair after the approved correction. The fixture repair retains
+that exact text and all original assertions, uses a separately named synthetic
+false save claim to exercise the repair path, and adds explicit native first-pass
+and corrective-request regressions. No further runtime change is included.
+
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
 

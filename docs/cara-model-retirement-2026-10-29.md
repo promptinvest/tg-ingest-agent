@@ -162,3 +162,23 @@ results do not convert either paid failure into a pass. Fresh source-bound full
 checks, 43-case actual-model qualification, independent semantic review and all
 normal preflight/deployment/acceptance gates still precede production change.
 The prior total USD0.0028614 remains in the shared USD0.25 qualification accounting.
+
+## Retained integrated-guard verification failure
+
+Candidate `1ca8e22` / archive `90669e1d` failed CI
+[41013429287](https://github.com/promptinvest/tg-ingest-agent/actions/runs/41013429287)
+and the fresh full Linux verifier at October 30 06:37:10 UTC. The model-trial
+helper suite ran 154 tests with two failures; later full gates did not run.
+Both failed repair fixtures used the truthful retained `RAW_THREE` reply as a
+trigger for a corrective call. The approved noun-phrase fix now correctly accepts
+that first reply, so the repair-only assertions were never reached.
+
+The correction preserves `RAW_THREE` byte-for-byte and every existing assertion.
+A separately named synthetic draft adds an actual false save claim for those two
+repair tests, while new regressions prove that the truthful original passes with
+one request and the synthetic false claim requests the unchanged correction.
+The approved application guard and all other runtime bytes remain unchanged.
+Failure `cdc850c2`, helper log `f3b88146` and supervisor result `3230e231` remain.
+Fresh 06:38:13 UTC observation confirmed all five owned PIDs/groups absent.
+A new immutable source and new full attempt are required; neither failed attempt
+may be replayed or treated as verification success.
