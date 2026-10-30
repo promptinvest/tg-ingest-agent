@@ -98,8 +98,16 @@ the retained request time, restoring it after replay. All four replay calls reta
 the full canonical-proof and protected-state checks. Two actual network-isolated
 replays produced identical complete proofs and snapshots (`5fc6934b`), with the
 same exact corrective prompt and all 376 application files unchanged. The full
-operator suite passed 144 tests (142 passes, the same two fixture skips). New
+operator suite passed, with the same two fixture skips. New
 source-bound preparation and launch review remain required; no paid call occurred.
+
+The retained continuation stopped at the missing-information knowledge case.
+Flash returned the correct empty excerpt list inside a JSON code fence; the
+unchanged grounding parser rejects that format. The original failure is retained:
+no parser or prompt change is applied. Earlier cases passed, including Cara's
+one normal correction, but remaining model roles and vision are still unqualified.
+Production remains unchanged. CI separately found a hard-coded test count in
+these living specs; the wording is corrected while dated evidence keeps exact totals.
 
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).

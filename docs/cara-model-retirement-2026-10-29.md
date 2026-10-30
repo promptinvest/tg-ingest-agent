@@ -283,3 +283,33 @@ replays produced identical complete proofs and snapshots (`5fc6934b`), with the
 same exact corrective prompt and all 376 application files unchanged. The full
 operator suite passed 144 tests (142 passes, the same two fixture skips). New
 source-bound preparation and launch review remain required; no paid call occurred.
+
+## Retained format failure and documentation CI correction
+
+The retained continuation stopped at the missing-information knowledge case.
+Flash returned the correct empty excerpt list inside a JSON code fence; the
+unchanged grounding parser rejects that format. The original failure is retained:
+no parser or prompt change is applied. Earlier cases passed, including Cara's
+one normal correction, but remaining model roles and vision are still unqualified.
+Production remains unchanged. CI separately found a hard-coded test count in
+these living specs; the wording is corrected while dated evidence keeps exact totals.
+
+Operator `e49b8df` passed its isolated 144-check Linux suite but both CI runs
+failed the existing living-spec hard-coded-count check. The exact native check
+and its assertions remain unchanged; only the specs wording is corrected.
+
+The actual continuation launched once at 07:19:33 UTC, supervisor1549296,
+with manifest `d7082dcd` and independent review `9e8adc04`. It retained the eight
+earlier responses, completed the one existing case-eight correction, then stopped
+at case22, `kb-missing-ru__deepseek-v4.1-flash-1017`. Cases1?21 passed native
+checks;22 failed;23?43 were not run. Raw `9c7f96f6` and supervisor `f9850a6c`
+remain failed. At07:21:12 UTC all three owned PIDs/groups were absent.
+
+The exact case22 raw response (`dccecd11`) is a JSON code fence around an empty
+excerpts array. `knowledge.checked_answer` uses strict JSON parsing, so the
+existing handler records invalid grounding and returns its no-answer containment.
+This is a real format incompatibility, not a fixture error or invented password.
+No parser/guard weakening, repeat of this call or claim of qualification follows.
+There are25 settled migration calls totaling USD0.0378865 and zero migration
+unknowns, within the original shared USD0.25 allowance. Historical failures and
+the separate Kimi health-check reservation remain unchanged.
