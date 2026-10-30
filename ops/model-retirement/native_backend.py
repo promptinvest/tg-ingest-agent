@@ -25,15 +25,16 @@ import time
 import collect_preflight as observe
 import peer_release
 from env_bytes import parse_env_bytes
-from release_operator import (Controller, file_metadata, replace_environment,
-                              require, sha, transform_env_bytes, utc,
-                              validate_observation, validate_plan, verify_unknowns)
+from release_operator import (ALLOWED_RUNTIME_DELTA as ALLOWED_RUNTIME_DELTA,
+                              Controller, file_metadata,
+                              replace_environment, require, runtime_delta, sha,
+                              transform_env_bytes, utc, validate_observation,
+                              validate_plan, verify_unknowns)
 
 FROZEN_REFERENCES = {
     'accepted_backend.py': '7bbb9d5b532aa6074305244964fd6ae7541a12df40e20405549d251581fc3961',
     'cara_next_release_checks_draft.py': '42ad9c37814e119270020afd43e1fee39570c06c92bdcb7bb23a838530c167b5',
 }
-ALLOWED_RUNTIME_DELTA = frozenset({'common.py', 'llm.py', 'cache_usage.py'})
 MENTOR_FILES = ('cara-mentor.env', 'cara-mentor-runner.env')
 ACCEPTED_PROTECTED_SHA256 = 'b81dff508089edf6535e82f919184bfac4bc3878d254c7c14d0df9d80ac47951'
 
@@ -56,13 +57,6 @@ def relative_file(root, name):
     for parent in (*reversed(path.parents), path):
         require(not parent.is_symlink(), 'evidence path contains symlink')
     return path
-
-
-def runtime_delta(before, after):
-    require(set(before) == set(after), 'installed runtime membership changed')
-    changed = sorted(key for key in before if before[key] != after[key])
-    require(set(changed) == ALLOWED_RUNTIME_DELTA, 'unexpected model-retirement runtime delta')
-    return changed
 
 
 def validate_baseline_peers(plan, value):
@@ -119,7 +113,7 @@ def validate_post_transition_inputs(plan):
 
 
 def verify_peer_selection(plan, actual):
-    """Adopt exactly the four authenticated peer monitor files, nothing else."""
+    """Adopt the four peer monitors and exact accepted policy update only."""
     protected = plan['baseline_protected']
     require(len(protected) == 126 and plan['accepted_protected_sha256'] == ACCEPTED_PROTECTED_SHA256,
             'accepted126 protected ancestry differs')
@@ -128,7 +122,7 @@ def verify_peer_selection(plan, actual):
         require(actual is None and sha(canonical(protected)) == ACCEPTED_PROTECTED_SHA256,
                 'unexplained protected drift cannot become a baseline')
         return
-    require(selected.get('schema') == 'cara.model-retirement-peer-link/v1'
+    require(selected.get('schema') == 'cara.model-retirement-peer-link/v2'
             and selected.get('status') == 'passed' and actual == selected,
             'current peer acceptance/receipt bytes differ from selected proof')
     require(selected.get('root') == peer_release.ROOT and selected.get('source') == peer_release.SOURCE
@@ -138,19 +132,8 @@ def verify_peer_selection(plan, actual):
             and selected.get('active_release_controllers') == 0
             and selected.get('neighbors') == plan['baseline_neighbors'],
             'precise completed peer release linkage required')
-    originals = plan['peer_original_units']
-    require(set(originals) == set(peer_release.UNIT_PATHS)
-            and selected.get('unit_source_sha256s') == {
-                path: protected[path]['sha256'] for path in peer_release.UNIT_PATHS},
-            'only four selected peer monitor files may change')
-    for path, before in originals.items():
-        after = protected[path]
-        require(before['sha256'] != after['sha256'] and
-                {key: value for key, value in before.items() if key != 'sha256'} ==
-                {key: value for key, value in after.items() if key != 'sha256'},
-                'peer adoption must preserve original monitor ownership/mode')
-    require(sha(canonical({**protected, **originals})) == ACCEPTED_PROTECTED_SHA256,
-            'unrelated accepted protected bytes changed during peer adoption')
+    peer_release.validate_adoption(selected, protected, plan['peer_original_units'],
+                                   ACCEPTED_PROTECTED_SHA256)
 
 
 def validate_gate(name, selected, value, actual_evidence):
@@ -282,16 +265,17 @@ def verify_model_gates(plan, evidence, bound_role, source_hashes, fullflow_valid
     args = (plan, *(bound_role(model, model_roles[key]) for key in ('plan', 'inputs', 'raw')),
             bound_role(semantics, semantic_roles['review']),
             {key: model['evidence_files'][filename] for key, filename in model_roles.items()})
+    if helpers or 'operator_source_commit' in plan:
+        revision = plan.get('operator_source_commit')
+        require(isinstance(revision, str) and bool(re.fullmatch('[0-9a-f]{40}', revision))
+                and revision != plan['identity']['source_commit'], 'distinct qualified operator revision required')
+        package_sha = sha(canonical(plan['package_sha256s']))
+        for name in ('source_review', 'operator_qualification'):
+            require(evidence[name].get('operator_source_commit') == revision
+                    and evidence[name].get('operator_package_sha256') == package_sha,
+                    'new operator source review/qualification package binding differs')
     if not helpers:
         return verify_qualification(*args)
-    revision = plan['operator_source_commit']
-    require(isinstance(revision, str) and bool(re.fullmatch('[0-9a-f]{40}', revision))
-            and revision != plan['identity']['source_commit'], 'distinct qualified operator revision required')
-    package_sha = sha(canonical(plan['package_sha256s']))
-    for name in ('source_review', 'operator_qualification'):
-        require(evidence[name].get('operator_source_commit') == revision
-                and evidence[name].get('operator_package_sha256') == package_sha,
-                'new operator source review/qualification package binding differs')
     require(fullflow_validator is not None, 'authenticated nativeflow validator required')
     return fullflow_validator(*args,
         *(bound_role(model, model_roles[key]) for key in ('original_plan', 'original_raw', 'original_case')),

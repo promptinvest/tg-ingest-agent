@@ -58,7 +58,7 @@ def collect(scope):
                 'peer HTTP/database health failed')
         neighbor_health={'http_status':response.status,'database':health['database']}
     peer_linkage = (peer_release.collect(protected, neighbors)
-                    if set(known_differences) == set(peer_release.UNIT_PATHS) else None)
+                    if set(known_differences) == set(peer_release.PROTECTED_PATHS) else None)
     return {'schema':'cara.model-retirement-preservation-observation/v1',
             'at':datetime.now(timezone.utc).isoformat(),'scope_sha256':digest(scope),
             'protected':protected,'protected_sha256':digest(protected),

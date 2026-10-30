@@ -244,6 +244,32 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(legacy.call_args.args[1:5], ('plan.json', 'inputs.json', 'raw.json', 'semantic.json'))
         self.assertEqual(native.qualification_helpers({}), set())
 
+    def test_firstpass_separate_operator_is_authenticated_before_original_validator(self):
+        data = self.fixture()
+        data[0]['operator_source_commit'] = 'a' * 40
+        for name in ('source_review', 'operator_qualification'):
+            data[1][name] = {'operator_source_commit': 'a' * 40,
+                            'operator_package_sha256': gate.digest(data[0]['package_sha256s'])}
+        with patch.object(native, 'verify_qualification', return_value='original') as legacy:
+            self.assertEqual(native.verify_model_gates(*data), 'original')
+        self.assertEqual(legacy.call_args.args[1:5], ('plan.json', 'inputs.json', 'raw.json', 'semantic.json'))
+        for name in ('source_review', 'operator_qualification'):
+            for field in ('operator_source_commit', 'operator_package_sha256'):
+                bad = copy.deepcopy(data[:2])
+                bad[1][name][field] = 'incorrect'
+                with self.subTest(name=name, field=field), \
+                     patch.object(native, 'verify_qualification', side_effect=AssertionError('must not dispatch')), \
+                     self.assertRaisesRegex(ValueError, 'package binding'):
+                    native.verify_model_gates(*bad, *data[2:])
+
+    def test_firstpass_invalid_selected_operator_revision_cannot_dispatch(self):
+        for revision in (None, '', 'not-a-commit', gate.APP_SOURCE):
+            data = self.fixture(); data[0]['operator_source_commit'] = revision
+            with self.subTest(revision=revision), \
+                 patch.object(native, 'verify_qualification', side_effect=AssertionError('must not dispatch')), \
+                 self.assertRaisesRegex(ValueError, 'distinct qualified operator'):
+                native.verify_model_gates(*data)
+
     def test_explicit_fullflow_dispatch_passes_original_lineage_and_archive_map(self):
         data = self.fixture(True)
         calls = []

@@ -8,6 +8,7 @@ from unittest import mock
 
 import collect_preservation as collect
 import prepare_selection as prep
+import release_operator as contract
 
 
 class PreservationTests(unittest.TestCase):
@@ -26,7 +27,7 @@ class PreservationTests(unittest.TestCase):
         entry={'sha256':'a'*64,'uid':0,'gid':0,'mode':0o600}
         def read(path, **kwargs):
             metadata=copy.deepcopy(entry)
-            if str(path)==change:metadata['sha256']='b'*64
+            if str(path)==change or (isinstance(change,set) and str(path) in change):metadata['sha256']='b'*64
             return b'',metadata
         response=io.BytesIO(b'{"status":"ok","database":"ok"}');response.status=200
         process=SimpleNamespace(returncode=0,stdout='"id"\t"image"\t"date"\t"running"\t42\t"healthy"\n')
@@ -52,6 +53,23 @@ class PreservationTests(unittest.TestCase):
         self.assertFalse(value['matches_accepted126'])
         self.assertEqual(value['known_protected_differences'],['/opt/cara-fixture'])
 
+    def test_collector_authenticates_only_the_exact_five_expected_peer_changes(self):
+        scope=self.scope()
+        for index,path in enumerate(collect.peer_release.PROTECTED_PATHS):
+            scope['protected_expected'][path]=scope['protected_expected'].pop(f'/etc/fixture-{index}')
+        scope['accepted_protected_sha256']=collect.digest(scope['protected_expected'])
+        expected=set(collect.peer_release.PROTECTED_PATHS)
+        with mock.patch.object(collect.peer_release,'collect',return_value={'status':'passed'}) as authenticate:
+            value=self.run_collector(scope,change=expected)
+            self.assertEqual(set(value['known_protected_differences']),expected)
+            self.assertEqual(value['peer_release_linkage'],{'status':'passed'})
+            authenticate.assert_called_once()
+        for altered in (set(collect.peer_release.UNIT_PATHS), expected | {'/etc/fixture-6'}):
+            with mock.patch.object(collect.peer_release,'collect') as authenticate:
+                value=self.run_collector(scope,change=altered)
+                self.assertIsNone(value['peer_release_linkage'])
+                authenticate.assert_not_called()
+
     def test_scope_cannot_select_unrelated_private_path(self):
         scope=self.scope();scope['protected_expected']['/home/unrelated']=scope['protected_expected'].pop('/opt/cara-fixture')
         with self.assertRaisesRegex(ValueError,'bounded protected'):
@@ -63,6 +81,30 @@ class PreservationTests(unittest.TestCase):
                  self.assertRaisesRegex(ValueError,'native verification summary required'):
                 prep.selected_plan({'status':'prepared_not_deployable'}, {}, {},
                                    {'test_summary':value}, '/unused')
+
+    def test_selection_and_native_contract_use_the_same_runtime_validator(self):
+        self.assertIs(prep.runtime_delta, contract.runtime_delta)
+
+    def test_separate_firstpass_operator_requires_exact_reviewed_revision_and_package(self):
+        package={'native_backend.py':'a'*64}
+        inputs={'source_commit':'c'*40,'operator_source_commit':'d'*40}
+        gates={'model_qualification':{},'semantic_review':{}}
+        for name in ('source_review','operator_qualification'):
+            gates[name]={'operator_source_commit':'d'*40,'operator_package_sha256':prep.digest(package)}
+        self.assertEqual(prep.operator_revision_binding(gates,inputs,package),
+                         {'operator_source_commit':'d'*40})
+        for name in ('source_review','operator_qualification'):
+            for field in ('operator_source_commit','operator_package_sha256'):
+                bad=copy.deepcopy(gates);bad[name][field]='incorrect'
+                with self.subTest(name=name,field=field), self.assertRaisesRegex(ValueError,'exact first-pass'):
+                    prep.operator_revision_binding(bad,inputs,package)
+        for revision in (None,'','not-a-commit','c'*40):
+            with self.subTest(revision=revision), self.assertRaisesRegex(ValueError,'distinct first-pass'):
+                prep.operator_revision_binding(gates,{**inputs,'operator_source_commit':revision},package)
+
+    def test_unknown_qualification_mode_is_rejected_by_selection(self):
+        with self.assertRaisesRegex(ValueError,'unrecognized qualification'):
+            prep.operator_revision_binding({'model_qualification':{'qualification_mode':'unknown'}},{},{})
 
     def test_first_pass_operator_binding_remains_unchanged(self):
         self.assertEqual(prep.operator_revision_binding({'model_qualification':{}},{},{}),{})

@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import native_backend as native
+import release_operator as contract
 
 
 class PureBoundaries(unittest.TestCase):
@@ -40,14 +41,28 @@ class PureBoundaries(unittest.TestCase):
         with self.assertRaises(ValueError):
             native.validate_gate('model_qualification', gate, bad, {'raw.json': 'd' * 64})
 
-    def test_only_exact_three_runtime_files_can_change(self):
+    def test_only_exact_four_runtime_files_with_approved_guard_can_change(self):
         old = {name: name + '-old' for name in ('common.py', 'llm.py', 'cache_usage.py', 'store.py')}
+        old['action_truth.py'] = contract.APPROVED_GUARD_BASE
         new = {**old, **{name: name + '-new' for name in native.ALLOWED_RUNTIME_DELTA}}
+        new['action_truth.py'] = contract.APPROVED_GUARD_TARGET
         self.assertEqual(native.runtime_delta(old, new), sorted(native.ALLOWED_RUNTIME_DELTA))
         for bad in ({**new, 'store.py': 'changed'}, {**new, 'extra.py': 'new'},
-                    {key: val for key, val in new.items() if key != 'store.py'}):
+                    {key: val for key, val in new.items() if key != 'store.py'},
+                    {**new, 'action_truth.py': old['action_truth.py']},
+                    {**new, 'llm.py': old['llm.py']}):
             with self.assertRaises(ValueError):
                 native.runtime_delta(old, bad)
+
+    def test_guard_approval_does_not_authorize_other_guard_bytes(self):
+        old = dict.fromkeys(contract.ALLOWED_RUNTIME_DELTA, 'before')
+        old['action_truth.py'] = contract.APPROVED_GUARD_BASE
+        new = dict.fromkeys(contract.ALLOWED_RUNTIME_DELTA, 'after')
+        new['action_truth.py'] = contract.APPROVED_GUARD_TARGET
+        for before, after in (({**old, 'action_truth.py': 'a' * 64}, new),
+                              (old, {**new, 'action_truth.py': 'b' * 64})):
+            with self.assertRaisesRegex(ValueError, 'exact approved'):
+                native.runtime_delta(before, after)
 
     def test_recovery_changes_cannot_be_adopted_as_new_preflight_baseline(self):
         original = {'neighbors': {'peer': 'unchanged'}, 'preserved_units': {'timer': 'active'},
@@ -194,30 +209,55 @@ class QualificationEvidence(unittest.TestCase):
 class PeerAdoption(unittest.TestCase):
     def fixture(self):
         original = {f'/synthetic/protected/{i}': {'sha256': 'old', 'uid': 0, 'gid': 0, 'mode': 0o600}
-                    for i in range(122)}
+                    for i in range(121)}
         units = {path: {'sha256': 'old-unit', 'uid': 0, 'gid': 0, 'mode': 0o644}
                  for path in native.peer_release.UNIT_PATHS}
         original.update(units)
+        originals = {**units, native.peer_release.POLICY_PATH: {
+            'sha256': native.peer_release.POLICY_BEFORE, 'uid': 0, 'gid': 0, 'mode': 0o600}}
+        original.update(originals)
         protected = {**original, **{path: {**value, 'sha256': 'new-unit'} for path, value in units.items()}}
+        protected[native.peer_release.POLICY_PATH] = {
+            **originals[native.peer_release.POLICY_PATH], 'sha256': native.peer_release.POLICY_AFTER}
         neighbors = {'synthetic-peer': 'bound'}
-        proof = {'schema': 'cara.model-retirement-peer-link/v1', 'status': 'passed',
+        proof = {'schema': 'cara.model-retirement-peer-link/v2', 'status': 'passed',
                  'root': native.peer_release.ROOT, 'source': native.peer_release.SOURCE,
                  'image': native.peer_release.IMAGE, 'verification_receipt_sha256': native.peer_release.VERIFICATION,
                  'receipt_sha256s': {name: name + '-raw-hash' for name in native.peer_release.RECEIPTS},
                  'active_release_controllers': 0, 'neighbors': neighbors,
-                 'unit_source_sha256s': {path: 'new-unit' for path in units}}
+                 'unit_source_sha256s': {path: 'new-unit' for path in units},
+                 'adopted_protected_paths': list(native.peer_release.PROTECTED_PATHS),
+                 'continuation': {
+                     'root': native.peer_release.ACCEPTANCE_ROOT,
+                     'acceptance_sha256': native.peer_release.ACTUAL_ACCEPTANCE,
+                     'process_sha256': native.peer_release.ACTUAL_PROCESS,
+                     'pid_sha256': native.peer_release.ACTUAL_PID,
+                     'canonical_publication_sha256': native.peer_release.PUBLICATION,
+                     'phase_launch_sha256': native.peer_release.ACTUAL_LAUNCH},
+                 'policy_transition': {
+                     'status': 'passed', 'path': native.peer_release.POLICY_PATH,
+                     'receipt_sha256s': native.peer_release.POLICY_RECEIPT_PINS,
+                     'changed_paths': sorted(native.peer_release.POLICY_VALUES),
+                     'unchanged_bytes_verified': True,
+                     'actual_acceptance_sha256': native.peer_release.ACTUAL_ACCEPTANCE,
+                     'before': originals[native.peer_release.POLICY_PATH],
+                     'after': protected[native.peer_release.POLICY_PATH]}}
+        proof['receipt_sha256s'].update({
+            'acceptance.json': native.peer_release.ACTUAL_ACCEPTANCE,
+            'process-result-acceptance.json': native.peer_release.ACTUAL_PROCESS,
+            'phase-pid-acceptance.json': native.peer_release.ACTUAL_PID})
         pin = native.sha(native.canonical(original))
         plan = {'baseline_protected': protected, 'baseline_neighbors': neighbors,
-                'peer_original_units': units, 'accepted_protected_sha256': pin,
+                'peer_original_units': originals, 'accepted_protected_sha256': pin,
                 'peer_release_linkage': proof}
         return plan, copy.deepcopy(proof), pin
 
-    def test_exact_four_monitor_adoption_reconstructs_entire_accepted_map(self):
+    def test_exact_five_file_adoption_reconstructs_entire_accepted_map(self):
         plan, proof, pin = self.fixture()
         with patch.object(native, 'ACCEPTED_PROTECTED_SHA256', pin):
             native.verify_peer_selection(plan, proof)
 
-    def test_refuses_new_receipt_unrelated_fifth_file_or_monitor_mode_change(self):
+    def test_refuses_new_receipt_unrelated_file_or_monitor_mode_change(self):
         for kind in ('receipt', 'fifth-file', 'mode', 'pending', 'other-peer'):
             plan, proof, pin = self.fixture()
             if kind == 'receipt':

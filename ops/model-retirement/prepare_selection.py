@@ -17,7 +17,8 @@ import tarfile
 
 from collect_preflight import canonical, digest
 import peer_release
-from release_operator import REQUIRED_GATES, require, utc, validate_observation, validate_plan, verify_unknowns
+from release_operator import (REQUIRED_GATES, require, runtime_delta, utc,
+                              validate_observation, validate_plan, verify_unknowns)
 
 ACCEPTED_PINS = {
     'authorization.json': 'b293755b65537f0d99a0093d136283e6a0e961e51d5b12b8d2a384dad905845e',
@@ -133,7 +134,7 @@ def build_draft(records, observation, observation_sha256):
             'preservation_scope_sha256':digest(scope),
             'accepted_protected_sha256':scope['accepted_protected_sha256'],
             'peer_original_units':{path:deepcopy(scope['protected_expected'][path])
-                                   for path in peer_release.UNIT_PATHS},
+                                   for path in peer_release.PROTECTED_PATHS},
             'historical_closed_trial':deepcopy(plan['closed_trial']),
             'historical_closed_trial_files':deepcopy(plan['closed_trial_files']),
             **{key:deepcopy(plan[key]) for key in SCOPE_KEYS},
@@ -159,7 +160,7 @@ def bind_preservation(draft, observed):
     require(len(observed['protected'])==126, 'all126 accepted protected files required')
     peer = observed.get('peer_release_linkage')
     if observed['matches_accepted126'] is not True:
-        require(set(observed['known_protected_differences'])==set(peer_release.UNIT_PATHS)
+        require(set(observed['known_protected_differences'])==set(peer_release.PROTECTED_PATHS)
                 and isinstance(peer,dict) and peer.get('status')=='passed'
                 and peer.get('root')==peer_release.ROOT and peer.get('source')==peer_release.SOURCE
                 and peer.get('image')==peer_release.IMAGE
@@ -168,18 +169,8 @@ def bind_preservation(draft, observed):
                 and peer.get('active_release_controllers')==0
                 and peer.get('neighbors')==observed['neighbors'],
                 'exact completed peer acceptance linkage required')
-        before=draft['peer_original_units']
-        require(set(before)==set(peer_release.UNIT_PATHS)
-                and peer.get('unit_source_sha256s')=={
-                    path:observed['protected'][path]['sha256'] for path in peer_release.UNIT_PATHS},
-                'exact four peer unit source hashes required')
-        for path in peer_release.UNIT_PATHS:
-            require({key:value for key,value in before[path].items() if key!='sha256'}==
-                    {key:value for key,value in observed['protected'][path].items() if key!='sha256'},
-                    'peer unit ownership/mode changed')
-        reconstructed={**observed['protected'],**before}
-        require(digest(reconstructed)==draft['accepted_protected_sha256'],
-                'remaining accepted126 protected evidence differs')
+        peer_release.validate_adoption(peer,observed['protected'],draft['peer_original_units'],
+                                       draft['accepted_protected_sha256'])
     else:
         require(observed['known_protected_differences']==[], 'unexpected known protected differences')
     return {'baseline_protected':deepcopy(observed['protected']),
@@ -238,20 +229,25 @@ def candidate_runtime(archive_path, expected_archive):
 
 
 def operator_revision_binding(envelopes, inputs, package_hashes):
-    """The existing-correction operator has separate source/CI evidence."""
+    """Bind a selected separate operator in either qualification mode."""
     mode=envelopes['model_qualification'].get('qualification_mode')
-    if mode != 'full_native_existing_correction':
+    require(mode in (None,'full_native_existing_correction'), 'unrecognized qualification mode')
+    if mode is None and 'operator_source_commit' not in inputs:
         return {}
+    label='fullflow' if mode else 'first-pass'
     revision=inputs.get('operator_source_commit')
     require(isinstance(revision,str) and re.fullmatch(r'[0-9a-f]{40}',revision)
-            and revision!=inputs['source_commit'], 'distinct fullflow operator source commit required')
+            and revision!=inputs['source_commit'], 'distinct '+label+' operator source commit required')
     require(envelopes['semantic_review'].get('qualification_mode')==mode,
-            'fullflow model and semantic evidence modes differ')
+            label+' model and semantic evidence modes differ')
     for name in ('source_review','operator_qualification'):
         require(envelopes[name].get('operator_source_commit')==revision
                 and envelopes[name].get('operator_package_sha256')==digest(package_hashes),
-                'separately reviewed exact fullflow operator package required: '+name)
-    return {'operator_source_commit':revision,'qualification_mode':mode}
+                'separately reviewed exact '+label+' operator package required: '+name)
+    result={'operator_source_commit':revision}
+    if mode:
+        result['qualification_mode']=mode
+    return result
 
 
 def selected_plan(draft, observation, preservation, inputs, package_directory):
@@ -278,8 +274,7 @@ def selected_plan(draft, observation, preservation, inputs, package_directory):
     require(all(candidate_source.get(name)==original_source[name] for name in native_names),
             'accepted native installer/unit source changed')
     require(set(runtime)==set(draft['baseline_runtime_hashes']), 'runtime set must remain exact95 artifacts')
-    delta={name for name,pin in runtime.items() if pin!=draft['baseline_runtime_hashes'][name]}
-    require(delta <= {'common.py','llm.py','cache_usage.py'}, 'unapproved runtime source change')
+    runtime_delta(draft['baseline_runtime_hashes'],runtime)
     require(set(inputs['gates'])==REQUIRED_GATES, 'all7 selected gate envelopes required')
     package_hashes=deepcopy(inputs['package_sha256s'])
     require({name:package_hashes.get('reference/'+name) for name in REFERENCE_PINS}==REFERENCE_PINS,

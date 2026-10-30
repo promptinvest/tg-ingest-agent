@@ -182,3 +182,37 @@ Failure `cdc850c2`, helper log `f3b88146` and supervisor result `3230e231` remai
 Fresh 06:38:13 UTC observation confirmed all five owned PIDs/groups absent.
 A new immutable source and new full attempt are required; neither failed attempt
 may be replayed or treated as verification success.
+
+## Successor application and separate operator
+
+Frozen application `93bf1a6042af5b1651a747c230533e7c008de52a`, archive
+`165723ab9872ff227f944ea8b461acbe3a06442f4de12bb0a52f5ce0ec1c2e9b`,
+contains the reviewed repair-fixture correction. All 156 model-trial helper tests
+passed locally. The new full verifier launched once October 30 06:42:39 UTC under
+`full4`, supervised by `full-supervisor4`, PID/group 1526904; manifest `2c9aa345`.
+It remains a verification attempt, not release acceptance. Preparation of its
+fresh 43-case model plan `96d615f1` completed with zero paid calls, unchanged
+coverage/caps/temperatures/timeouts and candidate environment `96db9e09`.
+
+The separate operator permits only common.py, llm.py, cache_usage.py and the
+exact approved action_truth.py change, with shared validation and fixed guard
+before/after hashes. Its first-pass model gates now bind the separate operator
+revision and full package hash just as the distinct full-flow mode does. Original
+qualification and unknown-charge validation functions remain exact.
+
+Peer v2 verifies the actual Daily Lingo acceptance continuation, canonical exact
+copy, and consumed nine-leaf policy updater. Only the four monitor units and
+/etc/cara-fleet-host.json may differ from the original 126-file protected set.
+The policy transition must retain every other byte and ownership/mode; the
+remaining protected ancestry is reconstructed exactly. Actual read-only proof
+passed 06:41:51 UTC (`f8172168`); the earlier failed adapter proof remains.
+All 125 local operator tests passed except two explicitly skipped Linux retained
+fixtures; independent source review passed. Fresh Linux qualification is pending.
+
+A separate fresh preflight found one overnight Kimi health-check unknown row
+(25046, October 30 04:41:07 UTC), reserved USD0.0005102. The original 35 rows remain
+exact and nullable cache values remain unknown. No transport/provider receipt
+establishes its outcome; it is not relabeled, deleted or refunded. The unchanged
+zero-current-unknown release gate blocks on this row. It is unrelated to the two
+settled migration calls (USD0.0028614). No exception has been selected or applied;
+any proposed one-release allowance must remain private and require owner approval.

@@ -25,6 +25,22 @@ def require(value, message):
         raise ValueError(message)
 
 
+ALLOWED_RUNTIME_DELTA = frozenset({'common.py', 'llm.py', 'cache_usage.py', 'action_truth.py'})
+APPROVED_GUARD_BASE = 'e36c0df260df50be2414524f7094fcf58be2634e50aa4389234e84157b5639c6'
+APPROVED_GUARD_TARGET = '9d75bfad4042851b0204e3dec64e1872e103e6251fa0f1f3995607facdc4195f'
+
+
+def runtime_delta(before, after):
+    """Only model/pricing files and the owner's exact approved guard may change."""
+    require(set(before) == set(after), 'installed runtime membership changed')
+    changed = sorted(key for key in before if before[key] != after[key])
+    require(set(changed) == ALLOWED_RUNTIME_DELTA, 'unexpected model-retirement runtime delta')
+    require(before['action_truth.py'] == APPROVED_GUARD_BASE
+            and after['action_truth.py'] == APPROVED_GUARD_TARGET,
+            'only the exact approved saved-reminders guard change is permitted')
+    return changed
+
+
 def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 

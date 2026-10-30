@@ -50,6 +50,17 @@ that exact text and all original assertions, uses a separately named synthetic
 false save claim to exercise the repair path, and adds explicit native first-pass
 and corrective-request regressions. No further runtime change is included.
 
+The separate release operator binds the exact approved four-file runtime delta,
+including the guard's original and reviewed SHA256. First-pass qualification now
+also authenticates a separately reviewed operator revision/package. Peer evidence
+recognizes Daily Lingo's actual acceptance-only continuation and its consumed
+nine-leaf fleet-policy update: exactly four monitor files plus that policy may
+change, with the other accepted protected bytes reconstructed and unchanged.
+The operator passed 125 local checks (two retained-Linux fixtures skipped) and
+independent source review; its read-only live peer proof passed. The actual-model
+qualifier and current/unknown-charge gates are unchanged. Fresh Linux operator
+qualification and the remaining normal release gates still apply.
+
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
 
