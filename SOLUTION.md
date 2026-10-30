@@ -61,6 +61,29 @@ independent source review; its read-only live peer proof passed. The actual-mode
 qualifier and current/unknown-charge gates are unchanged. Fresh Linux operator
 qualification and the remaining normal release gates still apply.
 
+The successor application `93bf1a6` / archive `165723ab` passed exact-source CI,
+3315 normal and shuffled Linux tests, all helper suites, installed layout and
+shell syntax on October 30 at 06:50:41 UTC (verification `c48e678d`). The separate
+operator `6412604` also passed its isolated Linux suite: 125 checks, with only
+two intended retained-evidence fixture skips. Production remains unchanged.
+
+The fresh actual-model attempt retained seven native passes and stopped at its
+eighth response when the unchanged guard requested a correction for the phrase
+"delivery field is marked". All eight answers are semantically sound, but that
+is partial evidence, not qualification acceptance. Its eight charges plus the
+two earlier charges total USD0.0135208, with zero unresolved migration charges.
+A distinct operator companion carries those eight exact responses and their
+original ledger prefixes, permits only case eight's one existing correction,
+and then tests the untouched 35 first requests. It binds the verified application,
+original prompts, profile controls and the same cumulative USD0.25 allowance.
+The failed first-pass verdict remains unchanged; a third request or deterministic
+containment fails the continuation. Independent full semantic review remains required.
+
+The new companion, gate and mode dispatch passed all 141 local operator checks
+(139 passed, two unchanged retained-evidence fixture skips). Source review covers
+the exact eight-response reuse, one correction boundary, complete native outcome
+and cumulative 46-row accounting expected only after all 43 cases pass.
+
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
 

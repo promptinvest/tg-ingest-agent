@@ -248,7 +248,9 @@ def verify_qualification(plan, prepared, inputs, raw, semantic, hashes):
 
 def qualification_helpers(plan):
     mode = plan.get('qualification_mode')
-    require(mode in (None, 'full_native_existing_correction'), 'unrecognized qualification mode')
+    require(mode in (None, 'full_native_existing_correction', 'full_native_retirement'), 'unrecognized qualification mode')
+    if mode == 'full_native_retirement':
+        return {'retirement93_gate.py', 'qualify_retirement93.py', 'fullflow_gate.py'}
     return {'fullflow_gate.py', 'qualify_nativeflow.py'} if mode else set()
 
 
@@ -257,7 +259,9 @@ def verify_model_gates(plan, evidence, bound_role, source_hashes, fullflow_valid
     helpers = qualification_helpers(plan)
     model, semantics = (evidence[name] for name in ('model_qualification', 'semantic_review'))
     model_roles, semantic_roles = model['evidence_roles'], semantics['evidence_roles']
-    roles = {'plan', 'inputs', 'raw'} | ({'original_plan', 'original_raw', 'original_case'} if helpers else set())
+    retirement = plan.get('qualification_mode') == 'full_native_retirement'
+    original_cases = ['original_case_' + str(index).zfill(3) for index in range(1, 9)] if retirement else ['original_case']
+    roles = {'plan', 'inputs', 'raw'} | ({'original_plan', 'original_raw', *original_cases} if helpers else set())
     require(set(model_roles) == roles and set(semantic_roles) == {'review'},
             'model/semantic raw role bindings incomplete')
     require(model.get('qualification_mode') == semantics.get('qualification_mode') == plan.get('qualification_mode'),
@@ -277,6 +281,10 @@ def verify_model_gates(plan, evidence, bound_role, source_hashes, fullflow_valid
     if not helpers:
         return verify_qualification(*args)
     require(fullflow_validator is not None, 'authenticated nativeflow validator required')
+    if retirement:
+        return fullflow_validator(*args,
+            *(bound_role(model, model_roles[key]) for key in ('original_plan', 'original_raw')),
+            [bound_role(model, model_roles[key]) for key in original_cases], source_hashes)
     return fullflow_validator(*args,
         *(bound_role(model, model_roles[key]) for key in ('original_plan', 'original_raw', 'original_case')),
         source_hashes)
@@ -402,10 +410,22 @@ class NativeMethods:
         if extra_helpers:
             # Import only after every byte in the selected package is authenticated.
             # The paid companion is evidence provenance, never an imported release action.
-            spec = importlib.util.spec_from_file_location('cara_authenticated_fullflow_gate', self.root / 'fullflow_gate.py')
+            retirement = plan.get('qualification_mode') == 'full_native_retirement'
+            gate_file = 'retirement93_gate.py' if retirement else 'fullflow_gate.py'
+            if retirement:
+                # The new gate reuses only generic pure helpers from this exact
+                # authenticated module. Reject a foreign cached import first.
+                cached = sys.modules.get('fullflow_gate')
+                require(cached is None or Path(cached.__file__).resolve() == self.root / 'fullflow_gate.py',
+                        'nativeflow dependency is outside authenticated package')
+                dependency_spec = importlib.util.spec_from_file_location('fullflow_gate', self.root / 'fullflow_gate.py')
+                dependency = importlib.util.module_from_spec(dependency_spec)
+                dependency_spec.loader.exec_module(dependency)
+                sys.modules['fullflow_gate'] = dependency
+            spec = importlib.util.spec_from_file_location('cara_authenticated_fullflow_gate', self.root / gate_file)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            fullflow_validator = module.verify_fullflow
+            fullflow_validator = module.verify_retirement93 if retirement else module.verify_fullflow
         files = self._archive(plan['identity']['archive_sha256'])
         modules = self.core.checks.expected_modules(
             (self.source / 'install-tg-ingest-agent-pilot-remote.sh').read_text(),

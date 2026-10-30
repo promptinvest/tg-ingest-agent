@@ -231,7 +231,7 @@ def candidate_runtime(archive_path, expected_archive):
 def operator_revision_binding(envelopes, inputs, package_hashes):
     """Bind a selected separate operator in either qualification mode."""
     mode=envelopes['model_qualification'].get('qualification_mode')
-    require(mode in (None,'full_native_existing_correction'), 'unrecognized qualification mode')
+    require(mode in (None,'full_native_existing_correction','full_native_retirement'), 'unrecognized qualification mode')
     if mode is None and 'operator_source_commit' not in inputs:
         return {}
     label='fullflow' if mode else 'first-pass'

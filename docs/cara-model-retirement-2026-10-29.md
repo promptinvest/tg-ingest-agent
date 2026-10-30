@@ -216,3 +216,46 @@ establishes its outcome; it is not relabeled, deleted or refunded. The unchanged
 zero-current-unknown release gate blocks on this row. It is unrelated to the two
 settled migration calls (USD0.0028614). No exception has been selected or applied;
 any proposed one-release allowance must remain private and require owner approval.
+
+## Verified application and retained qualification prefix, October 30
+
+The successor application `93bf1a6` / archive `165723ab` passed exact-source CI,
+3315 normal and shuffled Linux tests, all helper suites, installed layout and
+shell syntax on October 30 at 06:50:41 UTC (verification `c48e678d`). The separate
+operator `6412604` also passed its isolated Linux suite: 125 checks, with only
+two intended retained-evidence fixture skips. Production remains unchanged.
+
+The fresh actual-model attempt retained seven native passes and stopped at its
+eighth response when the unchanged guard requested a correction for the phrase
+"delivery field is marked". All eight answers are semantically sound, but that
+is partial evidence, not qualification acceptance. Its eight charges plus the
+two earlier charges total USD0.0135208, with zero unresolved migration charges.
+A distinct operator companion carries those eight exact responses and their
+original ledger prefixes, permits only case eight's one existing correction,
+and then tests the untouched 35 first requests. It binds the verified application,
+original prompts, profile controls and the same cumulative USD0.25 allowance.
+The failed first-pass verdict remains unchanged; a third request or deterministic
+containment fails the continuation. Independent full semantic review remains required.
+
+The stopped qualification3 supervisor returned one (`3229f3c1`), retaining
+raw `c51793ab` and all eight case artifacts. At 07:01:43 UTC, a fresh read-only
+check found all four owned PIDs/groups absent. Offline replay `fff6e434` proves
+the existing second request with protected synthetic state unchanged and no paid
+call. Partial independent review `e9ff91cb` does not claim full acceptance.
+
+The continuation uses new `qualify_retirement93.py` and `retirement93_gate.py`
+helpers; old qualifiers and validators remain byte-exact. The new supervisor
+`9c121d9a` binds full4/source, archive `165723ab`, full verification `c48e678d`,
+and the exact failed qualification3 plan, inputs and raw result. Sixteen isolated
+Linux supervisor checks passed, with independent review `aa009827`. A prepared
+plan, frozen helper package, offline helper qualification and reviewed concrete
+launch manifest are still required before a paid continuation.
+
+The separate Kimi health-check reservation remains unknown and reserved. The
+strict current-unknown release gate is unchanged; its private one-release
+exception proposal has not been approved or applied.
+
+The new companion, gate and mode dispatch passed all 141 local operator checks
+(139 passed, two unchanged retained-evidence fixture skips). Source review covers
+the exact eight-response reuse, one correction boundary, complete native outcome
+and cumulative 46-row accounting expected only after all 43 cases pass.
