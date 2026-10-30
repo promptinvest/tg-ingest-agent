@@ -30,9 +30,18 @@ flow also failed at its first case: the corrective answer repeated the attributi
 phrase "the saved reminders", and the existing guard produced deterministic
 containment. Both failed generations remain. Total settled qualification spend is
 USD0.0028614 with no unknown charges; the remaining 42 cases were not run. No
-production models, prices, guards or services changed. A narrow guard correction
-is being prepared separately for owner review, not applied by this migration.
-Final model quality and deployment remain blocked.
+production models, prices, guards or services changed at that checkpoint.
+
+On October 30 the owner approved the reviewed narrow guard correction ("go").
+The exact attributive phrase "the saved reminders" is no longer treated as a
+completed save. Other determiners/objects/verbs, genuine completed actions,
+completion headers and ambiguous same-sentence combinations retain the original
+checks. The original regex patterns, templates, prompts and repair limits remain.
+The proposal passed all 51 existing guard tests, ten new checks and offline
+retained-answer replay; both original paid failures remain failed. This correction
+is now included in the new application candidate, with portable caller regression
+coverage. Fresh full verification, actual-model qualification and guarded
+deployment/acceptance are required; no new production state is claimed.
 
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).

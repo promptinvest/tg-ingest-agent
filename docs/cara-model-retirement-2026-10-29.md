@@ -139,3 +139,26 @@ completed-action claims, with regressions for both retained responses and genuin
 claims. It is outside the requested model-ID/pricing change: the owner's standing
 preserve-existing-behavior rule requires approval before applying that behavior
 change. Preparation does not authorize application or deployment of the guard fix.
+
+## Approved guard correction, October 30
+
+The owner replied "go" to the explicit request to apply the narrow saved-reminders
+fix, complete fresh qualification and deploy the model migration. This approves
+the reviewed behavior change; it does not change the primary set, model controls,
+budgets, history, prompts or existing genuine-action checks. The exact reviewed
+guard is `9d75bfad` (base `e36c0df2`, patch `5c8e1d1a`). Before the correction,
+both truthful retained status answers triggered a false action-denial response.
+After the correction, the exact attributive noun phrase can pass the existing
+caller, while true save claims, completion headers and other completed verbs in
+the same sentence remain blocked. All original regexes and other exemptions remain.
+
+The private proposal reproduced the false positives against unchanged source,
+then passed 51 unchanged existing guard tests and ten new focused methods. Both
+exact retained response strings independently reached the native reply with one
+mocked response, no additional request and protected synthetic state unchanged.
+Independent review passed. Application integration adds portable pure and caller
+regressions; the exact private retained-plan proof remains separate. These offline
+results do not convert either paid failure into a pass. Fresh source-bound full
+checks, 43-case actual-model qualification, independent semantic review and all
+normal preflight/deployment/acceptance gates still precede production change.
+The prior total USD0.0028614 remains in the shared USD0.25 qualification accounting.

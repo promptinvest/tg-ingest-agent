@@ -417,6 +417,34 @@ def _offered(value, pos):
     return bool(_OFFER_TAIL_RE.search(value[max(0, pos - _NEGATION_WINDOW):pos]))
 
 
+def _attributive_saved_reminders(value, start, end, verb, match_start):
+    """The exact noun phrase 'the saved reminders' does not report a save.
+
+    Keep ambiguous combinations blocked: another completed verb or completion
+    header in the same sentence must not disappear behind this narrow exception.
+    No other determiner, object or participle is exempted here.
+    """
+    if verb.lower() != "saved" \
+            or not re.search(r"\bthe $", value[:start], re.IGNORECASE) \
+            or not re.match(r" reminders\b", value[end:], re.IGNORECASE):
+        return False
+    # The existing completion-header pattern may span punctuation ("Done.").
+    # Its matched header remains authoritative even across a sentence boundary.
+    if _COMPLETION_HEAD_RE.search(value[match_start:start]):
+        return False
+    left = max((m.end() for m in _SENTENCE_BOUNDARY_RE.finditer(value, 0, start)),
+               default=0)
+    right_m = _SENTENCE_BOUNDARY_RE.search(value, end)
+    sentence = value[left:right_m.start() if right_m else len(value)]
+    if _COMPLETION_HEAD_RE.search(sentence) or re.search(
+            r"\b(?:complete[ds]?|finished|executed|performed|processed|handled|"
+            r"resolved|fulfilled|taken care of|dealt with)\b", sentence, re.IGNORECASE):
+        return False
+    return all(left + other.start() == start
+               for other in re.finditer(rf"\b(?:{_DONE_VERBS})\b", sentence,
+                                        re.IGNORECASE))
+
+
 def _line_around(value, start, end):
     line_start = value.rfind("\n", 0, start) + 1
     line_end = value.find("\n", end)
@@ -632,6 +660,7 @@ def action_claim_match(text):
                     or _inside_question(value, pos, m.end()) \
                     or _past_reference(value, pos, m.end()) \
                     or _subjunctive(value, pos, verb_end) \
+                    or _attributive_saved_reminders(value, pos, verb_end, verb, m.start()) \
                     or _her_life(value, pos, verb_end, verb):
                 # pos >= m.start() >= cursor for every pattern, so this always
                 # advances — the loop cannot stall on a rejected match.
