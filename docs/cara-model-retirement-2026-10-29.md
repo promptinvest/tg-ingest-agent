@@ -414,3 +414,42 @@ tokens within the1600-token extraction completion, which returned empty final
 content. These reported counts explain the observed cap failures; no cap increase
 or quality acceptance follows. This corrects the preceding documentation commit's
 overbroad statement that reasoning-token breakdowns were unavailable.
+
+## Distinct Nemotron VL vision candidate
+
+The Haiku comparison is retained as failed raw `ad8d97de`, plan `6be434e7`:
+six of nine requests were attempted, leaving53 settled migration rows costing
+USD0.0605291 with no unresolved migration charges. The candidate `d4c5930a`,
+its helper and every response remain immutable. The separate synthesis criterion
+audit does not reclassify this failed run or establish selected-matrix acceptance.
+
+The next operator-only transform replaces retiring `llama-4-maverick` with
+`nemotron-nano-12b-v2-vl`. Original-contract audit `63d3c4c6` and separate
+superseding semantic review `de31ce40` found both Flash and OSS synthesis answers
+compatible: invalid optional facets are already discarded while the required
+grounded answer is retained. The original stricter reviews and every paid OSS
+comparison remain preserved. The unnecessary synthesis OSS exception is removed,
+leaving its generic retiring-Flash replacement Flash1017. This changes no parser,
+prompt or native criterion and requires no further synthesis calls.
+The candidate leaves the other three selected text-role mappings,
+all nine primaries, current unretired models, native prompts/images/controls,
+commercial overrides and unrelated environment bytes unchanged. The six original
+vision cases38–43 are the only planned new comparisons; OSS, Haiku and Flash
+responses are not resampled. All53 prior charges remain inside the same USD0.25
+cumulative allowance, with the same reservation, unknown and native budget guards.
+
+DigitalOcean's [model catalog](https://docs.digitalocean.com/products/inference/details/models/)
+lists this exact VL model for serverless inference, and its
+[pricing table](https://docs.digitalocean.com/products/inference/details/pricing/)
+lists USD0.20 input, USD0.60 output and USD0.04 cache reads per million tokens.
+Frozen `llm.py` and `cache_usage.py` already contain those rates; existing explicit
+overrides remain untouched. NVIDIA documents the model's multimodal capabilities
+in its [VL API reference](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-nano-12b-v2-vl).
+This selection concerns the VL model, not the similarly named text-only model.
+Actual six-case native and independent semantic checks remain required; no paid
+call, selected release, unknown exception or deployment is claimed by this change.
+
+The configuration change passed the complete154-check offline operator suite,
+with the same two retained-evidence platform skips. Existing environment-parity
+assertions remain, with the explicitly selected vision model; added coverage
+checks all three role overrides, generic synthesis routing and idempotence.

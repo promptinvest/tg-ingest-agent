@@ -23,7 +23,6 @@ ROLE_FALLBACK_REPLACEMENTS = {
     "ingest_balanced": {"deepseek-4-flash": "openai-gpt-oss-120b"},
     "ask_grounded": {"deepseek-4-flash": "openai-gpt-oss-120b"},
     "memory_curator": {"openai-gpt-oss-20b": "deepseek-v4.1-flash-1017"},
-    "task_synthesis": {"deepseek-4-flash": "openai-gpt-oss-120b"},
 }
 SELECTED_PRICES = {
     "deepseek-v4.1-flash": [0.30, 1.20],
@@ -200,7 +199,7 @@ def transform_environment(environment):
             updated[key] = MODEL_REPLACEMENTS[updated[key]]
             _record(changes, "replace", key)
     if updated.get("VISION_MODEL") == "llama-4-maverick":
-        updated["VISION_MODEL"] = "anthropic-claude-5.5-haiku"
+        updated["VISION_MODEL"] = "nemotron-nano-12b-v2-vl"
         _record(changes, "replace", "VISION_MODEL")
     if "LLM_PROFILES_JSON" in updated:
         updated["LLM_PROFILES_JSON"] = _transform_profiles(updated["LLM_PROFILES_JSON"], changes)

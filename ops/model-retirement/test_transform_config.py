@@ -47,7 +47,7 @@ class TransformConfigTests(unittest.TestCase):
         actual, plan = transform.transform_environment(source)
         self.assertEqual(source, frozen)
         expected = copy.deepcopy(source)
-        expected["VISION_MODEL"] = "anthropic-claude-5.5-haiku"
+        expected["VISION_MODEL"] = "nemotron-nano-12b-v2-vl"
         expected_profiles = json.loads(source["LLM_PROFILES_JSON"])
         expected_profiles["converse_warm"]["fallbacks"] = [
             "kimi-k2.6", "deepseek-v4.1-flash-1017", "openai-gpt-oss-120b"]
@@ -195,25 +195,44 @@ class TransformConfigTests(unittest.TestCase):
         self.assertEqual(len(json.loads(actual["PRICING_JSON"])), 3)
         self.assertEqual(len(plan["changes"]), 3)
 
-    def test_task_synthesis_replaces_retiring_flash_only_with_oss_and_keeps_controls(self):
+    def test_task_synthesis_keeps_generic_retiring_flash_replacement_and_controls(self):
         profile = {"primary": "anthropic-claude-sonnet-5.5", "fallbacks": ["kimi-k2.6", "deepseek-4-flash"],
                    "max_tokens": 1200, "temperature": 0, "timeout": 90, "json_required": True}
         roles = {name: copy.deepcopy(profile) for name in ("task_synthesis", "task_planner", "task_synthesis/custom")}
         actual, _ = transform.transform_environment({"LLM_PROFILES_JSON": json.dumps(roles)})
         after = json.loads(actual["LLM_PROFILES_JSON"])
         for name in roles:
-            target = "openai-gpt-oss-120b" if name == "task_synthesis" else "deepseek-v4.1-flash-1017"
+            target = "deepseek-v4.1-flash-1017"
             self.assertEqual(after[name], {**profile, "fallbacks": ["kimi-k2.6", target]})
 
-    def test_retired_vision_selects_haiku_without_repricing_existing_commercial_override(self):
+    def test_retired_vision_selects_nemotron_without_repricing_existing_commercial_override(self):
         haiku = "anthropic-claude-5.5-haiku"
-        for model in ("llama-4-maverick", "deepseek-v4.1-flash", haiku, "custom-vision", "llama-4-maverick:custom"):
+        nemotron = "nemotron-nano-12b-v2-vl"
+        for model in ("llama-4-maverick", "deepseek-v4.1-flash", haiku, nemotron, "custom-vision", "llama-4-maverick:custom"):
             source = self.fixture();source["VISION_MODEL"] = model
             actual, _ = transform.transform_environment(source)
-            self.assertEqual(actual["VISION_MODEL"], haiku if model == "llama-4-maverick" else model)
+            self.assertEqual(actual["VISION_MODEL"], nemotron if model == "llama-4-maverick" else model)
             self.assertEqual(json.loads(actual["PRICING_JSON"])[haiku], [0.5, 2.5])
             self.assertEqual(actual["ROUTER_MODEL"], source["ROUTER_MODEL"])
             self.assertEqual(actual["DO_CHAT_MODEL"], source["DO_CHAT_MODEL"])
+
+    def test_vision_refinement_keeps_three_selected_text_roles_and_generic_synthesis(self):
+        profiles = {name: {"primary": "keep-primary", "fallbacks": ["openai-gpt-oss-20b", "deepseek-4-flash"],
+            "max_tokens": 700, "temperature": 0, "timeout": 60, "json_required": True}
+            for name in ("ingest_balanced", "ask_grounded", "memory_curator", "task_synthesis", "memory_consolidate")}
+        source = self.fixture(); source["LLM_PROFILES_JSON"] = json.dumps(profiles)
+        actual, _ = transform.transform_environment(source)
+        control = dict(source, VISION_MODEL="anthropic-claude-5.5-haiku")
+        unchanged_haiku, _ = transform.transform_environment(control)
+        self.assertEqual(actual, {**unchanged_haiku, "VISION_MODEL": "nemotron-nano-12b-v2-vl"})
+        current = json.loads(actual["LLM_PROFILES_JSON"])
+        for name, profile in current.items():
+            expected = ["deepseek-v4.1-flash-1017"] if name == "memory_curator" else (
+                ["openai-gpt-oss-120b", "deepseek-v4.1-flash-1017"] if name in {"memory_consolidate", "task_synthesis"} else ["openai-gpt-oss-120b"])
+            self.assertEqual(profile, {**profiles[name], "fallbacks": expected})
+        repeated, plan = transform.transform_environment(actual)
+        self.assertEqual(repeated, actual)
+        self.assertEqual(plan["changes"], [])
 
     def test_memory_curator_selects_flash_without_changing_consolidation_or_controls(self):
         original = {"primary": "anthropic-claude-5.5-haiku",

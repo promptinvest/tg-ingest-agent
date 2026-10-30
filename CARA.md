@@ -140,6 +140,19 @@ caps; the dated record preserves those provider counts and failed final outputs.
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
 
+The next vision-only candidate selects `nemotron-nano-12b-v2-vl` for retiring
+Maverick. The preceding Haiku comparison stopped after six of nine requests;
+its failed result and all cumulative charges remain. The original-contract audit
+confirmed that synthesis already tolerates invalid optional facets while preserving
+the required grounded answer. Both sampled synthesis models satisfy that contract;
+the unnecessary OSS role exception is removed, retaining generic Flash1017.
+The other three selected role mappings, all nine primaries and every prompt,
+image and native control stay exact. Earlier stricter reviews remain preserved.
+Nemotron's published USD0.20/0.60 input/output and USD0.04 cache-read prices already
+match the frozen application's accounting tables, so no runtime or tariff edit
+is needed. A separate comparison covers only the original six vision requests.
+It does not rerun text cases or establish model-quality acceptance by configuration.
+
 ## October 29 - Prompt-cache reporting accepted
 
 The owner selected measured cache usage and price reconciliation. The release
