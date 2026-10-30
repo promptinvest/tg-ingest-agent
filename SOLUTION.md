@@ -153,6 +153,19 @@ match the frozen application's accounting tables, so no runtime or tariff edit
 is needed. A separate comparison covers only the original six vision requests.
 It does not rerun text cases or establish model-quality acceptance by configuration.
 
+The Nemotron comparison also stopped at classification case40: its unchanged
+160-token allowance produced no final answer. All three charges and the failed
+result remain, bringing cumulative settled migration usage to USD0.0620747.
+The next vision-only candidate maps retiring Maverick to `mistral-3-14B`
+(Ministral3 14B Instruct), with an explicit USD0.20/0.20 input/output override
+only when that vision model is selected. Conflicting existing overrides fail
+closed; all existing prices, nine primaries and the three text-role exceptions
+remain unchanged. The frozen application needs no request or delimiter change
+for this comparison. Its missing default/cache tariff entries remain a release
+prerequisite after quality passes, with fresh full verification and a source-parity
+bridge for unchanged native callers. Six distinct vision comparisons still precede
+acceptance; no new model call or deployment is claimed by this configuration.
+
 ## October 29 - Prompt-cache reporting accepted
 
 The owner selected measured cache usage and price reconciliation. The release

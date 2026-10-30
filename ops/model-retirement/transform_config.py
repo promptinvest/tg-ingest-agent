@@ -162,13 +162,16 @@ def _price_pair(pair):
     return result
 
 
-def _transform_prices(raw, changes):
+def _transform_prices(raw, changes, vision_model=None):
     prices = parse_json_object(raw) if raw.strip() else {}
     # Validate every override before returning a new environment. Invalid existing
     # pricing needs operator attention, not an implicit change to runtime defaults.
     parsed = {model: _price_pair(pair) for model, pair in prices.items()}
     changed = False
-    for model, pair in SELECTED_PRICES.items():
+    selected_prices = dict(SELECTED_PRICES)
+    if vision_model == "mistral-3-14B":
+        selected_prices[vision_model] = [0.20, 0.20]
+    for model, pair in selected_prices.items():
         if model in parsed:
             if parsed[model] != _price_pair(pair):
                 raise ConfigError("selected model already has a conflicting PRICING_JSON override")
@@ -199,11 +202,12 @@ def transform_environment(environment):
             updated[key] = MODEL_REPLACEMENTS[updated[key]]
             _record(changes, "replace", key)
     if updated.get("VISION_MODEL") == "llama-4-maverick":
-        updated["VISION_MODEL"] = "nemotron-nano-12b-v2-vl"
+        updated["VISION_MODEL"] = "mistral-3-14B"
         _record(changes, "replace", "VISION_MODEL")
     if "LLM_PROFILES_JSON" in updated:
         updated["LLM_PROFILES_JSON"] = _transform_profiles(updated["LLM_PROFILES_JSON"], changes)
-    updated["PRICING_JSON"] = _transform_prices(updated.get("PRICING_JSON", ""), changes)
+    updated["PRICING_JSON"] = _transform_prices(
+        updated.get("PRICING_JSON", ""), changes, updated.get("VISION_MODEL"))
     plan = {
         "schema": "cara-model-retirement-plan-v1",
         "hash_format": "sha256:sorted-compact-utf8-json-string-map",

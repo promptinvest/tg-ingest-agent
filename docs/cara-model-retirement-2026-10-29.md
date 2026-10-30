@@ -453,3 +453,38 @@ The configuration change passed the complete154-check offline operator suite,
 with the same two retained-evidence platform skips. Existing environment-parity
 assertions remain, with the explicitly selected vision model; added coverage
 checks all three role overrides, generic synthesis routing and idempotence.
+
+## Distinct Ministral Instruct vision candidate
+
+The Nemotron attempt failed at original classification case40 after three calls:
+plan `3dc6c66f`, raw `caa1bf29`,56 settled migration rows and USD0.0620747 total,
+with no unresolved migration charge. The160-token completion exhausted its native
+cap and returned null final content. Its failed candidate, evidence and private
+selected-matrix proposals remain unselected and immutable.
+
+The successor replaces only retiring Maverick vision with `mistral-3-14B`.
+DigitalOcean's [model catalog](https://docs.digitalocean.com/products/inference/details/models/)
+identifies Ministral3 14B Instruct for serverless inference; its
+[pricing table](https://docs.digitalocean.com/products/inference/details/pricing/)
+lists USD0.20 input/output and USD0.04 cache reads per million tokens. The official
+[Mistral model card](https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512)
+documents vision and distinguishes the Instruct model from the Reasoning variant.
+These references were checked on30October.
+
+The transform adds an explicit `[0.20,0.20]` PRICING_JSON entry only when the
+selected vision model is Ministral. Existing conflicting overrides fail closed;
+all historical rates, commercial overrides, tariff dates and usage rows remain.
+All nine primaries, three selected text-role exceptions and generic Flash1017
+synthesis remain exact. Application `93bf1a6` already handles Mistral delimiters;
+this comparison changes no request, prompt, image, cap, temperature or timeout.
+Its absent default/cache tariff entries must be completed after genuine quality
+passes, followed by fresh full application verification and explicit byte/AST
+parity for native callers before reusing prior paid evidence. No historical
+charge is recalculated or qualification failure reclassified.
+
+The separate comparison may sample original cases38?43 once each using this new
+model. It must authenticate all56 settled predecessor rows and the exact failed
+Nemotron prefix, retaining the shared USD0.25 ceiling, reservations and unknown
+abort. The configuration passed155 offline operator checks with the same two
+platform skips; the new rate-selection regression first failed against the prior
+transform. No paid comparison, release selection or deployment is implied.
