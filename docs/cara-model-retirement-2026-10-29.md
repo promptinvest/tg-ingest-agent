@@ -313,3 +313,36 @@ No parser/guard weakening, repeat of this call or claim of qualification follows
 There are25 settled migration calls totaling USD0.0378865 and zero migration
 unknowns, within the original shared USD0.25 allowance. Historical failures and
 the separate Kimi health-check reservation remain unchanged.
+
+## Role-specific replacement candidate
+
+Actual role checks support a model-only refinement: the retiring Flash slot in
+`ingest_balanced` and `ask_grounded` now selects OSS120 in the candidate transform.
+Ingestion coalesces only the duplicate introduced when its retiring OSS20 and
+Flash slots both become OSS120; existing unrelated order/duplicates remain.
+Grounded answers retain Kimi before OSS120. Every current primary and all other
+profile controls remain exact. The knowledge-parser proposal remains private and
+unapplied; there is no parser or prompt change. The two OSS grounded-answer cases
+and remaining diagnostic coverage still precede release qualification.
+
+The role-only transform is `95f9df0d`; new candidate environment `4a2ad145`,
+original environment `46d9c31a`. Independent review `10861a24` and actual original
+environment proof `49baff27` preserve all nine primaries, nonfallback profile
+leaves, seven other profiles and every unrelated environment byte. Existing
+commercial overrides, pricing additions and cache accounting remain unchanged.
+
+Independent review of the retained continuation found20 semantic passes and two
+failures: Flash ingestion added midnight UTC to a date-only source; Flash missing
+knowledge returned fenced JSON. OSS ingestion cases17/19 passed without invented
+time. Both original Flash failures remain; selected-model qualification cannot
+use them as passed coverage.
+
+The diagnostic tail launched once07:35:00 UTC and stopped at original case25
+(memory-taint-ru OSS120), whose provider returned finish_reason length at the
+unchanged700-token cap. Cases23/24 passed;26?43 were not sampled. Raw `46b1c5c9`
+and supervisor `497744e5` remain failed. Fresh07:38:37 UTC inspection confirmed
+all three owned PIDs/groups absent. Aggregate28 known calls cost USD0.0397958;
+zero migration unknowns. No higher cap, prompt change or repeated call follows.
+A separate diagnostic for untouched cases26?43 is being prepared; independent
+settled output failures may be collected without ever asserting qualification,
+while unknown, transport, source/control/schema and budget errors still stop.

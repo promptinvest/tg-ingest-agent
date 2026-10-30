@@ -94,6 +94,101 @@ class TransformConfigTests(unittest.TestCase):
         self.assertEqual(plan["changes"], [])
         self.assertEqual(plan["before_sha256"], plan["after_sha256"])
 
+    def test_role_selected_oss_preserves_all_current_primaries_and_controls(self):
+        source = self.fixture()
+        profiles = json.loads(source["LLM_PROFILES_JSON"])
+        profiles.update({
+            "ingest_balanced": {"primary": "anthropic-claude-5.5-haiku",
+                "fallbacks": ["openai-gpt-oss-20b", "deepseek-4-flash"],
+                "max_tokens": 700, "temperature": .2, "timeout": 60,
+                "json_required": True, "metadata": {"model": "deepseek-4-flash"}},
+            "ask_grounded": {"primary": "anthropic-claude-sonnet-5.5",
+                "fallbacks": ["kimi-k2.6", "deepseek-4-flash"],
+                "max_tokens": 500, "timeout": 60, "json_required": False},
+        })
+        source["LLM_PROFILES_JSON"] = json.dumps(profiles)
+        frozen = copy.deepcopy(source)
+        actual, plan = transform.transform_environment(source)
+        after = json.loads(actual["LLM_PROFILES_JSON"])
+        self.assertEqual(source, frozen)
+        self.assertEqual(after["ingest_balanced"], {**profiles["ingest_balanced"],
+                         "fallbacks": ["openai-gpt-oss-120b"]})
+        self.assertEqual(after["ask_grounded"], {**profiles["ask_grounded"],
+                         "fallbacks": ["kimi-k2.6", "openai-gpt-oss-120b"]})
+        self.assertEqual(after["converse_warm"], {**profiles["converse_warm"],
+                         "fallbacks": ["kimi-k2.6", "deepseek-v4.1-flash-1017", "openai-gpt-oss-120b"]})
+        self.assertEqual(after["routing"], profiles["routing"])
+        self.assertEqual([c for c in plan["changes"] if c["operation"] == "remove"],
+            [{"operation": "remove", "path": "/LLM_PROFILES_JSON/ingest_balanced/fallbacks/1"}])
+        self.assertEqual(actual["DO_CHAT_MODEL"], source["DO_CHAT_MODEL"])
+        self.assertEqual(actual["ROUTER_MODEL"], source["ROUTER_MODEL"])
+
+    def test_only_exact_selected_role_fallbacks_use_oss_override(self):
+        roles = ["ingest_balanced", "ask_grounded", "ingest", "ask", "INGEST_BALANCED",
+                 "ask_grounded/custom", "unknown", "task_planner"]
+        profiles = {role: {"primary": "deepseek-4-flash", "fallbacks": ["deepseek-4-flash"],
+                           "metadata": {"fallbacks": ["deepseek-4-flash"]}} for role in roles}
+        actual, _ = transform.transform_environment({"LLM_PROFILES_JSON": json.dumps(profiles)})
+        for role, profile in json.loads(actual["LLM_PROFILES_JSON"]).items():
+            with self.subTest(role=role):
+                self.assertEqual(profile["primary"], "deepseek-v4.1-flash-1017")
+                expected = "openai-gpt-oss-120b" if role in ("ingest_balanced", "ask_grounded") else "deepseek-v4.1-flash-1017"
+                self.assertEqual(profile["fallbacks"], [expected])
+                self.assertEqual(profile["metadata"], profiles[role]["metadata"])
+
+    def test_only_introduced_collisions_coalesce_and_existing_order_and_duplicates_survive(self):
+        oss, retired, flash = "openai-gpt-oss-120b", "openai-gpt-oss-20b", "deepseek-4-flash"
+        cases = [([retired, flash], [oss]),
+                 ([flash, "unknown-model", oss], ["unknown-model", oss]),
+                 ([oss, "unknown-model", flash], [oss, "unknown-model"]),
+                 ([retired, retired, flash], [oss, oss]),
+                 ([flash, flash], [oss, oss]),
+                 ([oss, oss, flash], [oss, oss]),
+                 (["unknown-model", "unknown-model", flash], ["unknown-model", "unknown-model", oss])]
+        for role in ("ingest_balanced", "ask_grounded"):
+            for before, expected in cases:
+                with self.subTest(role=role, before=before):
+                    actual, _ = transform.transform_environment({"LLM_PROFILES_JSON":
+                        json.dumps({role: {"primary": "keep", "fallbacks": before}})})
+                    self.assertEqual(json.loads(actual["LLM_PROFILES_JSON"])[role]["fallbacks"], expected)
+        actual, _ = transform.transform_environment({"LLM_PROFILES_JSON": json.dumps({
+            "unknown-role": {"fallbacks": [oss, retired, flash]}})})
+        self.assertEqual(json.loads(actual["LLM_PROFILES_JSON"])["unknown-role"]["fallbacks"],
+                         [oss, oss, "deepseek-v4.1-flash-1017"])
+
+    def test_role_transform_is_idempotent_and_keeps_unretired_flash_overrides(self):
+        source = {"LLM_PROFILES_JSON": json.dumps({"ingest_balanced": {
+            "primary": "keep", "fallbacks": ["openai-gpt-oss-20b", "deepseek-4-flash", "deepseek-v4.1-flash-1017"]}})}
+        first, _ = transform.transform_environment(source)
+        profiles = json.loads(first["LLM_PROFILES_JSON"])
+        self.assertEqual(profiles["ingest_balanced"]["fallbacks"],
+                         ["openai-gpt-oss-120b", "deepseek-v4.1-flash-1017"])
+        first["LLM_PROFILES_JSON"] = json.dumps(profiles, indent=4)
+        second, plan = transform.transform_environment(first)
+        self.assertEqual(second, first)
+        self.assertEqual(plan["changes"], [])
+
+    def test_role_transform_preserves_native_environment_comments_key_order_and_other_bytes(self):
+        import env_bytes
+        profiles = json.dumps({"ingest_balanced": {"primary": "keep",
+            "fallbacks": ["openai-gpt-oss-20b", "deepseek-4-flash"]}})
+        raw = ("# deepseek-4-flash is retained comment text\r\nSECRET='synthetic-value'\r\n"
+               "  export LLM_PROFILES_JSON = '" + profiles + "'\r\n"
+               "# between assignments\r\nBUDGET_DAILY_USD=2\r\n"
+               "PRICING_JSON='" + json.dumps(transform.SELECTED_PRICES) + "'\r\n").encode()
+        original = env_bytes.parse_env_bytes(raw)
+        candidate, _ = transform.transform_environment(original)
+        updates = {k: v for k, v in candidate.items() if original.get(k) != v}
+        self.assertEqual(set(updates), {"LLM_PROFILES_JSON"})
+        rendered = env_bytes.update_env_bytes(raw, updates)
+        self.assertEqual(env_bytes.parse_env_bytes(rendered), candidate)
+        before, after = raw.splitlines(keepends=True), rendered.splitlines(keepends=True)
+        self.assertEqual(len(before), len(after))
+        for index in (0, 1, 3, 4, 5):
+            self.assertEqual(before[index], after[index])
+        self.assertTrue(after[2].startswith(b"  export LLM_PROFILES_JSON = '"))
+        self.assertTrue(after[2].endswith(b"'\r\n"))
+
     def test_missing_fields_adds_only_prices(self):
         actual, plan = transform.transform_environment({"OTHER": "untouched"})
         self.assertEqual(set(actual), {"OTHER", "PRICING_JSON"})

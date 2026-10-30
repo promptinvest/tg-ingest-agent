@@ -109,6 +109,15 @@ one normal correction, but remaining model roles and vision are still unqualifie
 Production remains unchanged. CI separately found a hard-coded test count in
 these living specs; the wording is corrected while dated evidence keeps exact totals.
 
+Actual role checks support a model-only refinement: the retiring Flash slot in
+`ingest_balanced` and `ask_grounded` now selects OSS120 in the candidate transform.
+Ingestion coalesces only the duplicate introduced when its retiring OSS20 and
+Flash slots both become OSS120; existing unrelated order/duplicates remain.
+Grounded answers retain Kimi before OSS120. Every current primary and all other
+profile controls remain exact. The knowledge-parser proposal remains private and
+unapplied; there is no parser or prompt change. The two OSS grounded-answer cases
+and remaining diagnostic coverage still precede release qualification.
+
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
 

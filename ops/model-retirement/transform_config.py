@@ -17,6 +17,12 @@ MODEL_REPLACEMENTS = {
     "deepseek-4-flash": "deepseek-v4.1-flash-1017",
     "openai-gpt-oss-20b": "openai-gpt-oss-120b",
 }
+# These two roles use the selected OSS replacement for their retired Flash slot.
+# Other roles and fresh defaults retain the general retirement mapping above.
+ROLE_FALLBACK_REPLACEMENTS = {
+    "ingest_balanced": {"deepseek-4-flash": "openai-gpt-oss-120b"},
+    "ask_grounded": {"deepseek-4-flash": "openai-gpt-oss-120b"},
+}
 SELECTED_PRICES = {
     "deepseek-v4.1-flash": [0.30, 1.20],
     "deepseek-v4.1-flash-1017": [0.30, 1.20],
@@ -94,6 +100,25 @@ def _record(changes, operation, *parts):
     changes.append({"path": _pointer(*parts), "operation": operation})
 
 
+def _transform_fallbacks(name, fallbacks, changes):
+    replacements = {**MODEL_REPLACEMENTS, **ROLE_FALLBACK_REPLACEMENTS.get(name, {})}
+    selected_role = name in ROLE_FALLBACK_REPLACEMENTS
+    # Keep existing targets at their existing positions. Repeated entries of
+    # one original model remain repeated; only newly converging models coalesce.
+    owners = {model: model for model in fallbacks if model not in replacements}
+    result = []
+    for index, model in enumerate(fallbacks):
+        target = replacements.get(model, model)
+        if selected_role and target != model and target in owners and owners[target] != model:
+            _record(changes, "remove", "LLM_PROFILES_JSON", name, "fallbacks", index)
+            continue
+        owners.setdefault(target, model)
+        if target != model:
+            _record(changes, "replace", "LLM_PROFILES_JSON", name, "fallbacks", index)
+        result.append(target)
+    return result
+
+
 def _transform_profiles(raw, changes):
     profiles = parse_json_object(raw) if raw.strip() else {}
     changed = False
@@ -112,11 +137,10 @@ def _transform_profiles(raw, changes):
             fallbacks = profile["fallbacks"]
             if not isinstance(fallbacks, list) or not all(isinstance(v, str) for v in fallbacks):
                 raise ConfigError("LLM_PROFILES_JSON fallbacks must be a string list")
-            for index, model in enumerate(fallbacks):
-                if model in MODEL_REPLACEMENTS:
-                    fallbacks[index] = MODEL_REPLACEMENTS[model]
-                    _record(changes, "replace", "LLM_PROFILES_JSON", name, "fallbacks", index)
-                    changed = True
+            updated = _transform_fallbacks(name, fallbacks, changes)
+            if updated != fallbacks:
+                profile["fallbacks"] = updated
+                changed = True
     return _dump(profiles) if changed else raw
 
 
