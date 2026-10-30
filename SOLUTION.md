@@ -118,6 +118,14 @@ profile controls remain exact. The knowledge-parser proposal remains private and
 unapplied; there is no parser or prompt change. The two OSS grounded-answer cases
 and remaining diagnostic coverage still precede release qualification.
 
+The memory-curator role now maps its retiring OSS20 fallback to Flash1017,
+coalescing only the duplicate introduced with its retiring Flash fallback.
+OSS120 exhausted the unchanged token cap on the tainted-memory case; Flash1017
+passed that native and semantic check. The separate memory-consolidation role
+keeps OSS120 followed by Flash1017. Every current primary, prompt, output cap,
+timeout and other profile field remains unchanged; the failed response is retained.
+This operator-only candidate change leaves the frozen application source intact.
+
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
 

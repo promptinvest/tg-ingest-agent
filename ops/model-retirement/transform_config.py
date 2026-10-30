@@ -17,11 +17,12 @@ MODEL_REPLACEMENTS = {
     "deepseek-4-flash": "deepseek-v4.1-flash-1017",
     "openai-gpt-oss-20b": "openai-gpt-oss-120b",
 }
-# These two roles use the selected OSS replacement for their retired Flash slot.
+# Selected roles use their verified replacement for each retiring fallback.
 # Other roles and fresh defaults retain the general retirement mapping above.
 ROLE_FALLBACK_REPLACEMENTS = {
     "ingest_balanced": {"deepseek-4-flash": "openai-gpt-oss-120b"},
     "ask_grounded": {"deepseek-4-flash": "openai-gpt-oss-120b"},
+    "memory_curator": {"openai-gpt-oss-20b": "deepseek-v4.1-flash-1017"},
 }
 SELECTED_PRICES = {
     "deepseek-v4.1-flash": [0.30, 1.20],

@@ -195,6 +195,36 @@ class TransformConfigTests(unittest.TestCase):
         self.assertEqual(len(json.loads(actual["PRICING_JSON"])), 3)
         self.assertEqual(len(plan["changes"]), 3)
 
+    def test_memory_curator_selects_flash_without_changing_consolidation_or_controls(self):
+        original = {"primary": "anthropic-claude-5.5-haiku",
+            "fallbacks": ["openai-gpt-oss-20b", "deepseek-4-flash"],
+            "max_tokens": 700, "temperature": 0, "timeout": 60, "json_required": True}
+        profiles = {name: copy.deepcopy(original) for name in
+            ("memory_curator", "memory_consolidate", "memory", "MEMORY_CURATOR", "memory_curator/custom")}
+        source = {"LLM_PROFILES_JSON": json.dumps(profiles), "KEEP": "unchanged"}
+        frozen = copy.deepcopy(source)
+        actual, plan = transform.transform_environment(source)
+        after = json.loads(actual["LLM_PROFILES_JSON"])
+        self.assertEqual(source, frozen)
+        for name in profiles:
+            expected = ["deepseek-v4.1-flash-1017"] if name == "memory_curator" else ["openai-gpt-oss-120b", "deepseek-v4.1-flash-1017"]
+            self.assertEqual(after[name], {**profiles[name], "fallbacks": expected})
+        self.assertEqual(actual["KEEP"], "unchanged")
+        self.assertIn({"operation": "remove", "path": "/LLM_PROFILES_JSON/memory_curator/fallbacks/1"}, plan["changes"])
+
+    def test_memory_override_only_coalesces_new_collisions_and_preserves_existing_targets(self):
+        old, old_flash, flash = "openai-gpt-oss-20b", "deepseek-4-flash", "deepseek-v4.1-flash-1017"
+        for before, expected in (([old, old_flash], [flash]), ([old_flash, old], [flash]),
+                ([old, "other", flash], ["other", flash]), ([old, old, old_flash], [flash, flash]),
+                ([flash, flash, old], [flash, flash]), (["openai-gpt-oss-120b", old], ["openai-gpt-oss-120b", flash])):
+            with self.subTest(before=before):
+                actual, _ = transform.transform_environment({"LLM_PROFILES_JSON": json.dumps({
+                    "memory_curator": {"primary": "keep", "fallbacks": before}})})
+                self.assertEqual(json.loads(actual["LLM_PROFILES_JSON"])["memory_curator"]["fallbacks"], expected)
+                again, plan = transform.transform_environment(actual)
+                self.assertEqual(again, actual)
+                self.assertEqual(plan["changes"], [])
+
     def test_existing_equal_override_is_kept_byte_exact(self):
         source = {"PRICING_JSON": '{"deepseek-v4.1-flash":["0.30", "1.20"], '
                   '"deepseek-v4.1-flash-1017":[0.3, 1.2], "openai-gpt-oss-120b":[0.1,0.7]}'}

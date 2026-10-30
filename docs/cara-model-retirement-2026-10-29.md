@@ -346,3 +346,28 @@ zero migration unknowns. No higher cap, prompt change or repeated call follows.
 A separate diagnostic for untouched cases26?43 is being prepared; independent
 settled output failures may be collected without ever asserting qualification,
 while unknown, transport, source/control/schema and budget errors still stop.
+
+## Memory-curator replacement refinement
+
+The unused-case diagnostic subsequently passed the native and independent semantic
+checks for case26 (Flash1017 memory taint) and cases27/28 (OSS120/Flash1017 memory
+consolidation). The selected candidate therefore changes only `memory_curator`:
+its retiring OSS20 and Flash slots converge on one Flash1017 fallback after the
+unchanged Haiku primary. The separate `memory_consolidate` role retains OSS120
+followed by Flash1017. Other roles, all nine primaries, prompts, token caps,
+temperatures, timeouts and existing unretired overrides remain unchanged.
+
+Original case25 remains failed at its native700-token cap. The two-role candidate
+`4a2ad145` and its independent ASK comparison remain immutable evidence; the new
+candidate must be derived separately from protected original environment
+`46d9c31a`, with fresh byte/profile proof. This change affects only the operator
+transform and leaves application `93bf1a6` / archive `165723ab` frozen. It does not
+accept a selected model matrix, change the strict unknown-usage gate, apply the
+private row25046 proposal, or deploy the candidate.
+
+The new transform is `9526e71d`; pure original-environment proof `aae42cad`
+derives candidate `8e458054` and independently reconstructs prior candidate
+`4a2ad145` exactly. Only the curator fallback list differs between candidates.
+All42 focused transform/release/selection checks passed; the complete offline
+operator suite ran151 checks successfully with the same two legacy fixture skips.
+Both new memory-role regressions first failed against the prior mapping.
