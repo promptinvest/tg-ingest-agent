@@ -371,3 +371,28 @@ derives candidate `8e458054` and independently reconstructs prior candidate
 All42 focused transform/release/selection checks passed; the complete offline
 operator suite ran151 checks successfully with the same two legacy fixture skips.
 Both new memory-role regressions first failed against the prior mapping.
+
+## Vision and task-synthesis replacement candidates
+
+Actual remaining-case diagnostics exposed additional replacement failures: vision
+classification exhausted the unchanged160-token cap, an extraction failed response
+validation, and a synthesis response contained an invalid optional field despite
+native normalization. These outcomes are retained and do not qualify the selected
+roles. The configuration-only successor maps retired `llama-4-maverick` vision to
+`anthropic-claude-5.5-haiku`, preserving its existing USD0.50/2.50 per-million input/
+output override, and maps the retiring Flash fallback in `task_synthesis` to
+OSS120. All nine current primaries, other role mappings, native prompts, images,
+caps, temperatures, timeouts and JSON controls remain unchanged.
+
+Separate comparisons will use original synthesis cases35–37 with OSS120 and
+vision cases38–43 with Haiku, at most one request per case. They must bind the
+actual post-ASK cumulative ledger under the unchanged shared USD0.25 ceiling;
+earlier failed or incomplete outcomes contribute spend only. No comparison call,
+selected-matrix acceptance, unknown allowance or deployment is implied by this
+configuration publication. Application `93bf1a6` remains frozen.
+
+Transform `0b4d61b4` passed44 focused transform/release/selection checks and the
+complete153-check offline operator suite with the same two fixture skips. Both
+new regression cases first failed against the previous mapping. The existing
+environment-parity test retains its assertions with the explicitly selected
+Haiku vision value; no quality or preservation assertion is removed.

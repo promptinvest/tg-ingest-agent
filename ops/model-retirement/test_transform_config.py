@@ -47,7 +47,7 @@ class TransformConfigTests(unittest.TestCase):
         actual, plan = transform.transform_environment(source)
         self.assertEqual(source, frozen)
         expected = copy.deepcopy(source)
-        expected["VISION_MODEL"] = "deepseek-v4.1-flash"
+        expected["VISION_MODEL"] = "anthropic-claude-5.5-haiku"
         expected_profiles = json.loads(source["LLM_PROFILES_JSON"])
         expected_profiles["converse_warm"]["fallbacks"] = [
             "kimi-k2.6", "deepseek-v4.1-flash-1017", "openai-gpt-oss-120b"]
@@ -194,6 +194,26 @@ class TransformConfigTests(unittest.TestCase):
         self.assertEqual(set(actual), {"OTHER", "PRICING_JSON"})
         self.assertEqual(len(json.loads(actual["PRICING_JSON"])), 3)
         self.assertEqual(len(plan["changes"]), 3)
+
+    def test_task_synthesis_replaces_retiring_flash_only_with_oss_and_keeps_controls(self):
+        profile = {"primary": "anthropic-claude-sonnet-5.5", "fallbacks": ["kimi-k2.6", "deepseek-4-flash"],
+                   "max_tokens": 1200, "temperature": 0, "timeout": 90, "json_required": True}
+        roles = {name: copy.deepcopy(profile) for name in ("task_synthesis", "task_planner", "task_synthesis/custom")}
+        actual, _ = transform.transform_environment({"LLM_PROFILES_JSON": json.dumps(roles)})
+        after = json.loads(actual["LLM_PROFILES_JSON"])
+        for name in roles:
+            target = "openai-gpt-oss-120b" if name == "task_synthesis" else "deepseek-v4.1-flash-1017"
+            self.assertEqual(after[name], {**profile, "fallbacks": ["kimi-k2.6", target]})
+
+    def test_retired_vision_selects_haiku_without_repricing_existing_commercial_override(self):
+        haiku = "anthropic-claude-5.5-haiku"
+        for model in ("llama-4-maverick", "deepseek-v4.1-flash", haiku, "custom-vision", "llama-4-maverick:custom"):
+            source = self.fixture();source["VISION_MODEL"] = model
+            actual, _ = transform.transform_environment(source)
+            self.assertEqual(actual["VISION_MODEL"], haiku if model == "llama-4-maverick" else model)
+            self.assertEqual(json.loads(actual["PRICING_JSON"])[haiku], [0.5, 2.5])
+            self.assertEqual(actual["ROUTER_MODEL"], source["ROUTER_MODEL"])
+            self.assertEqual(actual["DO_CHAT_MODEL"], source["DO_CHAT_MODEL"])
 
     def test_memory_curator_selects_flash_without_changing_consolidation_or_controls(self):
         original = {"primary": "anthropic-claude-5.5-haiku",

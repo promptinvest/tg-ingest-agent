@@ -126,6 +126,13 @@ keeps OSS120 followed by Flash1017. Every current primary, prompt, output cap,
 timeout and other profile field remains unchanged; the failed response is retained.
 This operator-only candidate change leaves the frozen application source intact.
 
+The candidate also selects Haiku5.5 for retiring Maverick vision and OSS120 for
+the retiring task-synthesis Flash fallback. The existing Haiku pricing override
+stays unchanged. Earlier vision outputs exhausted native caps or failed response
+checks; a synthesis output included an invalid optional field. Those outcomes
+remain failed evidence. Fresh comparisons use the same prompts, images and caps;
+the configuration change alone does not establish replacement quality.
+
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
 

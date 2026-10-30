@@ -19,7 +19,7 @@ class EnvironmentTests(unittest.TestCase):
         self.assertTrue(after.startswith(b'# preserved\r\nSECRET=private-example\r\nDO_CHAT_MODEL=deepseek-4-pro\r\n'))
         parsed = release.parse_env_bytes(after)
         self.assertEqual(json.loads(parsed['LLM_PROFILES_JSON'])['router_fast']['primary'], 'primary')
-        self.assertEqual(parsed['VISION_MODEL'], 'deepseek-v4.1-flash')
+        self.assertEqual(parsed['VISION_MODEL'], 'anthropic-claude-5.5-haiku')
         self.assertEqual(proof['before_bytes_sha256'], hashlib.sha256(raw).hexdigest())
         self.assertNotIn('private-example', json.dumps(proof))
 
