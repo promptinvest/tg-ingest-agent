@@ -156,15 +156,22 @@ It does not rerun text cases or establish model-quality acceptance by configurat
 The Nemotron comparison also stopped at classification case40: its unchanged
 160-token allowance produced no final answer. All three charges and the failed
 result remain, bringing cumulative settled migration usage to USD0.0620747.
-The next vision-only candidate maps retiring Maverick to `mistral-3-14B`
-(Ministral3 14B Instruct), with an explicit USD0.20/0.20 input/output override
-only when that vision model is selected. Conflicting existing overrides fail
-closed; all existing prices, nine primaries and the three text-role exceptions
-remain unchanged. The frozen application needs no request or delimiter change
-for this comparison. Its missing default/cache tariff entries remain a release
-prerequisite after quality passes, with fresh full verification and a source-parity
-bridge for unchanged native callers. Six distinct vision comparisons still precede
-acceptance; no new model call or deployment is claimed by this configuration.
+The Ministral candidate was rejected by DigitalOcean with HTTP400 because that
+endpoint does not support image input. Its single zero-cost rejected reservation
+is preserved; no vision case passed and its proposed runtime tariffs were not applied.
+The successor candidate maps only retiring Maverick vision to `openai-gpt-6-luna`.
+All nine primaries, text-role selections, prompts, images, output caps, temperature,
+timeouts, budgets and existing overrides remain. The gateway adds only for this
+exact slug `reasoning_effort: none` and uses the same numeric output limit in
+`max_completion_tokens`; other model request bytes are unchanged. This preserves
+the small vision limits without spending them on the model's default reasoning.
+Its explicit USD0.20/0.75 input/output guard rate covers the long-context ceiling.
+Separate measured standard tariffs use USD0.10/0.50 input/output, USD0.01 cache
+reads and USD0.125 cache writes through272k input tokens; above that boundary they
+use USD0.20/0.75, USD0.02 and USD0.25. Missing counters remain unknown; prior tariff
+records and ledger rows are never recalculated. Fresh full verification, native
+request parity for retained text evidence, and the six original vision checks must
+pass before release. No qualification or deployment is implied by preparing this code.
 
 ## October 29 - Prompt-cache reporting accepted
 

@@ -30,7 +30,8 @@ _HOSTED_RATES = {
 }
 _ANTHROPIC = {"anthropic-claude-5.5-haiku", "anthropic-claude-sonnet-5.5"}
 _SOL = "openai-gpt-6-1-sol"
-_MODELS = set(_HOSTED_RATES) | _ANTHROPIC | {_SOL}
+_LUNA = "openai-gpt-6-luna"
+_MODELS = set(_HOSTED_RATES) | _ANTHROPIC | {_SOL, _LUNA}
 
 
 class _InvalidUsage(ValueError):
@@ -158,7 +159,10 @@ def _rates(model, total):
     elif model == "anthropic-claude-sonnet-5.5":
         rates = (2, 10, .2, 2.5, 4)
     else:
-        rate_in, rate_out, read, write = (2, 10, .1, 2.5) if total <= 272_000 else (4, 15, .2, 5)
+        if model == _LUNA:
+            rate_in, rate_out, read, write = (.1, .5, .01, .125) if total <= 272_000 else (.2, .75, .02, .25)
+        else:
+            rate_in, rate_out, read, write = (2, 10, .1, 2.5) if total <= 272_000 else (4, 15, .2, 5)
         return {"input_per_million": rate_in, "output_per_million": rate_out,
                 "cache_read_per_million": read, "cache_write_per_million": write,
                 "cache_write_5m_per_million": None, "cache_write_1h_per_million": None,
@@ -220,7 +224,8 @@ def capture(model, usage, *, provider_url, response_model=None):
     if response_model is not None and response_model != model:
         result.update(status="unsupported", reason="response_model_mismatch")
         return result
-    result.update(tariff_date=TARIFF_DATE, tariff_source=TARIFF_SOURCE)
+    result.update(tariff_date="2026-10-30" if model == _LUNA else TARIFF_DATE,
+                  tariff_source=TARIFF_SOURCE)
     if usage is None:
         return result
     if not isinstance(usage, dict):
@@ -234,5 +239,6 @@ def capture(model, usage, *, provider_url, response_model=None):
         # partial counters that a future report might accidentally count as known.
         result = _record(model)
         result.update(status="invalid", reason=str(exc),
-                      tariff_date=TARIFF_DATE, tariff_source=TARIFF_SOURCE)
+                      tariff_date="2026-10-30" if model == _LUNA else TARIFF_DATE,
+                      tariff_source=TARIFF_SOURCE)
     return result

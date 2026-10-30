@@ -47,7 +47,7 @@ class TransformConfigTests(unittest.TestCase):
         actual, plan = transform.transform_environment(source)
         self.assertEqual(source, frozen)
         expected = copy.deepcopy(source)
-        expected["VISION_MODEL"] = "mistral-3-14B"
+        expected["VISION_MODEL"] = "openai-gpt-6-luna"
         expected_profiles = json.loads(source["LLM_PROFILES_JSON"])
         expected_profiles["converse_warm"]["fallbacks"] = [
             "kimi-k2.6", "deepseek-v4.1-flash-1017", "openai-gpt-oss-120b"]
@@ -56,7 +56,7 @@ class TransformConfigTests(unittest.TestCase):
             "deepseek-v4.1-flash": [0.30, 1.20],
             "deepseek-v4.1-flash-1017": [0.30, 1.20],
             "openai-gpt-oss-120b": [0.10, 0.70],
-            "mistral-3-14B": [0.20, 0.20],
+            "openai-gpt-6-luna": [0.20, 0.75],
         })
         self.assertEqual(json.loads(actual.pop("LLM_PROFILES_JSON")), expected_profiles)
         self.assertEqual(json.loads(actual.pop("PRICING_JSON")), expected_prices)
@@ -70,7 +70,7 @@ class TransformConfigTests(unittest.TestCase):
             "/PRICING_JSON/deepseek-v4.1-flash",
             "/PRICING_JSON/deepseek-v4.1-flash-1017",
             "/PRICING_JSON/openai-gpt-oss-120b",
-            "/PRICING_JSON/mistral-3-14B",
+            "/PRICING_JSON/openai-gpt-6-luna",
         })
 
     def test_exact_model_matches_only(self):
@@ -207,13 +207,13 @@ class TransformConfigTests(unittest.TestCase):
             target = "deepseek-v4.1-flash-1017"
             self.assertEqual(after[name], {**profile, "fallbacks": ["kimi-k2.6", target]})
 
-    def test_retired_vision_selects_ministral_without_repricing_existing_commercial_override(self):
+    def test_retired_vision_selects_luna_without_repricing_existing_commercial_override(self):
         haiku = "anthropic-claude-5.5-haiku"
-        ministral = "mistral-3-14B"
-        for model in ("llama-4-maverick", "deepseek-v4.1-flash", haiku, "nemotron-nano-12b-v2-vl", ministral, "custom-vision", "llama-4-maverick:custom"):
+        luna = "openai-gpt-6-luna"
+        for model in ("llama-4-maverick", "deepseek-v4.1-flash", haiku, "nemotron-nano-12b-v2-vl", luna, "custom-vision", "llama-4-maverick:custom"):
             source = self.fixture();source["VISION_MODEL"] = model
             actual, _ = transform.transform_environment(source)
-            self.assertEqual(actual["VISION_MODEL"], ministral if model == "llama-4-maverick" else model)
+            self.assertEqual(actual["VISION_MODEL"], luna if model == "llama-4-maverick" else model)
             self.assertEqual(json.loads(actual["PRICING_JSON"])[haiku], [0.5, 2.5])
             self.assertEqual(actual["ROUTER_MODEL"], source["ROUTER_MODEL"])
             self.assertEqual(actual["DO_CHAT_MODEL"], source["DO_CHAT_MODEL"])
@@ -227,8 +227,8 @@ class TransformConfigTests(unittest.TestCase):
         control = dict(source, VISION_MODEL="anthropic-claude-5.5-haiku")
         unchanged_haiku, _ = transform.transform_environment(control)
         expected_prices = json.loads(unchanged_haiku["PRICING_JSON"])
-        expected_prices["mistral-3-14B"] = [0.2, 0.2]
-        self.assertEqual(actual, {**unchanged_haiku, "VISION_MODEL": "mistral-3-14B",
+        expected_prices["openai-gpt-6-luna"] = [0.2, 0.75]
+        self.assertEqual(actual, {**unchanged_haiku, "VISION_MODEL": "openai-gpt-6-luna",
             "PRICING_JSON": json.dumps(expected_prices, separators=(",", ":"))})
         current = json.loads(actual["LLM_PROFILES_JSON"])
         for name, profile in current.items():
@@ -239,14 +239,14 @@ class TransformConfigTests(unittest.TestCase):
         self.assertEqual(repeated, actual)
         self.assertEqual(plan["changes"], [])
 
-    def test_ministral_price_is_explicit_only_for_selected_vision_and_conflicts_fail_closed(self):
+    def test_luna_price_is_explicit_only_for_selected_vision_and_conflicts_fail_closed(self):
         selected, _ = transform.transform_environment({"VISION_MODEL": "llama-4-maverick", "PRICING_JSON": '{"custom":[9,10]}'})
-        self.assertEqual(json.loads(selected["PRICING_JSON"])["mistral-3-14B"], [0.2, 0.2])
+        self.assertEqual(json.loads(selected["PRICING_JSON"])["openai-gpt-6-luna"], [0.2, 0.75])
         self.assertEqual(json.loads(selected["PRICING_JSON"])["custom"], [9, 10])
         other, _ = transform.transform_environment({"VISION_MODEL": "nemotron-nano-12b-v2-vl"})
-        self.assertNotIn("mistral-3-14B", json.loads(other["PRICING_JSON"]))
+        self.assertNotIn("openai-gpt-6-luna", json.loads(other["PRICING_JSON"]))
         with self.assertRaises(transform.ConfigError):
-            transform.transform_environment({"VISION_MODEL": "llama-4-maverick", "PRICING_JSON": '{"mistral-3-14B":[0.3,0.2]}'})
+            transform.transform_environment({"VISION_MODEL": "llama-4-maverick", "PRICING_JSON": '{"openai-gpt-6-luna":[0.3,0.2]}'})
 
     def test_memory_curator_selects_flash_without_changing_consolidation_or_controls(self):
         original = {"primary": "anthropic-claude-5.5-haiku",

@@ -488,3 +488,38 @@ Nemotron prefix, retaining the shared USD0.25 ceiling, reservations and unknown
 abort. The configuration passed155 offline operator checks with the same two
 platform skips; the new rate-selection regression first failed against the prior
 transform. No paid comparison, release selection or deployment is implied.
+
+
+## Luna vision compatibility and pricing preparation
+
+The Ministral comparison failed immediately at original case38: HTTP400 stated
+that the endpoint does not support image input. Cases39?43 were not attempted.
+Raw `28670ac3`, independent review `2929b112` and the original failed supervisor
+remain. The cumulative ledger has57 rows:56 chat charges and rejected_chat25134
+at zero cost, totaling USD0.0620747, with zero unresolved migration reservations.
+All owned processes and groups were absent at09:41:10UTC. No Ministral default or
+cache tariff proposal was applied, and the failed candidate is not selected.
+
+The next distinct vision candidate is `openai-gpt-6-luna`. The30October
+[DigitalOcean catalog](https://docs.digitalocean.com/products/inference/details/models/)
+and a free GET `/v1/models` confirm that exact slug is available to this credential.
+The [OpenAI model page](https://developers.openai.com/api/docs/models/gpt-6-luna)
+documents image input, Chat Completions and reasoning none through max, with medium
+as default. Its [migration guide](https://developers.openai.com/api/docs/guides/latest-model)
+permits temperature at reasoning none. DigitalOcean's
+[reasoning guide](https://docs.digitalocean.com/products/inference/how-to/use-reasoning/)
+and [serverless schema](https://docs.digitalocean.com/products/inference/reference/api/serverless-inference/)
+accept `reasoning_effort` and `max_completion_tokens`. The exact-slug gateway branch
+sets none and preserves the native numeric caps400/160/1600 and temperature0.
+No other model payload, native caller, prompt, parser, image, timeout or budget is changed.
+
+The [DO tariff](https://docs.digitalocean.com/products/inference/details/pricing/)
+is USD0.10 input/0.50 output/0.01 read/0.125 write per million through272k input;
+above that boundary it is0.20/0.75/0.02/0.25. The guard uses the conservative
+long-context input/output ceiling, while new measured estimates use the actual tier.
+Old tariff dates, overrides and usage records remain exact. The new request and
+money tests first failed against the old source; the two mixed-cache fixture
+expected costs were corrected by direct arithmetic before the green run. The39
+focused gateway/cache checks then passed offline. Fresh Linux full verification
+and six distinct native vision comparisons remain required. GPT-4o mini and GPT-4.1
+were not selected because their upstream shutdown is14January2027; no calls were made.

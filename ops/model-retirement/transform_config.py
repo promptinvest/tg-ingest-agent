@@ -169,8 +169,8 @@ def _transform_prices(raw, changes, vision_model=None):
     parsed = {model: _price_pair(pair) for model, pair in prices.items()}
     changed = False
     selected_prices = dict(SELECTED_PRICES)
-    if vision_model == "mistral-3-14B":
-        selected_prices[vision_model] = [0.20, 0.20]
+    if vision_model == "openai-gpt-6-luna":
+        selected_prices[vision_model] = [0.20, 0.75]
     for model, pair in selected_prices.items():
         if model in parsed:
             if parsed[model] != _price_pair(pair):
@@ -202,7 +202,7 @@ def transform_environment(environment):
             updated[key] = MODEL_REPLACEMENTS[updated[key]]
             _record(changes, "replace", key)
     if updated.get("VISION_MODEL") == "llama-4-maverick":
-        updated["VISION_MODEL"] = "mistral-3-14B"
+        updated["VISION_MODEL"] = "openai-gpt-6-luna"
         _record(changes, "replace", "VISION_MODEL")
     if "LLM_PROFILES_JSON" in updated:
         updated["LLM_PROFILES_JSON"] = _transform_profiles(updated["LLM_PROFILES_JSON"], changes)

@@ -51,6 +51,8 @@ DEFAULT_PRICING = {
     "anthropic-claude-4.5-sonnet": (3.0, 15.0),
     "openai-gpt-4o": (2.5, 10.0),
     "openai-gpt-4o-mini": (0.15, 0.6),
+    # Conservative long-context guard ceiling; measured tariffs are tiered.
+    "openai-gpt-6-luna": (0.20, 0.75),
     # Open-weight models Cara actually runs today
     "deepseek-v4-pro": (1.74, 3.48),
     "deepseek-v4.1-flash-1017": (0.30, 1.20),
@@ -317,6 +319,11 @@ def prepare_chat(cfg, conn, skill, messages, max_tokens=300, model=None, tempera
         "temperature": temperature,
         "stream": False,
     }
+    if model == "openai-gpt-6-luna":
+        # Preserve the small vision output caps without consuming them on
+        # reasoning. Other model requests retain their existing wire format.
+        payload["max_completion_tokens"] = payload.pop("max_tokens")
+        payload["reasoning_effort"] = "none"
     request = Request(
         f"{_base_url(cfg)}/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
