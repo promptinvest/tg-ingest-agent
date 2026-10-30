@@ -6,6 +6,7 @@ requests keep the original first-pass checks. No paid sampling is repeated.
 """
 import argparse
 from contextlib import redirect_stdout
+from datetime import datetime
 import hashlib
 import importlib
 import io
@@ -14,6 +15,7 @@ from pathlib import Path
 import re
 import sqlite3
 import sys
+from unittest import mock
 
 sys.dont_write_bytecode = True
 MODE = 'full_native_retirement'
@@ -157,6 +159,26 @@ def correction_case(case, captured):
     return dict(case, messages=captured['messages'], input_sha256=captured['input_sha256'])
 
 
+def replay_retained(repair, source, case, responses, overrides):
+    """Reconstruct the confirmed synthetic task-delivery clock only."""
+    source = Path(source).resolve()
+    tasks = importlib.import_module('tasks_svc')
+    require(Path(tasks.__file__).resolve() == source / 'tasks_svc.py',
+            'task replay module must come from the frozen source')
+    frozen_utc = repair._clock_from_case(case, overrides)
+
+    class FixtureTaskClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen_utc.astimezone(tz) if tz is not None else frozen_utc.replace(tzinfo=None)
+
+    # The original repair helper already freezes its other confirmed fixture
+    # clocks. This additional task timestamp is scoped to synthetic replay;
+    # paid requests and original source files remain outside the patch.
+    with mock.patch.object(tasks, 'datetime', FixtureTaskClock):
+        return repair.replay_with_responses(source, case, responses, overrides)
+
+
 def require_terminal(proof, count):
     require(proof.get('status') == 'functional_passed_pending_manual'
             and proof.get('deterministic_fallback') is False and proof.get('effects_preserved') is True
@@ -202,7 +224,7 @@ def prepare(prior, output, attempt):
     # Capture and validate the actual existing correction before authorizing a
     # paid continuation. Frozen clock and seed order reproduce every first byte.
     with redirect_stdout(io.StringIO()):
-        proof = repair.replay_with_responses(source, inputs['cases'][FAIL_INDEX]['case'], [retained[FAIL_INDEX]['raw']],
+        proof = replay_retained(repair, source, inputs['cases'][FAIL_INDEX]['case'], [retained[FAIL_INDEX]['raw']],
                                              inputs['prepared']['config_overrides'])
     require(proof['status'] == 'needs_next', 'retained failure must require its existing native correction')
     correction_case(inputs['cases'][FAIL_INDEX], proof['needs_next'])
@@ -250,14 +272,14 @@ def run_case(q, repair, validator, fixtures, cfg, source, output, overrides, ind
     elif index == FAIL_INDEX:
         require(first is not None and case['id'] == FAIL_CASE and first['status'] == 'failed',
                 'exact eighth retained failure required')
-        proof = repair.replay_with_responses(source, case['case'], [raw], overrides)
+        proof = replay_retained(repair, source, case['case'], [raw], overrides)
         result['replay_first'] = proof
         require(proof['status'] == 'needs_next', 'only the existing eighth corrective request is authorized')
         corrected = correction_case(case, proof['needs_next'])
         phase = {'phase': 'correction', 'origin': 'new', 'request': request(corrected),
                  'result': paid(corrected, 'correction')}
         result['phases'].append(phase)
-        proof = repair.replay_with_responses(source, case['case'], [raw, phase['result']['raw']], overrides)
+        proof = replay_retained(repair, source, case['case'], [raw, phase['result']['raw']], overrides)
         result['functional'] = proof
         final = require_terminal(proof, 2)
     else:
@@ -297,7 +319,7 @@ def execute(output, expected_plan_sha):
     require(sha(read(output / 'retained-replay.json')) == plan['retained_replay_sha256'], 'retained replay changed')
     validate_inputs(q, output, plan, inputs)
     with redirect_stdout(io.StringIO()):
-        replay = repair.replay_with_responses(Path(plan['source']), inputs['cases'][FAIL_INDEX]['case'],
+        replay = replay_retained(repair, Path(plan['source']), inputs['cases'][FAIL_INDEX]['case'],
                                              [retained[FAIL_INDEX]['raw']], inputs['prepared']['config_overrides'])
     require(sha(canonical(replay)) == plan['retained_replay_sha256'] and replay['status'] == 'needs_next',
             'retained correction prompt changed before execution')

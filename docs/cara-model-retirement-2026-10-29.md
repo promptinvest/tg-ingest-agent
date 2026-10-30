@@ -259,3 +259,27 @@ The new companion, gate and mode dispatch passed all 141 local operator checks
 (139 passed, two unchanged retained-evidence fixture skips). Source review covers
 the exact eight-response reuse, one correction boundary, complete native outcome
 and cumulative 46-row accounting expected only after all 43 cases pass.
+
+## Continuation blocked before launch
+
+Prelaunch review of operator `c38ddaf` found that the uncertain-delivery fixture
+used wall time for `assistant_tasks.updated_at`. Its two network-isolated replays
+had identical prompts and outcomes but different protected snapshot hashes. Both
+exact-head CI runs and the 141-check Linux suite had passed; those results remain
+valid test history but do not overcome this newly reproduced source finding.
+The first continuation plan was blocked before launch (`c4b5b999`); no additional
+model call occurred. A companion-only fixture-clock correction is being prepared
+without changing the application, original repair helper or any proof comparison.
+
+Audit `4644c937` proves the exact differing writer at tasks_svc.py:965;
+`repair_cases.py` had not frozen that fixture module clock. Original prepared
+plan `617432d8`, manifest `fb35447f`, source and both complete proofs remain.
+The original seven native passes and eighth failure remain unchanged.
+
+The companion now freezes only that confirmed synthetic task-delivery clock to
+the retained request time, restoring it after replay. All four replay calls retain
+the full canonical-proof and protected-state checks. Two actual network-isolated
+replays produced identical complete proofs and snapshots (`5fc6934b`), with the
+same exact corrective prompt and all 376 application files unchanged. The full
+operator suite passed 144 tests (142 passes, the same two fixture skips). New
+source-bound preparation and launch review remain required; no paid call occurred.

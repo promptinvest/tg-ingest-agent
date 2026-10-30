@@ -1,5 +1,11 @@
 """Offline coverage for the exact qualification3 continuation boundary."""
+import ast
 import copy
+from contextlib import closing
+from datetime import datetime, timezone
+import sqlite3
+import sys
+import types
 from pathlib import Path
 import unittest
 from unittest import mock
@@ -10,6 +16,12 @@ import prepare_selection as selection
 
 
 class ContinuationTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(n, 'replay_retained',
+            side_effect=lambda repair, *args: repair.replay_with_responses(*args))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def case(self, identity=n.FAIL_CASE):
         messages = [{'role': 'user', 'content': 'delivery status?'}]
         return {'id': identity, 'kind': 'text', 'case': {'id': identity.split('__')[0]},
@@ -118,6 +130,68 @@ class ContinuationTests(unittest.TestCase):
                 n.verify_carried_ledger(changed, retained, 'old')
         with self.assertRaises(ValueError):
             n.verify_carried_ledger(actual, retained[:7], 'old')
+
+
+class RetainedTaskClockTests(unittest.TestCase):
+    def module(self, clock):
+        source = Path(__file__).resolve().parents[2]
+        filename = source / 'tasks_svc.py'
+        method = next(node for node in ast.walk(ast.parse(filename.read_text(encoding='utf-8')))
+                      if isinstance(node, ast.FunctionDef) and node.name == '_mark_task_delivery_ambiguous')
+        module = types.ModuleType('tasks_svc')
+        module.__file__ = str(filename)
+        module.datetime, module.timezone = clock, timezone
+        # Execute the exact application method over synthetic in-memory rows.
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(filename), 'exec'), module.__dict__)
+        return source, module
+
+    def test_actual_delivery_timestamp_and_whole_proof_stable_across_distinct_base_clocks(self):
+        frozen = datetime(2026, 10, 30, 5, 17, tzinfo=timezone.utc)
+        case = {'id': 'assistant-uncertain-delivery-en', 'messages': [{'role': 'user', 'content': 'same request'}]}
+        proofs, baseline_timestamps = [], []
+        for hour in (6, 9):
+            base = datetime(2026, 10, 30, hour, 2, 3, tzinfo=timezone.utc)
+            class DifferentBaseClock(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return base.astimezone(tz) if tz is not None else base.replace(tzinfo=None)
+            source, module = self.module(DifferentBaseClock)
+            def invoke(_source, selected, responses, overrides):
+                with closing(sqlite3.connect(':memory:')) as conn:
+                    conn.execute('CREATE TABLE assistant_tasks(id INTEGER, delivery_status TEXT, next_action_at TEXT, updated_at TEXT)')
+                    conn.execute("INSERT INTO assistant_tasks VALUES(1,'sending','due','old')")
+                    module._mark_task_delivery_ambiguous(types.SimpleNamespace(conn=conn), 1)
+                    rows = conn.execute('SELECT * FROM assistant_tasks').fetchall()
+                return {'requests': selected['messages'], 'responses': responses,
+                        'protected_before_sha256': n.sha(n.canonical(rows)), 'state': rows}
+            baseline_timestamps.append(invoke(source, case, ['retained'], {})['state'][0][3])
+            repair = types.SimpleNamespace(_clock_from_case=mock.Mock(return_value=frozen), replay_with_responses=mock.Mock(side_effect=invoke))
+            with mock.patch.dict(sys.modules, {'tasks_svc': module}):
+                proofs.append(n.replay_retained(repair, source, case, ['retained'], {}))
+            self.assertIs(module.datetime, DifferentBaseClock)
+            repair._clock_from_case.assert_called_once_with(case, {})
+            repair.replay_with_responses.assert_called_once_with(source, case, ['retained'], {})
+        self.assertNotEqual(*baseline_timestamps)
+        self.assertEqual(n.canonical(proofs[0]), n.canonical(proofs[1]))
+        self.assertEqual(proofs[0]['requests'], case['messages'])
+        self.assertEqual(proofs[0]['state'], [(1, 'ambiguous', None, frozen.isoformat())])
+
+    def test_foreign_module_cannot_reach_replay(self):
+        source, module = self.module(datetime)
+        module.__file__ = str(source / 'foreign' / 'tasks_svc.py')
+        repair = mock.Mock()
+        with mock.patch.dict(sys.modules, {'tasks_svc': module}), self.assertRaisesRegex(ValueError, 'frozen source'):
+            n.replay_retained(repair, source, {}, ['retained'], {})
+        repair.replay_with_responses.assert_not_called()
+
+    def test_original_task_clock_is_restored_when_replay_fails(self):
+        source, module = self.module(datetime)
+        repair = mock.Mock()
+        repair._clock_from_case.return_value = datetime(2026, 10, 30, tzinfo=timezone.utc)
+        repair.replay_with_responses.side_effect = AssertionError('protected state changed')
+        with mock.patch.dict(sys.modules, {'tasks_svc': module}), self.assertRaisesRegex(AssertionError, 'protected state changed'):
+            n.replay_retained(repair, source, {}, ['retained'], {})
+        self.assertIs(module.datetime, datetime)
 
 
 class RetirementDispatchTests(unittest.TestCase):
