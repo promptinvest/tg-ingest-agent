@@ -39,7 +39,7 @@ class ConfigTests(unittest.TestCase):
     def test_load_config_defaults(self):
         cfg = make_config()
         self.assertEqual(cfg.allowed_chat_ids, {111, 222})
-        self.assertEqual(cfg.do_model, "deepseek-4-flash")
+        self.assertEqual(cfg.do_model, "deepseek-v4.1-flash-1017")
         self.assertEqual(cfg.router_model, cfg.do_model)
         self.assertEqual(cfg.poll_timeout, 50)
         self.assertEqual(cfg.seed_categories, [])

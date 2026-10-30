@@ -1,5 +1,178 @@
 # Cara — Solution Specification
 
+## October 29 - Retiring DigitalOcean models: selected migration
+
+The owner requested replacement of retiring models while keeping the current
+primary set and updating pricing. The selected change replaces Flash fallbacks
+with `deepseek-v4.1-flash-1017`, OSS20B fallbacks with `openai-gpt-oss-120b`, and
+Maverick vision with `deepseek-v4.1-flash`. Existing Haiku, Sonnet, Sol, DeepSeek
+V4 Pro and Kimi selections, profile controls, ordering and budget limits remain.
+Fresh default configurations use the supported Flash/OSS replacements; vision
+remains opt-in. Historical tariffs and usage rows are retained. Both Flash IDs
+have USD0.30/1.20 per million input/output tokens and USD0.006 cache reads;
+OSS120B retains USD0.10/0.70 and no invented cache-read price. Explicit commercial
+overrides remain unchanged. This extends the existing gateway and accounting;
+it introduces no new skill or process.
+
+Initial CI exposed an incomplete historical outage-test fixture: it pinned only
+one profile while model health combines every profile sharing the primary. The
+fixture now explicitly pins its complete two-model chain and retains every
+existing alert assertion. Application behavior is unchanged by this test repair.
+
+The application candidate is frozen at `c25038e8` / archive `2fa941e8`: exact CI,
+3305 normal and shuffled Linux tests, helper suites and installed-layout checks
+pass. Its first-pass replacement-model check remains failed and retained. The
+new operator-only qualification measures the already-existing bounded native
+correction flow separately, with unchanged application prompts, action guards,
+profile controls and budgets. It carries the original first response exactly;
+there is no repeated first-response sampling or third model request. That native
+flow also failed at its first case: the corrective answer repeated the attributive
+phrase "the saved reminders", and the existing guard produced deterministic
+containment. Both failed generations remain. Total settled qualification spend is
+USD0.0028614 with no unknown charges; the remaining 42 cases were not run. No
+production models, prices, guards or services changed at that checkpoint.
+
+On October 30 the owner approved the reviewed narrow guard correction ("go").
+The exact attributive phrase "the saved reminders" is no longer treated as a
+completed save. Other determiners/objects/verbs, genuine completed actions,
+completion headers and ambiguous same-sentence combinations retain the original
+checks. The original regex patterns, templates, prompts and repair limits remain.
+The proposal passed all 51 existing guard tests, ten new checks and offline
+retained-answer replay; both original paid failures remain failed. This correction
+is now included in the new application candidate, with portable caller regression
+coverage. Fresh full verification, actual-model qualification and guarded
+deployment/acceptance are required; no new production state is claimed.
+
+The first integrated guard candidate `1ca8e22` failed CI and full Linux verification
+in two existing model-trial repair fixtures. Their truthful `RAW_THREE` text no
+longer requests repair after the approved correction. The fixture repair retains
+that exact text and all original assertions, uses a separately named synthetic
+false save claim to exercise the repair path, and adds explicit native first-pass
+and corrective-request regressions. No further runtime change is included.
+
+The separate release operator binds the exact approved four-file runtime delta,
+including the guard's original and reviewed SHA256. First-pass qualification now
+also authenticates a separately reviewed operator revision/package. Peer evidence
+recognizes Daily Lingo's actual acceptance-only continuation and its consumed
+nine-leaf fleet-policy update: exactly four monitor files plus that policy may
+change, with the other accepted protected bytes reconstructed and unchanged.
+The operator passed 125 local checks (two retained-Linux fixtures skipped) and
+independent source review; its read-only live peer proof passed. The actual-model
+qualifier and current/unknown-charge gates are unchanged. Fresh Linux operator
+qualification and the remaining normal release gates still apply.
+
+The successor application `93bf1a6` / archive `165723ab` passed exact-source CI,
+3315 normal and shuffled Linux tests, all helper suites, installed layout and
+shell syntax on October 30 at 06:50:41 UTC (verification `c48e678d`). The separate
+operator `6412604` also passed its isolated Linux suite: 125 checks, with only
+two intended retained-evidence fixture skips. Production remains unchanged.
+
+The fresh actual-model attempt retained seven native passes and stopped at its
+eighth response when the unchanged guard requested a correction for the phrase
+"delivery field is marked". All eight answers are semantically sound, but that
+is partial evidence, not qualification acceptance. Its eight charges plus the
+two earlier charges total USD0.0135208, with zero unresolved migration charges.
+A distinct operator companion carries those eight exact responses and their
+original ledger prefixes, permits only case eight's one existing correction,
+and then tests the untouched 35 first requests. It binds the verified application,
+original prompts, profile controls and the same cumulative USD0.25 allowance.
+The failed first-pass verdict remains unchanged; a third request or deterministic
+containment fails the continuation. Independent full semantic review remains required.
+
+The new companion, gate and mode dispatch passed all 141 local operator checks
+(139 passed, two unchanged retained-evidence fixture skips). Source review covers
+the exact eight-response reuse, one correction boundary, complete native outcome
+and cumulative 46-row accounting expected only after all 43 cases pass.
+
+Prelaunch review of operator `c38ddaf` found that the uncertain-delivery fixture
+used wall time for `assistant_tasks.updated_at`. Its two network-isolated replays
+had identical prompts and outcomes but different protected snapshot hashes. Both
+exact-head CI runs and the 141-check Linux suite had passed; those results remain
+valid test history but do not overcome this newly reproduced source finding.
+The first continuation plan was blocked before launch (`c4b5b999`); no additional
+model call occurred. A companion-only fixture-clock correction is being prepared
+without changing the application, original repair helper or any proof comparison.
+
+The companion now freezes only that confirmed synthetic task-delivery clock to
+the retained request time, restoring it after replay. All four replay calls retain
+the full canonical-proof and protected-state checks. Two actual network-isolated
+replays produced identical complete proofs and snapshots (`5fc6934b`), with the
+same exact corrective prompt and all 376 application files unchanged. The full
+operator suite passed, with the same two fixture skips. New
+source-bound preparation and launch review remain required; no paid call occurred.
+
+The retained continuation stopped at the missing-information knowledge case.
+Flash returned the correct empty excerpt list inside a JSON code fence; the
+unchanged grounding parser rejects that format. The original failure is retained:
+no parser or prompt change is applied. Earlier cases passed, including Cara's
+one normal correction, but remaining model roles and vision are still unqualified.
+Production remains unchanged. CI separately found a hard-coded test count in
+these living specs; the wording is corrected while dated evidence keeps exact totals.
+
+Actual role checks support a model-only refinement: the retiring Flash slot in
+`ingest_balanced` and `ask_grounded` now selects OSS120 in the candidate transform.
+Ingestion coalesces only the duplicate introduced when its retiring OSS20 and
+Flash slots both become OSS120; existing unrelated order/duplicates remain.
+Grounded answers retain Kimi before OSS120. Every current primary and all other
+profile controls remain exact. The knowledge-parser proposal remains private and
+unapplied; there is no parser or prompt change. The two OSS grounded-answer cases
+and remaining diagnostic coverage still precede release qualification.
+
+The memory-curator role now maps its retiring OSS20 fallback to Flash1017,
+coalescing only the duplicate introduced with its retiring Flash fallback.
+OSS120 exhausted the unchanged token cap on the tainted-memory case; Flash1017
+passed that native and semantic check. The separate memory-consolidation role
+keeps OSS120 followed by Flash1017. Every current primary, prompt, output cap,
+timeout and other profile field remains unchanged; the failed response is retained.
+This operator-only candidate change leaves the frozen application source intact.
+
+The candidate also selects Haiku5.5 for retiring Maverick vision and OSS120 for
+the retiring task-synthesis Flash fallback. The existing Haiku pricing override
+stays unchanged. Earlier vision outputs exhausted native caps or failed response
+checks; a synthesis output included an invalid optional field. Those outcomes
+remain failed evidence. Fresh comparisons use the same prompts, images and caps;
+the configuration change alone does not establish replacement quality.
+The dated migration record links the provider's vision/support/pricing references;
+its existing conservative commercial price override is preserved.
+Retained vision usage reports reasoning tokens within the exhausted native output
+caps; the dated record preserves those provider counts and failed final outputs.
+
+Implementation and fresh qualification are in progress. No new deployment or
+model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).
+
+The next vision-only candidate selects `nemotron-nano-12b-v2-vl` for retiring
+Maverick. The preceding Haiku comparison stopped after six of nine requests;
+its failed result and all cumulative charges remain. The original-contract audit
+confirmed that synthesis already tolerates invalid optional facets while preserving
+the required grounded answer. Both sampled synthesis models satisfy that contract;
+the unnecessary OSS role exception is removed, retaining generic Flash1017.
+The other three selected role mappings, all nine primaries and every prompt,
+image and native control stay exact. Earlier stricter reviews remain preserved.
+Nemotron's published USD0.20/0.60 input/output and USD0.04 cache-read prices already
+match the frozen application's accounting tables, so no runtime or tariff edit
+is needed. A separate comparison covers only the original six vision requests.
+It does not rerun text cases or establish model-quality acceptance by configuration.
+
+The Nemotron comparison also stopped at classification case40: its unchanged
+160-token allowance produced no final answer. All three charges and the failed
+result remain, bringing cumulative settled migration usage to USD0.0620747.
+The Ministral candidate was rejected by DigitalOcean with HTTP400 because that
+endpoint does not support image input. Its single zero-cost rejected reservation
+is preserved; no vision case passed and its proposed runtime tariffs were not applied.
+The successor candidate maps only retiring Maverick vision to `openai-gpt-6-luna`.
+All nine primaries, text-role selections, prompts, images, output caps, temperature,
+timeouts, budgets and existing overrides remain. The gateway adds only for this
+exact slug `reasoning_effort: none` and uses the same numeric output limit in
+`max_completion_tokens`; other model request bytes are unchanged. This preserves
+the small vision limits without spending them on the model's default reasoning.
+Its explicit USD0.20/0.75 input/output guard rate covers the long-context ceiling.
+Separate measured standard tariffs use USD0.10/0.50 input/output, USD0.01 cache
+reads and USD0.125 cache writes through272k input tokens; above that boundary they
+use USD0.20/0.75, USD0.02 and USD0.25. Missing counters remain unknown; prior tariff
+records and ledger rows are never recalculated. Fresh full verification, native
+request parity for retained text evidence, and the six original vision checks must
+pass before release. No qualification or deployment is implied by preparing this code.
+
 ## October 29 - Prompt-cache reporting accepted
 
 The owner selected measured cache usage and price reconciliation. The release
@@ -1078,7 +1251,7 @@ service plus an isolated worker; two retained Mentor services are disabled.
  └────────────────────────────────────────────────────────────────────────────────┘
                             │
               DigitalOcean Gradient serverless inference
-   (chat: deepseek-4-flash · default fallback openai-gpt-oss-20b · embeddings: BGE-M3)
+   (role-specific chat · default fallback openai-gpt-oss-120b · embeddings: BGE-M3)
 ```
 
 ### Module map

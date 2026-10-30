@@ -21366,10 +21366,18 @@ class PhaseA20260907Tests(unittest.TestCase):
         cfg.model_health_interval = 1
         cfg.model_health_confirm = 1
         cfg.do_model = "deepseek-4-flash"
+        cfg.router_model = cfg.do_model
         cfg.vision_model = ""
-        # ADR-0014 widened the default router chain (deepseek-v4-pro joined it); this
-        # test is about CHAIN semantics, so pin a two-model chain explicitly.
-        cfg.llm_profiles_json = '{"router_fast": {"fallbacks": ["openai-gpt-oss-20b"]}}'
+        # Health merges fallbacks from every profile sharing this primary. Pin
+        # the complete two-model fixture so changes to defaults cannot leave an
+        # unmocked healthy fallback in the supposedly dead chain.
+        cfg.llm_profiles_json = json.dumps({
+            name: {"fallbacks": ["openai-gpt-oss-20b"]}
+            for name, profile in llm.default_profiles(cfg).items()
+            if profile["primary"] == cfg.do_model
+        })
+        self.assertEqual(self.agent._fallbacks_for(cfg.do_model, llm.profiles(cfg)),
+                         ["openai-gpt-oss-20b"])
 
         def run(down):
             self.agent.last_model_health = 0
