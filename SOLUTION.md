@@ -132,6 +132,8 @@ stays unchanged. Earlier vision outputs exhausted native caps or failed response
 checks; a synthesis output included an invalid optional field. Those outcomes
 remain failed evidence. Fresh comparisons use the same prompts, images and caps;
 the configuration change alone does not establish replacement quality.
+The dated migration record links the provider's vision/support/pricing references;
+its existing conservative commercial price override is preserved.
 
 Implementation and fresh qualification are in progress. No new deployment or
 model-quality acceptance is claimed here. See the [migration record](docs/cara-model-retirement-2026-10-29.md).

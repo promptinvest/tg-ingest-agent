@@ -396,3 +396,18 @@ complete153-check offline operator suite with the same two fixture skips. Both
 new regression cases first failed against the previous mapping. The existing
 environment-parity test retains its assertions with the explicitly selected
 Haiku vision value; no quality or preservation assertion is removed.
+
+Selection references checked on30October: DigitalOcean's
+[supported-model list](https://docs.digitalocean.com/products/inference/details/models/)
+lists `anthropic-claude-5.5-haiku` for serverless inference with support ending
+no sooner than October2027; Anthropic's
+[Haiku5.5 overview](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
+documents text and image input. DigitalOcean's
+[pricing table](https://docs.digitalocean.com/products/inference/details/pricing/)
+lists USD0.10/0.50 per million tokens through100k context and USD0.50/2.50 above
+100k. The installed USD0.50/2.50 override remains the existing conservative
+accounting policy; this migration does not silently reprice commercial overrides.
+The prior DeepSeek classification/extraction outcomes exhausted the native
+160/1600-token limits or failed response validation. Retained provider usage does
+not separately establish how many output tokens were reasoning, so no such
+breakdown or cap increase is claimed.
