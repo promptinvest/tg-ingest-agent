@@ -1,0 +1,128 @@
+{
+  "schema": "cara.adr26-public-release-verification/v1",
+  "status": "accepted_and_independently_audited",
+  "source_commit": "75f0f345a6a0195bcad519045ab8473abcfa72d5",
+  "source_archive_sha256": "e56bfe71c5b7edd609bb7ee46776c4334304b4312b7debd943e0202efdfa9282",
+  "production_tag": {
+    "name": "production-2026-11-01-adr26-tooling",
+    "url": "https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-11-01-adr26-tooling",
+    "status": "published_and_remote_verified",
+    "annotation_object_sha": "a3e220c74a05b79d27e32bfc29376aa8f2511d85",
+    "peeled_source_commit": "75f0f345a6a0195bcad519045ab8473abcfa72d5",
+    "earlier_remote_tag_refs_preserved": 23
+  },
+  "scope": {
+    "adr": "ADR-0026",
+    "changes": [
+      "Full Ruff F-rule checks",
+      "Exact synthetic router, converse and Hermes prompt snapshots",
+      "Compatible shared task serializer and environment writer helpers"
+    ],
+    "runtime_dependencies_added": 0,
+    "runtime_prompt_changes": false,
+    "database_schema_changes": false,
+    "legacy_task_encoding_preserved": true,
+    "environment_writer_behavior_preserved": true
+  },
+  "linux": {
+    "status": "passed",
+    "completed_at": "2026-11-01T08:47:43.741023+00:00",
+    "normal": {"tests_run": 3320, "skipped": 9, "seconds": 217.332},
+    "shuffled": {"tests_run": 3320, "skipped": 9, "seconds": 221.699, "seed": 20261007},
+    "focused_regression_tests": 28,
+    "helper_suites": {"model_trial": 154, "capability_release": 21, "analysis_release": 6, "cache_release": 29},
+    "full_f_rules": "passed",
+    "compile": "passed",
+    "shell_syntax": "passed",
+    "shellcheck": "passed",
+    "installed_layout": {"status": "passed", "scenarios": 5, "renamed_entrypoint": "agent.py"},
+    "result_sha256": "3dc416fd30815586bd65b72fd4d6cbcb48a75a0cc632065f1f9ee33a4b5bdd45"
+  },
+  "ci": {
+    "status": "success",
+    "head_sha": "75f0f345a6a0195bcad519045ab8473abcfa72d5",
+    "pull_request": 11,
+    "pull_request_run": 41291859096,
+    "push_run": 41291837087,
+    "raw_evidence_sha256": "a0da01169adade3af5f604b6d0d8b7a3c49fb5f536a524824950426e9d376263"
+  },
+  "compatibility": {
+    "exact_request_snapshots": 6,
+    "prompt_snapshot_tests": 9,
+    "original_test_support_files": 106,
+    "original_assertion_bearing_source_lines": 12393,
+    "inventory_note": "Ordered source-line inventory; not a count of executed assertions.",
+    "source_review_sha256": "3d82af89105db36bc830bee48d1d14121a8d37e03365a4b0d1acf90c55bb497c"
+  },
+  "operator_qualification": {
+    "status": "passed",
+    "original_tests": 94,
+    "forward_continuation_tests": 12,
+    "mcp_harness_tests": 8,
+    "transport_fault_tests": 14,
+    "actual_isolated_cgroup_cases": 3,
+    "isolated_mcp_kernel_probe": {"status": "passed", "tools": 6, "scenarios": 9, "invalid_principal_reproduced": true}
+  },
+  "first_attempt": {
+    "status": "contained",
+    "failed_at": "2026-11-01T10:59:44.183055+00:00",
+    "completed_gates": [
+      "fresh_preflight", "staged_layout", "online_backups", "idle_before_stop",
+      "stop_main_executor", "stopped_backups", "closed_trial_preservation",
+      "paused_preservation", "install_exact", "native_runtime_security",
+      "readiness_before_mark_verified"
+    ],
+    "failure_stage": "mcp_before_mark_verified",
+    "cause": "Operator fixture principals were 78 and 84 characters; the unchanged application permits at most 64.",
+    "historical_stderr_recovered": false,
+    "cause_evidence": "Deterministic validation of retained fixture policies, followed by a fresh isolated negative reproduction.",
+    "application_and_executor_paused": true,
+    "failed_evidence_preserved": true,
+    "database_restored": false
+  },
+  "forward_continuation": {
+    "status": "accepted",
+    "launched_at": "2026-11-01T11:33:15+00:00",
+    "launches": 1,
+    "deployment_id": "9a7da34f2a7761ce681a1c23",
+    "build_version": "931c14f8bb74",
+    "same_installed_candidate": true,
+    "application_reinstalled": false,
+    "rollback_performed": false,
+    "fresh_readiness": "passed",
+    "private_mcp": "passed",
+    "scoped_reads": "passed",
+    "final_preservation": "passed",
+    "final_restart": "passed",
+    "healthy_samples": "passed",
+    "repair_scope": "Operator-only bounded fixture principals; full nonce paths, original MCP check, scenarios and timeouts preserved."
+  },
+  "native_acceptance": {
+    "status": "accepted",
+    "at": "2026-11-01T11:36:09.901372Z",
+    "receipt_sha256": "30ced8280f3a5478a0d2174271ec9f52923e488d38d6c5cd0247da3eecae1fb7",
+    "source_commit": "75f0f345a6a0195bcad519045ab8473abcfa72d5",
+    "build_version": "931c14f8bb74",
+    "deployment_id": "9a7da34f2a7761ce681a1c23",
+    "native_status": "verified"
+  },
+  "independent_audit": {
+    "status": "passed",
+    "at": "2026-11-01T11:37:06.442988Z",
+    "receipt_sha256": "92fc0992edba2d6a82573c80dff60e38936bf4300b319e78ce44a54b4d1dbf47",
+    "active_services": 4,
+    "all_restart_counts_zero": true,
+    "same_installed_deployment": true,
+    "schema_usage_cache_history_and_protected_settings_preserved": true
+  },
+  "data_preservation": {
+    "schema_tables": 56,
+    "stopped_full_row_and_cache_parity": "passed",
+    "original_usage_cache_and_unknown_history_preserved": true,
+    "personal_content_preserved": true,
+    "original_stopped_snapshots_retained": true,
+    "existing_telemetry_retention": "Unchanged 90-day maintenance continued during normal runtime."
+  },
+  "adr_status": "complete",
+  "next_reconciled_adr": "ADR-0027"
+}

@@ -1,5 +1,40 @@
 # Cara — Solution Specification
 
+## November 1 - ADR-0026 tooling completion accepted
+
+The selected tooling work is implemented in exact source `75f0f34`. CI checks
+all Python F rules. Synthetic snapshots pin the existing conversation, router
+and Hermes prompts. Shared stdlib-only task-serialization and environment-file
+helpers preserve existing byte, hash, wrapper and sync contracts. Original
+regression assertions and distinct fleet serialization contracts are retained.
+
+Deployed and accepted **2026-11-01 11:36:09.901372 UTC**, build `931c14f8bb74`,
+deployment `9a7da34f2a7761ce681a1c23`. The separate audit passed at
+**11:37:06.442988 UTC**, confirming the same verified runtime and four active
+services with `NRestarts=0`. Acceptance `30ced828` and audit `92fc0992` are bound
+in the [sanitized verification receipt](docs/cara-adr26-verification-2026-11-01.json).
+The remotely verified annotated tag
+[production-2026-11-01-adr26-tooling](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-11-01-adr26-tooling)
+points to exact source `75f0f34`; earlier production tags are retained.
+These are dated observations, not an uninterrupted-health claim.
+
+The full Linux suite passed **3,320 tests in normal order and 3,320 in shuffled
+order**, with nine skipped in each run. [Exact-source CI run 41291859096](https://github.com/promptinvest/tg-ingest-agent/actions/runs/41291859096)
+and installed-layout checks passed. Operator verification passed 94 original,
+12 forward-continuation and eight MCP tests; 14 transport cases and three real
+cgroup cases passed. Isolated MCP verification passed all six tools and nine
+scenarios.
+
+The first runtime attempt was contained when an operator fixture's synthetic
+principal exceeded the existing length limit. A bounded fixture suffix repaired
+that gate without changing application source or the full execution identity.
+The fresh installed-state continuation completed only the missing gates; it
+replayed no installer, backup or earlier controller. The failed attempt and its
+proofs remain. The 56-table schema, stored history and cache metadata are
+preserved; this stage adds no migration or model-facing prompt change.
+See the [release record](docs/cara-adr26-release-2026-11-01.md).
+
+
 ## October 29 - Prompt-cache reporting accepted
 
 The owner selected measured cache usage and price reconciliation. The release
