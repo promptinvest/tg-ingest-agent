@@ -11,8 +11,9 @@ nothing — getUpdates with no offset at all — so the first real poll still se
 everything, and it rewrites /etc/tg-ingest-agent.env atomically with a .bak —
 the old truncate-and-write could destroy the bot token and the DO key.
 """
+import env_file
+
 import json
-import os
 import re
 import subprocess
 import sys
@@ -138,20 +139,7 @@ def read_token(content):
 
 
 def set_env_value(content, key, value):
-    """Replace exactly one `KEY=…` line, or append the line when it is absent.
-
-    A missing line used to make the rewrite a silent no-op. Duplicates are
-    refused rather than half-updated: systemd's EnvironmentFile honours the LAST
-    assignment, so rewriting only the first would leave the old value in force.
-    The replacement is a callable — a secret containing a backslash must not be
-    read as a regex escape.
-    """
-    new, count = re.subn(rf"(?m)^{re.escape(key)}=.*$", lambda _: f"{key}={value}", content)
-    if count == 1:
-        return new
-    if count > 1:
-        raise ValueError(f"{key} is assigned {count} times; fix the file by hand")
-    return content.rstrip("\n") + f"\n{key}={value}\n"
+    return env_file.set_env_value(content, key, value)
 
 
 def write_owner(content, chat_id):
@@ -159,53 +147,7 @@ def write_owner(content, chat_id):
 
 
 def write_env_atomically(path, content):
-    """Replace `path` without ever leaving it truncated.
-
-    The env file holds the bot token and the DO key: a plain write() that dies
-    mid-way loses both. Temp file (O_EXCL, 0600) -> fsync -> .bak of the old
-    content -> os.replace (atomic within the filesystem) -> fsync the directory.
-    """
-    path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
-    previous = path.read_text(encoding="utf-8") if path.exists() else None
-    try:
-        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError as exc:
-        # O_EXCL is deliberate, but a hard kill between this open and os.replace
-        # leaves the temp file behind and every later run would then die on a
-        # bare FileExistsError. Say what it is and how to clear it.
-        raise SystemExit(f"a stale {tmp} is in the way — an earlier run was killed "
-                         f"mid-write. Inspect it, then: rm -f {tmp}") from exc
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if previous is not None:
-            backup = path.with_name(path.name + ".bak")
-            bak_fd = os.open(backup, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-            # The mode above applies only when the file is CREATED: a .bak left by
-            # an earlier hand-made `cp` keeps its own (looser) mode while receiving
-            # a full copy of the token and the DO key.
-            os.fchmod(bak_fd, 0o600)
-            with os.fdopen(bak_fd, "w", encoding="utf-8") as handle:
-                handle.write(previous)
-                handle.flush()
-                os.fsync(handle.fileno())
-        os.replace(tmp, path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
-    os.chmod(path, 0o600)
-    try:
-        dir_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except OSError:                 # some filesystems refuse a directory fsync
-        pass
-    return path
+    return env_file.write_env_atomically(path, content, sync_directory=True)
 
 
 def service_is_active(service=SERVICE, runner=subprocess.run):

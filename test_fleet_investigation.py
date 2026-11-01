@@ -3,7 +3,7 @@ import json
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path as Path
 from unittest import mock
 
 import fleet

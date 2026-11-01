@@ -7,7 +7,7 @@ access, or network namespace. A passing result is a bound test artifact, never
 permission to merge, push, install, or deploy.
 """
 import hashlib
-import json
+import json as json
 import os
 import re
 import resource

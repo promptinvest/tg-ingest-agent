@@ -5,7 +5,7 @@ stored content (never general knowledge).
 
 Pure-stdlib vector math — fine for a personal KB (hundreds of chunks).
 """
-import json
+import json as json
 import math
 import re
 from itertools import zip_longest

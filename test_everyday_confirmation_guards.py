@@ -1,6 +1,6 @@
 """Everyday confirmation outcomes under replacement, source edits and target loss."""
-from datetime import datetime, timezone
-import json
+from datetime import datetime as datetime, timezone as timezone
+import json as json
 from pathlib import Path
 import tempfile
 import unittest

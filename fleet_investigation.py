@@ -8,8 +8,8 @@ import hashlib
 import json
 import math
 import re
-import sqlite3
-from datetime import datetime, timezone
+import sqlite3 as sqlite3
+from datetime import datetime as datetime, timezone as timezone
 
 import common
 import fleet_lifecycle

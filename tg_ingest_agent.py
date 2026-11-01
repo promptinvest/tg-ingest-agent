@@ -12,21 +12,21 @@ The former Pilot-VPS was retired in June 2026. Voice transcription runs on a
 serial helper thread; SQLite and state changes remain on the poll thread.
 The isolated cara-worker service executes allowlisted local tasks.
 """
-import ast
+import ast as ast
 import json
 import re
-import shutil
+import shutil as shutil
 import signal
 import sqlite3
 import sys
-import tempfile
+import tempfile as tempfile
 import threading
 import time
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import action_truth
+import action_truth as action_truth
 import action_delivery
 import backup
 import boss_model
@@ -45,13 +45,13 @@ import llm
 import inference_io
 import worker_client
 import voice_svc
-import media
+import media as media
 import media_svc
 import converse_svc
 import memory_curator
 import mentor_client
 import notes_svc
-import persona
+import persona as persona
 import proactive
 import reminders
 import reminder_time
@@ -63,7 +63,7 @@ import runtime
 import self_model
 import skill_manifest
 import spend
-import storage
+import storage as storage
 import store
 import sysinfo
 import fleet
@@ -5073,7 +5073,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         category = self.correction_category(text)
         if not category:
             return False
-        pending = store.pending_get(self.conn, chat_id)
+        _pending = store.pending_get(self.conn, chat_id)
         self.apply_category_confirm(chat_id, row, category, reply_to=reply_to)
         return True
 

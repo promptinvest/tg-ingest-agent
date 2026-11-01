@@ -1,55 +1,56 @@
 #!/usr/bin/env python3
 """Offline unit tests: router, LLM gateway, reminders, spend, texts, memory."""
-import gc
+import gc as gc
 import json
 import os
-import re
-import shutil
-import sqlite3
+import re as re
+import shutil as shutil
+import sqlite3 as sqlite3
 import sys
 import tempfile
-import time
+import time as time
 import unittest
-import weakref
-from datetime import datetime, timedelta, timezone
+import weakref as weakref
+from datetime import datetime, timedelta as timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import action_truth
-import boss_model
-import common
-import converse
-import events
-import fetch
-import ingest
+import action_truth as action_truth
+import boss_model as boss_model
+import common as common
+import converse as converse
+import events as events
+import fetch as fetch
+import ingest as ingest
 import gcal
-import jobs
-import journals
-import knowledge
+import jobs as jobs
+import journals as journals
+import knowledge as knowledge
 import llm
-import media
-import memory_curator
-import pdftext
-import persona
-import relationship
-import runtime
-import self_model
+import media as media
+import memory_curator as memory_curator
+import pdftext as pdftext
+import persona as persona
+import relationship as relationship
+import runtime as runtime
+import self_model as self_model
 import reminders
-import review
+import review as review
 import router
-import skill_manifest
+import skill_manifest as skill_manifest
 import spend
-import storage
+import storage as storage
 import store
-import sysinfo
-import texts
-import tg_api
-import trace as tracing
+import sysinfo as sysinfo
+import texts as texts
+import tg_api as tg_api
+import trace as _tracing
+tracing = _tracing
 
 
-from testlib import make_config, setUpModule, tearDownModule
+from testlib import make_config, setUpModule as setUpModule, tearDownModule as tearDownModule
 
 class GatewayTests(unittest.TestCase):
     def setUp(self):

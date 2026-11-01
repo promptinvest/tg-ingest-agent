@@ -820,7 +820,7 @@ low-level normalization and calendar behavior remain, while reminder execution
 cannot silently apply part of a repeat request. Schema, services, budgets, models,
 stored history and normal one-time/daily/weekly creation are unchanged.
 Russian number-word intervals and «раз в месяц» are checked in the source even if
-the router omits repetition. CI runs pinned Ruff F821/F822/F823 checks for undefined
+the router omits repetition. CI runs pinned Ruff F-rule checks, including undefined
 names; production stays stdlib-only. README, entry-module and voice architecture
 descriptions reflect the existing helper thread and isolated worker.
 See the accepted [reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md)
@@ -915,6 +915,15 @@ moves of Agent methods; the public composed Agent interface stays compatible.
 Tests use a shared fixture library and separate gateway/media/backup modules.
 `run_tests.py` supports named subsets, full discovery, seeded shuffled order and
 per-case timings; plain deployment always runs the full offline Linux gate.
+
+The CI-only Ruff gate checks the full F-rule family with the pinned development
+version. Intentional compatibility imports are explicit re-exports. Synthetic
+golden fixtures pin complete router, conversation and Hermes requests; an
+intentional prompt change requires reviewing the full diff before explicit fixture
+regeneration. `task_json.py` preserves the legacy task wire encoding across the
+agent, isolated worker and canary. Operator scripts share `env_file.py` while
+retaining private atomic backups, stale-temp refusal and bootstrap-only directory
+fsync. These helpers add no dependency, model call or new capability.
 
 > **Research & Decision Intelligence v1 (shipped 2026-07-29):** governed
 > provider-neutral search now composes with three provenance-bound fetches,

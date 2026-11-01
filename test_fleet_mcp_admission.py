@@ -1,6 +1,6 @@
 """Durable source-bound read admission; synthetic I/O, real SQLite/owner phases."""
 import copy
-import json
+import json as json
 import sqlite3
 import threading
 import unittest
@@ -9,7 +9,7 @@ from unittest import mock
 
 import fleet
 import fleet_facts
-import fleet_investigation
+import fleet_investigation as fleet_investigation
 import fleet_lifecycle
 import fleet_mcp_admission as admission
 import fleet_protocol as protocol

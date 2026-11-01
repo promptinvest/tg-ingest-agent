@@ -6,30 +6,32 @@ applicable typed lookups additionally compare exact cells/pages through the same
 client and in-memory reviewed stdio exchange. No model, host or paid work is live.
 """
 import copy
-import json
+import json as json
 from pathlib import Path
 import unittest
 from unittest import mock
 
 import cara_fleet
-import fleet
-import fleet_answers
+import fleet as fleet
+import fleet_answers as fleet_answers
 import fleet_facts
 import fleet_host
 import fleet_mcp as mcp
 import fleet_mcp_client as client
 import fleet_protocol as protocol
 import fleet_queries as queries
-import fleet_report
+import fleet_report as fleet_report
 import llm
 import worker_client
 import test_fleet_business_corpus as original
-import test_fleet_catalog as catalog
+import test_fleet_catalog as _catalog
+catalog = _catalog
 import test_fleet_mcp as wire
 import test_fleet_mcp_integration as enabled
 import test_fleet_project_adapter_integration as adapter_flow
 import test_fleet_project_adapters as adapter_fixtures
-import test_fleet_project_scope as scoped
+import test_fleet_project_scope as _scoped
+scoped = _scoped
 
 
 def catalog_run(owner, source_id, use_mcp):

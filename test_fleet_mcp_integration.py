@@ -8,22 +8,23 @@ import time
 import unittest
 from unittest import mock
 
-import common
+import common as common
 import fleet
 import fleet_catalog
 import fleet_facts
-import fleet_investigation
+import fleet_investigation as fleet_investigation
 import fleet_lifecycle as lifecycle
 import fleet_lifecycle_svc
 import fleet_mcp
 import fleet_mcp_client as client
 import fleet_protocol as protocol
-import fleet_queries as queries
+import fleet_queries as _queries
+queries = _queries
 import fleet_queue
 import llm
 import router
 import store
-import tasks_svc
+import tasks_svc as tasks_svc
 import tg_ingest_agent as entry
 import test_fleet_catalog as catalog_tests
 import test_fleet_mcp as mcp_tests
@@ -643,7 +644,7 @@ class DurableMCPAgentIntegration(unittest.TestCase):
             pending = store.pending_get(self.conn, 111)
             for field, count in counts.items(): self.assertEqual(pending["payload"]["anticipated"][field], count)
             self.agent.resolve_purge(111, "en", pending, pending["payload"]["phrase"])
-            nonce = lifecycle._authorization(self.conn)["nonce"]
+            _nonce = lifecycle._authorization(self.conn)["nonce"]
             self.assertTrue(lifecycle.executor_gate(spool))
             self.assertFalse(self.agent.check_fleet_content_purge())
             self.transport_release.set()

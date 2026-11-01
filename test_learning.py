@@ -3,10 +3,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import SimpleNamespace as SimpleNamespace
 from unittest import mock
 
-import common
+import common as common
 import converse
 import learning
 import llm
@@ -16,7 +16,7 @@ import skill_manifest
 import store
 import task_runner
 import tasks_svc
-import tasking
+import tasking as tasking
 import test_task_runtime as runtime_fixtures
 from testlib import make_config
 
@@ -46,7 +46,7 @@ class LearningTests(unittest.TestCase):
         uid = self.conn.execute("SELECT COALESCE(MAX(update_id),0)+1 FROM telegram_updates").fetchone()[0]
         update = {"update_id": uid, "message": {"message_id": 100 + uid,
                   "chat": {"id": self.chat}, "from": {"id": self.chat}, "text": text}}
-        source = store.telegram_update_receive(self.conn, update, chat_id=self.chat)
+        _source = store.telegram_update_receive(self.conn, update, chat_id=self.chat)
         store.convo_add(self.conn, self.chat, "user", text, source="boss",
                        update_id=uid, tg_message_id=100 + uid)
         plan = runtime_fixtures.RuntimeCase.read_plan()
@@ -167,7 +167,7 @@ class LearningTests(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM learning_versions").fetchone()[0], 1)
 
     def test_task_scan_is_bounded_idempotent_and_has_no_model_or_send(self):
-        task = self.task()
+        _task = self.task()
         ctx = learning.LearningMixin()
         ctx.conn = self.conn
         with mock.patch.object(llm, "chat_profile") as model:
@@ -265,7 +265,7 @@ class LearningTests(unittest.TestCase):
         self.assertTrue(report.endswith("Practical quality improvement has not yet been measured."))
 
     def test_scan_skips_old_completion_and_learning_does_not_resend(self):
-        task = self.task()
+        _task = self.task()
         self.conn.execute("UPDATE assistant_tasks SET delivered_at='2026-01-01T00:00:00+00:00'")
         self.conn.commit()
         ctx = learning.LearningMixin()

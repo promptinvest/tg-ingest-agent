@@ -11,7 +11,7 @@ import fleet_mcp_client
 import fleet_protocol as protocol
 import fleet_queries as queries
 import fleet_report
-import persona
+import persona as persona
 import store
 import tasking
 

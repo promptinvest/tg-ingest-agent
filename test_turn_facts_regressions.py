@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import converse
+import converse as converse
 import converse_svc
 import llm
 import store

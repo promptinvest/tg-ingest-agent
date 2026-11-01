@@ -6,10 +6,10 @@ The full disabled baseline suite remains a separate release gate.
 """
 import copy
 import hashlib
-import json
+import json as json
 import threading
 import unittest
-from types import SimpleNamespace
+from types import SimpleNamespace as SimpleNamespace
 from unittest import mock
 
 import cara_fleet

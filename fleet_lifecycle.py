@@ -355,7 +355,7 @@ def executor_gate(spool):
 def cancel_spooled_requests(cfg):
     """Cancel validated bindings before DB terminal state; preserve all content."""
     import fleet_queue
-    import worker_client
+    import worker_client as _worker_client
     from types import SimpleNamespace
     spool = _spool(cfg)
     client = SimpleNamespace(task_worker_spool=str(spool))

@@ -1,7 +1,7 @@
 import copy
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-import tempfile
+from datetime import datetime as datetime, timedelta as timedelta, timezone as timezone
+from pathlib import Path as Path
+import tempfile as tempfile
 import unittest
 
 import trial_continuation as t

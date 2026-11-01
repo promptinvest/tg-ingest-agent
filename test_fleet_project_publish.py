@@ -1,6 +1,6 @@
 """Isolated Linux fixtures for the manual read-only evidence publisher."""
 import contextlib
-import copy
+import copy as copy
 import hashlib
 import io
 import json

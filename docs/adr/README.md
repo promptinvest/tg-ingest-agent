@@ -54,6 +54,9 @@ completed 2026-10-25 09:08:55 UTC for `dcdd5ee`. The original implemented decisi
 | [ADR-0032](ADR-0032-code-owned-fleet-findings.md) | Owner-bound fleet scope and code-owned findings | Phase D | owner go 2026-10-23 | Implemented and deployed e925af3 |
 | [ADR-0033](ADR-0033-fleet-knowledge-and-project-capability-backlog.md) | Fleet knowledge, adaptive answers and project capability backlog | Follow-up roadmap | ADR-0031/0032; six business packages plus downstream MCP | Implemented/deployed; source eb0b9ad, application20:56:22/facts2 21:06:13 UTC October24 accepted; all71 functional criteria accepted; final-head synchronization precedes separate manual refresh |
 
+[1 November reconciliation and selected ADR0026 completion](../cara-adr-reconciliation-2026-11-01.md)
+records current remainders; older proposal details do not override later evidence-preservation rules.
+
 ## Phases
 
 - Phase A — the daily loop

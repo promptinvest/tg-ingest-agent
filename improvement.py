@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Evidence-bound evaluation and propose-only self-improvement for Cara."""
+from task_json import canonical as _canonical
+
 import hashlib
 import json
 import os
@@ -42,12 +44,6 @@ _ID_FIELD = re.compile(r"(?:trace_id)$")
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
-
-
-def _canonical(value):
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
 
 
 def _hash(value):

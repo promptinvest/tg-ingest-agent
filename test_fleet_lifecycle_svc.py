@@ -149,7 +149,7 @@ class FleetContentHandshakeTests(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM telegram_updates").fetchone()[0], 0)
 
     def test_expired_renewed_card_cancels_old_jobs_releases_new_admission_preserves_content(self):
-        self.request(); nonce = self.authorize(); lifecycle.executor_gate(self.spool)
+        self.request(); _nonce = self.authorize(); lifecycle.executor_gate(self.spool)
         self.agent.check_fleet_content_purge()
         store.pending_clear(self.conn, 1)  # existing expiry sweep / explicit discard
         self.assertTrue(self.agent.check_fleet_content_purge())
@@ -160,7 +160,7 @@ class FleetContentHandshakeTests(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0], "cancelled")
 
     def test_declining_renewed_phrase_preserves_content_and_does_not_replay_old_jobs(self):
-        self.request(); nonce = self.authorize(); lifecycle.executor_gate(self.spool)
+        self.request(); _nonce = self.authorize(); lifecycle.executor_gate(self.spool)
         self.agent.check_fleet_content_purge()
         pending = store.pending_get(self.conn, 1)
         self.agent.resolve_purge(1, "en", pending, "cancel")

@@ -10,7 +10,7 @@ JSON only; transactional/system text always comes from texts.py templates.
 import json
 import re
 import relationship
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta as timedelta, timezone
 
 import common
 import llm

@@ -1,8 +1,8 @@
 """Legacy host-token uncertainty remains authoritative without data migration."""
 import fcntl
-import json
+import json as json
 import os
-from pathlib import Path
+from pathlib import Path as Path
 import unittest
 from unittest import mock
 

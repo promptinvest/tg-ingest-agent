@@ -35,3 +35,8 @@ nothing
 - 2026-10-19: owner requested adding undefined-name lint from the follow-up review.
   CI pins Ruff 0.17.1 and enables F821/F822/F823 without runtime dependencies.
   Wider F-rule cleanup, prompt snapshots and serializer consolidation remain open.
+
+- 2026-11-01: owner selected the reconciled completion stage. Full F-rule checks,
+  exact synthetic prompt fixtures and compatible task/env helper consolidation
+  are implemented in preparation; full verification and runtime deployment remain
+  pending. [Reconciliation and evidence](../cara-adr-reconciliation-2026-11-01.md).

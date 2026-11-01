@@ -6,7 +6,7 @@ qualification, or accepted deployment of the separate durable MCP capabilities.
 The original corpus files remain unchanged and are the source of questions and
 assertions. Existing independent lifecycle/runtime suites remain required.
 """
-import copy
+import copy as copy
 import json
 import unittest
 from pathlib import Path

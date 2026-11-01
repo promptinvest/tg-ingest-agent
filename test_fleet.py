@@ -1,7 +1,7 @@
 """Fleet provenance, privilege, failure, and conversational regression checks."""
 import copy
 import json
-import sqlite3
+import sqlite3 as sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -379,7 +379,7 @@ class FleetLifecycle(unittest.TestCase):
         self.assertEqual(send.call_count,1)
         self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0],"ambiguous")
     def result(self, row):
-        payload = json.loads(row["payload"])
+        _payload = json.loads(row["payload"])
         response = {"version": protocol.VERSION, "observed_at": protocol.now(), "hosts": {"pd": {
             "host": "pd", "observed_at": protocol.now(), "services": {"cara-worker.service": {"ActiveState": "active", "fingerprint": "a"*64}}}}}
         with mock.patch.object(worker_client, "poll", return_value=response), mock.patch.object(fleet.llm, "chat_profile", side_effect=ValueError):
@@ -418,7 +418,7 @@ class FleetLifecycle(unittest.TestCase):
     def test_one_model_call_limit_keeps_measurements_without_synthesis(self):
         self.agent.cfg.task_model_call_limit=1
         row=self.start()
-        payload=json.loads(row["payload"])
+        _payload=json.loads(row["payload"])
         response={"version":protocol.VERSION,"observed_at":protocol.now(),"hosts":{"pd":{"host":"pd","observed_at":protocol.now(),"resources":{"available":False}}}}
         with mock.patch.object(worker_client,"poll",return_value=response), mock.patch.object(fleet.llm,"chat_profile") as chat:
             self.agent.check_fleet_requests()
@@ -488,7 +488,7 @@ class FleetLifecycle(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0], "executing")
 
     def test_unquoted_yes_with_two_confirmation_types_changes_neither(self):
-        row = self.result(self.start("restart"))
+        _row = self.result(self.start("restart"))
         with mock.patch.object(store, "pending_get", return_value={"kind": "reminder"}):
             self.assertTrue(self.agent.resolve_fleet_confirmation_text(111, "en", {}, "yes"))
         self.assertEqual(self.conn.execute("SELECT state FROM fleet_requests").fetchone()[0], "approval")
@@ -521,7 +521,7 @@ class FleetLifecycle(unittest.TestCase):
         self.assertEqual(store.kv_get(self.conn, "existing"), "keep")
         self.assertEqual(self.conn.execute("PRAGMA foreign_key_check").fetchall(), [])
     def test_delivery_interruption_is_not_replayed(self):
-        row = self.start()
+        _row = self.start()
         self.conn.execute("UPDATE fleet_requests SET state='delivering'")
         self.conn.commit()
         before = len(self.agent.messages)

@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import SimpleNamespace as SimpleNamespace
 from unittest import mock
 
 import fleet_broker as broker

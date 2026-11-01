@@ -16,7 +16,7 @@ from pathlib import Path
 import re
 import runpy
 import shutil
-import sqlite3
+import sqlite3 as sqlite3
 import subprocess
 import sys
 import tempfile

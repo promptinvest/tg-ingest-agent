@@ -4,7 +4,7 @@ Every line traces to a real stored row (messages, reminders, events). Used by
 the working_history action and the weekly digest.
 """
 import json
-import re
+import re as re
 from datetime import datetime, timedelta, timezone
 
 import store

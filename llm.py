@@ -293,7 +293,7 @@ def prepare_chat(cfg, conn, skill, messages, max_tokens=300, model=None, tempera
     # 2 models x 2 attempts x LLM_TIMEOUT, and no watchdog budget can cover that.
     common.watchdog_ping()
     _check_budget(cfg, conn)
-    kind = "chat"
+    _kind = "chat"
     model = model or cfg.do_model
     # UTF-8 bytes bound tokenization conservatively; include role/protocol overhead.
     upper_in = 512 * len(messages)

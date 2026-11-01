@@ -7,7 +7,7 @@ separately qualified companion, and retains the original absolute deadline.
 This module never changes a service, environment, database, grant or application.
 Host mutation is deliberately confined to the separately reviewed release backend.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone as timezone
 import hashlib
 import importlib.util
 import json

@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """Unprivileged end-to-end canary for Cara's one-way worker spool."""
+from task_json import canonical as _canonical
+
 import hashlib
-import json
+import json as json
 import time
 from types import SimpleNamespace
 
 import tool_broker
 import worker_client
-
-
-def _canonical(value):
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
 
 
 def main():

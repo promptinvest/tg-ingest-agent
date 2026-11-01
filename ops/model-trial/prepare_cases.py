@@ -6,7 +6,7 @@ or execute historical staging, qualification or deployment controllers.
 """
 import argparse
 from contextlib import contextmanager, ExitStack
-from datetime import datetime, timezone
+from datetime import datetime as datetime, timezone as timezone
 import hashlib
 import json
 from pathlib import Path
@@ -167,7 +167,7 @@ def packet(identity, captured, recipe, rubric):
 
 
 def continuity(identity, response=None):
-    import llm, router, store, task_runner, tasks_svc, tg_ingest_agent, memory_curator
+    import llm, router, store, task_runner, tasks_svc, tg_ingest_agent as _tg_ingest_agent, memory_curator
     index = [x[0] for x in CONTINUITY].index(identity)
     _, question, lang = CONTINUITY[index]
     with agent_fixture() as agent:
@@ -334,7 +334,7 @@ FLEET_PLANS = (
 
 
 def fleet_plan_case(identity, response=None):
-    import llm, fleet_protocol as protocol
+    import llm as _llm, fleet_protocol as protocol
     import test_fleet_catalog as fixture
     import test_fleet_async as asynchronous
     _, question, lang = next(x for x in FLEET_PLANS if x[0] == identity)
@@ -433,7 +433,7 @@ def synthesis_case(identity, response=None):
 
 
 def task_case(response=None):
-    import tasks_svc, tasking, llm, store
+    import tasks_svc as _tasks_svc, tasking, llm, store
     question = FLEET_PLANS[2][1]
     with agent_fixture() as agent:
         receive(agent, 1, question)

@@ -1,5 +1,5 @@
 """Append-only project sources retain qualified old answers and useful new dates."""
-import copy
+import copy as copy
 import unittest
 from unittest import mock
 

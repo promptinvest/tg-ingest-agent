@@ -3,7 +3,7 @@ from contextlib import redirect_stdout
 from copy import deepcopy
 import io
 import json
-from pathlib import Path
+from pathlib import Path as Path
 import sqlite3
 import sys
 from types import ModuleType, SimpleNamespace

@@ -1,5 +1,5 @@
 """An older edit card never authorizes newer staged source text."""
-import json
+import json as json
 import tempfile
 import unittest
 from pathlib import Path

@@ -362,7 +362,7 @@ class TasksMixin:
                     _planner_messages(text, source_time, self.tz_offset(), error,
                                       learning.context(self.conn, chat_id, "planner", text)),
                     profile="task_planner", json_required=True)
-            except llm.BudgetExceeded as exc:
+            except llm.BudgetExceeded as _exc:
                 self.reply(
                     chat_id,
                     ("Лимит AI не позволяет спланировать задачу сейчас."
@@ -771,7 +771,7 @@ class TasksMixin:
         outcome = task_runner.execute_approved(
             self, self.conn, approval_id, chat_id) if approve else "rejected"
         if not approve:
-            task = store.assistant_task_get(
+            _task = store.assistant_task_get(
                 self.conn, row["task_id"], chat_id)
             summary = task_runner.render_partial_summary(
                 self.conn, row["task_id"], "Write approval rejected.")

@@ -18,17 +18,17 @@ handlers, personal -> the companion).
 import json
 import re
 import time
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timedelta as timedelta, timezone
+from pathlib import Path as Path
 
 import common
 import action_delivery
 import events
 import fetch
-import ingest
+import ingest as ingest
 import llm
-import proactive
-import reminders
+import proactive as proactive
+import reminders as reminders
 import relationship
 import review
 import store
@@ -152,7 +152,7 @@ class HermesMixin:
     @action_delivery.caller_finalized
     def do_ask(self, chat_id, lang, params, text):
         import knowledge
-        import persona
+        import persona as _persona
         question = str(params.get("question") or "").strip() or text.strip()
         if not question:
             self.reply(chat_id, T(lang, "clarify"))

@@ -10,7 +10,7 @@ behavior.
 import json
 from datetime import datetime, timedelta, timezone
 
-import store
+import store as store
 
 # A retry waits this long before the job is claimable again. Without it both
 # attempts burned inside the SAME drain pass (available_at never moved), so one

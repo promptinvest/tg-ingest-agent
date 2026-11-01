@@ -15,7 +15,7 @@ never establishes identity; the launching operator-owned config binds authority.
 """
 import argparse
 import base64
-import hashlib
+import hashlib as hashlib
 import sqlite3
 from datetime import datetime, timezone, timedelta
 import copy

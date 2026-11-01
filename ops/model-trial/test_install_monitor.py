@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from contextlib import redirect_stdout
 import io
-import json
+import json as json
 from pathlib import Path
 import subprocess
 import tempfile

@@ -297,7 +297,7 @@ class DigestContentTests(unittest.TestCase):
         self.assertEqual(store.kv_get(self.conn, "issue_digest_delivered_at"), "2026-10-07T14:35:30.203859+00:00")
 
 
-from testlib import make_config, setUpModule, tearDownModule
+from testlib import make_config, setUpModule as setUpModule, tearDownModule as tearDownModule
 
 
 class RuntimeFixTests(unittest.TestCase):
@@ -419,7 +419,7 @@ class RuntimeFixTests(unittest.TestCase):
 
 
     def test_late_gratitude_reply_is_bound_to_its_card_but_commands_are_not(self):
-        import journals, router
+        import journals as _journals, router
         from datetime import timedelta
         category="\u0411\u043b\u0430\u0433\u043e\u0434\u0430\u0440\u043d\u043e\u0441\u0442\u0438"
         store.set_category_kind(self.conn,category,"journal")
