@@ -1653,6 +1653,7 @@ class ConversationDispatchTests(unittest.TestCase):
 
     def test_stale_fired_reminders_auto_expire(self):
         from datetime import datetime as _datetime, timezone as _timezone
+        del _datetime, _timezone
         conn = self.agent.conn
         rid = store.reminder_add(conn, 1, "старое", "2026-06-20T10:00:00+00:00", "none")
         conn.execute("UPDATE reminders SET last_fired_at = ? WHERE id = ?",
@@ -1705,6 +1706,7 @@ class ConversationDispatchTests(unittest.TestCase):
         # She must know her own reminders in conversation, so "почему не закрыла #1?"
         # is answered from the real list (with a fired-but-open one marked), not notes.
         from datetime import datetime as _datetime, timezone as _timezone
+        del _datetime, _timezone
         conn = self.agent.conn
         # a one-shot that already fired but wasn't confirmed -> still active/open
         rid = store.reminder_add(conn, 1, "пиво для Наташа", "2026-06-22T18:31:00+00:00", "none")

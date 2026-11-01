@@ -153,6 +153,7 @@ class HermesMixin:
     def do_ask(self, chat_id, lang, params, text):
         import knowledge
         import persona as _persona
+        del _persona
         question = str(params.get("question") or "").strip() or text.strip()
         if not question:
             self.reply(chat_id, T(lang, "clarify"))

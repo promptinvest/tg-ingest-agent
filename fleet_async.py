@@ -296,6 +296,7 @@ class AsyncMixin:
 
     def _fleet_apply_async_plan(self, row, payload, inventory):
         import fleet as _fleet
+        del _fleet
         plan = payload["plan"]
         if plan["clarification"]:
             payload["answer"] = tasking.redact_derived_text(plan["clarification"])

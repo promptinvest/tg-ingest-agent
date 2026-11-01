@@ -420,6 +420,7 @@ class RuntimeFixTests(unittest.TestCase):
 
     def test_late_gratitude_reply_is_bound_to_its_card_but_commands_are_not(self):
         import journals as _journals, router
+        del _journals
         from datetime import timedelta
         category="\u0411\u043b\u0430\u0433\u043e\u0434\u0430\u0440\u043d\u043e\u0441\u0442\u0438"
         store.set_category_kind(self.conn,category,"journal")
