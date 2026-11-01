@@ -879,7 +879,8 @@ version. Intentional compatibility imports are explicit re-exports. Synthetic
 golden fixtures pin complete router, conversation and Hermes requests; an
 intentional prompt change requires reviewing the full diff before explicit fixture
 regeneration. `task_json.py` preserves the legacy task wire encoding across the
-agent, isolated worker and canary. Operator scripts share `env_file.py` while
+agent, isolated worker and canary; isolated MCP fixtures include that dependency.
+Operator scripts share `env_file.py` while
 retaining private atomic backups, stale-temp refusal and bootstrap-only directory
 fsync and the existing operator module mock boundaries. These helpers add no
 new dependency, model call or capability.
