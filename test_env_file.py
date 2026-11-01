@@ -76,6 +76,11 @@ class EnvFileCompatibilityTests(unittest.TestCase):
                 self.assertEqual(stale.read_text(encoding="utf-8"), "interrupted write\n")
                 stale.unlink()
 
+    def test_operator_os_mock_boundaries_remain_exposed(self):
+        for entry in ENTRY_POINTS:
+            with self.subTest(entry=entry.__name__):
+                self.assertIs(entry.os, os)
+
     def test_existing_global_os_failure_mocks_still_preserve_original(self):
         for entry in (env_file, *ENTRY_POINTS):
             for operation in ("fsync", "replace"):

@@ -923,7 +923,8 @@ intentional prompt change requires reviewing the full diff before explicit fixtu
 regeneration. `task_json.py` preserves the legacy task wire encoding across the
 agent, isolated worker and canary. Operator scripts share `env_file.py` while
 retaining private atomic backups, stale-temp refusal and bootstrap-only directory
-fsync. These helpers add no dependency, model call or new capability.
+fsync and the existing operator module mock boundaries. These helpers add no
+new dependency, model call or capability.
 
 > **Research & Decision Intelligence v1 (shipped 2026-07-29):** governed
 > provider-neutral search now composes with three provenance-bound fetches,

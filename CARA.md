@@ -783,8 +783,8 @@ Unsupported repetition, intervals and repeat end dates are clarified before any
 reminder or draft changes. New reminders retain one-time/daily/weekly support;
 rescheduling changes only time. There is no hourly scheduler in this release.
 Source checks include Russian number words and «раз в месяц», even when a model
-omits the requested repeat. CI checks the Python F-rule family with pinned Ruff
-F821/F822/F823 rules, without adding a runtime dependency.
+omits the requested repeat. The pinned CI Ruff F-rule gate includes undefined-name
+checks (F821/F822/F823), without adding a runtime dependency.
 See the accepted [reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md)
 and preserved [original correction](docs/cara-reminder-safety-2026-10-19.md).
 The follow-up passes 56 focused cases and 1,776 full Linux tests (nine skips).
@@ -881,7 +881,8 @@ intentional prompt change requires reviewing the full diff before explicit fixtu
 regeneration. `task_json.py` preserves the legacy task wire encoding across the
 agent, isolated worker and canary. Operator scripts share `env_file.py` while
 retaining private atomic backups, stale-temp refusal and bootstrap-only directory
-fsync. These helpers add no dependency, model call or new capability.
+fsync and the existing operator module mock boundaries. These helpers add no
+new dependency, model call or capability.
 
 > **Research & Decision Intelligence v1 (shipped 2026-07-29):** Cara can turn
 > a RU/EN research request into a governed six-step task:
