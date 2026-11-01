@@ -19,7 +19,7 @@ import fleet_mcp_client as client
 import fleet_protocol as protocol
 import fleet_shared_reads
 import llm
-import store
+import store as store
 import test_fleet_mcp as mcp_tests
 import test_fleet_mcp_admission as admission_tests
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Non-blocking, bounded Unix-spool client for Cara's local worker."""
 import errno
+from task_json import canonical as _canonical
+
 import hashlib
 import json
 import os
@@ -24,12 +26,6 @@ class WorkerError(RuntimeError):
 
 class WorkerUnavailable(WorkerError):
     pass
-
-
-def _canonical(value):
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
 
 
 def _dirs(cfg):

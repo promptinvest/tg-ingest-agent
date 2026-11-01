@@ -7,7 +7,7 @@ from pathlib import Path
 import common
 import answer_policy
 import fleet_lifecycle
-import fleet_context
+import fleet_context as fleet_context
 import fleet_inference
 import fleet_investigation
 import fleet_protocol as protocol
@@ -295,7 +295,8 @@ class AsyncMixin:
                        if payload["lang"] == "ru" else "I have no reliable result; a fresh investigation is needed.")
 
     def _fleet_apply_async_plan(self, row, payload, inventory):
-        import fleet
+        import fleet as _fleet
+        del _fleet
         plan = payload["plan"]
         if plan["clarification"]:
             payload["answer"] = tasking.redact_derived_text(plan["clarification"])

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import common
-import fleet
+import fleet as fleet
 import fleet_async
 import fleet_protocol as protocol
 import llm

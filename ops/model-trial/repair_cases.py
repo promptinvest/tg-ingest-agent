@@ -6,10 +6,10 @@ Earlier first-pass failures remain failures; this produces distinct full-flow
 evidence. No application prompt, guard, token cap or fallback is changed.
 """
 from contextlib import ExitStack
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone as timezone
 import hashlib
 import inspect
-from pathlib import Path
+from pathlib import Path as Path
 import re
 import sys
 from unittest import mock

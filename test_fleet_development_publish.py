@@ -1,7 +1,7 @@
 """Synthetic bounded public-GitHub capture/export and protected Linux installation."""
 import contextlib
 import copy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime as datetime, timedelta, timezone as timezone
 import hashlib
 import io
 import json

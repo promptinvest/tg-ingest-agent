@@ -228,7 +228,7 @@ class PipelineContracts(unittest.TestCase):
     start = base.FleetLifecycle.start
     result = base.FleetLifecycle.result
     def test_context_is_structured_and_ends_on_unrelated_owner_turn(self):
-        row = self.result(self.start())
+        _row = self.result(self.start())
         self.owner_turn(2, "А память?")
         context = self.agent._fleet_recent(111, "А память?")
         self.assertEqual(context["hosts"], ["pd"])
@@ -239,7 +239,7 @@ class PipelineContracts(unittest.TestCase):
 
     def test_additional_read_is_bounded_source_bound_and_preserves_first_facets(self):
         self.agent.cfg.task_model_call_limit = 4
-        row = self.start(); initial = json.loads(row["payload"])
+        row = self.start(); _initial = json.loads(row["payload"])
         first = {"version": protocol.VERSION, "observed_at": protocol.now(), "hosts": {"pd": {"host": "pd", "observed_at": protocol.now(), "resources": {"cpu_percent": 12.5, "cpu_sample_seconds": .2, "memory_used_percent": 45, "disk_used_percent": 34}, "projects": {}}}}
         decision = json.dumps({"highlights": [], "hypotheses": [], "next_checks": [{"host": "pd", "facet": "errors"}]})
         with mock.patch.object(worker_client, "poll", return_value=first), mock.patch.object(fleet.llm, "chat_profile", return_value=decision): self.agent.check_fleet_requests()
@@ -256,7 +256,7 @@ class PipelineContracts(unittest.TestCase):
         self.assertEqual(payload["result"]["hosts"]["pd"]["_facet_times"]["resources"], first["hosts"]["pd"]["observed_at"])
 
     def test_arbitrary_synthesis_prose_falls_back_to_actual_measurements(self):
-        row = self.start()
+        _row = self.start()
         response = {"version": protocol.VERSION, "observed_at": protocol.now(), "hosts": {"pd": {"host": "pd", "observed_at": protocol.now(), "resources": {"available": False}}}}
         with mock.patch.object(worker_client, "poll", return_value=response), mock.patch.object(fleet.llm, "chat_profile", return_value='{"interpretation":"All backups healthy"}'):
             self.agent.check_fleet_requests()

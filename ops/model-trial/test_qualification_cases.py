@@ -2,7 +2,7 @@
 import copy
 import json
 import os
-from pathlib import Path
+from pathlib import Path as Path
 import unittest
 
 import prepare_cases as fixtures

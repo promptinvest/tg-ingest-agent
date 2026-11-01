@@ -9,7 +9,7 @@ import reminders
 import router
 import store
 import tg_ingest_agent
-from testlib import make_config, setUpModule, tearDownModule
+from testlib import make_config, setUpModule as setUpModule, tearDownModule as tearDownModule
 
 
 class ReminderConversationTests(unittest.TestCase):
@@ -178,7 +178,7 @@ class ReminderConversationTests(unittest.TestCase):
         self.assertEqual(dict(store.reminder_get(self.conn, one)), before[0])
 
     def test_duplicate_fired_titles_do_not_guess_from_last_touched(self):
-        one = self.reminder()
+        _one = self.reminder()
         two = self.reminder()
         self.fired_pending(two)
         before = [dict(r) for r in store.reminders_active(self.conn, 1)]

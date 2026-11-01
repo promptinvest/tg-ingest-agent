@@ -13,7 +13,7 @@ import router
 import store
 import tg_ingest_agent
 from texts import T
-from testlib import make_config, setUpModule, tearDownModule
+from testlib import make_config, setUpModule as setUpModule, tearDownModule as tearDownModule
 
 
 class ReminderSafetyTests(unittest.TestCase):

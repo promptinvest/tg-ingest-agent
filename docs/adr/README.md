@@ -45,7 +45,7 @@ completed 2026-10-25 09:08:55 UTC for `dcdd5ee`. The original implemented decisi
 | [ADR-0023](ADR-0023-voice-transcription-leaves-the-poll-thread-with.md) | Voice transcription leaves the poll thread, with the DB staying on it | Phase D | ADR-0007 first; owner decision | Implemented 2026-10-07 |
 | [ADR-0024](ADR-0024-pre-router-precedence-is-a-table-pinned-by-a.md) | Pre-router precedence is a table pinned by a matrix test; every immediate action has an inverse | Phase E | nothing | Partially implemented 2026-10-19 (reminder reply bindings and schedule guards; table/inverses remain proposed) |
 | [ADR-0025](ADR-0025-the-router-prompt-pays-for-the-gist-of-history.md) | The router prompt pays for the gist of history, not its bytes | Phase E | nothing | Implemented 2026-10-07 (router clipping and input telemetry) |
-| [ADR-0026](ADR-0026-the-test-suite-gets-a-fast-path-a-fixture.md) | The test suite gets a fast path, a fixture library and a measured gate | Phase E | nothing | Partially implemented 2026-10-19 (timed gate, subsets, fixtures, split suites, tmpfs, shuffle and undefined-name lint; broader lint/serializer follow-ups remain) |
+| [ADR-0026](ADR-0026-the-test-suite-gets-a-fast-path-a-fixture.md) | The test suite gets a fast path, a fixture library and a measured gate | Phase E | nothing | Implemented/deployed 75f0f34; accepted 2026-11-01; independent audit passed; [release evidence](../cara-adr26-release-2026-11-01.md) |
 | [ADR-0027](ADR-0027-documentation-contract-present-tense-guarded.md) | Documentation contract: present tense, guarded maps, one runbook | Phase E | nothing | Partially implemented 2026-10-19 (runtime/voice/retired-host descriptions corrected; broader contract work remains proposed) |
 | [ADR-0028](ADR-0028-the-entry-point-is-decomposed-only-after.md) | The entry point is decomposed only after behaviour work settles | Phase E | everything above | Partially implemented 2026-10-07 (media and converse pure moves; pending resolver table remains) |
 | [ADR-0029](ADR-0029-cara-records-her-issues-and-reminds-the-owner-monthly.md) | Cara records her issues and reminds the owner of them once a month (first digest 2026-10-07); supersedes the Mentor | Phase D | owner go 2026-10-07 | Implemented 2026-10-07 |
@@ -53,6 +53,9 @@ completed 2026-10-25 09:08:55 UTC for `dcdd5ee`. The original implemented decisi
 | [ADR-0031](ADR-0031-natural-language-fleet-management.md) | Natural-language fleet investigations with a restricted executor | Phase D | owner go 2026-10-23 | Implemented and deployed fb20e4d |
 | [ADR-0032](ADR-0032-code-owned-fleet-findings.md) | Owner-bound fleet scope and code-owned findings | Phase D | owner go 2026-10-23 | Implemented and deployed e925af3 |
 | [ADR-0033](ADR-0033-fleet-knowledge-and-project-capability-backlog.md) | Fleet knowledge, adaptive answers and project capability backlog | Follow-up roadmap | ADR-0031/0032; six business packages plus downstream MCP | Implemented/deployed; source eb0b9ad, application20:56:22/facts2 21:06:13 UTC October24 accepted; all71 functional criteria accepted; final-head synchronization precedes separate manual refresh |
+
+[1 November reconciliation and selected ADR0026 completion](../cara-adr-reconciliation-2026-11-01.md)
+records current remainders; older proposal details do not override later evidence-preservation rules.
 
 ## Phases
 

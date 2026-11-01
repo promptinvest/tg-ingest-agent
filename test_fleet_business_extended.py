@@ -24,11 +24,11 @@ import fleet_project_adapters as project_adapters
 import tg_ingest_agent as entry
 import fleet_queries
 import fleet_report
-import knowledge
+import knowledge as knowledge
 import llm
 import router
 import store
-import tasking
+import tasking as tasking
 import task_runner
 import test_fleet_broker as broker_tests
 import test_fleet as fleet_tests
@@ -40,7 +40,7 @@ import test_fleet_project_scope as scoped
 import test_fleet_queue as queue_tests
 import test_fleet_responsiveness as poll_tests
 from test_fleet_business_corpus import BUSINESS
-from testlib import make_config
+from testlib import make_config as make_config
 
 
 def measured(capabilities):

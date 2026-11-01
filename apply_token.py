@@ -8,9 +8,11 @@ to make the rewrite a silent no-op that still printed success; the line is now
 appended when absent. The env write is atomic with a .bak, and the staged
 secret is deleted only on success — its fate is always printed.
 """
+import env_file
+
 import json
-import os
-import re
+import os as os
+import re as re
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -39,58 +41,11 @@ def verify_token(token, opener=urlopen):
 
 
 def set_env_value(content, key, value):
-    """Replace exactly one `KEY=…` line, or append the line when it is absent.
-
-    Duplicates are refused rather than half-updated: systemd's EnvironmentFile
-    honours the LAST assignment, so rewriting only the first would leave the old
-    value in force. The replacement is a callable — a secret containing a
-    backslash must not be read as a regex escape.
-    """
-    new, count = re.subn(rf"(?m)^{re.escape(key)}=.*$", lambda _: f"{key}={value}", content)
-    if count == 1:
-        return new
-    if count > 1:
-        raise ValueError(f"{key} is assigned {count} times; fix the file by hand")
-    return content.rstrip("\n") + f"\n{key}={value}\n"
+    return env_file.set_env_value(content, key, value)
 
 
 def write_env_atomically(path, content):
-    """Temp file (O_EXCL, 0600) -> fsync -> .bak of the old content -> os.replace.
-
-    A plain truncate-and-write on this file loses the bot token AND the DO key
-    if it dies mid-way.
-    """
-    path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
-    previous = path.read_text(encoding="utf-8") if path.exists() else None
-    try:
-        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError as exc:
-        # A hard kill between this open and os.replace leaves the temp file
-        # behind; without this every later run dies on a bare FileExistsError.
-        raise SystemExit(f"a stale {tmp} is in the way — an earlier run was killed "
-                         f"mid-write. Inspect it, then: rm -f {tmp}") from exc
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if previous is not None:
-            backup = path.with_name(path.name + ".bak")
-            bak_fd = os.open(backup, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-            # The mode above applies only on CREATE: a pre-existing .bak keeps its
-            # own (looser) mode while receiving the token and the DO key.
-            os.fchmod(bak_fd, 0o600)
-            with os.fdopen(bak_fd, "w", encoding="utf-8") as handle:
-                handle.write(previous)
-                handle.flush()
-                os.fsync(handle.fileno())
-        os.replace(tmp, path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
-    os.chmod(path, 0o600)
-    return path
+    return env_file.write_env_atomically(path, content, sync_directory=False)
 
 
 def main(staged=STAGED, env=ENV, opener=urlopen):

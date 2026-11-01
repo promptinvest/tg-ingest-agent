@@ -1,14 +1,14 @@
 """Logical 90-second model waits through the real owner loop; no network I/O."""
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
-import json
+import json as json
 import threading
 import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-import fleet
+import fleet as fleet
 import fleet_inference
 import fleet_protocol as protocol
 import llm

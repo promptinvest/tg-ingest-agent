@@ -4,6 +4,8 @@
 There is intentionally no command, argv, script, import, browser, or network
 surface. The first tool is a harmless echo used to prove spool isolation.
 """
+from task_json import canonical as _canonical
+
 import hashlib
 import json
 import os
@@ -26,12 +28,6 @@ MAX_PENDING_BYTES = 1024 * 1024
 TOOLS = frozenset({"worker.echo"})
 POLICY_VERSION = "task-tools/v3"
 IMPLEMENTATION_VERSION = "tasking/v3"
-
-
-def _canonical(value):
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
 
 
 def _safe_job_id(value):
@@ -323,7 +319,7 @@ def run(spool, state, once=False):
             except OSError:
                 pass
         for ack in results.glob("purge_*.ack.json"):
-            nonce = ack.name.removeprefix("purge_").removesuffix(".ack.json")
+            _nonce = ack.name.removeprefix("purge_").removesuffix(".ack.json")
             try:
                 if (not purge_marker.exists()
                         and now - ack.stat().st_mtime > 1):

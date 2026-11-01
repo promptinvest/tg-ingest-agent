@@ -15,7 +15,7 @@ import llm
 import router
 import store
 import task_runner
-import tasking
+import tasking as tasking
 import tasks_svc
 import tg_ingest_agent as entry
 from testlib import make_config

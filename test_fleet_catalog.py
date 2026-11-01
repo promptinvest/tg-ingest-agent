@@ -12,10 +12,10 @@ import fleet_catalog
 import fleet_context
 import fleet_facts
 import fleet_protocol as protocol
-import fleet_report
-import fleet_queries
+import fleet_report as fleet_report
+import fleet_queries as fleet_queries
 import llm
-import router
+import router as router
 import runtime
 import store
 import tg_ingest_agent

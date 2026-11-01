@@ -294,7 +294,7 @@ class SharedFleetReads(unittest.TestCase):
                 document = copy.deepcopy(self.document)
                 document["answer_pages"] = [page]
                 self.save("done", document)
-                task = {"id": 1, "chat_id": 1, "source_update": 202, "source_hash": "x"}
+                _task = {"id": 1, "chat_id": 1, "source_update": 202, "source_hash": "x"}
                 result, gap = reads._pages(document)
                 self.assertEqual(result, [])
                 self.assertEqual(gap, expected)

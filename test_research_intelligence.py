@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import common
+import common as common
 import deployment_notice
 import llm
 import store

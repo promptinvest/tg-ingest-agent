@@ -7,7 +7,7 @@ The original corpus, original tests and source modules are not changed.
 """
 import copy
 import json
-import os
+import os as os
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace

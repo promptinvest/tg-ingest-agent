@@ -1,5 +1,39 @@
 # Cara — Solution Specification
 
+## November 1 - ADR-0026 tooling completion accepted
+
+The selected tooling work is implemented in exact source `75f0f34`. CI checks
+all Python F rules. Synthetic snapshots pin the existing conversation, router
+and Hermes prompts. Shared stdlib-only task-serialization and environment-file
+helpers preserve existing byte, hash, wrapper and sync contracts. Original
+regression assertions and distinct fleet serialization contracts are retained.
+
+Deployed and accepted **2026-11-01 11:36:09.901372 UTC**, build `931c14f8bb74`,
+deployment `9a7da34f2a7761ce681a1c23`. The separate audit passed at
+**11:37:06.442988 UTC**, confirming the same verified runtime and four active
+services with `NRestarts=0`. Acceptance `30ced828` and audit `92fc0992` are bound
+in the [sanitized verification receipt](docs/cara-adr26-verification-2026-11-01.json).
+The remotely verified annotated tag
+[production-2026-11-01-adr26-tooling](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-11-01-adr26-tooling)
+points to exact source `75f0f34`; earlier production tags are retained.
+These are dated observations, not an uninterrupted-health claim.
+
+The full offline Linux suite passed in normal and shuffled order, retaining its
+documented skips. [Exact-source CI run 41291859096](https://github.com/promptinvest/tg-ingest-agent/actions/runs/41291859096)
+and installed-layout checks passed. Original operator, forward-continuation,
+MCP and transport qualification passed, including isolated kernel checks.
+The dated verification record holds the measured counts and durations.
+
+The first runtime attempt was contained when an operator fixture's synthetic
+principal exceeded the existing length limit. A bounded fixture suffix repaired
+that gate without changing application source or the full execution identity.
+The fresh installed-state continuation completed only the missing gates; it
+replayed no installer, backup or earlier controller. The failed attempt and its
+proofs remain. The 56-table schema, stored history and cache metadata are
+preserved; this stage adds no migration or model-facing prompt change.
+See the [release record](docs/cara-adr26-release-2026-11-01.md).
+
+
 ## October 29 - Prompt-cache reporting accepted
 
 The owner selected measured cache usage and price reconciliation. The release
@@ -820,7 +854,7 @@ low-level normalization and calendar behavior remain, while reminder execution
 cannot silently apply part of a repeat request. Schema, services, budgets, models,
 stored history and normal one-time/daily/weekly creation are unchanged.
 Russian number-word intervals and «раз в месяц» are checked in the source even if
-the router omits repetition. CI runs pinned Ruff F821/F822/F823 checks for undefined
+the router omits repetition. CI runs pinned Ruff F-rule checks, including undefined
 names; production stays stdlib-only. README, entry-module and voice architecture
 descriptions reflect the existing helper thread and isolated worker.
 See the accepted [reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md)
@@ -915,6 +949,17 @@ moves of Agent methods; the public composed Agent interface stays compatible.
 Tests use a shared fixture library and separate gateway/media/backup modules.
 `run_tests.py` supports named subsets, full discovery, seeded shuffled order and
 per-case timings; plain deployment always runs the full offline Linux gate.
+
+The CI-only Ruff gate checks the full F-rule family with the pinned development
+version. Intentional compatibility imports are explicit re-exports. Synthetic
+golden fixtures pin complete router, conversation and Hermes requests; an
+intentional prompt change requires reviewing the full diff before explicit fixture
+regeneration. `task_json.py` preserves the legacy task wire encoding across the
+agent, isolated worker and canary; isolated MCP fixtures include that dependency.
+Operator scripts share `env_file.py` while
+retaining private atomic backups, stale-temp refusal and bootstrap-only directory
+fsync and the existing operator module mock boundaries. These helpers add no
+new dependency, model call or capability.
 
 > **Research & Decision Intelligence v1 (shipped 2026-07-29):** governed
 > provider-neutral search now composes with three provenance-bound fetches,

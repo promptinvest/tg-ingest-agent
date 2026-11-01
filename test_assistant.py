@@ -3,7 +3,7 @@
 import gc
 import json
 import os
-import re
+import re as re
 import shutil
 import sqlite3
 import sys
@@ -49,7 +49,7 @@ import tg_api
 import trace as tracing
 
 
-from testlib import make_config, setUpModule, tearDownModule
+from testlib import make_config, setUpModule as setUpModule, tearDownModule as tearDownModule
 
 
 
@@ -1111,7 +1111,7 @@ class ConversationDispatchTests(unittest.TestCase):
         store.set_suggestion(conn, mid, "uncategorized", "filename only", "m")
         store.pending_set(conn, 1, "category", {"row_id": mid})
         with mock.patch.object(router, "route") as route, \
-                mock.patch.object(self.agent, "reply") as r:
+                mock.patch.object(self.agent, "reply") as _r:
             self.agent.dispatch(1, {}, "Категория - Документы")
         route.assert_not_called()                      # resolved deterministically, no router
         row = store.get_message(conn, mid)
@@ -1652,7 +1652,8 @@ class ConversationDispatchTests(unittest.TestCase):
 
 
     def test_stale_fired_reminders_auto_expire(self):
-        from datetime import datetime, timezone
+        from datetime import datetime as _datetime, timezone as _timezone
+        del _datetime, _timezone
         conn = self.agent.conn
         rid = store.reminder_add(conn, 1, "старое", "2026-06-20T10:00:00+00:00", "none")
         conn.execute("UPDATE reminders SET last_fired_at = ? WHERE id = ?",
@@ -1704,7 +1705,8 @@ class ConversationDispatchTests(unittest.TestCase):
     def test_converse_context_surfaces_active_reminders(self):
         # She must know her own reminders in conversation, so "почему не закрыла #1?"
         # is answered from the real list (with a fired-but-open one marked), not notes.
-        from datetime import datetime, timezone
+        from datetime import datetime as _datetime, timezone as _timezone
+        del _datetime, _timezone
         conn = self.agent.conn
         # a one-shot that already fired but wasn't confirmed -> still active/open
         rid = store.reminder_add(conn, 1, "пиво для Наташа", "2026-06-22T18:31:00+00:00", "none")
@@ -3210,7 +3212,7 @@ class ReminderRescheduleAndFilesTests(unittest.TestCase):
         b = store.insert_message(c, {"chat_id": 1, "tg_message_id": 2,
                                      "received_at": "2026-06-20T11:00:00Z", "raw_text": "y"})
         store.confirm_category(c, b, store.ensure_category(c, "AI Tools & Resources"))
-        with mock.patch.object(self.agent, "reply") as r:
+        with mock.patch.object(self.agent, "reply") as _r:
             self.agent.do_merge_categories(1, "ru", {"from": "AI tools",
                                                      "into": "AI Tools & Resources"})
         self.assertEqual(store.get_message(c, a)["category"], "AI Tools & Resources")  # moved
@@ -4405,7 +4407,7 @@ class EventJobTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_job_claim_complete_and_payload(self):
-        jid = jobs.add_job(self.conn, "memory_curator", "run_memory_curator",
+        _jid = jobs.add_job(self.conn, "memory_curator", "run_memory_curator",
                            payload={"day": "2026-06-13"})
         self.assertTrue(jobs.has_pending(self.conn, "memory_curator", "run_memory_curator"))
         job = jobs.claim_next(self.conn)

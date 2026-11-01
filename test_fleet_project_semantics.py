@@ -1,9 +1,10 @@
 """Closed answer obligations do not change project reads or historical plans."""
 import unittest
 
-import fleet_project
+import fleet_project as fleet_project
 import fleet_project_report
-import fleet_protocol as protocol
+import fleet_protocol as _protocol
+protocol = _protocol
 from test_fleet_project_dispatch import Harness, inventory, proposal, scope
 
 

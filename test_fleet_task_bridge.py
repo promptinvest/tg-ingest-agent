@@ -896,7 +896,7 @@ class FleetTaskBridge(unittest.TestCase):
         task, _pages = self.long_catalog_ready()
         with mock.patch.object(task_runner, "_write_managed_artifact", side_effect=OSError("synthetic unavailable")):
             task_runner.poll_fleet_results(self.agent, self.conn)
-        failed = store.assistant_task_get(self.conn, task["id"])
+        _failed = store.assistant_task_get(self.conn, task["id"])
         self.assertEqual(self.step(task)["error"], store.FLEET_ANSWER_CHANNEL_ERROR)
         self.assertFalse(store.assistant_task_resume(self.conn, task["id"], 222))
         text = self.conn.execute("SELECT text FROM conversation WHERE update_id=1 AND role='user' ORDER BY id LIMIT 1").fetchone()[0]

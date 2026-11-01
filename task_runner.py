@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Durable, receipt-driven execution for Cara's bounded assistant tasks."""
+from task_json import canonical as _canonical
+
 import hashlib
 import errno
 import json
@@ -44,12 +46,6 @@ def _transient_error(exc):
             errno.ECONNABORTED, errno.ECONNRESET, errno.ECONNREFUSED,
         }
     return False
-
-
-def _canonical(value):
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
 
 
 def _input_hash(value):

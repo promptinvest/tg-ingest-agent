@@ -4,7 +4,7 @@ import re
 import shutil
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta as timedelta, timezone
 from pathlib import Path
 import common
 import fetch
@@ -19,9 +19,9 @@ import store
 import trace
 from common import (Config, ShutdownInterrupt, current_trace, load_config, log,  # noqa: F401
                     log_err, log_warn)
-from tg_api import (TelegramError, tg_call, tg_download, tg_send_document,
-                    tg_send_document_file_id, tg_send_photo,
-                    tg_set_reaction)
+from tg_api import (TelegramError, tg_call as tg_call, tg_download as tg_download, tg_send_document as tg_send_document,
+                    tg_send_document_file_id as tg_send_document_file_id, tg_send_photo as tg_send_photo,
+                    tg_set_reaction as tg_set_reaction)
 from texts import T
 
 class MediaMixin:

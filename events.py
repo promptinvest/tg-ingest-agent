@@ -12,7 +12,7 @@ claimed an event, so it is gone; `record_done` stays for the note-outcome mirror
 jobs.py keeps its own claim pattern.
 """
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta as timedelta, timezone
 
 import store
 

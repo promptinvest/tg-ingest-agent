@@ -971,7 +971,7 @@ class MCPDurableWire(unittest.TestCase):
         modules = ("fleet_mcp.py", "fleet_mcp_client.py", "fleet_protocol.py", "fleet_project_adapters.py", "fleet_monitor_adapters.py",
             "fleet_facts.py", "fleet_queries.py", "fleet_shared_reads.py", "fleet_mcp_admission.py",
             "fleet_investigation.py", "fleet_lifecycle.py", "common.py", "mentor_protocol.py",
-            "tasking.py", "tool_broker.py", "skill_manifest.py", "store.py", "worker_client.py")
+            "tasking.py", "tool_broker.py", "skill_manifest.py", "store.py", "task_json.py", "worker_client.py")
         for name in modules:
             target = installed / name
             shutil.copyfile(Path(__file__).with_name(name), target); target.chmod(0o644)

@@ -4,10 +4,10 @@ The runner uses actual scratch SQLite. Provider/gateway modules and case replay
 are explicit synthetic transport boundaries, never an actual model request.
 """
 from contextlib import redirect_stdout
-import copy
+import copy as copy
 import io
 import json
-import math
+import math as math
 from pathlib import Path
 import sqlite3
 import sys

@@ -21,7 +21,7 @@ import task_runner
 import tasking
 import tasks_svc
 import tg_ingest_agent
-import tool_broker
+import tool_broker as tool_broker
 from testlib import make_config
 
 ANALYSIS_CASE_IDS = ("compare_en", "compare_ru", "adaptive_read", "absence", "source_injection")
@@ -584,7 +584,7 @@ class AnalysisOutcomes(unittest.TestCase):
         with self.assertRaises(ValueError):engine._context(self.conn,task,engine._inputs(self.conn,task,step))
 
     def test_safe_receipt_preserves_only_typed_hashes_and_rejects_forged_evidence(self):
-        self.start(); task=self.drain()
+        self.start(); _task=self.drain()
         receipt=store.task_receipt_by_idempotency(self.conn,engine._controller(self.conn,self.task_id)["idempotency_key"])
         data=json.loads(receipt["data_json"]); evidence=json.loads(receipt["evidence_json"])
         safe,retained=engine.safe_receipt(data,evidence)
@@ -615,7 +615,7 @@ class AnalysisOutcomes(unittest.TestCase):
         self.assertNotIn("response",state["phases"][-1])
 
     def test_multiline_quote_stays_inside_requested_numbered_items(self):
-        self.start(); task=self.drain()
+        self.start(); _task=self.drain()
         receipt=store.task_receipt_by_idempotency(self.conn,engine._controller(self.conn,self.task_id)["idempotency_key"])
         value=json.loads(receipt["data_json"])["value"]["analysis"]
         value["sources"][0]["text"]="Recorded first line.\n10. Source continuation."
