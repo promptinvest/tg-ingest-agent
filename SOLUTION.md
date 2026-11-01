@@ -18,12 +18,11 @@ The remotely verified annotated tag
 points to exact source `75f0f34`; earlier production tags are retained.
 These are dated observations, not an uninterrupted-health claim.
 
-The full Linux suite passed **3,320 tests in normal order and 3,320 in shuffled
-order**, with nine skipped in each run. [Exact-source CI run 41291859096](https://github.com/promptinvest/tg-ingest-agent/actions/runs/41291859096)
-and installed-layout checks passed. Operator verification passed 94 original,
-12 forward-continuation and eight MCP tests; 14 transport cases and three real
-cgroup cases passed. Isolated MCP verification passed all six tools and nine
-scenarios.
+The full offline Linux suite passed in normal and shuffled order, retaining its
+documented skips. [Exact-source CI run 41291859096](https://github.com/promptinvest/tg-ingest-agent/actions/runs/41291859096)
+and installed-layout checks passed. Original operator, forward-continuation,
+MCP and transport qualification passed, including isolated kernel checks.
+The dated verification record holds the measured counts and durations.
 
 The first runtime attempt was contained when an operator fixture's synthetic
 principal exceeded the existing length limit. A bounded fixture suffix repaired
