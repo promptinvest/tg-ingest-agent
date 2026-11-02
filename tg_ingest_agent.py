@@ -86,6 +86,53 @@ from texts import T
 COMMAND_ALIASES = {"/start": "start", "/stats": "stats", "/categories": "categories"}
 
 
+class _PreRouterTurn:
+    """Mutable state local to one dispatch; never shared with another turn."""
+
+    def __init__(self, chat_id, lang, msg, text, pending):
+        self.chat_id = chat_id
+        self.lang = lang
+        self.msg = msg
+        self.text = text
+        self.msg_id = msg.get("message_id")
+        self.pending = pending
+        self.fired_pending_context = None
+        self.fired_pending_row = None
+
+
+# None allows every pending kind; (None,) requires a free pending slot.
+# Ordering is part of the owner-facing contract, pinned by the dispatch matrix.
+PRE_ROUTER = (
+    ('liveness', '_pre_liveness', (None,)),
+    ('route_correction', '_pre_route_correction', None),
+    ('note_review_pref', '_pre_note_review_pref', None),
+    ('reminder_pref', '_pre_reminder_pref', None),
+    ('report_problem', '_pre_report_problem', None),
+    ('fleet_confirmation', '_pre_fleet_confirmation', None),
+    ('purge', '_pre_purge', ('purge',)),
+    ('journal_correction', '_pre_journal_correction', ('journal_correction',)),
+    ('gratitude_correction', '_pre_gratitude_correction', None),
+    ('journal_edit', '_pre_journal_edit', ('journal_edit',)),
+    ('media_correction', '_pre_media_correction', ('media_capture',)),
+    ('category', '_pre_category', ('category',)),
+    ('reminder_schedule', '_pre_reminder_schedule', None),
+    ('replied_reminder', '_pre_replied_reminder', None),
+    ('reminder_pick', '_pre_reminder_pick', ('reminder_op',)),
+    ('expired_reopen', '_pre_expired_reopen', None),
+    ('reminder_draft', '_pre_reminder_draft', None),
+    ('snooze_choice', '_pre_snooze_choice', None),
+    ('named_reschedule', '_pre_named_reschedule', None),
+    ('fired_followup', '_pre_fired_followup', None),
+    ('gratitude_capture', '_pre_gratitude_capture', None),
+    ('action_undo', '_pre_action_undo', (None,)),
+    ('compound', '_pre_compound', (None,)),
+    ('numbered_delete', '_pre_numbered_delete', (None,)),
+    ('task_approval', '_pre_task_approval', None),
+    ('proactive_followup', '_pre_proactive_followup', (None,)),
+    ('smalltalk', '_pre_smalltalk', (None,)),
+)
+
+
 # One dispatch entry per router action: action -> handler(agent, ctx). This is the single
 # place that maps an action to its handler (the router validates the action, skill_manifest
 # declares its policy, texts.py holds its templates). `_Ctx` carries every field the handlers
@@ -2414,6 +2461,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         self._send_reminder_draft(chat_id, lang, draft, twin=twin)
 
     @action_delivery.reminder_action()
+    @store.action_undo_grouped('reminder_cancel')
     def do_reminder_cancel(self, chat_id, lang, params):
         rows = store.reminders_active(self.conn, chat_id)
         # «закрой все» / «закрой #1 и #3» (ADR-0002): the same all/ids grammar as
@@ -2582,16 +2630,12 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         finally:
             self._reminder_scope = prior
 
-    def _dispatch(self, chat_id, msg, text):
-        lang = self.lang()
-        # She always signals that she is working (ADR-0007): the router or an
-        # ingest call is 2–20 s of silence otherwise.
-        self.send_chat_action(chat_id, "typing")
-        # When he last reached out — the reminder-delivery lull check reads this so
-        # a ping waits for a short pause in the conversation.
-        store.kv_set(self.conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
-        msg_id = msg.get("message_id")
-        pending = store.pending_get(self.conn, chat_id)
+    def _pre_liveness(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        msg = turn.msg
+        text = turn.text
+        pending = turn.pending
         # A standalone receipt probe cannot benefit from routing, saved-note
         # retrieval or memory curation. Resolve it before a stale gratitude
         # invitation can mistake it for journal content. Live drafts, approvals,
@@ -2611,11 +2655,22 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 and not self._last_bot_turn_asked(chat_id)):
             self._trace_route("converse", "liveness_ping")
             self.reply(chat_id, T(lang, "ping_received"))
-            return
+            return True
+        return False
+
+    def _pre_route_correction(self, turn):
+        chat_id = turn.chat_id
+        text = turn.text
         # ADR-0019: a correction within ten minutes of a state-changing route is
         # the cheapest evidence that the route was wrong — one issue row for the
         # weekly review, never a behavior change by itself.
         self._note_route_correction(chat_id, text)
+        return False
+
+    def _pre_note_review_pref(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
         # A recurring saved-note opt-out is a preference command about Cara's
         # own proactive behavior, never the answer to whichever confirmation
         # card happens to occupy the single pending slot. Resolve it before
@@ -2623,12 +2678,24 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         # the exact destructive purge phrase cannot match this narrow parser.
         if self._disable_note_review_request(chat_id, lang, text):
             self._trace_route("proactive_prefs", "note_review_pref")
-            return
+            return True
+        return False
+
+    def _pre_reminder_pref(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
         # Same rule for the two Phase A preferences (expiry notices, gratitude
         # auto-save): narrow, anchored parsers that no card can swallow.
         if self._reminder_pref_request(chat_id, lang, text):
             self._trace_route("proactive_prefs", "reminder_pref")
-            return
+            return True
+        return False
+
+    def _pre_report_problem(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
         # A problem-report command is about the exchange that just failed, not
         # an answer to a purge, journal-edit, or category card. Keep it ahead of
         # every consuming pending resolver; the exact destructive purge phrase
@@ -2643,32 +2710,76 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                               "source": "explicit_problem_report",
                               "action": "report_problem"})
             self.do_report_problem(chat_id, lang, {"detail": problem_detail}, text)
-            return
+            return True
+        return False
+
+    def _pre_fleet_confirmation(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        msg = turn.msg
+        text = turn.text
         # Fleet decisions bind their own delivered card before another pending
         # confirmation can consume a short yes/no answer.
         if self.resolve_fleet_confirmation_text(chat_id, lang, msg, text):
             self._trace_route("fleet_maintain", "fleet_confirmation_text")
-            return
+            return True
+        return False
+
+    def _pre_purge(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # A pending purge is confirmed ONLY by typing the exact phrase —
         # handled deterministically (no LLM), so a stray "да" can't wipe data.
         if pending and pending["kind"] == "purge":
             self._trace_route("purge", "pending_purge_phrase")
             self.resolve_purge(chat_id, lang, pending, text)
-            return
+            return True
+        return False
+
+    def _pre_journal_correction(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        msg = turn.msg
+        text = turn.text
+        pending = turn.pending
         if pending and pending["kind"] == "journal_correction":
             reply_card = (msg.get("reply_to_message") or {}).get("message_id")
             if self.resolve_journal_correction(chat_id, lang, pending, text, card_id=reply_card):
                 self._trace_route("recategorize", "journal_correction_confirmation")
-                return
+                return True
+        return False
+
+    def _pre_gratitude_correction(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        msg = turn.msg
+        text = turn.text
+        pending = turn.pending
         if self.resolve_gratitude_correction(chat_id, lang, msg, text, pending):
             self._trace_route("recategorize", "journal_source_correction")
-            return
+            return True
+        return False
+
+    def _pre_journal_edit(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # «Изменить» on a journal capture card: his next message is the
         # correction for the pending entry DRAFT (deterministic, no router).
         if pending and pending["kind"] == "journal_edit":
             self._trace_route("ingest", "pending_journal_edit")
             self.resolve_journal_edit(chat_id, lang, pending, text)
-            return
+            return True
+        return False
+
+    def _pre_media_correction(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # A media confirmation card is open: corrections («№2 — фильм», «убери
         # №3») are deterministic — never a router guess over untrusted titles.
         # Anything that isn't a correction routes normally («да» -> confirm).
@@ -2681,7 +2792,15 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 pending = None
             elif self.resolve_media_correction(chat_id, lang, stash, text):
                 self._trace_route("ingest", "pending_media_correction")
-                return
+                return True
+        turn.pending = pending
+        return False
+
+    def _pre_category(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # Explicit category assignment while a suggestion is pending ("Категория -
         # Документы", "в категорию X", "set category to X") — resolve it
         # deterministically so the named category is never lost to a router
@@ -2691,13 +2810,20 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             if explicit:
                 self._trace_route("recategorize", "explicit_category")
                 self.resolve_pending(chat_id, "amend", {"category": explicit}, pending, lang)
-                return
+                return True
             if self.rejects_category_suggestion(text):
                 # Keep the suggestion pending, but never let generic negative
                 # feedback become an invented category through the LLM router.
                 self._trace_route("recategorize", "category_rejected")
                 self.reply(chat_id, T(lang, "category_correction_needed"))
-                return
+                return True
+        return False
+
+    def _pre_reminder_schedule(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # A repeat request cannot be silently reduced to a one-shot by a pending
         # resolver or the model. Keep every current confirmation intact.
         reminder_context = pending and pending["kind"] in {
@@ -2710,47 +2836,107 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             text, re.I)
         if (repeat_followup or reminder_request) and self._reject_reminder_schedule(chat_id, lang, {}, text):
             self._trace_route("clarify", "unsupported_reminder_schedule")
-            return
+            return True
+        return False
+
+    def _pre_replied_reminder(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # A reply names a delivered alarm before another reminder's draft,
         # reopen question or disambiguation can consume it. A source/echo snooze
         # choice keeps its existing binding; unrelated drafts retain their TTL.
         if self.turn_reply_reminder_id is not None:
             if self.resolve_snooze_choice_text(chat_id, lang, pending, text):
                 self._trace_route("reminder_reschedule", "snooze_choice")
-                return
+                return True
             if self.resolve_fired_followup(chat_id, lang, text, pending):
                 self._trace_route("reminder_reschedule", "fired_followup")
-                return
+                return True
+        return False
+
+    def _pre_reminder_pick(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # A pending reminder disambiguation ('which reminder?'): his next pick
         # ('второе'/'#2'/'про банк') completes the remembered reschedule/rename (B2).
         if pending and pending["kind"] == "reminder_op":
             if self._resolve_reminder_op(chat_id, lang, pending, text):
                 self._trace_route("reminder_reschedule", "pending_reminder_pick")
-                return
+                return True
             store.pending_clear(self.conn, chat_id)  # not a pick -> abandon, route normally
             pending = None
+        turn.pending = pending
+        return False
+
+    def _pre_expired_reopen(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # The expiry notice's open question («вернуть?») and a reminder draft /
         # partial are answered deterministically: yes / no / a bare time never
         # cost a router call (ADR-0003, ADR-0006).
         if self.resolve_expired_reopen_text(chat_id, lang, pending, text):
             self._trace_route("reminder_undo", "expired_reopen_text")
-            return
+            return True
+        return False
+
+    def _pre_reminder_draft(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         if self.resolve_reminder_draft_text(chat_id, lang, pending, text):
             self._trace_route("reminder_create", "reminder_draft_text")
-            return
+            return True
+        return False
+
+    def _pre_snooze_choice(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # Common fired-reminder replies are state transitions, not conversation.
         if self.resolve_snooze_choice_text(chat_id, lang, pending, text):
             self._trace_route("reminder_reschedule", "snooze_choice")
-            return
+            return True
         pending = store.pending_get(self.conn, chat_id)
+        turn.pending = pending
+        return False
+
+    def _pre_named_reschedule(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
         # Resolve them deterministically before the LLM router — including an
         # explicit close/skip/snooze after the short pending window expired.
         if self.resolve_named_reschedule_text(chat_id, lang, text):
             self._trace_route("reminder_reschedule", "named_time")
-            return
+            return True
+        return False
+
+    def _pre_fired_followup(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         if self.resolve_fired_followup(chat_id, lang, text, pending):
             self._trace_route("reminder_reschedule", "fired_followup")
-            return
+            return True
+        return False
+
+    def _pre_gratitude_capture(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        msg = turn.msg
+        text = turn.text
+        pending = turn.pending
+        fired_pending_context = turn.fired_pending_context
+        fired_pending_row = turn.fired_pending_row
         # A fired reminder leaves a 30-min 'reminder_fired' pending so 'готово' / 'через
         # 30 минут' resolve it. But the boss often answers by DOING the task — a gratitude
         # reminder -> he dictates the gratitude. That content must be SAVED, not eaten as
@@ -2764,7 +2950,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         explicit_category = self._fired_gratitude_category(explicit_journal, msg)
         if explicit_category and (pending is None or pending["kind"] == "reminder_fired"):
             self._deterministic_capture(chat_id, lang, msg, explicit_category, source="replied_gratitude")
-            return
+            return True
         if pending is None:
             invitation = self.gratitude_invitation(chat_id, msg, delayed=True)
             context = ({"kind": "reminder_fired", "payload": {"title": invitation["title"]}}
@@ -2772,9 +2958,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             category = self._fired_gratitude_category(context, msg)
             if category:
                 self._deterministic_capture(chat_id, lang, msg, category, source="delayed_gratitude")
-                return
-        fired_pending_context = None
-        fired_pending_row = None
+                return True
         if (pending and pending["kind"] == "reminder_fired"
                 and not self._is_reminder_ack(
                     text, str(pending["payload"].get("title") or ""))):
@@ -2790,7 +2974,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 # entry — straight to the journal card, no router, no summary call.
                 self._deterministic_capture(chat_id, lang, msg, fired_gratitude_category,
                                             source="fired_gratitude")
-                return
+                return True
         # «В благодарности — …» is the boss's own routing prefix for the journal
         # (typed on most nights): the same deterministic capture, no LLM in front.
         prefixed = self._gratitude_prefix_capture(text) if pending is None else None
@@ -2798,7 +2982,48 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             category, body = prefixed
             self._deterministic_capture(chat_id, lang, msg, category,
                                         source="gratitude_prefix", body=body)
-            return
+            return True
+        turn.pending = pending
+        turn.fired_pending_context = fired_pending_context
+        turn.fired_pending_row = fired_pending_row
+        return False
+
+    @action_delivery.reminder_action()
+    def do_action_undo(self, chat_id, lang):
+        result = store.action_undo_latest(self.conn, chat_id)
+        if result['status'] == 'undone':
+            action_delivery.mark_completed(self)
+            self.reply(chat_id, T(lang, 'action_undo_done', n=result['count']))
+        else:
+            key = {
+                'missing': 'action_undo_missing', 'expired': 'action_undo_expired',
+                'past_due': 'action_undo_past_due', 'conflict': 'action_undo_conflict',
+                'invalid': 'action_undo_conflict',
+            }[result['status']]
+            self.reply(chat_id, T(lang, key))
+        return result
+
+    def _pre_action_undo(self, turn):
+        # Existing reminder undo phrases and replied-card meanings retain their
+        # own routes. This explicit command is available only with a free slot.
+        if (re.fullmatch(r'\s*(?:отмени\s+последнее\s+действие|undo\s+(?:the\s+)?last\s+action)[.!\s]*',
+                         turn.text, re.I)
+                and self.turn_reply_reminder_id is None
+                and not any(turn.msg.get(key) for key in (
+                    'reply_to_message', 'external_reply', 'quote', 'forward_origin',
+                    'forward_from', 'forward_from_chat', 'forward_sender_name'))
+                and not store.task_approvals_live(self.conn, turn.chat_id)):
+            result = self.do_action_undo(turn.chat_id, turn.lang)
+            self._trace_route('action_undo', 'explicit_action_undo', status=result['status'])
+            return True
+        return False
+
+    def _pre_compound(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        msg = turn.msg
+        text = turn.text
+        pending = turn.pending
         # A simple command SEQUENCE («закрой первое, потом перенеси второе на 14»)
         # is split deterministically and run fragment by fragment (ADR-0020 step 1);
         # it pauses at the first fragment that opens a card and resumes once that
@@ -2807,25 +3032,54 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             fragments = router.split_compound(text)
             if fragments:
                 self._run_compound(chat_id, lang, msg, fragments)
-                return
+                return True
+        return False
+
+    def _pre_numbered_delete(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # Basic #N deletion is a closed-world state command, not a language-
         # model judgment. Keep it before proactive/smalltalk/router handling so
         # identical word orders cannot randomly alternate between real deletion
         # confirmation and a blocked converse claim.
         if pending is None and self._dispatch_numbered_delete(chat_id, lang, text):
-            return
+            return True
+        return False
+
+    def _pre_task_approval(self, turn):
+        chat_id = turn.chat_id
+        msg = turn.msg
+        text = turn.text
+        pending = turn.pending
         # Task write approvals are bound to the exact delivered preview card.
         # A bare yes/no is accepted only when there is exactly one live task
         # approval and no legacy pending action competing for the same words.
         if self.resolve_task_approval_text(chat_id, text, msg, pending):
             self._trace_route("task_start", "task_approval_text")
-            return
+            return True
+        return False
+
+    def _pre_proactive_followup(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        pending = turn.pending
         # A short reply to a proactive nudge belongs to the exact queue that was
         # offered. Do this before small-talk/router handling so «Давай» cannot
         # become an unrelated free-form promise.
         if pending is None and self._resolve_proactive_followup(chat_id, lang, text):
             self._trace_route("proactive_heartbeat", "proactive_followup")
-            return
+            return True
+        return False
+
+    def _pre_smalltalk(self, turn):
+        chat_id = turn.chat_id
+        lang = turn.lang
+        text = turn.text
+        msg_id = turn.msg_id
+        pending = turn.pending
         # Obvious greetings / "how are you" / identity pings go straight to warm
         # free-form Cara, skipping the router (one chat call, no template). A bare
         # "ок"/"👍" needs no reply, like a human. With a pending action, short acks
@@ -2840,11 +3094,33 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                     self._trace_route("smalltalk", "smalltalk_ack")
                     if msg_id and router.is_agreement_ack(text):
                         self.react(chat_id, msg_id, "👍")
-                    return
+                    return True
             elif kind:
                 self._trace_route("converse", f"smalltalk_{kind}")
                 self.do_converse(chat_id, lang, text, msg_id)
+                return True
+        return False
+
+    def _dispatch(self, chat_id, msg, text):
+        lang = self.lang()
+        # She always signals that she is working (ADR-0007): the router or an
+        # ingest call is 2–20 s of silence otherwise.
+        self.send_chat_action(chat_id, "typing")
+        # When he last reached out — the reminder-delivery lull check reads this so
+        # a ping waits for a short pause in the conversation.
+        store.kv_set(self.conn, "last_boss_msg_at", datetime.now(timezone.utc).isoformat())
+        msg_id = msg.get("message_id")
+        pending = store.pending_get(self.conn, chat_id)
+        turn = _PreRouterTurn(chat_id, lang, msg, text, pending)
+        for _name, method, allowed_pending_kinds in PRE_ROUTER:
+            pending_kind = turn.pending["kind"] if turn.pending else None
+            if allowed_pending_kinds is not None and pending_kind not in allowed_pending_kinds:
+                continue
+            if getattr(self, method)(turn):
                 return
+        pending = turn.pending
+        fired_pending_context = turn.fired_pending_context
+        fired_pending_row = turn.fired_pending_row
         try:
             # The router gets the same per-turn context converse does — above
             # all the message he's REPLYING TO (it may be far older than the
@@ -3345,12 +3621,13 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 self.reply(chat_id, T(lang, "cancelled"))
                 return
             ids = payload.get("row_ids") or []
-            archived = [rid for rid in ids if store.note_archive(
-                self.conn, rid, reason="bulk archive by boss")]
-            for rid in archived:
-                events.record_done(self.conn, "note_archived", chat_id=chat_id,
-                                   payload={"message_id": rid})
-            self.reply(chat_id, T(lang, "note_archived_multi", n=len(archived)))
+            with store.action_undo_group(self.conn, chat_id, 'note_lifecycle'):
+                archived = [rid for rid in ids if store.note_archive(
+                    self.conn, rid, reason="bulk archive by boss")]
+                for rid in archived:
+                    events.record_done(self.conn, "note_archived", chat_id=chat_id,
+                                       payload={"message_id": rid})
+                self.reply(chat_id, T(lang, "note_archived_multi", n=len(archived)))
         elif kind == "delete":
             if action != "confirm":  # deletion only on an explicit yes
                 store.pending_clear(self.conn, chat_id)

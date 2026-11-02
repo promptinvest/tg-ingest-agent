@@ -248,6 +248,10 @@ def enqueue(agent, method, params, *, record=False, history_text=None):
         " VALUES(?,?,?,?,?,?,?,'pending',?,?)",
         (key, tx["key"] if tx else None, source, method, _json(params), int(record),
          _json(metadata), now, now))
+    row_id = agent.conn.execute(
+        "SELECT id FROM reply_outbox WHERE delivery_key=?", (key,)).fetchone()[0]
+    store.action_undo_track_outbox(agent.conn, row_id,
+                                 action_key=tx["key"] if tx else None)
     agent.conn.commit()
     return agent.conn.execute("SELECT * FROM reply_outbox WHERE delivery_key=?", (key,)).fetchone()
 

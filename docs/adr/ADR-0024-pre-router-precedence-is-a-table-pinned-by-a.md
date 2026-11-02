@@ -1,6 +1,6 @@
 # ADR-0024: Pre-router precedence is a table pinned by a matrix test; every immediate action has an inverse
 
-- Status: Partially implemented 2026-10-19 (reminder reply bindings and schedule guards; precedence table and inverses remain proposed)
+- Status: Accepted 2026-11-02; implementation and verification in progress
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -12,6 +12,23 @@ dispatch is a hand-ordered chain of about fourteen guards justified by incidents
 ## Decision
 
 commit 1 writes a matrix test asserting today's winner for each pending kind and sample message; commit 2 introduces PRE_ROUTER = [(name, method, allowed_pending_kinds)] iterated in dispatch with the guards moved verbatim; store.reminder_reopen plus a kv last_action with the inverse operation written by cancel, reschedule, rename, recategorize and note_lifecycle, and a deterministic «отмени / верни как было / не то» shortcut valid for 10 min; the ordinal-close and the question-aware ack of ADR-0006 become rows; skill_manifest gains a per-action param contract applied by validate_route with an examples-conformance test.
+
+The owner's 2 November selection preserves the existing meanings of «отмени»,
+«верни как было» and «не то». Generic undo instead uses the unambiguous
+«отмени последнее действие» / “undo last action” command with a free pending slot
+and no competing task approval or quoted/replied-card binding. Existing targeted
+reminder and learning undo remain intact. The latest supported mutation has a
+durable per-chat ten-minute inverse with stable target identities and an expected
+state comparison. Batch inverse is all-or-none, with original history retained.
+Restoration refuses changed targets or overdue rearming. Category inverse restores
+exact journal membership, payload and date; it does not erase correction history,
+issued note numbers or newly created categories. A recurring deferral's unchanged
+new echo is cancelled while its series anchor and history remain.
+
+This implementation extends the existing dispatcher, manifest and skill/storage
+modules; it creates no new process, schema, model call or router prompt. The
+parameter contract retains optional defaults, existing coercions, handler-safe
+fallbacks and ignored extension keys while rejecting unusable supplied shapes.
 
 ## Consequences
 
@@ -26,6 +43,12 @@ router-dispatch#4, #6, #12, architecture#6 in part
 nothing
 
 ## Status log
+
+- 2026-11-02: owner requested “implement next Cara ADR”; the current reconciliation
+  selects ADR-0024. Owner selected preserving existing phrases and adding
+  «отмени последнее действие» for generic undo. The original dispatch matrix is
+  characterized before extraction. Release verification remains separate; no
+  consumed healthcheck exception or prior controller is reused.
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
 - 2026-10-19: owner requested fixing three confirmed reminder defects. Implemented

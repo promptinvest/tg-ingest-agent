@@ -12,6 +12,7 @@ import json
 import re
 import secrets
 import sqlite3
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 
 import journals
@@ -78,6 +79,7 @@ class ReminderMixin:
         return True
 
     @action_delivery.reminder_action()
+    @store.action_undo_grouped("reminder_reschedule")
     def do_reschedule(self, chat_id, lang, params, text=None):
         """Move an existing reminder to a new time (applied immediately, like
         cancel). Targets by id/title; a bare 'это/последнее' reference uses the
@@ -134,6 +136,7 @@ class ReminderMixin:
                    + "\n\n" + self._reminder_list_body(chat_id, lang))
 
     @action_delivery.reminder_action()
+    @store.action_undo_grouped("reminder_rename")
     def do_rename_reminder(self, chat_id, lang, params, text=None):
         """Retitle an existing reminder IN PLACE (keeps id/time/recurrence/history).
         The new name is params['new_title']; the target is resolved by id/title_query/
@@ -1143,7 +1146,9 @@ class ReminderMixin:
             if due is None:
                 self.reply(chat_id, T(lang, "reschedule_when"))
                 return True
-            store.reminder_update_due(self.conn, row["id"], due.isoformat())
+            with store.action_undo_group(self.conn, chat_id, "reminder_reschedule",
+                    origin_action_key=(getattr(self, "_reminder_transaction", None) or {}).get("key")):
+                store.reminder_update_due(self.conn, row["id"], due.isoformat())
             self._remember_reminder(row["id"])
             self.reply(chat_id, T(lang, "reminder_rescheduled",
                                   rid=self.reminder_no(chat_id, row["id"]), title=row["title"],
@@ -1154,7 +1159,9 @@ class ReminderMixin:
             if not new_title:
                 self.reply(chat_id, T(lang, "reminder_rename_what"))
                 return True
-            store.reminder_rename(self.conn, row["id"], new_title)
+            with store.action_undo_group(self.conn, chat_id, "reminder_rename",
+                    origin_action_key=(getattr(self, "_reminder_transaction", None) or {}).get("key")):
+                store.reminder_rename(self.conn, row["id"], new_title)
             self._remember_reminder(row["id"])
             self.reply(chat_id, T(lang, "reminder_renamed",
                                   rid=self.reminder_no(chat_id, row["id"]), title=new_title))
@@ -1534,6 +1541,7 @@ class ReminderMixin:
 
     # -- fired outcomes shared by text follow-ups and card buttons (ADR-0001/0002) --
 
+    @store.action_undo_grouped("reminder_reschedule")
     def _apply_snooze(self, chat_id, rid, title, due_iso):
         """Re-arm one fired reminder at `due_iso`. B4: the ORIGINAL one-shot moves
         (keeps id/history); a fired RECURRING one gets a one-shot ECHO and the series
@@ -1559,6 +1567,7 @@ class ReminderMixin:
         day_start = reminders.local_day_at(offset, 0, 0)
         return store.reminder_snoozes_since(self.conn, rid, day_start)
 
+    @store.action_undo_grouped("reminder_cancel")
     def _close_fired(self, chat_id, rid, reason):
         """«готово»/«пропустить» on one fired reminder: closes a one-shot (B5 — it was
         left open at fire), acknowledges a recurring one. Returns (row, display_no)
@@ -1570,7 +1579,14 @@ class ReminderMixin:
         if rem["recurrence"] == "none" and rem["status"] == "active":
             store.reminder_close(self.conn, rid, "done", reason=reason)
         else:
-            store.reminder_event(self.conn, rid, "acknowledged", reason)
+            # The delivered recurring occurrence is already history and its
+            # next anchor is retained. An acknowledgement has no safe inverse;
+            # never let a generic undo select an older unrelated action.
+            transaction = (nullcontext() if getattr(self.conn, "_local_action_transaction", False)
+                           else action_delivery.local_transaction(self.conn))
+            with transaction:
+                store.action_undo_forget(self.conn, chat_id=chat_id)
+                store.reminder_event(self.conn, rid, "acknowledged", reason)
         return rem, disp
 
     def resolve_fired_action(self, chat_id, lang, payload, action, params):
@@ -1609,9 +1625,10 @@ class ReminderMixin:
                 due = (now + timedelta(minutes=minutes)).isoformat()
             when_rel = reminders.fmt_relative(due, offset, lang, now)
             done = []
-            for rid, title in zip(ids, titles):
-                eff, real_title = self._apply_snooze(chat_id, rid, title, due)
-                done.append((rid, eff, real_title))
+            with store.action_undo_group(self.conn, chat_id, "reminder_reschedule"):
+                for rid, title in zip(ids, titles):
+                    eff, real_title = self._apply_snooze(chat_id, rid, title, due)
+                    done.append((rid, eff, real_title))
             if done:
                 action_delivery.mark_completed(self)
             if len(done) == 1:
@@ -1639,11 +1656,12 @@ class ReminderMixin:
         if journal and close_reason == "done":
             close_reason = "skipped"
         closed = []
-        for rid in ids:
-            rem, disp = self._close_fired(chat_id, rid, close_reason)
-            if rem is not None:
-                self._clear_snooze_choice(chat_id, rid)
-                closed.append((rem, disp))
+        with store.action_undo_group(self.conn, chat_id, "reminder_cancel"):
+            for rid in ids:
+                rem, disp = self._close_fired(chat_id, rid, close_reason)
+                if rem is not None:
+                    self._clear_snooze_choice(chat_id, rid)
+                    closed.append((rem, disp))
         if not closed:
             return T(lang, "reminder_not_found"), None, remaining
         if len(closed) == 1:
@@ -1839,7 +1857,9 @@ class ReminderMixin:
             self.answer_callback(callback_id, T(lang, "card_expired"))
             return
         store.pending_clear(self.conn, chat_id)
-        store.reminder_update_due(self.conn, twin["id"], payload["due_utc"])
+        with store.action_undo_group(self.conn, chat_id, "reminder_reschedule",
+                origin_action_key=(getattr(self, "_reminder_transaction", None) or {}).get("key")):
+            store.reminder_update_due(self.conn, twin["id"], payload["due_utc"])
         self._remember_reminder(twin["id"])
         self.answer_callback(callback_id, "↪️")
         self.edit_message(chat_id, message_id, base_text + "\n— ↪️")

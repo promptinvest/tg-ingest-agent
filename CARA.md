@@ -84,6 +84,26 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
                                           → cited Markdown brief
 ```
 
+- **Deterministic precedence:** `PRE_ROUTER` declares the ordered guards and
+  their allowed pending kinds. The regression matrix pins the current winners,
+  including card/reply ownership, pending refreshes, gratitude capture and
+  question-aware acknowledgements. Router parameter contracts in
+  `skill_manifest.py` reject unusable supplied shapes before handlers run;
+  missing fields, established coercions, safe selector fallbacks and ignored
+  extension fields keep their existing behavior.
+- **Undo the latest supported action:** with no pending card or task approval,
+  say «отмени последнее действие» / “undo last action” within ten minutes of
+  closing, moving or renaming a reminder, changing a note's category, or changing
+  its lifecycle. The inverse uses the original stable targets, survives restart,
+  and applies every member of a batch or none. It refuses changed targets and
+  overdue rearming. Journal payloads/dates and note lifecycle fields are restored;
+  issued note numbers, categories and original history remain, with appended undo
+  evidence. The record is consumed once; a newer supported mutation
+  replaces it. Unrelated commands do not replace it. A recurring occurrence's
+  acknowledgement clears it without changing the series anchor. Existing named/replied
+  reminder undo, its time-toggle behavior, pending-card cancellation and learning
+  undo keep their own meanings. «Отмени», «верни как было» and «не то» do not
+  become cross-domain undo commands.
 - **Owner‑only:** a message/reaction/button is acted on **only** when the chat id
   *and* the sender's user id are both allowlisted. Strangers, and the owner in any
   other chat (e.g. a group), are ignored.
@@ -2054,7 +2074,7 @@ failures, spend, conversation and memory are not silently aged out.
 | `jobs` | Terminal telemetry | Only `done`/`failed` rows older than the configured cutoff are pruned; pending/claimed work remains. |
 | `journal_definitions` | Protected configuration | Stable journal identity, category and opt-in prompt settings; retained by every content-purge scope. |
 | `journal_entries` | Journal child | Validated derived payload tied to a source message; manually deleted before the message. Journal purge retains the journal definition/category. |
-| `kv` | Mixed durable state | Configuration, counters, recovery markers and bounded context/drafts; targeted consumption/removal only. `all` clears named content pointers and resets note counters, retaining unrelated config and consumed authorization evidence. |
+| `kv` | Mixed durable state | Configuration, counters, recovery markers and bounded context/drafts; targeted consumption/removal only. One `action_undo:<chat>` record is replaced by the next supported mutation or consumed by successful undo; expiry revokes its ten-minute authority. Affected source deletion/purge removes its content. `all` clears named content pointers and resets note counters, retaining unrelated config and consumed authorization evidence. |
 | `learning_events` | Learning child | Exact-version learning/undo events; no age sweep; cascades with learning versions on explicit `all` purge. |
 | `learning_lessons` | Learned content | Active/disabled owner-bound procedures; no age sweep; exact-version undo retains history; explicit `all` purge deletes it. |
 | `learning_task_observations` | Learning/task child | Task-to-lesson capture evidence; explicit `all` purge deletes it; task deletion cascades and lesson deletion clears the lesson reference. |

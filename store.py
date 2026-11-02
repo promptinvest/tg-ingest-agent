@@ -14,8 +14,11 @@ import math
 import re
 import sqlite3
 import weakref
+import uuid
 from array import array
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 
 import common
@@ -2245,6 +2248,396 @@ def kv_set(conn, key, value):
     conn.commit()
 
 
+# This is a bounded inverse of the latest explicit owner mutation, not a
+# replacement for target-bound reminder or version-bound learning undo.
+_ACTION_UNDO_FIELDS = {
+    "reminder_cancel": ("reminders", ("status", "closed_at", "close_reason")),
+    "reminder_reschedule": ("reminders", ("due_utc", "prev_due_utc", "last_fired_at")),
+    "reminder_rename": ("reminders", ("title",)),
+    "recategorize": ("messages", ("category", "status", "knowledge_state", "note_purpose")),
+    "note_lifecycle": ("messages", ("knowledge_state", "note_purpose", "review_at",
+                                      "expires_at", "archived_at", "archive_reason")),
+}
+_ACTION_UNDO_CREATED_FIELDS = ("status", "closed_at", "close_reason")
+_ACTION_UNDO_JOURNAL_COLUMNS = ("id", "journal_id", "message_id", "occurred_at", "payload_json",
+                                "extraction_status", "created_at", "updated_at")
+
+
+def _action_undo_json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _action_undo_hash(value):
+    return hashlib.sha256(_action_undo_json(value).encode("utf-8")).hexdigest()
+
+
+def _action_undo_time(value):
+    if not isinstance(value, str):
+        raise ValueError("inverse timestamp must be an aware ISO string")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("inverse timestamp must be aware")
+    return parsed
+
+
+def _action_undo_target_fields(action, target):
+    return (_ACTION_UNDO_CREATED_FIELDS if target.get("created")
+            else _ACTION_UNDO_FIELDS[action][1])
+
+
+def _action_undo_valid_target(action, target):
+    if not isinstance(target, dict) or type(target.get("id")) is not int or target["id"] <= 0:
+        return False
+    created = target.get("created", False)
+    if type(created) is not bool or (created and action != "reminder_reschedule"):
+        return False
+    before = target.get("before")
+    expected = target.get("expected")
+    if (not isinstance(before, dict) or set(before) != set(_action_undo_target_fields(action, target))
+            or any(v is not None and not isinstance(v, str) for v in before.values())
+            or not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None):
+        return False
+    if action != "recategorize":
+        return True
+    entries, definitions = target.get("journal"), target.get("definitions")
+    categories = target.get("categories")
+    if (not isinstance(entries, list) or not isinstance(definitions, list) or len(entries) > 1
+            or not isinstance(categories, list)
+            or any(not isinstance(c, dict) or not isinstance(c.get("name"), str)
+                   or (c.get("row") is not None and not isinstance(c["row"], dict)) for c in categories)):
+        return False
+    for entry in entries:
+        if (not isinstance(entry, dict) or set(entry) != set(_ACTION_UNDO_JOURNAL_COLUMNS)
+                or any(type(entry[k]) is not int or entry[k] <= 0 for k in ("id", "journal_id", "message_id"))
+                or entry["message_id"] != target["id"]
+                or any(not isinstance(entry[k], str) for k in _ACTION_UNDO_JOURNAL_COLUMNS[3:])):
+            return False
+    if any(not isinstance(d, dict) or type(d.get("id")) is not int or d["id"] <= 0 for d in definitions):
+        return False
+    return {d["id"] for d in definitions} == {e["journal_id"] for e in entries}
+
+
+def _action_undo_created_reminder(conn, row_id):
+    group = getattr(conn, "_action_undo_group", None)
+    if group is None or group.get("unavailable") or group["action"] != "reminder_reschedule":
+        return
+    snapshot = _action_undo_snapshot(conn, "reminders", row_id, group["chat_id"])
+    target = {"id": row_id, "created": True,
+              "before": {"status": "cancelled", "closed_at": None, "close_reason": "action_undone"},
+              "expected": _action_undo_hash(snapshot)}
+    group["targets"].append(target)
+    conn.execute("INSERT OR REPLACE INTO kv(key,value) VALUES(?,?)",
+                 (f"action_undo:{group['chat_id']}", _action_undo_json(group)))
+
+
+def action_undo_track_outbox(conn, row_id, *, action_key=None):
+    """Bind exact original output IDs before enqueue commits, including notes.
+
+    A reminder resolver may have returned before its caller queues the result;
+    its exact durable action key keeps that output bound without guessing from
+    a Telegram update shared by several compound fragments.
+    """
+    group = getattr(conn, "_action_undo_group", None)
+    if group is None and action_key is None:
+        return
+    if group is not None:
+        if group.get("unavailable") or not group["targets"]:
+            return
+        rows = conn.execute("SELECT key,value FROM kv WHERE key=?",
+                            (f"action_undo:{group['chat_id']}",)).fetchall()
+    else:
+        rows = conn.execute(r"SELECT key,value FROM kv WHERE key LIKE ? ESCAPE '\'",
+                            (_like_prefix("action_undo") + ":%",)).fetchall()
+    for row in rows:
+        try:
+            record = json.loads(row["value"])
+            if group is not None:
+                if record["token"] != group["token"]:
+                    continue
+            elif record.get("origin_action_key") != action_key:
+                continue
+            bound = record.setdefault("outbox_ids", [])
+            if row_id not in bound:
+                bound.append(row_id)
+            conn.execute("UPDATE kv SET value=? WHERE key=? AND value=?",
+                         (_action_undo_json(record), row["key"], row["value"]))
+            if group is not None:
+                group["outbox_ids"] = bound
+        except (KeyError, TypeError, ValueError):
+            # A damaged inverse cannot gain new output authority.
+            continue
+
+
+def _action_undo_note_number_assigned(conn, row_id):
+    group = getattr(conn, "_action_undo_group", None)
+    if group is None or group.get("unavailable") or group["action"] != "recategorize":
+        return
+    target = next((t for t in group["targets"] if t["id"] == row_id), None)
+    if target is None:
+        return
+    # Legacy journal cards issue their number while rendering the same action,
+    # after category confirmation. Bind that existing lazy issuance atomically;
+    # the inverse never clears an issued stable number.
+    target["expected"] = _action_undo_hash(_action_undo_snapshot(
+        conn, "messages", row_id, group["chat_id"], True))
+    conn.execute("UPDATE kv SET value=? WHERE key=?",
+                 (_action_undo_json(group), f"action_undo:{group['chat_id']}"))
+
+
+def action_undo_forget(conn, *, chat_id=None, table=None, ids=None, category=None):
+    """Erase matching inverse snapshots with their source; caller owns commit.
+
+    Category erasure also covers a previous journal membership held only by an
+    inverse. A malformed record cannot prove it is unrelated, so it is removed.
+    No content is copied into the append-only, content-free undo audit.
+    """
+    target_ids = set(ids) if ids is not None else None
+    category_key = str(category).casefold() if category is not None else None
+    for row in conn.execute(r"SELECT key,value FROM kv WHERE key LIKE ? ESCAPE '\'",
+                            (_like_prefix("action_undo") + ":%",)).fetchall():
+        if chat_id is not None and row["key"] != f"action_undo:{int(chat_id)}":
+            continue
+        remove = table is None and target_ids is None and category_key is None
+        try:
+            record = json.loads(row["value"])
+            record_table = _ACTION_UNDO_FIELDS[record["action"]][0]
+            targets = record["targets"]
+            if table is not None and record_table != table:
+                continue
+            if target_ids is None and category_key is None:
+                remove = True
+            elif target_ids is not None and any(t["id"] in target_ids for t in targets):
+                remove = True
+            elif category_key is not None:
+                remove = any(
+                    str(t["before"].get("category") or "").casefold() == category_key
+                    or any(str(d.get("category") or "").casefold() == category_key
+                           for d in t.get("definitions", []))
+                    or any(str(c.get("name") or "").casefold() == category_key
+                           for c in t.get("categories", [])) for t in targets)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            remove = True
+        if remove:
+            conn.execute("DELETE FROM kv WHERE key=?", (row["key"],))
+            group = getattr(conn, "_action_undo_group", None)
+            if group is not None and row["key"] == f"action_undo:{group['chat_id']}":
+                group["unavailable"] = True
+    # An unsupported explicit mutation may precede the first supported member
+    # of a batch. Keep that batch unavailable even if there was no older record.
+    group = getattr(conn, "_action_undo_group", None)
+    if (group is not None and chat_id is not None and group["chat_id"] == int(chat_id)
+            and table is None and target_ids is None and category_key is None):
+        group["unavailable"] = True
+
+
+@contextmanager
+def action_undo_group(conn, chat_id, action, *, origin_action_key=None):
+    """Group actual mutations without moving their transport/commit boundaries."""
+    if action not in _ACTION_UNDO_FIELDS:
+        raise ValueError("unknown inverse action")
+    previous = getattr(conn, "_action_undo_group", None)
+    # A disambiguation resolver may call its ordinary handler inside the same
+    # action. It contributes to that action rather than replacing its snapshot.
+    if previous is not None:
+        if origin_action_key is not None:
+            previous.setdefault("origin_action_key", origin_action_key)
+        yield
+        return
+    stamp = datetime.now(timezone.utc)
+    conn._action_undo_group = {
+        "version": 1, "token": uuid.uuid4().hex, "chat_id": int(chat_id),
+        "action": action, "created_at": stamp.isoformat(),
+        "expires_at": (stamp + timedelta(minutes=10)).isoformat(), "targets": [],
+    }
+    if origin_action_key is not None:
+        conn._action_undo_group["origin_action_key"] = origin_action_key
+    try:
+        yield
+    finally:
+        conn._action_undo_group = previous
+
+
+def action_undo_grouped(action):
+    """Keep one latest inverse across the handler's already-resolved targets."""
+    def decorate(fn):
+        @wraps(fn)
+        def run(agent, chat_id, *args, **kwargs):
+            origin = (getattr(agent, "_reminder_transaction", None) or {}).get("key")
+            with action_undo_group(agent.conn, chat_id, action, origin_action_key=origin):
+                return fn(agent, chat_id, *args, **kwargs)
+        return run
+    return decorate
+
+
+def _action_undo_snapshot(conn, table, row_id, chat_id, journal=False):
+    row = conn.execute(f"SELECT * FROM {table} WHERE id=? AND chat_id=?",
+                       (row_id, chat_id)).fetchone()
+    if row is None:
+        return None
+    snapshot = {"row": dict(row)}
+    if table == "reminders":
+        snapshot["last_event"] = conn.execute(
+            "SELECT COALESCE(MAX(id),0) FROM reminder_events WHERE reminder_id=?",
+            (row_id,)).fetchone()[0]
+    if journal:
+        snapshot["journal"] = [dict(r) for r in conn.execute(
+            "SELECT * FROM journal_entries WHERE message_id=? ORDER BY id", (row_id,))]
+        snapshot["definitions"] = [dict(conn.execute(
+            "SELECT * FROM journal_definitions WHERE id=?", (r["journal_id"],)).fetchone())
+            for r in snapshot["journal"]]
+        snapshot["categories"] = []
+        for name in sorted({row[k] for k in ("category", "suggested_category") if row[k]}):
+            category = conn.execute("SELECT * FROM categories WHERE norm_key=?", (name.casefold(),)).fetchone()
+            snapshot["categories"].append({"name": name, "row": dict(category) if category else None})
+    return snapshot
+
+
+@contextmanager
+def _action_undo_capture(conn, table, row_id):
+    group = getattr(conn, "_action_undo_group", None)
+    if group is None or group.get("unavailable") or _ACTION_UNDO_FIELDS[group["action"]][0] != table:
+        yield
+        return
+    # Existing helper commits are contained by the same narrow transaction
+    # implementation used by durable reminder actions; no network occurs here.
+    from action_delivery import local_transaction
+    transaction = (nullcontext() if getattr(conn, "_local_action_transaction", False)
+                   else local_transaction(conn))
+    journal = group["action"] == "recategorize"
+    with transaction:
+        before = _action_undo_snapshot(conn, table, row_id, group["chat_id"], journal)
+        yield
+        after = _action_undo_snapshot(conn, table, row_id, group["chat_id"], journal)
+        if before is None or after is None:
+            return
+        fields = _ACTION_UNDO_FIELDS[group["action"]][1]
+        if (all(before["row"][k] == after["row"][k] for k in fields)
+                and (not journal or before["journal"] == after["journal"])):
+            return
+        target = next((t for t in group["targets"] if t["id"] == row_id), None)
+        if target is None:
+            target = {"id": row_id, "before": {k: before["row"][k] for k in fields}}
+            if journal:
+                target["journal"] = before["journal"]
+                target["definitions"] = before["definitions"]
+                target["categories"] = before["categories"]
+            group["targets"].append(target)
+        target["expected"] = _action_undo_hash(after)
+        conn.execute("INSERT OR REPLACE INTO kv(key,value) VALUES(?,?)",
+                     (f"action_undo:{group['chat_id']}", _action_undo_json(group)))
+
+
+def action_undo_latest(conn, chat_id, now=None):
+    """Restore one exact latest action atomically, or return a refusal reason.
+
+    All targets must still match. Historical events, note numbers and issued
+    deliveries remain; a delivered alarm keeps its old firing marker. No target
+    is guessed from a current ordinal and no older action becomes the fallback.
+    """
+    from action_delivery import local_transaction
+    key = f"action_undo:{int(chat_id)}"
+    stamp = now or datetime.now(timezone.utc)
+    transaction = (nullcontext() if getattr(conn, "_local_action_transaction", False)
+                   else local_transaction(conn))
+    with transaction:
+        raw = kv_get(conn, key)
+        if not raw:
+            return {"status": "missing"}
+        try:
+            record = json.loads(raw)
+            action = record["action"]
+            table = _ACTION_UNDO_FIELDS[action][0]
+            created = _action_undo_time(record["created_at"])
+            expires = _action_undo_time(record["expires_at"])
+            targets = record["targets"]
+            outbox_ids = record.get("outbox_ids", [])
+            if (type(record["version"]) is not int or record["version"] != 1
+                    or type(record["chat_id"]) is not int or record["chat_id"] != int(chat_id)
+                    or not isinstance(targets, list) or not targets
+                    or stamp < created or expires - created != timedelta(minutes=10)
+                    or any(not _action_undo_valid_target(action, t) for t in targets)
+                    or len({t["id"] for t in targets}) != len(targets)
+                    or not isinstance(record["token"], str)
+                    or not isinstance(outbox_ids, list)
+                    or any(type(i) is not int or i <= 0 for i in outbox_ids)):
+                return {"status": "invalid"}
+            if stamp >= expires:
+                return {"status": "expired", "action": action}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return {"status": "invalid"}
+        journal = action == "recategorize"
+        for target in targets:
+            try:
+                current = _action_undo_snapshot(conn, table, target["id"], int(chat_id), journal)
+                current_hash = _action_undo_hash(current)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return {"status": "invalid", "action": action}
+            if current is None or current_hash != target["expected"]:
+                return {"status": "conflict", "action": action}
+            restored = dict(current["row"], **target["before"])
+            if action in ("reminder_cancel", "reminder_reschedule") and restored["status"] == "active":
+                try:
+                    due = _action_undo_time(restored["due_utc"])
+                    fired = (_action_undo_time(restored["last_fired_at"])
+                             if restored["last_fired_at"] is not None else None)
+                except (TypeError, ValueError, OverflowError):
+                    return {"status": "invalid", "action": action}
+                if due <= stamp and (fired is None or fired < due):
+                    return {"status": "past_due", "action": action}
+            if journal:
+                for category in target["categories"]:
+                    row = conn.execute("SELECT * FROM categories WHERE norm_key=?",
+                                       (category["name"].casefold(),)).fetchone()
+                    if (dict(row) if row else None) != category["row"]:
+                        return {"status": "conflict", "action": action}
+                for definition in target.get("definitions", []):
+                    row = conn.execute("SELECT * FROM journal_definitions WHERE id=?",
+                                       (definition["id"],)).fetchone()
+                    if row is None or dict(row) != definition:
+                        return {"status": "conflict", "action": action}
+                for entry in target.get("journal", []):
+                    collision = conn.execute("SELECT message_id FROM journal_entries WHERE id=?",
+                                             (entry["id"],)).fetchone()
+                    if collision and collision["message_id"] != target["id"]:
+                        return {"status": "conflict", "action": action}
+        for target in targets:
+            fields = _action_undo_target_fields(action, target)
+            before = dict(target["before"])
+            if target.get("created"):
+                before["closed_at"] = stamp.isoformat()
+            conn.execute(f"UPDATE {table} SET " + ",".join(f"{f}=?" for f in fields)
+                         + " WHERE id=? AND chat_id=?",
+                         (*[before[f] for f in fields], target["id"], int(chat_id)))
+            if table == "reminders":
+                if target.get("created"):
+                    reminder_event(conn, target["id"], "closed", "action_undone", commit=False)
+                reminder_event(conn, target["id"], "action_undone", action, commit=False)
+            else:
+                if journal:
+                    conn.execute("DELETE FROM journal_entries WHERE message_id=?", (target["id"],))
+                    for entry in target.get("journal", []):
+                        columns = _ACTION_UNDO_JOURNAL_COLUMNS
+                        conn.execute("INSERT INTO journal_entries(" + ",".join(columns)
+                                     + ") VALUES(" + ",".join("?" for _ in columns) + ")",
+                                     tuple(entry[c] for c in columns))
+                note_outcome_record(conn, target["id"], "action_undone", source=action, commit=False)
+        if table == "messages":
+            bump_vec_gen(conn)
+            invalidate_vector_cache(conn)
+        # Content-free append-only evidence compensates for the action; its
+        # original correction, lifecycle, and delivery history is never erased.
+        import events
+        events.record_done(conn, "action_undone", chat_id=int(chat_id),
+                           payload={"action": action, "token": record["token"],
+                                    "ids": [t["id"] for t in targets]})
+        for outbox_id in outbox_ids:
+            conn.execute("UPDATE reply_outbox SET state='failed',error=?,finished_at=?"
+                         " WHERE id=? AND state='pending'",
+                         ("superseded_by_action_undo:" + record["token"], stamp.isoformat(), outbox_id))
+        conn.execute("DELETE FROM kv WHERE key=? AND value=?", (key, raw))
+        return {"status": "undone", "action": action, "count": len(targets)}
+
+
 def deployment_notification_prepare(conn, manifest, summary, destination_fingerprint):
     now = _now()
     conn.execute(
@@ -2689,12 +3082,13 @@ def _note_update(conn, message_id, sql_set, args):
     """Apply a lifecycle update to a NOTE row (knowledge_state NOT NULL — journal
     entries and failed rows are outside note lifecycle). Returns True if a row
     changed."""
-    cur = conn.execute(
-        f"UPDATE messages SET {sql_set} WHERE id = ? AND knowledge_state IS NOT NULL",
-        (*args, message_id),
-    )
-    conn.commit()
-    return cur.rowcount > 0
+    with _action_undo_capture(conn, "messages", message_id):
+        cur = conn.execute(
+            f"UPDATE messages SET {sql_set} WHERE id = ? AND knowledge_state IS NOT NULL",
+            (*args, message_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def note_archive(conn, message_id, reason=None):
@@ -3332,6 +3726,13 @@ def set_suggestion_message(conn, message_id, tg_suggestion_message_id):
 
 def confirm_category(conn, message_id, category, journal_payload=None,
                      journal_status=None, journal_occurred_at=None):
+    with _action_undo_capture(conn, "messages", message_id):
+        return _confirm_category(conn, message_id, category, journal_payload,
+                                 journal_status, journal_occurred_at)
+
+
+def _confirm_category(conn, message_id, category, journal_payload=None,
+                      journal_status=None, journal_occurred_at=None):
     if journal_occurred_at is not None:
         stamp = datetime.fromisoformat(str(journal_occurred_at).replace("Z", "+00:00"))
         if stamp.tzinfo is None:
@@ -3662,6 +4063,7 @@ def ensure_note_no(conn, message_id, *, commit=True):
         return row["note_no"]
     nxt = _claim_note_no(conn, row["chat_id"])
     conn.execute("UPDATE messages SET note_no = ? WHERE id = ?", (nxt, message_id))
+    _action_undo_note_number_assigned(conn, message_id)
     if commit:
         conn.commit()
     return nxt
@@ -3823,6 +4225,7 @@ NOTE_REF_KV_PREFIXES = ("note_review_shown",)
 
 
 def delete_message_kv(conn, message_id):
+    action_undo_forget(conn, table="messages", ids=[message_id])
     keys = [f"{prefix}:{message_id}" for prefix in MESSAGE_KV_KEYS]
     marks = ",".join("?" for _ in keys)
     conn.execute(f"DELETE FROM kv WHERE key IN ({marks})", keys)
@@ -3836,6 +4239,7 @@ def _purge_all_message_kv(conn):
     `capture_action:%` would also match a future `captureXaction:` key, and a
     sweep that deletes more than it names is exactly the class of bug this
     module keeps paying for."""
+    action_undo_forget(conn, table="messages")
     for prefix in MESSAGE_KV_KEYS + NOTE_REF_KV_PREFIXES:
         conn.execute(r"DELETE FROM kv WHERE key LIKE ? ESCAPE '\'",
                      (_like_prefix(prefix) + ":%",))
@@ -3857,6 +4261,7 @@ TURN_ARTIFACT_KV = "turn_artifact_msgs"
 
 
 def _purge_reminder_kv(conn):
+    action_undo_forget(conn, table="reminders")
     marks = ",".join("?" for _ in REMINDER_KV_KEYS)
     conn.execute(f"DELETE FROM kv WHERE key IN ({marks})", REMINDER_KV_KEYS)
     # Drop the 'reminder' turn-artifact pointers with the rows they describe:
@@ -4041,6 +4446,8 @@ def purge_execute(conn, scope, category=None, task_purge_nonce=None):
         fleet_lifecycle.require_quiescence(conn, task_purge_nonce)
     elif scope in {"category", "journal", "messages", "reminders"}:
         analysis_lifecycle.erase_scope(conn, scope, category)
+    if scope in {"category", "journal"}:
+        action_undo_forget(conn, table="messages", category=category)
     paths = []
     if scope == "all":
         paths = [r["local_path"] for r in
@@ -6096,6 +6503,19 @@ def reminder_event(conn, rid, event, detail=None, *, commit=True):
 
 
 def reminder_add(conn, chat_id, title, due_utc, recurrence="none"):
+    group = getattr(conn, "_action_undo_group", None)
+    if group is not None and group["action"] == "reminder_reschedule":
+        from action_delivery import local_transaction
+        transaction = (nullcontext() if getattr(conn, "_local_action_transaction", False)
+                       else local_transaction(conn))
+        with transaction:
+            row_id = _reminder_add(conn, chat_id, title, due_utc, recurrence)
+            _action_undo_created_reminder(conn, row_id)
+            return row_id
+    return _reminder_add(conn, chat_id, title, due_utc, recurrence)
+
+
+def _reminder_add(conn, chat_id, title, due_utc, recurrence="none"):
     cur = conn.execute(
         "INSERT INTO reminders (chat_id, title, due_utc, recurrence, created_at)"
         " VALUES (?, ?, ?, ?, ?)",
@@ -6248,14 +6668,15 @@ def reminder_update_due(conn, rid, due_utc, reason="rescheduled"):
     of remembering the fired occurrence — otherwise a bare «отмени перенос» could swap
     a recurring series back behind last_fired_at, where reminders_due never selects it
     again and the series silently dies."""
-    prev_sql = "NULL" if reason == "recurrence_advanced" else "due_utc"
-    conn.execute(
-        f"UPDATE reminders SET prev_due_utc = {prev_sql}, due_utc = ?, last_fired_at = NULL"
-        " WHERE id = ?",
-        (due_utc, rid),
-    )
-    reminder_event(conn, rid, reason, due_utc, commit=False)
-    conn.commit()
+    with _action_undo_capture(conn, "reminders", rid):
+        prev_sql = "NULL" if reason == "recurrence_advanced" else "due_utc"
+        conn.execute(
+            f"UPDATE reminders SET prev_due_utc = {prev_sql}, due_utc = ?, last_fired_at = NULL"
+            " WHERE id = ?",
+            (due_utc, rid),
+        )
+        reminder_event(conn, rid, reason, due_utc, commit=False)
+        conn.commit()
 
 
 def reminder_restore_due(conn, rid):
@@ -6277,9 +6698,10 @@ def reminder_restore_due(conn, rid):
 
 def reminder_rename(conn, rid, title):
     """Retitle an existing reminder in place (keeps id, time, recurrence, history)."""
-    conn.execute("UPDATE reminders SET title = ? WHERE id = ?", (title, rid))
-    reminder_event(conn, rid, "renamed", title, commit=False)
-    conn.commit()
+    with _action_undo_capture(conn, "reminders", rid):
+        conn.execute("UPDATE reminders SET title = ? WHERE id = ?", (title, rid))
+        reminder_event(conn, rid, "renamed", title, commit=False)
+        conn.commit()
 
 
 def reminder_close(conn, rid, status="done", reason=None):
@@ -6289,9 +6711,10 @@ def reminder_close(conn, rid, status="done", reason=None):
     Keeping them separate lets reviews distinguish fired-awaiting-ack from overdue and
     completed/cancelled/expired outcomes accurately.
     """
-    conn.execute(
-        "UPDATE reminders SET status = ?, closed_at = ?, close_reason = ? WHERE id = ?",
-        (status, _now(), str(reason or status), rid),
-    )
-    reminder_event(conn, rid, "closed", str(reason or status), commit=False)
-    conn.commit()
+    with _action_undo_capture(conn, "reminders", rid):
+        conn.execute(
+            "UPDATE reminders SET status = ?, closed_at = ?, close_reason = ? WHERE id = ?",
+            (status, _now(), str(reason or status), rid),
+        )
+        reminder_event(conn, rid, "closed", str(reason or status), commit=False)
+        conn.commit()
