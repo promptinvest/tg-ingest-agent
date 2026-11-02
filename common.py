@@ -765,6 +765,10 @@ def load_config(env=None):
     cfg.backup_keep = max(1, int(env.get("BACKUP_KEEP") or "7"))
     cfg.backup_encryption_key_file = Path(
         env.get("BACKUP_ENCRYPTION_KEY_FILE") or "/etc/tg-ingest-agent-backup.key")
+    cfg.backup_key_escrow_sha256 = (env.get("BACKUP_KEY_ESCROW_SHA256") or "").strip().lower()
+    if cfg.backup_key_escrow_sha256 and not re.fullmatch(
+            r"[a-f0-9]{64}", cfg.backup_key_escrow_sha256):
+        raise ValueError("BACKUP_KEY_ESCROW_SHA256 must be an exact SHA256 fingerprint")
     # Low-disk alert: warn the boss while there is still room to act. A full disk
     # kills every SQLite write at once (crash loop), and the first symptom used to
     # be the crash itself. Percent of the DB filesystem still free (0 disables).

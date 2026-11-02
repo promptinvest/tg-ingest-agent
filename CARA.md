@@ -9,6 +9,11 @@ prompts, schema, budgets, stored history or service activation.
 The documentation contract is verified; [the implementation record](docs/cara-adr27-2026-11-02.md)
 retains test results, limitations and publication evidence.
 
+ADR-0018's optional fingerprint confirmation and explicit existing SQLite mode
+are verified in source and documented in the environment example; evidence and release are tracked in
+[its implementation record](docs/cara-adr18-2026-11-02.md). The accepted installed
+runtime above remains authoritative until release acceptance.
+
 Current specification text describes present behavior. Historical release
 checkpoints and the complete previous specification remain in the
 [byte-exact pre-ADR0027 archive](docs/history/CARA.pre-adr27-2026-11-02.md).
@@ -2006,7 +2011,9 @@ tools and host service ownership are documented separately in §9.
 
 ## 6. Data model (SQLite, WAL)
 
-SQLite runs in WAL mode with foreign keys enabled. `store.open_db` assembles
+SQLite runs in WAL mode with foreign keys and `secure_delete` explicitly enabled;
+the latter pins the native build's existing default, without retrospective scrub,
+VACUUM or erasure claims for WAL, FTS structures or backups. `store.open_db` assembles
 DDL from `store.py`, `fleet_protocol.py` and `action_delivery.py`, then applies
 additive migrations atomically. The map below covers the application tables
 created by that path; SQLite's internal `sqlite_sequence` is not an application
@@ -2289,6 +2296,8 @@ source before she offers to auto‑confirm that source (§3; the offer still nee
 Backup: `BACKUP_ENABLED=true` · `BACKUP_INTERVAL_DAYS=7` · `BACKUP_KEEP=7` ·
 `BACKUP_ENCRYPTION_KEY_FILE=/etc/tg-ingest-agent-backup.key` (local gzip plus encrypted
 off‑box copy; independently retained recovery key must be verified, not inferred) ·
+`BACKUP_KEY_ESCROW_SHA256` (optional operator-confirmed SHA256 of the exact key-file
+bytes, including any newline; unset by default) ·
 `DISK_ALERT_MIN_FREE_PCT=10` (low‑disk alert, 0 disables; added 2026‑07‑25).
 
 Optional integrations (dormant until configured): `GCAL_CALENDAR_ID` /
@@ -2377,7 +2386,7 @@ Scheduling is in-process; these rows add no systemd timer.
 | Memory curator / consolidation | Curator is queued once per UTC day; consolidation uses its existing weekly cadence. Proposals retain owner confirmation; no automatic fact promotion. |
 | Local DB snapshot | `BACKUP_ENABLED` defaults on; rolling UTC-day interval `BACKUP_LOCAL_INTERVAL_DAYS` defaults to 1. Only success stamps completion. Terminal failure holds retry for 60 minutes and deduplicates its owner notice per UTC day. |
 | Encrypted off-box DB delivery | Due after `BACKUP_INTERVAL_DAYS`, default 7, within the normal snapshot job. `BACKUP_KEEP`, default 7, protects weekly recovery points during local rotation. Existing Spaces/fleet-chat destination selection remains. |
-| Restore self-check | Once per UTC month after success; decrypt/gunzip/integrity-check in scratch. Failure holds retry for 24 hours. This checks an on-box archive/key pair, not independent custody or host-loss recovery. |
+| Restore self-check | Once per UTC month after success; decrypt/gunzip/integrity-check in scratch. Failure holds retry for 24 hours. A configured `BACKUP_KEY_ESCROW_SHA256` also compares the on-box key file with the operator-confirmed fingerprint; mismatch/unreadable files record `backup_key_not_escrowed` without changing the restore outcome. This checks an on-box archive/key pair, not independent custody or host-loss recovery. |
 | Media / export / telemetry housekeeping | Hourly job; unreferenced media has a one-hour grace window. Reviews retain newest `REVIEW_KEEP`, default 10. Telemetry follows §6, default 90 days; content/accounting and protected terminal recovery evidence remain. |
 | Model / disk health | Default eligibility intervals 1,800 seconds; impact-aware model alerts, budget stops and notification preferences remain. Low disk warns on a transition at the configured threshold. |
 | Monthly open-issue digest | On/after local day 7 at 10:00; successful delivery stamps the month, with bounded retries. Replaces automatic Mentor cycles; no model call or automatic fix. |
@@ -2395,7 +2404,7 @@ Scheduling is in-process; these rows add no systemd timer.
 | `/etc/tg-ingest-agent.env` | Protected populated application environment (0600); installer seeds only a missing file. No secrets in argv, logs or Git. |
 | `/etc/cara-mentor.env` and `/etc/cara-mentor-runner.env` | Retained bounded settings; reviewer has no Telegram credential, runner no inference credential. |
 | `/etc/cara-fleet/` | Executor identities, pinned hosts and policies. Poller receives no unrestricted SSH identity; gateway policy is separately root-owned. |
-| `/etc/tg-ingest-agent-backup.key` | On-box encryption key. Independent off-box escrow and host-loss recovery remain unproved without separate evidence. |
+| `/etc/tg-ingest-agent-backup.key` | On-box encryption key. Optional fingerprint confirmation reads only a regular file of at most 64 KiB, rejects symlinks and reports no key, path or fingerprint. Matching exact file bytes does not establish independent custody. Independent off-box escrow and host-loss recovery remain unproved without separate evidence. |
 | `/root/codex-hardening-backups/` | Root-only pre-install DB/source/config/unit copies; installer rotates newest 10 of its own `*-tg-ingest-agent` directories only. Separately pinned release/failure evidence remains protected. |
 | `/opt/whisper.cpp/` | Default speech binary/model root; warm service uses private temporary conversion files and a loopback listener. Verify configured root before repair. |
 
