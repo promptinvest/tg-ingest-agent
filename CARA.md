@@ -1,17 +1,11 @@
 # Cara — Capabilities and Architecture
 
-The accepted runtime is ADR-0018 source `6e947694` (build `ee4aa3446c7d`).
-Native acceptance and the independent audit are recorded in
-[the release record](docs/cara-adr18-release-2026-11-02.md).
-
-ADR-0024 source `2b6da6ee` is implemented and verified, merged through
-[PR 15](https://github.com/promptinvest/tg-ingest-agent/pull/15). Its deployment
-failed before installation at the online-to-stopped data comparison. The accepted
-ADR-0018 services were resumed and independently checked; the new generic undo
-command is not live. The [release hold](docs/cara-adr24-release-2026-11-02.md)
-records the preserved failure and the proposed single-timestamp guard decision.
-The public record gives source and test status; detailed operator receipts and
-consumed attempt identities are retained in the private operator workspace.
+The accepted runtime is ADR-0024 source `2b6da6ee` (build `2b8c4237a9a4`).
+The precedence table, compatible route contracts and explicit latest-action undo
+are live. Existing undo phrases retain their meanings. The
+[release record](docs/cara-adr24-release-2026-11-02.md) records source verification,
+the preserved failed attempts and the separate read-only final acceptance/audit.
+Detailed operator receipts remain in the private operator workspace.
 
 ADR-0027 adds documentation coverage checks and freezes a cache-report test clock
 to its existing fixture date, without changing installed runtime,
@@ -94,14 +88,14 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
                                           → cited Markdown brief
 ```
 
-- **ADR-0024 source, awaiting deployment:** `PRE_ROUTER` declares the ordered guards and
+- **Deterministic precedence:** `PRE_ROUTER` declares the ordered guards and
   their allowed pending kinds. The regression matrix pins the current winners,
   including card/reply ownership, pending refreshes, gratitude capture and
   question-aware acknowledgements. Router parameter contracts in
   `skill_manifest.py` reject unusable supplied shapes before handlers run;
   missing fields, established coercions, safe selector fallbacks and ignored
   extension fields keep their existing behavior.
-- **ADR-0024 undo, awaiting deployment:** with no pending card or task approval,
+- **Undo the latest supported action:** with no pending card or task approval,
   say «отмени последнее действие» / “undo last action” within ten minutes of
   closing, moving or renaming a reminder, changing a note's category, or changing
   its lifecycle. The inverse uses the original stable targets, survives restart,
@@ -2084,7 +2078,7 @@ failures, spend, conversation and memory are not silently aged out.
 | `jobs` | Terminal telemetry | Only `done`/`failed` rows older than the configured cutoff are pruned; pending/claimed work remains. |
 | `journal_definitions` | Protected configuration | Stable journal identity, category and opt-in prompt settings; retained by every content-purge scope. |
 | `journal_entries` | Journal child | Validated derived payload tied to a source message; manually deleted before the message. Journal purge retains the journal definition/category. |
-| `kv` | Mixed durable state | Configuration, counters, recovery markers and bounded context/drafts; targeted consumption/removal only. Prepared ADR-0024 source, not live: one `action_undo:<chat>` record is replaced by the next supported mutation or consumed by successful undo; expiry revokes its ten-minute authority. Affected source deletion/purge removes its content. `all` clears named content pointers and resets note counters, retaining unrelated config and consumed authorization evidence. |
+| `kv` | Mixed durable state | Configuration, counters, recovery markers and bounded context/drafts; targeted consumption/removal only. One `action_undo:<chat>` record is replaced by the next supported mutation or consumed by successful undo; expiry revokes its ten-minute authority. Affected source deletion/purge removes its content. `all` clears named content pointers and resets note counters, retaining unrelated config and consumed authorization evidence. |
 | `learning_events` | Learning child | Exact-version learning/undo events; no age sweep; cascades with learning versions on explicit `all` purge. |
 | `learning_lessons` | Learned content | Active/disabled owner-bound procedures; no age sweep; exact-version undo retains history; explicit `all` purge deletes it. |
 | `learning_task_observations` | Learning/task child | Task-to-lesson capture evidence; explicit `all` purge deletes it; task deletion cascades and lesson deletion clears the lesson reference. |
