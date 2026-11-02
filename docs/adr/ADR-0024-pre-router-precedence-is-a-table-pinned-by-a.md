@@ -1,6 +1,6 @@
 # ADR-0024: Pre-router precedence is a table pinned by a matrix test; every immediate action has an inverse
 
-- Status: Implemented/verified 2b6da6ee, 2026-11-02; rollout failed before installation, release held
+- Status: Implemented, deployed and accepted 2b6da6ee, 2026-11-02
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -43,6 +43,23 @@ router-dispatch#4, #6, #12, architecture#6 in part
 nothing
 
 ## Status log
+
+- 2026-11-02: deployed and accepted source `2b6da6ee`, build `2b8c4237a9a4`.
+  The owner-approved narrow online-to-stopped guard passed; every other value and
+  strict stopped/live comparison remained exact. Installation, sandbox, native
+  runtime and scoped-read checks passed. A startup-accounting race stopped the
+  release controller; a later helper rejected an early identity sample before
+  reaching its stability wait. Both failures remain preserved. A new read-only continuation
+  verified the already running nonroot generation without service actions,
+  completed the remaining gates and passed a separate final audit. Existing
+  phrases, stored history, models, prompts, schema and budgets remain compatible.
+  See [release evidence](../cara-adr24-release-2026-11-02.md).
+
+- 2026-11-02: owner replied “OK, go” to the recommendation to approve only the
+  bounded existing learning-scan timestamp advance and proceed with a fresh
+  reviewed rollout. Every other value and all paused-state checks remain exact.
+  New operator qualification and selection are in progress; no old attempt or
+  receipt is reopened.
 
 - 2026-11-02: exact source `2b6da6ee` passed 208 focused checks and 3,450
   checks in each normal/shuffled Linux run, with nine skips retained, plus static,

@@ -1,68 +1,107 @@
 {
-  "accepted_runtime": {
-    "build_version": "ee4aa3446c7d",
-    "source_commit": "6e947694518659e4a41d516f6f35c4f3012f49f6",
-    "status": "unchanged_accepted_source_availability_independently_verified"
+  "schema": "cara.adr24-public-verification-summary/v1",
+  "adr": "ADR-0024",
+  "status": "deployed_and_accepted",
+  "source_commit": "2b6da6ee0ca43f7c8aa1073fe5fddb069bfd91b2",
+  "source_archive_sha256": "be7b83b2d33b844c98ae02749fca7cc17d692e3d1c246533571a2f26f9161725",
+  "scope": {
+    "declarative_pre_router_precedence": true,
+    "compatible_per_action_parameter_contracts": true,
+    "explicit_latest_supported_action_undo": true,
+    "generic_undo_commands": [
+      "отмени последнее действие",
+      "undo last action"
+    ],
+    "undo_valid_for_minutes": 10,
+    "stable_target_and_expected_state_checks": true,
+    "batch_inverse_atomic": true,
+    "existing_command_meanings_preserved": true,
+    "schema_migrations": 0,
+    "router_prompt_changes": false,
+    "model_changes": false,
+    "budget_changes": false
   },
-  "candidate": {
-    "accepted": false,
-    "archive_sha256": "be7b83b2d33b844c98ae02749fca7cc17d692e3d1c246533571a2f26f9161725",
-    "installed": false,
-    "merged_commit": "daf1ffe931c5f38d2c8e8f309f0edaddba377e20",
-    "new_generic_undo_live": false,
-    "prompt_model_budget_changes": 0,
-    "pull_request": "https://github.com/promptinvest/tg-ingest-agent/pull/15",
-    "runtime_files_changed": 8,
-    "schema_changes": 0,
-    "source_commit": "2b6da6ee0ca43f7c8aa1073fe5fddb069bfd91b2"
-  },
-  "date": "2026-11-02",
-  "deployment": {
-    "candidate_accepted": false,
-    "candidate_installed": false,
-    "data_restored": false,
-    "diagnosis": "only the existing public learning_last_scan timestamp advanced during online-to-stopped capture; frozen stopped/live equality passed",
-    "exact_writer_attribution_proven": false,
-    "failed_attempt_replay_allowed": false,
-    "release_guards_waived": false,
-    "source_rolled_back": false,
-    "status": "failed_before_installation"
-  },
-  "documentation": {
-    "installation_or_restart_required": false,
-    "native_checkout_checks": 14,
-    "preservation_contract_checks": 29,
-    "runtime_test_script_changes": 0
-  },
-  "private_operator_evidence": "Detailed receipts, consumed-attempt identities, original failures, synthetic proposal artifacts and file manifests are retained privately; no database, environment, key or private log is included in this public summary.",
-  "proposal": {
-    "default_strict_comparator_unchanged": true,
-    "first_fixture_failure_preserved": true,
-    "lint_compile": "passed",
-    "linux_synthetic_checks": 24,
-    "live_operations": 0,
-    "new_release_selected": false,
-    "policy": "only a bounded advance of the existing learning_last_scan timestamp in online-to-stopped comparison; all other data and all frozen-state checks exact",
-    "status": "PROPOSED_NOT_AUTHORIZED"
-  },
-  "schema": "cara.adr24-public-source-status/v1",
   "verification": {
-    "actual_cgroup_cleanup_cases": 3,
-    "actual_nonroot_import_roles": 2,
-    "ci_run_url": "https://github.com/promptinvest/tg-ingest-agent/actions/runs/41430788706",
-    "exact_head_ci_passed": true,
-    "focused_checks": 208,
-    "historical_assertion_lines_reference_only": 12452,
-    "historical_original_subset_files": 110,
-    "historical_subset_map_sha256": "5381a3088fc41608b202045d3bdadc8959b387921389d9216ec7b14de599a5ed",
-    "installed_layout_scenarios": 5,
-    "normal_tests": 3450,
-    "operator_tests": 103,
-    "original_current_map_sha256": "a7542be6a9c20f248c33fe1c4449feb78e689099980a5a400fb5d70426e8c661",
-    "original_current_test_support_files": 112,
-    "original_files_byte_preserved": true,
-    "shuffled_tests": 3450,
-    "skips_each_order": 9,
-    "transport_tests": 20
-  }
+    "focused_linux": {
+      "status": "passed",
+      "tests": 208
+    },
+    "full_linux_normal": {
+      "status": "passed",
+      "tests": 3450,
+      "skipped": 9
+    },
+    "full_linux_shuffled": {
+      "status": "passed",
+      "tests": 3450,
+      "skipped": 9
+    },
+    "operator": {
+      "status": "passed",
+      "tests": 139,
+      "static_checks": "passed",
+      "compile_checks": "passed"
+    },
+    "transport": {
+      "status": "passed",
+      "tests": 27,
+      "static_checks": "passed",
+      "compile_and_shell_checks": "passed"
+    },
+    "nonroot_import": {
+      "status": "passed",
+      "roles": 2
+    },
+    "cgroup_fault_cleanup": {
+      "status": "passed",
+      "cases": 3
+    },
+    "preparer_real_timeout_cleanup": {
+      "status": "passed",
+      "cases": 1,
+      "term_resistant_leader_and_child_killed_and_reaped": true,
+      "owned_group_absent": true,
+      "consumed_stage_replay_refused": true,
+      "production_wait_changed": false
+    },
+    "original_test_assertions_preserved": true,
+    "source_compatibility_review": "passed",
+    "readonly_runtime": {
+      "status": "passed",
+      "tests": 14,
+      "static_checks": "passed",
+      "compile_checks": "passed"
+    },
+    "readonly_transport": {
+      "status": "passed",
+      "tests": 33,
+      "static_checks": "passed",
+      "compile_and_shell_checks": "passed"
+    },
+    "readonly_cgroup_fault_cleanup": {
+      "status": "passed",
+      "cases": 3,
+      "business_service_actions": 0,
+      "all_owned_actors_absent": true
+    }
+  },
+  "rollout_observations": {
+    "online_to_stopped_policy": "passed",
+    "permitted_existing_learning_scan_timestamp_advances": 1,
+    "all_other_online_to_stopped_schema_rows_usage_cache_exact": true,
+    "strict_stopped_backup_to_live_parity": "passed",
+    "tables_compared": 56,
+    "earlier_failure_evidence_preserved": true,
+    "readonly_acceptance_business_service_actions": 0,
+    "old_windows_unchanged": true,
+    "failed_controllers_replayed": 0
+  },
+  "build": "2b8c4237a9a4",
+  "build_status": "verified",
+  "deployment_status": "accepted",
+  "terminal": "success",
+  "terminal_status": "passed",
+  "independent_final_audit": "passed",
+  "independent_final_audit_status": "passed",
+  "release_accepted": true
 }
