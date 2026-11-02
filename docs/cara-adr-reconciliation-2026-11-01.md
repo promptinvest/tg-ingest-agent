@@ -1,5 +1,12 @@
 # Cara ADR reconciliation — 1 November 2026
 
+ADR-0018's narrow follow-ups are deployed and accepted as source `6e947694`,
+build `ee4aa3446c7d`, deployment `7189e6368a3717ed1fa129ec`. Native acceptance
+completed on 2 November at 09:25:38.717106 UTC; the separate audit passed at
+09:27:18.598737 UTC. See the [release record](cara-adr18-release-2026-11-02.md)
+and [verification](cara-adr18-release-verification-2026-11-02.json). Independent
+key custody and off-box provenance remain unproved; failed-inbox deletion is excluded.
+
 ADR-0026 is complete: source `75f0f345`, build `931c14f8bb74`, deployment
 `9a7da34f2a7761ce681a1c23` was accepted on 1 November at 11:36:09.901372 UTC;
 the independent audit passed at 11:37:06.442988 UTC. See the
@@ -16,15 +23,15 @@ not establish population quality, backup escrow or uninterrupted health.
 
 | ADR | Verified current remainder |
 | --- | --- |
-| 0018 | Narrow source follow-ups are implemented/verified/published as `0be55ff`: optional operator-confirmed fingerprint comparison and explicit secure-delete mode after native default assessment. All independent source work is complete; installation is held by the strict unknown-inference guard pending an owner decision. Independent custody/off-box provenance remain unproved; failed-inbox deletion stays excluded. [Evidence](cara-adr18-2026-11-02.md). |
+| 0018 | Narrow follow-ups deployed/accepted as `6e947694`, 2026-11-02, with a separate passing audit: optional operator-confirmed fingerprint comparison and explicit existing secure-delete mode. Independent custody/off-box provenance remain unproved; failed-inbox deletion stays excluded. [Release evidence](cara-adr18-release-2026-11-02.md). |
 | 0022 | Postponed by the owner's no-web-search decision. Later task/broker/fleet work makes the original dormant-runtime premise stale. The echo worker remains; scheduler order now also affects durable recovery/delivery. Reassess the design before changing capability manifests, scheduling or worker state. |
 | 0024 | Reminder bindings/schedule guards, reschedule undo, expired reopening and learning undo already exist. The general precedence matrix/table and per-action parameter contracts remain. Broader inverse operations need defined semantics preserving existing undo flows. |
 | 0026 | Complete 2026-11-01: full F-rule lint, exact synthetic prompt snapshots and compatible legacy task/env helper consolidation passed exact-source verification, native acceptance and independent audit. The contained first deployment failure and forward continuation are retained in the release record. |
 | 0027 | Complete 2026-11-02: curated module/service/retention maps, synthetic schema guards, current contracts and one operations runbook are verified. Byte-exact previous specs retain historical evidence; runtime unchanged. |
 | 0028 | Media/conversation moves are complete. Pending-resolver table and general mixin-composition checks remain, after precedence is pinned. |
 
-ADR0018's narrow source follow-ups are complete. Resolve its held release boundary
-before proceeding to the next source item, 0024, then 0028.
+ADR0018's narrow implementation and release are complete. The next reconciled
+source item is 0024, then 0028; this closure implements neither remainder.
 ADR0022 stays postponed pending a current design decision.
 No failed-inbox deletion, worker dormancy, scheduler reorder, new undo feature,
 backup destination/schedule, escrow claim or prompt tuning is included here.
@@ -39,7 +46,7 @@ remains accepted ADR0026; no installation or restart is required. See the
 narrow ADR0018 remainder with the exclusions above; this completion selects no
 backup policy, key custody claim or deletion of failed recovery evidence.
 
-## 2 November - ADR0018 source follow-ups verified; release held
+## 2 November - historical ADR0018 source checkpoint; release held before approval
 
 Source `0be55ff` passes 3,357 native checks in both normal and shuffled order
 with nine retained skips, plus focused/static/operator/installed-layout gates.
@@ -56,6 +63,18 @@ Actual independent custody/provenance still requires separate evidence, and the
 old failed-inbox deletion proposal remains superseded by preservation rules.
 No ADR0024/0028 implementation or broader recovery policy is selected by this
 closure.
+
+## 2 November - ADR0018 narrow follow-ups accepted
+
+The owner's later “I approve” authorized one exact healthcheck exception for
+this release. Fresh exact-source normal/shuffled checks, all 21 native release
+phases and the separate audit passed. Source `6e947694` is the accepted runtime;
+the [release record](cara-adr18-release-2026-11-02.md) supersedes the held release
+checkpoint above while preserving its original source/failure evidence. The
+one-release exception is consumed, retained records are unchanged and every new
+unknown remains blocking. Independent custody/provenance still requires real
+evidence; no failed-inbox deletion or broader backup policy was selected.
+ADR0024 is the next reconciled source item and remains unimplemented here.
 
 ## ADR0026 preparation history
 

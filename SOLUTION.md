@@ -1,7 +1,8 @@
 # Cara — Solution Specification
 
-The accepted runtime is ADR-0026 source `75f0f34`; its dated acceptance and
-verification are recorded in [the release record](docs/cara-adr26-release-2026-11-01.md).
+The accepted runtime is ADR-0018 source `6e947694` (build `ee4aa3446c7d`).
+Native acceptance and the independent audit are recorded in
+[the release record](docs/cara-adr18-release-2026-11-02.md).
 ADR-0027 adds documentation coverage checks and freezes a cache-report test clock
 to its existing fixture date, without changing installed runtime,
 prompts, schema, budgets, stored history or service activation.
@@ -12,10 +13,12 @@ CARA runbook and also pins its existing compatibility/data-preservation warnings
 The documentation contract is verified; [the implementation record](docs/cara-adr27-2026-11-02.md)
 retains test results, limitations and publication evidence.
 
-ADR-0018's optional fingerprint confirmation and explicit existing SQLite mode
-are verified in source and documented in the environment example; evidence and release are tracked in
-[its implementation record](docs/cara-adr18-2026-11-02.md). The accepted installed
-runtime above remains authoritative until release acceptance.
+ADR-0018 adds optional operator-confirmed fingerprint comparison to the existing
+monthly restore check and explicitly enables the native SQLite build's existing
+secure-delete mode. Independent key custody and off-box provenance remain
+unproved; failed inbox rows remain recovery evidence. The
+[implementation record](docs/cara-adr18-2026-11-02.md) retains source verification
+and the earlier release hold.
 
 Current specification text describes present behavior. Historical release
 checkpoints and the complete previous specification remain in the

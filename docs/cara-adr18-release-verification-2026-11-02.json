@@ -1,0 +1,179 @@
+{
+    "schema":  "cara.adr18-public-release-verification/v1",
+    "status":  "accepted_and_independently_audited",
+    "source_commit":  "6e947694518659e4a41d516f6f35c4f3012f49f6",
+    "source_archive_sha256":  "15c50f3137b33539c420c14de64b4fa452bc6b1974762b5e0ebef505d26d21a9",
+    "scope":  {
+                  "adr":  "ADR-0018",
+                  "changes":  [
+                                  "Optional empty-by-default operator-confirmed fingerprint comparison during the existing monthly restore check",
+                                  "Explicit secure_delete=ON pinning the native SQLite build\u0027s existing enabled default"
+                              ],
+                  "runtime_dependencies_added":  0,
+                  "database_schema_changes":  false,
+                  "backup_destination_schedule_or_retention_changes":  false,
+                  "failed_inbox_deletion":  "excluded"
+              },
+    "linux":  {
+                  "status":  "passed",
+                  "source_commit":  "6e947694518659e4a41d516f6f35c4f3012f49f6",
+                  "normal":  {
+                                 "tests_run":  3357,
+                                 "skipped":  9,
+                                 "seconds":  241.712
+                             },
+                  "shuffled":  {
+                                   "tests_run":  3357,
+                                   "skipped":  9,
+                                   "seconds":  256.331,
+                                   "seed":  20261007
+                               },
+                  "focused":  {
+                                  "tests_run":  154,
+                                  "skipped":  1,
+                                  "seconds":  10.295
+                              },
+                  "new_regressions":  23,
+                  "full_f_rules":  "passed",
+                  "compile":  "passed",
+                  "shell_syntax":  "passed",
+                  "shellcheck":  "passed",
+                  "helper_suites":  {
+                                        "model_trial":  154,
+                                        "capability_release":  21,
+                                        "analysis_release":  6,
+                                        "cache_release":  29
+                                    },
+                  "installed_layout":  {
+                                           "status":  "passed",
+                                           "scenarios":  5,
+                                           "renamed_entrypoint":  "agent.py"
+                                       },
+                  "actual_parent_wait":  {
+                                             "returncode":  0,
+                                             "at":  "2026-11-02T09:02:16.092717+00:00"
+                                         },
+                  "result_sha256":  "4d357a47b0960a787987b8c742a5b3c54b3b299e51de8a7487205970eb4565f3"
+              },
+    "ci":  {
+               "status":  "success",
+               "head_sha":  "6e947694518659e4a41d516f6f35c4f3012f49f6",
+               "run_id":  41414212959,
+               "job_id":  125174008029,
+               "normal":  {
+                              "tests_run":  3357,
+                              "skipped":  62,
+                              "seconds":  96.598
+                          },
+               "shuffled":  {
+                                "tests_run":  3357,
+                                "skipped":  62,
+                                "seconds":  97.294,
+                                "seed":  20261007
+                            }
+           },
+    "compatibility":  {
+                          "original_test_support_files_unchanged":  110,
+                          "original_assertion_bearing_source_lines":  12452,
+                          "inventory_note":  "Ordered source-line inventory; not a count of executed assertions.",
+                          "critical_policy_prompt_serializer_and_hook_files_unchanged":  22,
+                          "ddl_and_migration_bodies_unchanged":  true,
+                          "closed_router_and_capabilities_unchanged":  true
+                      },
+    "operator_qualification":  {
+                                   "status":  "passed",
+                                   "unit_and_fault_checks":  111,
+                                   "closed_selected_file_map":  13,
+                                   "transport_fault_tests":  19,
+                                   "nonroot_kernel_import_probe_roles":  2,
+                                   "actual_isolated_cgroup_cases":  3
+                               },
+    "source_checkpoint":  {
+                              "record":  "cara-adr18-verification-2026-11-02.json",
+                              "role":  "Historical source verification before the later one-release approval",
+                              "first_candidate_failure_preserved":  true,
+                              "earlier_release_hold_preserved":  true
+                          },
+    "remaining":  {
+                      "independent_key_custody":  "unproved; requires separate evidence",
+                      "offbox_provenance":  "unproved; requires separate evidence",
+                      "host_loss_recovery":  "unproved",
+                      "failed_inbox_deletion":  "excluded",
+                      "next_reconciled_source_adr_after_release_closure":  "ADR-0024",
+                      "next_source_adr_implemented_by_this_release":  false,
+                      "fingerprint_configuration":  "unset"
+                  },
+    "production_tag":  {
+                           "name":  "production-2026-11-02-adr18-backup",
+                           "status":  "published_and_independently_remote_verified",
+                           "peeled_source_commit":  "6e947694518659e4a41d516f6f35c4f3012f49f6",
+                           "url":  "https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-11-02-adr18-backup",
+                           "annotation_object_sha":  "232f9ab593654bfd16b7bb8c7cfa5418339d37f4",
+                           "earlier_remote_tag_refs_preserved":  25,
+                           "earlier_tags_preserved":  13
+                       },
+    "authorization":  {
+                          "owner_request":  "Implement next Cara ADR; later I approve accepted the one-release exact healthcheck exception",
+                          "approval_recorded_at":  "2026-11-02T08:48:34+00:00",
+                          "approval_time_note":  "Recorded time; owner-message timestamp unavailable",
+                          "one_release_exception":  "consumed",
+                          "earlier_exception_reused":  false,
+                          "retained_records_unchanged":  true,
+                          "every_new_unknown_remains_blocking":  true,
+                          "additional_unknown_activity_at_closure":  0,
+                          "completed_controller_replayed":  false
+                      },
+    "native_acceptance":  {
+                              "status":  "accepted",
+                              "at":  "2026-11-02T09:25:38.717106Z",
+                              "receipt_sha256":  "03924d31c01c4b4d25d74bf92e8221c90dbb8e2f5a8a96d3b7bf44a74502ec9b",
+                              "source_commit":  "6e947694518659e4a41d516f6f35c4f3012f49f6",
+                              "build_version":  "ee4aa3446c7d",
+                              "deployment_id":  "7189e6368a3717ed1fa129ec",
+                              "native_status":  "verified",
+                              "native_manifest_sha256":  "c50cdeb2c6403bd45350c1f83e0e953674ccceb39e20f86fccaea40188cd6b49",
+                              "phases_passed":  21,
+                              "mcp_gates":  2,
+                              "mcp_scenarios_per_gate":  9,
+                              "mcp_tools":  6,
+                              "scoped_reads_passed":  9,
+                              "actual_guardian_returncode":  0,
+                              "actual_controller_returncode":  0,
+                              "original_acceptance_receipt_unmodified":  true,
+                              "original_audit_field":  "pending; completion proved by the separate audit receipt",
+                              "native_notice_attempts":  1,
+                              "native_notice_guard":  "passed"
+                          },
+    "independent_audit":  {
+                              "status":  "passed",
+                              "at":  "2026-11-02T09:27:18.598737Z",
+                              "receipt_sha256":  "4cad48416da34d80f02eb3063e19699f0498357acfe6c760a46eb1d38cee0d2b",
+                              "actual_returncode":  0,
+                              "active_native_services":  4,
+                              "all_automatic_restart_counts_zero":  true,
+                              "same_installed_deployment":  true
+                          },
+    "data_preservation":  {
+                              "schema_tables":  56,
+                              "stopped_full_row_and_cache_parity":  "passed",
+                              "original_protected_files_exact":  132,
+                              "new_fixture_policies":  4,
+                              "current_protected_inventory":  136,
+                              "original_settings_environment_models_prompts_and_budgets_preserved":  true,
+                              "original_history_and_closed_trial_evidence_preserved":  true,
+                              "original_timers_preserved":  true,
+                              "existing_telemetry_retention":  "Unchanged maintenance and normal runtime progress continue; no whole-running-database byte identity claim"
+                          },
+    "terminal_closure":  {
+                             "status":  "passed",
+                             "observed_at":  "2026-11-02T09:28:50Z",
+                             "receipt_sha256":  "607be4a26aff50c294a5ed97376f9d94d26bde17cb39dd6a3639e0dedabaadcf",
+                             "healthy_native_services":  4,
+                             "all_automatic_restart_counts_zero":  true,
+                             "all_recorded_actors_and_groups_absent":  true,
+                             "owned_tool_cgroup_empty":  true,
+                             "fresh_cgroup_check_at":  "2026-11-02T09:30:08Z",
+                             "fresh_cgroup_receipt_sha256":  "f71964351d9af25b19125fc90bee66968cc44e53221bfd5cf8c65b9d6e49ace2"
+                         },
+    "adr_status":  "narrow_implementation_and_release_complete_independent_custody_unproved"
+}
