@@ -16,14 +16,15 @@ not establish population quality, backup escrow or uninterrupted health.
 
 | ADR | Verified current remainder |
 | --- | --- |
-| 0018 | Daily local/weekly off-box backups and independent-recovery rehearsal tooling exist. Independent key escrow/off-box provenance remains unproved. The old failed-inbox pruning proposal conflicts with the later explicit preservation of terminal recovery evidence in `store.prune_telemetry`; do not implement that deletion. Explicit secure-delete configuration needs a separate scoped assessment. |
+| 0018 | Narrow source follow-ups are implemented/verified/published as `0be55ff`: optional operator-confirmed fingerprint comparison and explicit secure-delete mode after native default assessment. All independent source work is complete; installation is held by the strict unknown-inference guard pending an owner decision. Independent custody/off-box provenance remain unproved; failed-inbox deletion stays excluded. [Evidence](cara-adr18-2026-11-02.md). |
 | 0022 | Postponed by the owner's no-web-search decision. Later task/broker/fleet work makes the original dormant-runtime premise stale. The echo worker remains; scheduler order now also affects durable recovery/delivery. Reassess the design before changing capability manifests, scheduling or worker state. |
 | 0024 | Reminder bindings/schedule guards, reschedule undo, expired reopening and learning undo already exist. The general precedence matrix/table and per-action parameter contracts remain. Broader inverse operations need defined semantics preserving existing undo flows. |
 | 0026 | Complete 2026-11-01: full F-rule lint, exact synthetic prompt snapshots and compatible legacy task/env helper consolidation passed exact-source verification, native acceptance and independent audit. The contained first deployment failure and forward continuation are retained in the release record. |
 | 0027 | Complete 2026-11-02: curated module/service/retention maps, synthetic schema guards, current contracts and one operations runbook are verified. Byte-exact previous specs retain historical evidence; runtime unchanged. |
 | 0028 | Media/conversation moves are complete. Pending-resolver table and general mixin-composition checks remain, after precedence is pinned. |
 
-The next sequence is narrowly selected 0018 follow-ups, then 0024 and 0028.
+ADR0018's narrow source follow-ups are complete. Resolve its held release boundary
+before proceeding to the next source item, 0024, then 0028.
 ADR0022 stays postponed pending a current design decision.
 No failed-inbox deletion, worker dormancy, scheduler reorder, new undo feature,
 backup destination/schedule, escrow claim or prompt tuning is included here.
@@ -37,6 +38,24 @@ remains accepted ADR0026; no installation or restart is required. See the
 [implementation and verification record](cara-adr27-2026-11-02.md). Next is the
 narrow ADR0018 remainder with the exclusions above; this completion selects no
 backup policy, key custody claim or deletion of failed recovery evidence.
+
+## 2 November - ADR0018 source follow-ups verified; release held
+
+Source `0be55ff` passes 3,357 native checks in both normal and shuffled order
+with nine retained skips, plus focused/static/operator/installed-layout gates.
+Exact-source CI passes both orders with its 62 environment skips retained.
+The [implementation record](cara-adr18-2026-11-02.md) and
+[verification](cara-adr18-verification-2026-11-02.json) preserve the first
+configuration-example failure separately. The earlier ADR0027 checkpoint above
+selected this work; it no longer describes the current next source item.
+
+All independently implementable ADR0018 source work is complete. The strict
+unknown-inference release guard requires an owner decision before installation;
+no old exception or controller may be reused. Accepted production remains ADR0026.
+Actual independent custody/provenance still requires separate evidence, and the
+old failed-inbox deletion proposal remains superseded by preservation rules.
+No ADR0024/0028 implementation or broader recovery policy is selected by this
+closure.
 
 ## ADR0026 preparation history
 

@@ -1,0 +1,201 @@
+{
+    "schema":  "cara.adr18-source-verification/v1",
+    "status":  "implemented_verified_published_source_release_held",
+    "verified_source":  "0be55ffbf800f6dd83282dafeb849bcc9f694676",
+    "source_archive_sha256":  "0032b0d64385d4276211256a8ace8d99e4f7f5ee26e1850ac87b0593413ae250",
+    "native_result_sha256":  "4f40a1c638faa5c1b066f8fc4422528be84a89bf4cbd52622d2965bb09b1e204",
+    "native_checks":  [
+                          {
+                              "finished_at":  "2026-11-02T08:24:55.419341+00:00",
+                              "log_sha256":  "73ca1a2d23a987214255bf573e07321cc73dbd8b174c697798ace8b34ada2b9a",
+                              "name":  "focused",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:24:41.431674+00:00",
+                              "summary":  [
+                                              "Ran 154 tests in 10.156s",
+                                              "OK (skipped=1)"
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:24:55.740712+00:00",
+                              "log_sha256":  "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+                              "name":  "lint",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:24:55.420294+00:00",
+                              "summary":  [
+                                              "All checks passed!"
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:24:59.381401+00:00",
+                              "log_sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                              "name":  "compile",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:24:55.741135+00:00",
+                              "summary":  [
+
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:24:59.415218+00:00",
+                              "log_sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                              "name":  "shell-syntax",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:24:59.381766+00:00",
+                              "summary":  [
+
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:25:00.291403+00:00",
+                              "log_sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                              "name":  "shellcheck",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:24:59.415553+00:00",
+                              "summary":  [
+
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:28:58.465234+00:00",
+                              "log_sha256":  "c26e85c3b2a89c2b986599b0c6a0f44b03455bd11ac79c8e677acf9cd2915eaa",
+                              "name":  "normal",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:25:00.291710+00:00",
+                              "summary":  [
+                                              "Ran 3357 tests in 235.569s",
+                                              "OK (skipped=9)"
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:33:00.499438+00:00",
+                              "log_sha256":  "2d9674f49aaf03d8499efc3fbfd1169e00dc4d788299bd6623d7defdffa494ec",
+                              "name":  "shuffled",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:28:58.472038+00:00",
+                              "summary":  [
+                                              "Ran 3357 tests in 238.678s",
+                                              "OK (skipped=9)"
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:33:11.249457+00:00",
+                              "log_sha256":  "88ca943ecff57999298824b619f6bef5eaf9e66b30d4c49c1af1793938c95cd5",
+                              "name":  "helpers-model-trial",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:33:00.508261+00:00",
+                              "summary":  [
+                                              "Ran 154 tests in 9.154s",
+                                              "OK"
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:33:12.368395+00:00",
+                              "log_sha256":  "b4f1086d5c6b546cf848640a23f3350ba7834b1b3cfa7dcbaf0df7cce2f6a3cf",
+                              "name":  "helpers-capability-release",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:33:11.250442+00:00",
+                              "summary":  [
+                                              "Ran 21 tests in 0.230s",
+                                              "OK"
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:33:13.054297+00:00",
+                              "log_sha256":  "62cfbeb2911bb226088bfb0918eb4b05008ea70b20bce854ee2ca8a564bd37a5",
+                              "name":  "helpers-analysis-release",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:33:12.368904+00:00",
+                              "summary":  [
+                                              "Ran 6 tests in 0.002s",
+                                              "OK"
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:33:14.236084+00:00",
+                              "log_sha256":  "be514fc91af78b21f5cd062a4807a95b59390e75cb360e3912ef1c0f57937630",
+                              "name":  "helpers-cache-release",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:33:13.054773+00:00",
+                              "summary":  [
+                                              "Ran 29 tests in 0.281s",
+                                              "OK"
+                                          ]
+                          },
+                          {
+                              "finished_at":  "2026-11-02T08:33:23.194441+00:00",
+                              "log_sha256":  "4a43c53e723ecc10de4e94417c87ddfc25ee3afe939c66523ce665aaed67565c",
+                              "name":  "layout",
+                              "returncode":  0,
+                              "started_at":  "2026-11-02T08:33:14.236808+00:00",
+                              "summary":  [
+
+                                          ]
+                          }
+                      ],
+    "native_supervisors_and_groups_absent":  true,
+    "native_groups_remaining":  0,
+    "ci":  {
+               "run_id":  41412780795,
+               "job_id":  125169402047,
+               "source_commit":  "0be55ffbf800f6dd83282dafeb849bcc9f694676",
+               "status":  "success",
+               "normal":  {
+                              "tests":  3357,
+                              "skipped":  62,
+                              "seconds":  93.787
+                          },
+               "shuffled":  {
+                                "tests":  3357,
+                                "skipped":  62,
+                                "seconds":  95.024,
+                                "seed":  20261007
+                            },
+               "compile":  "passed",
+               "full_f_rules":  "passed",
+               "operator_helpers":  "passed",
+               "shell_syntax":  "passed",
+               "shellcheck":  "passed"
+           },
+    "native_sqlite_assessment":  {
+                                     "python":  "3.12.3",
+                                     "sqlite":  "3.45.1",
+                                     "secure_delete_default":  1,
+                                     "compile_option":  "SECURE_DELETE",
+                                     "method":  "independent in-memory connection on native distro interpreter",
+                                     "production_mutations":  0
+                                 },
+    "new_regressions":  23,
+    "baseline_red":  {
+                         "tests":  23,
+                         "returncode":  1,
+                         "expected_missing_behavior_failed":  true,
+                         "log_sha256":  "4493bb786ea631215a2c8288bde8f5c2c6d341f61a41317032ba6d5c68f05609"
+                     },
+    "preserved_first_candidate_failure":  {
+                                              "source":  "3c543ae84fcfef2fe3d04e19ec2d160dcd3bab8f",
+                                              "ci_run_id":  41412296266,
+                                              "native_normal_tests":  3357,
+                                              "native_skips":  9,
+                                              "native_returncode":  1,
+                                              "native_log_sha256":  "9953d19b873ef214560199ec221489ee1c4ad15c086e55ae616f83cd95a9d5cf",
+                                              "cause":  "new optional configuration key omitted from environment example; original catalogue assertion preserved"
+                                          },
+    "deployment":  {
+                       "status":  "held_by_existing_strict_unknown_guard_pending_owner_decision",
+                       "accepted_runtime_retained":  "75f0f345a6a0195bcad519045ab8473abcfa72d5",
+                       "installed_manifest_preserved":  true,
+                       "original_service_generations_preserved":  true,
+                       "production_mutations":  0,
+                       "service_restarts":  0,
+                       "paid_model_calls":  0,
+                       "manual_messages":  0,
+                       "old_exception_reused":  false
+                   },
+    "remaining":  {
+                      "independent_custody":  "unproved; requires real evidence",
+                      "offbox_provenance":  "unproved; requires real evidence",
+                      "failed_inbox_deletion":  "excluded",
+                      "next_source_adr_after_release_boundary":  "ADR-0024"
+                  }
+}

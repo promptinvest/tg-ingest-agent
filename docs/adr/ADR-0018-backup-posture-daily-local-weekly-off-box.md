@@ -1,6 +1,6 @@
 # ADR-0018: Backup posture: daily local, weekly off-box, verified before rotation
 
-- Status: Narrow follow-ups implemented, verification/publication pending 2026-11-02; independent custody remains unproved; failed-inbox deletion excluded
+- Status: Narrow source follow-ups implemented/verified/published 0be55ff, 2026-11-02; deployment pending strict guard/owner decision; custody unproved; failed-inbox deletion excluded
 - Date: 2026-09-07
 - Phase: Phase C — robustness, operations, security
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -9,7 +9,7 @@
 
 BACKUP_INTERVAL_DAYS=7 means a wipe on day six loses six days; the key lives on the same droplet and nothing checks an off-box copy exists; integrity is checked only on the restored copy monthly; failed inbox rows are never pruned; SOLUTION §10 claims off-box key escrow that §9 denies.
 
-## Decision
+## Decision (original proposal; narrowed by the reconciled scope below)
 
 one db_backup job: snapshot, rotate and encrypt daily when kv backup_day is a day old; offsite only when backup_offsite_day is BACKUP_INTERVAL_DAYS old, or daily when Spaces is configured; quick_check runs on the raw snapshot before rotate and aborts the run on failure; optional BACKUP_KEY_ESCROW_SHA256 compared monthly, mismatch files a backup_key_not_escrowed issue worded as "operator confirmed"; PRAGMA secure_delete=ON stated explicitly; prune_telemetry deletes done and failed inbox rows past retention; SOLUTION §10 corrected.
 
@@ -51,7 +51,10 @@ owner confirms the 2026-08-21 weekly decision concerned the off-box post, not lo
 
 - 2026-11-02: owner requested the next Cara ADR after the reconciled ADR0027
   closure. Narrow optional fingerprint confirmation and explicit existing native
-  secure-delete mode are implemented. Verification/publication are pending;
-  strict release preflight currently refuses one new unknown-inference row.
+  secure-delete mode are implemented, verified and published as source `0be55ff`.
+  Full native and CI normal/shuffled suites, static/operator/layout gates pass;
+  strict release preflight still blocks installation pending an owner decision.
   The prior exact-four exception remains consumed. Independent custody requires
   separate evidence; failed-inbox deletion is excluded.
+  [Implementation and evidence](../cara-adr18-2026-11-02.md) distinguish completed
+  source work from the held release and remaining independent-custody evidence.

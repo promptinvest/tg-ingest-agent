@@ -12,8 +12,8 @@ CARA runbook and also pins its existing compatibility/data-preservation warnings
 The documentation contract is verified; [the implementation record](docs/cara-adr27-2026-11-02.md)
 retains test results, limitations and publication evidence.
 
-ADR-0018's optional fingerprint confirmation is implemented in source and
-documented in the environment example; verification and release are tracked in
+ADR-0018's optional fingerprint confirmation and explicit existing SQLite mode
+are verified in source and documented in the environment example; evidence and release are tracked in
 [its implementation record](docs/cara-adr18-2026-11-02.md). The accepted installed
 runtime above remains authoritative until release acceptance.
 
