@@ -3,6 +3,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -168,13 +169,19 @@ class CacheReportingTests(unittest.TestCase):
         self.conn.execute("UPDATE llm_usage SET ts='2026-10-25T12:00:00+00:00',"
                           " day='2026-10-25',month='2026-10' WHERE id=?", (row,))
         self.conn.commit()
-        with mock.patch.object(store, '_now', return_value='2026-10-29T12:00:00+00:00'):
+        # The Sunday fixture is inside the rolling seven days, but outside
+        # Thursday's calendar week. Freeze both consumers of the report clock
+        # so the fixture cannot age out of review.collect/markdown on later runs.
+        now = datetime.fromisoformat('2026-10-29T12:00:00+00:00')
+        with mock.patch.object(store, '_now', return_value=now.isoformat()), \
+                mock.patch.object(review, 'datetime', wraps=datetime) as clock:
+            clock.now.return_value = now
             self.assertEqual(store.usage_cache_summary(self.conn, 'week')['calls'], 0)
             self.assertEqual(store.usage_cache_summary(self.conn,
                 since='2026-10-22T12:00:00+00:00')['calls'], 1)
-        data = review.collect(self.conn, 'week')
-        self.assertIn('cache_usage', data)
-        self.assertIn('Prompt cache', review.markdown(self.conn, self.cfg, 'week'))
+            data = review.collect(self.conn, 'week')
+            self.assertIn('cache_usage', data)
+            self.assertIn('Prompt cache', review.markdown(self.conn, self.cfg, 'week'))
 
     def test_reconciled_open_model_rates_keep_commercial_overrides(self):
         cfg = make_config(PRICING_JSON='{"anthropic-claude-5.5-haiku":[0.5,2.5],"openai-gpt-6-1-sol":[4,15]}')

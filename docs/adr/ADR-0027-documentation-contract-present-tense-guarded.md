@@ -1,6 +1,6 @@
 # ADR-0027: Documentation contract: present tense, guarded maps, one runbook
 
-- Status: Partially implemented 2026-10-19 (runtime/voice/retired-host descriptions corrected; broader contract work remains proposed)
+- Status: Implemented and verified 2026-11-02 (documentation and checkout guards; runtime unchanged)
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -33,3 +33,19 @@ nothing
   records Pilot retirement, and current voice sections in both specs describe
   deferred STT and text-before-voice ordering. Broader schema/runbook/documentation
   contract work remains proposed; historical checkpoints are preserved.
+
+- 2026-11-02: Owner requested the next Cara ADR. Completed the present-tense
+  contract, curated installer/module and recursive service maps, complete live
+  application-table retention maps, scope-all documentation, one operational
+  runbook and historical-plan banners. Byte-exact previous specs preserve every
+  dated checkpoint and old oversized row. Synthetic guards test omissions against
+  the installer, tracked service definitions and a freshly migrated database.
+  Runtime files, prompts, schema, policies and services are unchanged. See the
+  [implementation record](../cara-adr27-2026-11-02.md) for verification/publication.
+
+- 2026-11-02: Complete. Full CI normal/shuffled gates, original operator helpers,
+  lint/compile/shell checks and the 41-case native Linux checkout gate pass.
+  The original scope-list guard is restored; the moved recovery assertion follows
+  the single runbook with its compatibility warnings. Cache-report fixture clocks
+  are frozen without changing their assertions. Incomplete VPS transport and all
+  prior failures remain distinct from completed gates. No runtime installation.

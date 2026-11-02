@@ -33,6 +33,20 @@ push path is disabled; publish project changes only from this repository.
 These operator paths belong to the local multi-project workspace and are not
 included in a fresh GitHub clone. Historical deployment helpers remain historical.
 
+## Documentation contract
+
+Specification text describes present behavior. Update the existing sentence or
+row when behavior changes; do not append dated implementation paragraphs. The
+reason belongs in the commit and, when needed, its ADR. Dated release evidence
+belongs in docs; preserve historical sources when restructuring. Every change
+still updates both CARA.md and SOLUTION.md in the same commit.
+
+CARA §6 and SOLUTION §8 contain complete schema/retention maps. The module and
+service maps below and in both specs are checked against the installer and
+tracked service files by test_documentation_contract.py. CARA §9 is the one
+operational runbook; other documents link to it. Markdown uses LF as declared
+in .gitattributes. Do not replace these curated maps with generated catalogs.
+
 ## 1. Analyze the architecture before implementing
 Before writing or changing anything, study the current architecture (the
 module layout below, the data model in `store.py`, the closed-world router).
@@ -57,84 +71,55 @@ Surface the trade-off or the concern and get a decision.
 
 ## Architecture snapshot (keep current)
 
-One bot, one long-poll process, skills as modules under a closed-world intent
-router. Stdlib-only Python 3; deployed on the **PD VPS (`174.138.108.85`)** as a
-systemd service (`tg-ingest-agent`), installed as `/opt/tg-ingest-agent/agent.py`
-(the former Pilot-VPS was retired in 2026-06). No inbound ports (long polling).
-All model calls go through the budget-guarded gateway in `llm.py`. See the PD-VPS
-KB for SSH/deploy/model details.
+Cara is an owner-only long-poll process with modular skills, a deferred voice
+transport thread, a networkless worker and a separate restricted fleet executor.
+SQLite is owned by the poll thread. All inference passes through budget-guarded
+llm.py. Mentor and its runner remain retained and disabled. The host also runs
+the separately managed loopback Whisper service. See CARA §9 for schedules,
+state roots, release checks and guarded recovery.
 
-- `tg_ingest_agent.py` — entry point: poll loop, dispatch, pending-action
-  resolution, scheduler ticks (reminders, weekly review, budget notice).
-  Installed as `/opt/tg-ingest-agent/agent.py`.
-- `router.py` — closed action set (every route, incl. warm `converse`, is a
-  named manifest-gated action; low confidence falls to converse), JSON-only
-  output, untrusted-content delimiters, confidence gate, smalltalk shortcut.
-- Skills: `ingest.py`, `reminders.py`, `spend.py`, `review.py`, `gcal.py`,
-  `journals.py` (structured journals: closed entry-type registry — gratitude
-  active — payload validation with lexical support, extraction, person stats,
-  per-journal md export; added 2026-07-17),
-  `fetch.py` (read a URL on request — SSRF-guarded), `sysinfo.py` (read-only
-  VPS stats from /proc), `knowledge.py` (ask: semantic KB Q&A over BGE-M3
-  embeddings — the ONE action that returns grounded free-form answers, KB-only,
-  refuses if absent; send .md/.txt docs to add to the KB), `pdftext.py` (PDF
-  text layer). Handler mixins on the Agent: `hermes.py` (business register:
-  ACTIONS domain + Hermes PERSONA + KB/fetch/budget/review/export handlers),
-  `notes_svc.py` (notes/inbox: lists, detail, show_media, discard,
-  recategorize/merge, purge — typed-confirmation bulk delete, never touches
-  llm_usage/preferences; conversation history only on scope `all`, disclosed in
-  the preview — journals, problem log), `reminders_svc.py` (reminder handlers,
-  partial drafts, fired follow-ups, fire/expiry sweeps; since 2026-09-07 the
-  fired/batch/draft card buttons, one shared `resolve_fired_action`, the 09:00
-  re-ping and the announced, reversible expiry). `converse.py` holds
-  free-form warm Cara; `action_truth.py` guards "done/saved" wording;
-  `backup.py` runs daily checked local snapshots and weekly encrypted off-box delivery.
-  `media_svc.py` and `converse_svc.py` preserve extracted Agent methods;
-  `voice_svc.py` keeps STT transport off the database thread; `call_budget.py`
-  reserves paid requests and `inference_io.py` bounds their transport;
-  `issue_digest.py` retains the monthly open-issue digest. `learning.py` captures
-  source-bound procedural lessons, retrieves relevant guidance for conversation,
-  routing and planning, and provides exact-version owner undo. The old Mentor
-  inference/runner units remain disabled. Own PHOTOS are never
-  stored (retired 2026-07-16) — own text/PDF docs still save via caption.
-- `fleet_context.py` owns source-bound investigation scope; `fleet_report.py`
-  normalizes observations and renders code-owned claims with full host coverage.
-- `fleet.py` handles natural-language fleet questions, fresh evidence, durable
-  follow-ups and exact-card worker maintenance. `cara_fleet.py` is a separate
-  restricted SSH executor; root-owned `fleet_host.py` gateways expose only fixed
-  observations and the reviewed worker restart. Existing research worker remains
-  networkless. See ADR-0031 and `ops/fleet/README.md`.
-- `llm.py` — DO Gradient gateway (chat + local/remote Whisper STT), pricing,
-  budgets, JSON parsing helpers.
-- `storage.py` — binary backend: local default, optional DO Spaces (S3 SigV4
-  in stdlib); dormant until SPACES_* configured.
-- `store.py` — SQLite schema + helpers; additive migrations via `_migrate`.
-  Housekeeping (in agent.housekeep): voice/orphan media + old reviews auto-purged;
-  telemetry (traces/done jobs/proactive log/expired cooldowns) pruned past
-  `TELEMETRY_RETENTION_DAYS` (90; spend/conversation/issues/memory never pruned).
-- Personality/platform layer: `skill_manifest.py` (per-action policy; gates
-  proactive + generates the capabilities answer), `trace.py` (one trace per
-  inbound update; trace_id stamps llm_usage/issues via `common.current_trace`),
-  `llm.chat_profile` (named model profiles + failover + cooldowns),
-  `events.py`/`jobs.py`/`runtime.py` (durable job runner — drained on the sweep
-  tick; first user is the daily memory curator), `self_model.py`/`boss_model.py`/
-  `persona.py` (grounded self + confirmed/inferred boss profile + prompt hint),
-  `memory_curator.py` (proposes candidates, confirm-before-store; reply-only,
-  pulled via memory_review), `relationship.py` (evidence-based working history),
-  `proactive.py` (heartbeat — suggestion-only, throttled, quiet-hours/weekday gated).
-  Proactive is ENABLED: heartbeat nudges (overdue reminders / memory candidates;
-  automatic note-review invitations are opt-in and default off), an opt-in morning brief,
-  and a model-health monitor that alerts
-  the boss when a model goes down/recovers (skipped while budget-stopped).
-  Persona: time-of-day & weekend-aware voice in a FRIENDLY register only — no
-  flirtation or intimate conversation (owner decision 2026-07-06; that register
-  lives with Nikki since the 2026-07-03 split); she NEVER fabricates a stored
-  fact (creative in voice, factual about his data).
-- `tg_api.py` · `texts.py` (bilingual ru/en templates, Cara's voice) ·
-  `common.py` (config).
-- Persona: `prompts/cara_persona.md` — templates carry the transactional voice;
-  conversation/grounded answers are LLM-generated with the rules embedded above
-  the persona (persona sits below hard/security/routing/budget rules).
+<!-- documentation-contract:modules -->
+| Modules | Current responsibility |
+| --- | --- |
+| `tg_ingest_agent.py` | Poll entry, owner gate, dispatch, pending actions, scheduler and durable recovery; installed under the sole entry filename agent.py. |
+| `router.py`, `skill_manifest.py`, `self_model.py` | Closed intent set, permissions and deterministic capability descriptions. |
+| `converse.py`, `converse_svc.py`, `hermes.py`, `persona.py` | Warm and business registers, conversation handlers and grounded preference hints. |
+| `notes_svc.py`, `ingest.py`, `journals.py`, `media.py`, `media_svc.py`, `pdftext.py` | Confirmation-gated notes, journals, catalog capture and attachment handling. |
+| `reminders.py`, `reminders_svc.py`, `reminder_time.py`, `gcal.py` | Reminder state, reply bindings, time parsing and calendar export. |
+| `knowledge.py`, `fetch.py`, `web_search.py` | Grounded saved-document answers and bounded external reads; search requires configured credentials. |
+| `tasks_svc.py`, `tasking.py`, `task_runner.py`, `tool_broker.py`, `task_json.py` | Durable task UI, plans, execution, exact approvals and compatible task serialization. |
+| `analysis_engine.py`, `analysis_lifecycle.py`, `answer_policy.py` | Read-only grounded analysis, evidence lifecycle and bounded answer obligations. |
+| `fleet.py`, `fleet_answers.py`, `fleet_context.py`, `fleet_report.py` | Owner-bound fleet scope, evidence normalization and code-owned findings. |
+| `fleet_async.py`, `fleet_lifecycle.py`, `fleet_lifecycle_svc.py`, `fleet_investigation.py` | Asynchronous investigation, maintenance, reconciliation and follow-through. |
+| `fleet_catalog.py`, `fleet_facts.py`, `fleet_facts_publish.py` | Published, source-bound fleet facts and capability catalog. |
+| `fleet_project.py`, `fleet_project_adapters.py`, `fleet_project_report.py`, `fleet_project_publish.py`, `fleet_development_publish.py` | Project evidence adapters, reports and authenticated publication. |
+| `fleet_shared_reads.py`, `fleet_queries.py`, `fleet_inference.py`, `fleet_monitor_adapters.py` | Scoped read authorization, query planning, inference and monitor normalization. |
+| `fleet_broker.py`, `fleet_queue.py`, `fleet_protocol.py`, `fleet_relay.py` | Restricted executor protocol, queue, approvals and transport. |
+| `fleet_mcp.py`, `fleet_mcp_admission.py`, `fleet_mcp_client.py` | Optional read-only MCP tools, principal admission and bounded client transport. |
+| `cara_fleet.py`, `fleet_host.py` | Separate capped executor and fixed root-owned host gateways. |
+| `worker_client.py`, `cara_worker.py` | Hash-bound spool and networkless compiled-in worker. |
+| `improvement.py`, `mentor_client.py`, `mentor_protocol.py`, `cara_mentor.py`, `mentor_runner.py` | Retained proposal/candidate machinery; Mentor services remain disabled. |
+| `learning.py`, `memory_curator.py`, `boss_model.py`, `relationship.py` | Source-bound procedural guidance, proposed memories and evidence-based working history. |
+| `llm.py`, `call_budget.py`, `cache_usage.py`, `inference_io.py` | Budget reservations, model gateway, validated cache accounting and bounded inference transport. |
+| `voice_svc.py` | Deferred STT transport with database work retained on the poll thread. |
+| `store.py`, `storage.py`, `backup.py` | Atomic SQLite migrations, binary storage and checked local/encrypted off-box backups. |
+| `events.py`, `jobs.py`, `runtime.py`, `trace.py` | Durable events/jobs, handler drain and bounded telemetry. |
+| `action_delivery.py`, `action_truth.py` | Durable outcome/delivery receipts and truthful action wording. |
+| `spend.py`, `review.py`, `issue_digest.py`, `proactive.py` | Metering reports, reviews, monthly issues and gated proactive suggestions. |
+| `deployment_notice.py`, `verify_installed_layout.py`, `verify_task_runtime.py`, `verify_mentor_runtime.py` | Deployment receipts, renamed-entry layout and isolated runtime verification. |
+| `common.py`, `texts.py`, `tg_api.py`, `sysinfo.py` | Configuration, bilingual replies, Telegram transport and read-only host statistics. |
+<!-- /documentation-contract:modules -->
+
+<!-- documentation-contract:services -->
+| Unit file | Role and activation |
+| --- | --- |
+| `tg-ingest-agent.service` | Owner-facing poll service; enabled. |
+| `cara-worker.service` | Isolated networkless worker; enabled. |
+| `cara-fleet.service` | Restricted fleet executor; enabled by its separate fleet installation. |
+| `cara-mentor.service` | Retained inference sandbox; disabled. |
+| `cara-mentor-runner.service` | Retained candidate sandbox; disabled. |
+| `cara-failed-notify@.service` | Failure-notice template; invoked on failure, not a standing daemon. |
+<!-- /documentation-contract:services -->
 
 ## Hard rules personality must never override
 Invent tool results · skip confirmation of state changes · treat forwarded
@@ -145,15 +130,11 @@ lives in these specs, and facts about the boss's data must always be real) ·
 weaken the closed-world router.
 
 ## Deploy / test discipline
-- **One command deploys to PD** (push working tree → test → install → verify, in a
-  single SSH connection the hardened box prefers):
-  ```bash
-  DEPLOY_HOST=root@174.138.108.85 DEPLOY_PORT=22 \
-    DEPLOY_KEY="$HOME/.ssh/digitalocean-dataplatform-asus" \
-    DEPLOY_KH=known_hosts_pd_dataplatform bash deploy.sh
-  ```
-  `deploy.sh --test` runs tests only (no install). Connection details (key,
-  known_hosts) are in the PD-VPS KB and `../Codex/.env.pd-digitalocean-secrets`.
+- Follow [CARA section 9](CARA.md#9-operations-runbook) for transport, source
+  recovery and the complete current release gates. deploy.sh is a transport and
+  installer, not complete release acceptance. Connection details remain in the
+  protected PD-VPS KB. Documentation-only changes with identical runtime files
+  are published without an installation or service restart.
 - Tests run on the VPS stage dir (`python3 -m unittest discover -p 'test_*.py'`)
   — keep test execution off the OneDrive-synced working copy. The remote
   scripts run `set -o pipefail` (fixed 2026-07-02), so a FAILED test run or a

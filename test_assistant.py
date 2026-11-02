@@ -22428,7 +22428,15 @@ class PhaseC20260908Tests(unittest.TestCase):
             self.assertIn("shellcheck", ci)
             self.assertIn("suite duration", ci)
             readme = (self.REPO / "README.md").read_text(encoding="utf-8")
-            self.assertIn("git checkout <sha>", readme)
+            # ADR-0027 moves recovery into the single guarded runbook. Keep the
+            # working source-transport recipe and its compatibility boundary
+            # pinned there, rather than restoring a second procedure in README.
+            self.assertIn("CARA.md#9-operations-runbook", readme)
+            runbook = (self.REPO / "CARA.md").read_text(encoding="utf-8")
+            self.assertIn("git checkout <sha>", runbook)
+            self.assertIn("bash deploy.sh", runbook)
+            self.assertIn("First verify schema, stored-data", runbook)
+            self.assertIn("no database rollback or destructive recovery", runbook)
 
     def test_a_deploy_that_fails_after_install_leaves_a_failed_receipt(self):
         import deployment_notice

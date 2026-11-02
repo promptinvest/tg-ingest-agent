@@ -1,5 +1,10 @@
 # Implementation Plan — 2026-07-24 Full-Review Fixes
 
+> **Status: historical implementation reference.** The shipped capabilities and
+> current boundaries are maintained in [CARA.md](CARA.md) and
+> [SOLUTION.md](SOLUTION.md); [the ADR backlog](docs/adr/README.md) tracks remaining
+> work. Approval, sequence and rollout instructions below describe their original
+> dated plan and do not authorize replaying completed work or one-shot helpers.
 Status: **APPROVED by the operator** ("I want to implement all of these"). This plan
 turns the 2026-07-24 multi-agent review (98 confirmed findings: 11 high / 40 medium /
 47 low, plus selected observations) into ordered, self-contained work packages.

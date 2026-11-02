@@ -15,12 +15,13 @@ local tasks. Long polling needs no inbound ports, so the host firewall stays
 SSH-only. The bot runs as systemd service `tg-ingest-agent` under the non-root
 user `tg-ingest`; Mentor and its candidate runner remain disabled.
 
-Current accepted runtime: `e834c29`, build `94d4bd4840c4`, accepted October 29
-at 10:32:20 UTC. Prompt-cache usage reporting and the approved open-model price
-reconciliation are deployed; actual savings have not been measured. See the
-[release record](docs/cara-cache-usage-2026-10-29.md) and
-[sanitized receipt](docs/cara-cache-deployment-2026-10-29.json).
-Published tag: [production-2026-10-29-cache-reporting](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-10-29-cache-reporting).
+Current accepted runtime: ADR-0026 source `75f0f34`, build `931c14f8bb74`,
+accepted November 1 at 11:36:09 UTC and independently audited. See the
+[release record](docs/cara-adr26-release-2026-11-01.md) and
+[verification](docs/cara-adr26-verification-2026-11-01.json).
+The published tag is
+[production-2026-11-01-adr26-tooling](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-11-01-adr26-tooling).
+ADR-0027 updates documentation and checkout guards without changing that runtime.
 
 ## Where the real documentation lives
 
@@ -62,61 +63,17 @@ and §7 — do not treat these two sentences as complete.
    `STT_MODE=local_server` — note the code default is `remote`, which sends
    audio off the box.
 
-## Deploy (from Git Bash, repo root)
+## Deployment and recovery
 
-```bash
-DEPLOY_HOST=root@174.138.108.85 DEPLOY_PORT=22 \
-  DEPLOY_KEY="$HOME/.ssh/digitalocean-dataplatform-asus" \
-  DEPLOY_KH=known_hosts_pd_dataplatform bash deploy.sh
-```
+[CARA section 9](CARA.md#9-operations-runbook) is the single operations runbook
+for units, schedules, state roots, exact-source verification, transport,
+preservation and acceptance. The current guarded release operator is required;
+a successful deploy.sh transport alone does not establish acceptance. Source
+recovery must preserve current schema, data, workers and receipts. A database
+integrity check does not authorize replacing live data.
 
-`DEPLOY_HOST`, `DEPLOY_KEY`, and `DEPLOY_KH` are required; the script has no
-retired-host fallback. `--test` pushes the working tree and runs the suite in
-the disposable stage dir without installing; `--pull` deploys `origin/main`;
-`--rollback <sha|branch>` checks that ref out on the box and reinstalls.
-
-**Rollback that works today (ADR-0017).** `--pull` and `--rollback` need a
-read-only GitHub deploy key on the box (`/root/.ssh/github-tg-ingest-deploy`),
-which the PD box does not have; both now exit 2 before touching anything and
-print this recipe. From the workstation:
-
-```bash
-git checkout <sha>          # the build to return to (see git log / the receipt)
-bash deploy.sh              # deploys the WORKING TREE: tests, install, verify
-git checkout main
-```
-
-The receipt Cara posts to the fleet chat names the source revision, and every
-install leaves `ingest-pre-install.db` (a `sqlite3 .backup` taken before the
-restart) next to the env/unit backups under
-`/root/codex-hardening-backups/<ts>-tg-ingest-agent/`. To enable the git modes:
-`ssh-keygen -t ed25519 -N "" -f /root/.ssh/github-tg-ingest-deploy` on the box,
-add the `.pub` as a read-only deploy key on the GitHub repo, then `./deploy.sh
---pull` once to create the clone.
-
-A deploy that fails AFTER the install marks the fresh manifest `failed`
-(`deployment_notice.py mark-failed`), prints it in the terminal, and Cara posts
-the same ❌ receipt to the fleet chat on her next start. A deploy that fails
-before the install leaves the previous verified receipt untouched. The stage
-dir on the box is wiped before every untar (dotfiles kept), so nothing an older
-payload shipped can ride into a test run or an install again.
-
-`python3 /opt/tg-ingest-agent/agent.py --check-config [/etc/tg-ingest-agent.env]`
-validates an env file with the real loader and exits 2 on a bad value; the
-installer runs it before any mutation.
-
-The installer is idempotent: it backs up replaced files to
-`/root/codex-hardening-backups/<ts>-tg-ingest-agent/` (newest 10 of its OWN
-`*-tg-ingest-agent` dirs kept — the root is fleet-shared, so the prune never
-touches other tools' backups), installs
-the tracked `tg-ingest-agent.service` and — only when `/etc/tg-ingest-agent.env`
-does not yet exist — seeds it from `tg-ingest-agent.env.example`, gates on
-`py_compile`, and leaves the service stopped while any `REPLACE_ME` placeholder
-remains.
-
-Fill `/etc/tg-ingest-agent.env` **in an SSH session on the box** (never push
-it from PowerShell with `Out-File`/redirect — UTF-16/BOM trap), then
-`systemctl start tg-ingest-agent`.
+Populated environment files stay protected on the host. The installer seeds
+only a missing environment; do not copy secrets or state into the checkout.
 
 Bootstrap your chat id while the service is stopped: message the bot once, then
 run `python3 bootstrap_chat_id.py <expected_numeric_chat_id>`. The id is
@@ -135,14 +92,10 @@ is nothing older left for a deeper offset to address.
 
 ## Layout on the VPS
 
-| Path | Purpose |
-|---|---|
-| `/opt/tg-ingest-agent/` | the service modules (`agent.py` + the modules listed in the installer's `MODULES`) |
-| `/etc/tg-ingest-agent.env` | config + secrets, mode 0600 (seeded from `tg-ingest-agent.env.example`) |
-| `/var/lib/tg-ingest-agent/ingest.db` | SQLite |
-| `/var/lib/tg-ingest-agent/media/` | downloaded photos and voice files |
-| `/var/lib/tg-ingest-agent/backups/` | weekly-by-default DB snapshots (rotated; off-box copies are encrypted) |
-| `/etc/systemd/system/tg-ingest-agent.service` | unit — installed verbatim from the tracked `tg-ingest-agent.service` (single source of truth) |
+The complete current state/configuration roots and service boundaries are in
+[CARA section 9](CARA.md#9-operations-runbook). Backups follow the existing daily
+local and weekly encrypted off-box policy; independent key escrow and host-loss
+recovery remain unproved.
 
 ## Tests
 
@@ -150,30 +103,20 @@ The full offline suite (no network, temp SQLite) also runs in GitHub Actions on
 every push and pull request. On this Windows/OneDrive workstation, run it only
 in the disposable VPS stage — never locally:
 
-```bash
-DEPLOY_HOST=root@174.138.108.85 DEPLOY_PORT=22 \
-  DEPLOY_KEY="$HOME/.ssh/digitalocean-dataplatform-asus" \
-  DEPLOY_KH=known_hosts_pd_dataplatform bash deploy.sh --test
-```
+Use the Linux scratch/test path described in
+[CARA section 9](CARA.md#9-operations-runbook). It runs scripted model/Telegram
+boundaries and synthetic state without a production installation.
 
 Only one poller may hold a bot token: never run the agent, a test, or a manual
 `getUpdates` against the live token elsewhere (Telegram answers HTTP 409).
 
 ## Backups
 
-Off-box database backups require `BACKUP_ENCRYPTION_KEY_FILE` (default
-`/etc/tg-ingest-agent-backup.key`). Keep a recovery copy outside both the VPS
-and this repo. Restore an `.enc` object with OpenSSL AES-256-CBC, PBKDF2 and
-`-iter 200000`, then gunzip the resulting `.db.gz`.
+The backup policy, protected state roots and recovery limits are documented in
+[CARA section 9](CARA.md#9-operations-runbook). Keep independently retained key
+custody distinct from an on-box integrity check; it remains unproved.
 
-## Quick verification queries (on the VPS)
+## Operational checks
 
-```bash
-sqlite3 /var/lib/tg-ingest-agent/ingest.db \
-  "SELECT id, category, status, substr(summary,1,60) FROM messages ORDER BY id DESC LIMIT 5;"
-sqlite3 /var/lib/tg-ingest-agent/ingest.db \
-  "SELECT day, skill, model, ROUND(SUM(cost_usd),4) FROM llm_usage GROUP BY day, skill, model;"
-sqlite3 /var/lib/tg-ingest-agent/ingest.db \
-  "SELECT id, title, due_utc, recurrence, status FROM reminders ORDER BY id DESC LIMIT 5;"
-journalctl -u tg-ingest-agent -n 30 --no-pager
-```
+Use [CARA section 9](CARA.md#9-operations-runbook) for current verification and
+recovery. Inspect owner content only within the authorized diagnostic scope.

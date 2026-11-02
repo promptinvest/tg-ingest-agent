@@ -1,5 +1,10 @@
 # Media capture from photos — implementation plan (2026-07-27)
 
+> **Status: historical implementation reference.** The shipped capabilities and
+> current boundaries are maintained in [CARA.md](CARA.md) and
+> [SOLUTION.md](SOLUTION.md); [the ADR backlog](docs/adr/README.md) tracks remaining
+> work. Approval, sequence and rollout instructions below describe their original
+> dated plan and do not authorize replaying completed work or one-shot helpers.
 Status: **APPROVED by the operator** (design agreed in-session 2026-07-27). Build AFTER the
 round-2 fix batches land and deploy.
 
