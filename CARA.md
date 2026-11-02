@@ -2420,8 +2420,8 @@ Scheduling is in-process; these rows add no systemd timer.
    release demonstrates a newly reviewed forward continuation against the same
    installed candidate. Failure grants no replay, reinstall, unknown-accounting
    reset or restoration of an older live database.
-5. **Compatible source recovery:** use a separate workstation checkout of the
-   selected known-good source with the existing explicit
+5. **Compatible source recovery:** use `git checkout <sha>` only in a separate
+   workstation checkout of the selected known-good source, with the existing explicit
    `DEPLOY_HOST`/`DEPLOY_KEY`/`DEPLOY_KH` transport. `bash deploy.sh` transports
    that checkout without a host Git key; complete the current preservation,
    readiness and acceptance gates around it. Legacy `--pull` and

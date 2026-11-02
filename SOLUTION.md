@@ -6,6 +6,9 @@ ADR-0027 adds documentation coverage checks and freezes a cache-report test cloc
 to its existing fixture date, without changing installed runtime,
 prompts, schema, budgets, stored history or service activation.
 
+The source-recovery documentation guard follows the recipe into the single
+CARA runbook and also pins its existing compatibility/data-preservation warnings.
+
 Current specification text describes present behavior. Historical release
 checkpoints and the complete previous specification remain in the
 [byte-exact pre-ADR0027 archive](docs/history/SOLUTION.pre-adr27-2026-11-02.md).
