@@ -205,6 +205,33 @@ or `task_start` creates a bounded durable plan whose steps pass the broker and
 pause on exact approval where required → reply sent; conversation, task,
 receipt, trace and issue tables updated.
 
+**Pre-router and parameters:** `PRE_ROUTER` holds guard order and allowed pending
+kinds; a behavior matrix pins winners and state refreshes before model dispatch.
+Its per-turn context retains fired-reminder restoration evidence through model
+and budget failures. `skill_manifest.PARAM_CONTRACTS` describes every router
+action's optional fields. Validation refuses unusable supplied shapes while
+preserving existing missing-field questions/defaults, scalar coercions, safe
+handler-validated selectors and ignored extension fields. Existing analysis and
+unsupported-schedule guards retain their original precedence.
+
+**Latest supported action inverse:** the explicit «отмени последнее действие» /
+“undo last action” command uses a per-chat ten-minute record for reminder close,
+reschedule/rename and note category/lifecycle mutations. A narrow local transaction
+commits each existing mutation and its inverse record together without moving
+network calls into the transaction. Undo verifies stable identity and the exact
+expected state for every target before restoring all targets atomically. It
+restores journal membership/payload/date and lifecycle fields, retains issued note
+numbers, categories and historical feedback/events, appends undo evidence and
+consumes the record once. Changed targets or an overdue undelivered alarm refuse
+restoration. Successful undo and its reply use the existing durable action receipt
+and outbox, preventing a delivery retry from applying another inverse. Pending
+cards, task approvals and replied-card semantics keep ownership. Existing
+reminder undo phrases and time-toggle semantics and version-bound learning undo
+are unchanged. Only a newer supported actual mutation replaces the record;
+unrelated actions and no-op attempts leave it intact. An explicit recurring
+occurrence acknowledgement clears it rather than exposing an older action;
+the recurring series anchor remains intact.
+
 **Research lifecycle:** a RU/EN research or decision request becomes exactly
 `web.search` → three `source.fetch` steps bound only to the search adapter's
 sanitized `url_1..url_3` outputs → `research.synthesize/v2` depending directly on
@@ -827,7 +854,7 @@ failures, spend, conversation and memory are not silently aged out.
 | `jobs` | Terminal telemetry | Only `done`/`failed` rows older than the configured cutoff are pruned; pending/claimed work remains. |
 | `journal_definitions` | Protected configuration | Stable journal identity, category and opt-in prompt settings; retained by every content-purge scope. |
 | `journal_entries` | Journal child | Validated derived payload tied to a source message; manually deleted before the message. Journal purge retains the journal definition/category. |
-| `kv` | Mixed durable state | Configuration, counters, recovery markers and bounded context/drafts; targeted consumption/removal only. `all` clears named content pointers and resets note counters, retaining unrelated config and consumed authorization evidence. |
+| `kv` | Mixed durable state | Configuration, counters, recovery markers and bounded context/drafts; targeted consumption/removal only. One `action_undo:<chat>` record is replaced by the next supported mutation or consumed by successful undo; expiry revokes its ten-minute authority. Affected source deletion/purge removes its content. `all` clears named content pointers and resets note counters, retaining unrelated config and consumed authorization evidence. |
 | `learning_events` | Learning child | Exact-version learning/undo events; no age sweep; cascades with learning versions on explicit `all` purge. |
 | `learning_lessons` | Learned content | Active/disabled owner-bound procedures; no age sweep; exact-version undo retains history; explicit `all` purge deletes it. |
 | `learning_task_observations` | Learning/task child | Task-to-lesson capture evidence; explicit `all` purge deletes it; task deletion cascades and lesson deletion clears the lesson reference. |
@@ -1193,8 +1220,8 @@ insufficient for a deployment.
   is declined honestly ("one at a time") — the `multi_action` route is a reply, not a
   plan. The planner (`task_start`) is research-only; it never had a close/reschedule tool,
   and the old wiring returned a paid refusal in planner prose. The splitter shipped
-  before ADR-0024's pinned precedence table: the pause-at-card rule is what keeps the
-  single pending slot from being clobbered meanwhile.
+  within ADR-0024's pinned precedence table: the pause-at-card rule keeps the
+  single pending slot from being clobbered.
 - **Journals — SHIPPED, no longer deferred (corrected 2026-07-26).** This list still
   named the optional daily "record today's entry?" nudge and the per-journal markdown
   export as future work; both landed with the structured-journals batch on 2026-07-17.

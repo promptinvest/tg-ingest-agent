@@ -9,6 +9,26 @@ deterministic side of her voice. Warm and personal, but structurally fixed.
 """
 
 TEXTS = {
+    "action_undo_done": {
+        "ru": "Отменила последнее доступное для отмены действие с заметками или напоминаниями. Записей: {n}. История сохранена.",
+        "en": "Undid the latest supported note or reminder action. Records: {n}. History is preserved.",
+    },
+    "action_undo_missing": {
+        "ru": "Сейчас нет действия для такой отмены. Она доступна после закрытия, переноса или переименования напоминания, смены категории или состояния заметки.",
+        "en": "There is no action to undo. This works after closing, moving or renaming a reminder, or changing a note's category or lifecycle.",
+    },
+    "action_undo_expired": {
+        "ru": "Десять минут для отмены уже прошли. Ничего не изменила.",
+        "en": "The ten-minute undo window has passed. I changed nothing.",
+    },
+    "action_undo_conflict": {
+        "ru": "Запись или её контекст уже изменились — такую отмену выполнить не могу. Ничего не изменила.",
+        "en": "The record or its context has changed, so I cannot undo that action. I changed nothing.",
+    },
+    "action_undo_past_due": {
+        "ru": "Отмена снова включила бы напоминание на уже прошедшее время. Ничего не изменила; укажи новое время явно.",
+        "en": "Undo would rearm a reminder at a time that has already passed. I changed nothing; choose a new time explicitly.",
+    },
     "start": {
         "ru": ("Привет, {name}! Я Кара — твой личный ассистент 🤗\n"
                "Пересылай мне посты, пиши или наговаривай: сохраню и разложу по полочкам, "

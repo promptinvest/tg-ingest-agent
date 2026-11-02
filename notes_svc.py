@@ -967,6 +967,7 @@ class NotesMixin:
         # Hand back the actual photos/files attached to the item, too.
         self.send_attachments(chat_id, row)
 
+    @store.action_undo_grouped("recategorize")
     def do_recategorize(self, chat_id, lang, params):
         """Change the category of an already-saved item (by id/ids/query/count,
         else the most recent). Reuses the confirm path, so the change is recorded
@@ -1499,6 +1500,7 @@ class NotesMixin:
         "actionable": ("требует действия", "actionable"),
     }
 
+    @store.action_undo_grouped("note_lifecycle")
     def do_note_lifecycle(self, chat_id, lang, params, text=""):
         """Reversible note triage: archive/restore/keep/purpose/review/temporary.
         Single ops run directly (the reply carries the undo); a BULK archive is

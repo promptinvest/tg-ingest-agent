@@ -201,6 +201,8 @@ SKILLS = {
                        "title": {"en": "Learned procedures", "ru": "Чему я научилась"}},
     "learning_undo": {"risk": "state_write", "writes_state": True,
                        "title": {"en": "Undo learned rule", "ru": "Отменить правило обучения"}},
+    "action_undo": {"risk": "state_write", "writes_state": True, "internal": True,
+                    "title": {"en": "Undo last action", "ru": "Отменить последнее действие"}},
     "improvement_list": {"risk": "read_only",
                          "title": {"en": "Improvement proposals",
                                    "ru": "Предложения улучшений"}},
@@ -273,6 +275,90 @@ SKILLS = {
 }
 
 
+def _params(scalars="", selectors=""):
+    """Optional JSON fields; selector error/fallback semantics stay in handlers."""
+    return {**dict.fromkeys(scalars.split(), "scalar"),
+            **dict.fromkeys(selectors.split(), "handler_validated")}
+
+
+# Router-bound contracts describe the fields actually consumed by each handler.
+# All fields are optional: missing values deliberately reach existing prompts,
+# partial drafts, reply/snapshot selectors and defaults. Unknown fields retain
+# their historical ignored/pass-through behavior. Scalar coercion stays local
+# to handlers (numeric strings, nulls, aliases and truth-value strings included).
+# Nonempty lists/objects in a consumed scalar field are unusable model output: allowing
+# them through can bind an unsupported SQL value or turn a malformed flag into
+# a state change merely because the container is truthy. Explicit id/ids fields
+# keep their defensive legacy resolvers, including safe malformed-id fallbacks.
+# Empty containers retain existing false/missing-value defaults. Fields already
+# parsed defensively (timestamps, selectors, ranges and numeric optionals) keep
+# their handler's rejection/default behavior, including partial-draft completion.
+PARAM_CONTRACTS = {
+    "fleet_investigate": {}, "fleet_maintain": {}, "ingest": {},
+    "reminder_create": _params("title recurrence", "due_utc note_id note_msg_id"),
+    "reminder_list": {},
+    "reminder_cancel": _params("all title_query title", "id ids"),
+    "reminder_reschedule": _params("all title_query title recurrence", "id ids due_utc"),
+    "reminder_rename": _params("title_query title new_title", "id ids"),
+    "reminder_undo": _params("title_query title", "id ids"),
+    "list_files": {},
+    "calendar_add": _params("title_query title", "id due_utc recurrence"),
+    "spend": _params(selectors="period"), "budget_set": _params("period", "amount"),
+    "stats": {}, "categories": {}, "help": {}, "overview": {},
+    "list_items": _params("category query", "limit state"),
+    "item_detail": _params("query category", "id"),
+    "item_delete": _params("query category", "id ids count"),
+    "note_edit": _params("query category new_summary summary", "id"),
+    "catalog_add": _params("title creator author director", "kind year"),
+    "list_field": _params(selectors="field"),
+    "recategorize": _params("query category", "id ids count"),
+    "note_lifecycle": _params("operation query category", "id ids count purpose when"),
+    "note_review": {},
+    "merge_categories": _params("from into query category"),
+    "show_media": _params("query category", "id"),
+    "read_media": _params(selectors="id"), "discard": {}, "vps_stats": {},
+    "purge": _params("scope category"), "fetch": _params("url"),
+    "ask": _params("question"), "issues_report": _params(selectors="period"),
+    "report_problem": _params("detail"), "multi_action": {},
+    "task_start": _params("mode", "context_task_id"),
+    "task_list": _params("all"),
+    "task_show": _params(selectors="id"),
+    "task_cancel": _params(selectors="id"),
+    "task_resume": _params(selectors="id"),
+    "task_feedback": _params("correction", "id rating"),
+    "learning_list": {}, "learning_undo": {}, "improvement_list": {},
+    "improvement_show": _params(selectors="id"),
+    "improvement_decide": _params(selectors="id accept"),
+    "improvement_export": _params(selectors="id"),
+    "set_journal": _params("category on"),
+    "journal_show": _params("category person tag stats", "period date since until"),
+    "journal_prompt": _params("category on", "time"), "memory": {},
+    "remember": _params("key value"), "forget": _params("key value"),
+    "self_query": {}, "persona": {}, "boss_query": {}, "memory_why": {},
+    "proactive_prefs": _params(
+        "enabled morning_brief note_review", "days quiet_start quiet_end max_per_day"),
+    "boss_memory_update": _params("op value", "id kind"),
+    "style_update": _params("tone"), "trace_query": {}, "memory_review": {},
+    "memory_cleanup": {}, "working_history": {},
+    "export": _params("what category", "period"),
+    "confirm": _params("title recurrence category", "due_utc snooze_minutes done member"),
+    "amend": _params("title recurrence category snooze_minutes done", "due_utc member"),
+    "cancel": {}, "smalltalk": {}, "converse": {},
+    "review": _params("export schedule resolved_issue_detail", "period focus when"),
+    "recall_conversation": _params("query", "since_utc until_utc"),
+    "clarify": _params("question"), "out_of_scope": {},
+}
+
+
+def invalid_params(action, params):
+    """Name an unusable supplied JSON shape without rewriting valid parameters."""
+    for name, kind in PARAM_CONTRACTS[action].items():
+        value = params.get(name)
+        if kind == "scalar" and isinstance(value, (dict, list)) and value:
+            return f"invalid_parameter:{action}.{name}"
+    return ""
+
+
 class SkillPolicyError(Exception):
     pass
 
@@ -303,6 +389,9 @@ def assert_covers(actions):
     missing = sorted(a for a in actions if a not in SKILLS)
     if missing:
         raise SkillPolicyError(f"router actions missing a manifest policy: {missing}")
+    missing_contracts = sorted(a for a in actions if a not in PARAM_CONTRACTS)
+    if missing_contracts:
+        raise SkillPolicyError(f"router actions missing a parameter contract: {missing_contracts}")
 
 
 def assert_proactive_allowed(action):

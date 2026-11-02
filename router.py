@@ -17,6 +17,7 @@ import llm
 import learning
 import reminders
 import reminder_time
+import skill_manifest
 import store
 
 ACTIONS = {
@@ -508,7 +509,8 @@ def validate_route(parsed, has_pending):
 def validate_route_reason(parsed, has_pending):
     """(validated_route, '') or (None, reason) — the reason names the model-output
     defect (ADR-0011): `non_json`, `invalid_action:<name>`,
-    `pending_only_without_pending`. It rides on the trace and the issue row so a
+    `pending_only_without_pending`, `invalid_parameter:<action>.<field>`.
+    It rides on the trace and the issue row so a
     router defect is never filed as the boss being unclear."""
     if not isinstance(parsed, dict):
         return None, "non_json"
@@ -532,6 +534,9 @@ def validate_route_reason(parsed, has_pending):
     if action in {"reminder_create", "reminder_reschedule"} and reminder_time.unsupported_schedule(
             params, reschedule=action == "reminder_reschedule"):
         return None, "unsupported_reminder_schedule"
+    parameter_error = skill_manifest.invalid_params(action, params)
+    if parameter_error:
+        return None, parameter_error
     try:
         confidence = float(parsed.get("confidence", 0.5))
     except (TypeError, ValueError):
