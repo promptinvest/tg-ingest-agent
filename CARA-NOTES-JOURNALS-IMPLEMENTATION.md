@@ -1,5 +1,10 @@
 # Cara — Notes Lifecycle and Structured Journals Implementation Specification
 
+> **Status: historical implementation reference.** The shipped capabilities and
+> current boundaries are maintained in [CARA.md](CARA.md) and
+> [SOLUTION.md](SOLUTION.md); [the ADR backlog](docs/adr/README.md) tracks remaining
+> work. Approval, sequence and rollout instructions below describe their original
+> dated plan and do not authorize replaying completed work or one-shot helpers.
 ```yaml
 document:
   id: cara-notes-journals-implementation

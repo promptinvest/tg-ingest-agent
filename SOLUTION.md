@@ -1,1011 +1,14 @@
 # Cara — Solution Specification
 
-## November 1 - ADR-0026 tooling completion accepted
-
-The selected tooling work is implemented in exact source `75f0f34`. CI checks
-all Python F rules. Synthetic snapshots pin the existing conversation, router
-and Hermes prompts. Shared stdlib-only task-serialization and environment-file
-helpers preserve existing byte, hash, wrapper and sync contracts. Original
-regression assertions and distinct fleet serialization contracts are retained.
-
-Deployed and accepted **2026-11-01 11:36:09.901372 UTC**, build `931c14f8bb74`,
-deployment `9a7da34f2a7761ce681a1c23`. The separate audit passed at
-**11:37:06.442988 UTC**, confirming the same verified runtime and four active
-services with `NRestarts=0`. Acceptance `30ced828` and audit `92fc0992` are bound
-in the [sanitized verification receipt](docs/cara-adr26-verification-2026-11-01.json).
-The remotely verified annotated tag
-[production-2026-11-01-adr26-tooling](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-11-01-adr26-tooling)
-points to exact source `75f0f34`; earlier production tags are retained.
-These are dated observations, not an uninterrupted-health claim.
-
-The full offline Linux suite passed in normal and shuffled order, retaining its
-documented skips. [Exact-source CI run 41291859096](https://github.com/promptinvest/tg-ingest-agent/actions/runs/41291859096)
-and installed-layout checks passed. Original operator, forward-continuation,
-MCP and transport qualification passed, including isolated kernel checks.
-The dated verification record holds the measured counts and durations.
-
-The first runtime attempt was contained when an operator fixture's synthetic
-principal exceeded the existing length limit. A bounded fixture suffix repaired
-that gate without changing application source or the full execution identity.
-The fresh installed-state continuation completed only the missing gates; it
-replayed no installer, backup or earlier controller. The failed attempt and its
-proofs remain. The 56-table schema, stored history and cache metadata are
-preserved; this stage adds no migration or model-facing prompt change.
-See the [release record](docs/cara-adr26-release-2026-11-01.md).
-
-
-## October 29 - Prompt-cache reporting accepted
-
-The owner selected measured cache usage and price reconciliation. The release
-extends the existing gateway, usage ledger and spend/review reports. New calls
-record validated cache counters and frozen published-rate estimates; measured
-coverage, reuse and priced coverage remain distinct. Historical rows/unknown
-reservations are preserved, and savings never reduce budget reservations. Four
-stale open-model defaults are reconciled; explicit commercial overrides and all
-dollar limits remain. Prompts, models, API payloads and action behavior are exact.
-Cache lines use distinct labels so existing model-cost warnings remain readable.
-
-Deployed and accepted **2026-10-29 10:32:20.166933 UTC**, exact source `e834c29`,
-build `94d4bd4840c4`, deployment `26718b31810856a7bfcdfbf5`. Independent audit
-passed at 10:33:03.995636 UTC: all four services active, 95 installed artifacts,
-126 protected files and one native completion notice recorded as sent/attempts1.
-Published tag [production-2026-10-29-cache-reporting](https://github.com/promptinvest/tg-ingest-agent/tree/production-2026-10-29-cache-reporting)
-points to that exact runtime; remote readback verified the tag target.
-The full Linux offline suite passed in normal and shuffled orders, along with
-installed-layout and CI checks. The final private operator passed its complete
-regression suite and a read-only check against actual inputs.
-
-The nullable column was added once, preserving all 56 tables and original rows
-without backfill. The owner-approved five-record exception retains all 35 unknown
-records and the five records' USD0.0020408 reserve; every new unknown still blocks.
-Failed attempts and pauses remain recorded. A fresh installed-state continuation
-corrected nine authenticated Daily Lingo release identifiers in Cara's read-only
-policy and acknowledged only its archived, completed synthetic read. It performed
-no reinstall, second migration, Daily Lingo mutation or controller replay.
-No measured cache savings or invoice reconciliation is claimed. These acceptance
-and health observations are dated, not a claim of uninterrupted availability.
-See [ADR-0037](docs/adr/ADR-0037-cache-usage-reporting.md) and the
-[release record](docs/cara-cache-usage-2026-10-29.md) with its
-[sanitized deployment receipt](docs/cara-cache-deployment-2026-10-29.json).
-
-## October 27 - Current-request conversation repair accepted
-
-Deployed and accepted **2026-10-27 17:28:51.589018 UTC**, source `83e8162`, build
-`ca7db0315cbc`, deployment `ed6cc206f136827168490016`. The owner requested the receipt
-and history bug be fixed and deployed. The change stays within the existing
-router, dispatcher, conversation and reporting modules; this incident did not
-justify another agent or model split.
-
-Standalone receipt probes now use a narrow bilingual parser and the durable
-reply path, acknowledging only the current message without routing, embedding
-or conversation curation. Existing pending confirmations, open questions,
-replies, forwarded content, media and substantive commands retain their paths.
-Generated conversation and its bounded repair bind the verified current request
-to the same frozen local clock and supported receipt facts. History and source
-fences remain; source dates, earlier processing outcomes and global health stay
-distinct. Scoped recovery and explicit calendar-contradiction checks preserve
-quotation, historical recall, uncertainty and ordinary conversation. Failed
-factual repairs use neutral containment and remain quality failures.
-
-The exact source passed the full offline suite, CI, installed-layout checks and
-independent review of the finite functional and native-model qualification cohort.
-The final live audit (`4697a38a`) confirmed the installed release and server
-observer. Actual native accounting passed within the owner's amended test limits,
-preserving earlier usage and failed replies. This finite check
-does not establish general intelligence or ordinary-traffic quality. Models,
-production budgets, schema, task authority and stored history are unchanged.
-The release adds a separate source segment to the existing trial, whose original
-end remains October 28 at 13:36:17.924552 UTC. See
-[the current-request repair record](docs/cara-current-request-2026-10-27.md).
-
-## October 27 - Functional review fixes accepted
-
-Deployed and accepted **2026-10-27 14:06:34.824392 UTC** (17:06:34.824392 Moscow),
-source `3140081`, build `df7a5715a810`, deployment `fac7939fdd950ba5e237d163`.
-The actual sandbox observer passed at 14:07:26 UTC; the independent final audit
-passed at 14:08:44.425238 UTC. The remotely verified annotated tag
-`production-2026-10-27-functional-fixes` points to the exact installed source.
-
-The fixes separate historical notices from current outcomes, preserve useful
-clarification and dated recall, bind new note/media confirmations to delivered
-cards and content versions, preserve explicit reminder-undo targets, and correct
-voice/task delivery and native-call accounting failure paths. Both root Linux
-orders completed the full offline suite (nine skipped each), with exact-source CI and the
-exact installed entrypoint gate. All 11,339 original assertions remain. A release-metadata guard
-stopped the first deployment; a reviewed forward continuation completed only
-the unexecuted steps, preserving all 56 stopped tables/schema and prior evidence.
-
-All fifteen final response outcomes passed, including a native repair of one
-initial Russian false all-clear; six record reads use no model. Cumulative test
-usage was 29 calls / USD0.139814352, within the owner-approved 30-call / USD0.25
-ceiling. Models and native budgets remain unchanged. The fifth source segment
-keeps the original **October 28 13:36:17.924552 UTC** end; application changes
-confound a model-only comparison. See [the functional review record](docs/cara-functional-review-2026-10-27.md).
-
-## October 27 - Installed-layout delivery recovery
-
-Deployed and accepted **2026-10-27 07:45:35 UTC** (10:45 Moscow), source
-`d9343ad`, build `447464bdaf47`, deployment `78582200ef0e63991778091e`.
-The actual sandbox observer passed at 07:48:12 UTC; the independent final audit
-passed at 08:32:44 UTC. The remotely verified annotated tag
-`production-2026-10-27-installed-layout` points to the exact installed source.
-
-Delivery-only recovery obtains the live Agent's current Telegram sender instead
-of importing the repository entry filename. The installed entry remains
-`agent.py`. A permanent offline gate exercises the exact packaged/installed
-artifact in fresh isolated import and script processes, with synthetic state and
-fake model/Telegram boundaries. It covers ordinary dispatch, no-op reminder
-expiry, committed recovery, known-unsent retry and ambiguous-send containment.
-The gate runs before installation, after runtime copying and before service
-startup, and through native verification. The original defect reproduces in the
-exact older installed layout; corrected-source normal/shuffled Linux, exact-head
-CI and network-isolated operator/kernel checks pass.
-
-No model-facing prompt, profile, action guard, budget or schema change is
-included. Five failed updates and their fifteen failed attempts remain preserved
-without replay. The audit preserves runtime, protected configuration, prior
-usage and historical unknowns; no new owner inbound traffic had arrived at the
-08:32 UTC health check. A fourth source epoch retains earlier trial evidence and the
-original October 28 end; this incident is application failure evidence, not a
-clean model-quality comparison. See the [incident and release record](docs/cara-installed-layout-recovery-2026-10-27.md).
-
-## October 25 - Read-only grounded analysis accepted
-
-Deployed and accepted **2026-10-25 20:04:47 UTC** (23:04 Moscow), source
-`e242516`, build `77f6380d9912`, deployment `73e0133c10ad848334a43e76`.
-The actual sandbox observer was installed 20:05:42 UTC; independent read-only
-runtime and preservation audit passed 20:06:41 UTC. The remotely verified tag is
-`production-2026-10-25-grounded-analysis`, pointing to the exact installed source.
-
-ADR-0036 extends the existing task skill and broker. A deliberate comparison or
-recommendation can select up to four local saved-note, reminder and published-fact
-reads, inspect validated receipts and adapt its reading before synthesis. Recorded
-facts cite source quotations and dates; conclusions, recommendations, conflicts
-and unknowns stay distinct. Successful empty searches remain visible to planning,
-and synthesis reassesses provisional gaps against the evidence. Explicit
-follow-ups bind to the same owner's delivered parent task/result.
-
-Ordinary chat, extractive KB answers, existing task plans, confirmations, action
-guards, cancellation, delivery ambiguity, restart accounting and stored history
-remain. Analysis copies follow existing authorized source/all purge semantics;
-late inference cannot restore erased content. No new external search, calendar
-or state-change permission is activated. Models/fallbacks and USD 2/day,
-USD 12/month, USD 0.15/task and four task-profile calls remain unchanged.
-
-Exact-source normal/shuffled Linux, exact-head CI, finite model qualification,
-network-isolated operator/kernel checks and all installed release gates passed.
-All six final-source synthetic outcomes pass independent semantic review. The
-final cohort adds 20 native calls/USD 0.152374; all 57 known qualification rows total
-USD 0.421429. Earlier failed 37 rows/USD 0.269055 and 29 historical unknowns remain,
-with no new unknown charge. The pinned operator-selected USD 0.60 finite evaluation
-amendment changes no native budget or quality criterion. Six outcomes do not
-establish general IQ or ChatGPT-agent capability parity.
-
-The first attempt paused before new worker/main startup on operator bytecode
-inventory checks. Forward-only completion preserved all 65 original package files,
-all 15 cache artifacts, data and failed receipts; it performed no reinstall or
-DB restore. The accepted map has 93 runtime/99 protected files, with the new
-observer's two unit files separately bound. The third source epoch begins
-20:02:28.895163 UTC after the recorded 918.431712-second source-transition gap;
-the earlier source pause and original October 28 13:36:17.924552 UTC trial end
-remain. The actual final timer entry is13:36:18 UTC. Observation is metadata-only,
-with no paid probes, messages or automatic reversion; sparse traffic remains
-insufficient evidence. Conditional model-only reversion preserves new code/data
-and requires fresh accepted-runtime/PID/idle/backup/protected checks and a
-compare-and-swap of only the four original model keys.
-
-The owner selected deployment as soon as qualification passes with a separate
-trial segment. Exact packages/windows were operator selections under that
-request; no separate hash-specific owner approval or Cara standing deployment
-rule is claimed. See the [accepted release](docs/cara-grounded-analysis-2026-10-25.md),
-[ADR-0036](docs/adr/ADR-0036-read-only-grounded-analysis.md) and
-[pure continuation contract](ops/analysis-release/README.md).
-
-## October 25 - Context and evidence improvements accepted
-
-The owner approved the architecture review's first release. ADR-0035 extends
-existing conversation, knowledge and memory modules. Turn context survives
-repair; retrieval keeps distinct source passages and late keyword matches;
-memory context retains certainty/provenance and candidate checks reject clear
-contradictions while preserving correctly attributed family and compound-sentence
-facts, including sensitive facts that still require confirmation. Existing source quotations, action guards, confirmations,
-persona, stored history and model/budget settings remain. No schema or new
-service/tool permission is introduced. Outcome regressions accompany the change.
-
-The first actual-model cohort failed four outcomes despite preserved prompt
-context; its original questions, raw replies and charges remain evidence.
-Unambiguous owner requests for recorded task status, next step or delivery
-now read verified task/source records directly without inference or effects.
-Ambiguous, edited, forwarded or mixed requests keep the model path. Explicit
-current numbered-item instructions share the bounded corrective path and
-immutable evidence; earlier degenerate/action repair behavior remains.
-Independent holdouts cover task identity, source integrity, mixed requests
-and extra numbered items. Format outcomes have readable Russian/English report
-labels; repeated mismatches and failed corrections enter existing issue review.
-Only failed corrections add the existing failure-health line. Exact-source
-qualification passed; the dated release record retains all failed evidence.
-
-Deployed and accepted **2026-10-25 16:21:02 UTC** (19:21 Moscow), source
-`17083d6`, build `23cada405758`, deployment `88a0cb2a8c15f71ac6fc5d4c`.
-Exact-source normal/shuffled Linux qualification, CI, finite model review and
-guarded forward completion passed. Existing data/schema and the model profiles,
-fallbacks, USD2/day and USD12/month remain. The authenticated continuation and
-companion observer retain the original October28 deadline and actual deployment
-pause; conditional model-only reversion preserves the new source and all data.
-See the [release record](docs/cara-context-evidence-2026-10-25.md) and
-[ADR-0035](docs/adr/ADR-0035-evidence-and-context-continuity.md). Adaptive tool
-reasoning, grounded analysis and broader research tools remain subsequent work;
-this release does not establish ChatGPT-agent capability parity.
-
-
-## October 25 - Qualified-role model trial: original acceptance
-
-This section records the original model-only transition. The accepted
-context/evidence release above subsequently changed application source and
-continued the same trial with a new observer; its original evidence remains.
-
-Accepted **2026-10-25 13:36:17 UTC** (16:36 Moscow). Haiku 5.5 handles routing,
-ingest and memory candidates; Sonnet 5.5 handles KB answers and memory
-consolidation; GPT-6.1 Sol handles task planning and synthesis. Conversation keeps
-its exact original DeepSeek v4 Pro profile after both proposed replacements failed
-task-context repair checks. Failed conversation trials remain retained and are
-excluded from the selected scope. No conversation repair code is included.
-
-All profile controls, existing fallbacks, USD2/day and USD12/month guards remain.
-New-model reservations use conservative context-tier ceilings. At that acceptance
-the installed application remained ee1a319/de3e62ab43f8/ad778b10272c813105b7080a; no code install,
-schema change or database restore occurred. All 91 runtime files and 78 protected
-files pass, with only four model environment keys changed. Exact stopped data
-across 56 tables, peers, notification receipts and final health checks pass.
-
-All 21 cases for seven changed active profiles pass functional and semantic review;
-conversation is separately hash-bound unchanged. Both full native Linux orders
-pass the full offline suite in each order; exact historical counts and skips
-remain in the dated trial receipt. Model-operator and independent observer
-checks pass as recorded there. Qualification including failed attempts costs USD0.357269084
-in the conservative ledger, with zero unknown charges. CI af3dcb7 passes.
-
-Read-only monitoring runs every six hours through **October28 13:36:18 UTC**
-(16:36 Moscow), then its dedicated timer stops. The initial sandboxed snapshot
-succeeded; it makes no model calls or owner messages. A separate observer package
-uses only the read/search capability needed for the private SQLite directory;
-data permissions, existing services and SQL read-only enforcement remain.
-Model-only reversion is prepared and preserves later data/history. No automatic
-quality decision or reversion is scheduled. The [trial record](docs/cara-model-trial-2026-10-25.md)
-and [sanitized receipt](docs/cara-model-trial-2026-10-25-verification.json) bind the evidence.
-
-## October 25 - Personal assistant reliability accepted
-
-ADR-0034 extends existing reminder, delivery and maintenance mechanisms for the
-owner's architecture-review implementation request. Source `ee1a319`, build
-`de3e62ab43f8`, deployment `ad778b10272c813105b7080a` was deployed and accepted
-**2026-10-25 11:37:18 UTC** (14:37 Moscow), tag
-`production-2026-10-25-assistant-reliability`. The
-[dated release record](docs/cara-assistant-reliability-2026-10-25.md) separates
-exact-source qualification, the preserved failed transition and forward completion.
-
-`action_delivery.py` adds source-bound action receipts and outbound intents.
-Reminder effect, exact confirmation consumption and result intents commit once;
-replay recovers that same result. Definite delivery rejection can retry transport;
-uncertain delivery cannot rerun an effect or automatically duplicate a send.
-New copies participate in existing purge semantics, with no old-send backfill.
-
-Maintenance handlers may return owner-thread `runtime.PendingJob` sessions.
-One bounded background slot performs file/transport work without the main SQLite
-connection; all accounting, memory merges, cadence stamps and job transitions
-settle on the owner thread. Unknown dispatched paid work is terminally contained
-after a crash. A cooperative inference wait heartbeat services due reminders
-without nested inbound dispatch, stealing confirmations or changing the current
-turn's reminder target. Original limits, budgets and synchronous helper APIs stay.
-Preparation failures terminally contain the session before database cleanup;
-cleanup may release only its exact provably unsent reservation, never an unrelated
-or uncertain charge. A failed cleanup cannot reopen preparation or transport.
-
-Conversation and routing receive a compact current-work projection from existing,
-source-valid tasks, pending cards and reminders. This read-only projection creates
-no objective or permission. Recent equal-priority guidance survives crowded
-profiles, and current requested structure/detail overrides concise defaults.
-Showing context is not evidence of executing a pending step or of the owner
-reading it. Exact requested structures exclude unsolicited opening/closing text.
-A static current-turn boundary disambiguates consecutive owner messages when a
-skill acknowledgement was not stored as a conversation turn. Existing history,
-forwarded-content fences and the final owner text remain intact. The next-step
-projection excludes the runner's actual successful state, `succeeded`.
-Fleet queue fairness and an exact terminal stale-authority status improve
-follow-through while preserving tampered-source silence and no automatic replay.
-
-Explicit independent-artifact recovery verification reports the limits of its
-provenance. Local restore checks remain distinct from verified off-box recovery;
-neither documentation nor a successful decrypt proves key escrow.
-The owner confirmed on 2026-10-25 that encrypted off-box backups are delivered
-through the TG notification bot. The independently retained recovery-key location
-remains unknown, and recovery after host loss remains unverified.
-
-Acceptance binds the exact installed modules to full normal/shuffled Linux gates,
-CI and finite model evidence. The migration preserves the original tables and
-history at stopped boundaries and adds only action receipts and reply delivery.
-Fresh namespace/MCP/scoped-read gates, a quiescent final restart, health samples
-and the native once-only notice pass. An old Daily Lingo release binding stopped
-the first transition before verification. A separately authenticated forward
-completion changes only nine release-binding values in one host policy, with the
-other 71 protected entries exact from preflight; it performs no reinstall or
-migration.
-Original grants, freshness caps, models/budgets and alert policy remain unchanged.
-
-## October 25 - Notification and gratitude source binding
-
-Extend the existing reminder/journal services rather than add a new skill or
-process. Delivered-card metadata stays in the existing bounded fired-message
-mapping; it retains the due occurrence, conversation boundary and exact fired
-reminder-event identity. Recurring actions compare that identity with the latest
-fired event. Legacy cards require a unique nearby fired event and a trusted card
-timestamp; missing or ambiguous evidence refuses a recurring mutation. Journal
-content can still inherit an old explicit card's date independently of its action
-eligibility. No schema or transport capability is added.
-
-The deterministic correction path distinguishes ordinary reads and explicitly
-prefixed new entries from retrospective corrections. It selects an exact owner
-note by number, quoted raw source, suggestion reply or recent visible context,
-then previews category/date/raw text/validated fields. A nonce, exact card and
-source hash bind confirmation. A single SQLite transaction changes only the
-confirmed category and journal metadata while preserving original raw text,
-receipt time, entry identity/creation time and full prior metadata in feedback.
-Ambiguous matches request a target. Existing journals use their stored payload
-and event date; a previously nonjournal note uses the unchanged extractor once.
-
-Occurrence dates flow through the existing journal draft into preview, autosave
-when already opted in, confirmation, saved acknowledgement and edited card.
-Invalid dates block only journal saves and retain the pending offer; ordinary
-recategorization remains available. Unrelated live reminder pending rows survive
-correction success, stale refusal and cancel with their original timestamps.
-Pronoun filtering changes validated/displayed named people without rewriting old
-entries or changing extraction prompts, model selection, call limits or budgets.
-
-[Guarded release](docs/cara-notifications-gratitude-2026-10-25.md) accepted
-**2026-10-25 09:08:55 UTC** for `dcdd5ee`, build `c39b8684b7db`, receipt
-`f5bad2f470066a136a80f297`. The full offline suite in normal/shuffled order,
-exact-source CI, original operator regressions, fresh operator fixtures and the
-actual prepared-input handoff pass. The dated release record holds exact totals.
-The exact native installer, original 54-table parity, before/after strict nonroot
-readiness, MCP60, scoped reads, preservation and native once-only notice pass.
-Postacceptance review preserves original content/history; only independently
-accounted normal runtime markers, health usage and the new deployment receipt
-advance. Sealed prior model evidence keeps its original source; fresh deterministic
-qualification made no model calls. Existing records require normal confirmation
-for any correction.
-
-The full catalogue gate caught an undeclared final-action template. The correction
-success template now declares the confirmed lifecycle and is emitted only after
-its atomic commit; date clarification has no completion claim. Original action-
-truth assertions remain intact. The corrected source passed full verification
-and the guarded installed acceptance above.
-
-## October 24 - Fleet and project release accepted
-
-Application acceptance completed **2026-10-24 20:56:22 UTC** for source
-`eb0b9ad`; the installed and loaded modules match the qualified source. Separate
-forward facts revision 2 was accepted **21:06:13 UTC**. CF-01-CF-07 and all 71
-unchanged original functional criteria have separate evidence-based acceptance
-decisions. The [dated release record](docs/cara-fleet-release-2026-10-24.md)
-contains verification totals, finite business qualification, costs and limits.
-
-Known descriptive facts avoid host inspection. The existing budgeted semantic
-planner selects requested entities, fields, scope and reply form; grounded output
-preserves meaningful names, preferences, corrections, source dates and gaps.
-Durable execution keeps owner/reminder work responsive. Project reads distinguish
-placement, application/route/backup evidence and repository/CI/issue progress.
-Shared authority, resource exclusion, content lifecycle and checked recovery
-preserve existing behavior, source history, budgets/models and unrelated services.
-
-Accepted checks include strict nonroot namespace readiness, preserved gateways,
-typed scoped reads, health, current/last-good facts and once-only normal notice.
-The final continuation carries completed installer, publisher, marking and restart
-evidence without replay. Original prestart data parity and backups remain retained;
-later ordinary activity and existing telemetry retention have a separate exact
-finite forward review, not an assertion of unchanged live row hashes.
-
-The supported optional MCP pair is stdlib/2026-07-28 local stdio with base async
-reads. Tasks is unsupported; A2A, other transport/SDK guarantees and new writes
-remain deferred. CF-01-CF-06 work independently of MCP availability. Facts and
-development synchronization remain reviewed manual workflows, without a new timer.
-
-Final public documentation, justified issue states and CI are synchronized at the
-final public head before a separate reviewed manual development-source refresh.
-Its dated acceptance is retained privately; a receipt-only public commit would
-move the head just captured. This record does not assert later refresh success.
-Dated checkpoints below retain their historical status.
-
-## October 24 - Increment 12 - stale and partial development evidence
-
-Development adapters retain complete:false, but a single gaps field records
-staleness ahead of partial_coverage. The typed reply previously displayed only
-that single gap, losing a separate limit on what the sampled CI/issues establish.
-Add the missing coverage qualifier in presentation only when its recorded sample
-is incomplete and the existing gap does not already state partial coverage.
-Preserve stale/revision/date qualifiers, source bytes and every fresh output.
-No fixture clock change, assertion relaxation or schema/probe/prompt/budget change.
-Fresh exact-source release qualification remains pending; all packages stay open.
-[Increment 12](docs/cara-fleet-increment-12-2026-10-24.md).
-
-
-## October 24 - Increment 11 runtime subfield obligations
-
-A composite runtime finding prevents the concise renderer from answering only
-the requested generation/reserves/day-budget question. Formal field-presence
-checks passed while manual business review rejected the unrelated diagnostics.
-Preserve that distinction and every original response/charge.
-
-Add closed presentation-only answer_fields selected by the existing semantic
-planner, retained within canonical project/runtime context and rendered from the
-complete typed observation. Unknown fields/scopes fail closed; no authority,
-transport, inference stage, model or production budget changes. Legacy no-field
-and full-detail behavior remains; field-scoped detail preserves requested facts,
-source dates, uncertainty and material failures. Current-source qualification
-and guarded installed acceptance remain pending; production99037c5/MCP disabled,
-packages open. [Increment 11](docs/cara-fleet-increment-11-2026-10-24.md).
-
-
-## October 24 - Increment 10 semantic host scope
-
-A memory-only model plan can omit optional read_scope. The legacy base validator
-then adds project metadata even though the answer correctly filters to RAM.
-Correct this at the new semantic planner boundary: explicit narrow host focus
-without project targets or an inherited scoped contract derives kind:host with
-empty project/capability lists. The existing scoped transport enforces the
-resulting no-project footprint; it is not merely an output filter.
-
-Keep the base validator and stored legacy wire contracts, broad overview/resource
-plans, project requests and maintenance confirmations exact. No prompt, model,
-provider, budget or new host probe is introduced. Add paired negative-runtime
-MCP evidence while retaining every original business assertion and corpus byte.
-Focused isolated Linux collection/compatibility checks pass. Complete-source/
-model/installed release gates remain open; production
-is accepted `99037c5`, MCP disabled. [Increment 10](docs/cara-fleet-increment-10-2026-10-24.md).
-
-## October 24 - Increment 09 operational context and minimal focus
-
-Complete Linux/CI passes for published `9566d1b` do not establish a passing model
-cohort. Its eighth phase selects inheritance for a self-contained named-project
-application question without canonical prior; the validator rejects it safely.
-A review of an earlier memory answer also finds unrelated CPU/disk/project detail
-that the former model assertions missed. Keep the failure, weak-assertion review
-and accounted usage; do not claim every recorded model pass met the business need.
-
-Clarify operational planning only: evidence recency is not conversational scope;
-a new named target selects explicit scope, while genuine follow-up/reformatting
-inherits only valid canonical prior. Preserve the separate local catalog prior
-contract. Single-metric questions use the specific focus without an umbrella
-resources/overview hint; legitimate broad/multi-metric reports stay compatible.
-Strict validators, renderers, source-age rules, inference attempts, models,
-providers, budgets, source authority and effects remain unchanged.
-
-Actual Agent/project-only runtime and dated RU answer, genuine inheritance,
-source edits/expiry, narrow-versus-broad memory and catalog regressions pass in
-isolated Linux. New-source full/CI/model and installed/release acceptance remains
-pending. Production stays accepted `99037c5`, MCP disabled; all packages open.
-Next source/archive/operator/window: UNSELECTED.
-[Increment 09 record](docs/cara-fleet-increment-09-2026-10-24.md).
-
-## October 24 - Increment 08 task admission prompt contract
-
-The published `8cbf06f` CI succeeds, including normal/shuffled and lint gates.
-Its real-model cohort nevertheless fails task admission after two passing
-catalog phases. The candidate supplies an array for input and a cropped binding
-instead of the complete owner investigation. Strict validation rejects it; no
-task or fleet dispatch is admitted, and every attempted charge remains accounted.
-
-Clarify the existing task planner: input and bindings are keyed JSON objects;
-provenance does not supply a missing input.query. Preserve the exact contiguous
-owner fleet clause, every target, metric and reply-format request, using the
-complete source span when it is one fleet request. Include a complete valid JSON
-example with separate illustrative source/hash/bounds. Actual source bindings,
-validators, original correction attempts, generic task flows, models/providers,
-budgets, data and approval/effect rules remain unchanged.
-
-Focused task/source/hygiene checks pass in isolated Linux. These deterministic
-checks do not repair or replay the failed paid attempt, qualify the new prompt's
-model behavior, or substitute for final full/CI/installed release evidence.
-Production remains accepted `99037c5`, MCP disabled; every package remains open.
-Next exact source/archive/operator/window: UNSELECTED.
-[Increment 08 evidence and remaining gates](docs/cara-fleet-increment-08-2026-10-24.md).
-## October 24 - Increment 07 fixture-only correction
-
-The first complete qualification of source `12a47d7` failed two fixture checks:
-a previous full-revision display expectation and a conditional-expression cleanup
-in the new legacy-history fixture rejected by the repository test-hygiene rule.
-The full offline Linux normal run and CI failed those two checks; shuffled was
-not reached. Exact historical totals remain in the dated release record. Failed
-source/archive/logs remain; none is replaced by a focused passing checkpoint.
-
-Correct only the explicit 12-character display expectation and replace the
-fixture cleanup expression with equivalent explicit if/else. Full typed revision, CI/issues/date/scope, legacy-unknown
-refusal and original data/authority/secret assertions remain. Application bytes,
-providers/models, budgets, wire contracts and deployment state are unchanged.
-Project integration 16 plus parity 26 pass 42 in 7.357 s; legacy 13/resource 20/fleet 60/
-poll 7/waits 3 plus exact hygiene pass 104 in 7.342 s in a separate isolated run.
-Fresh complete-source qualification remains a gate.
-
-Next source/archive/operator/window: UNSELECTED. Full normal/shuffled/lint/CI,
-accounted model and actual installation/backups/parity/sandbox/readiness/monitor/
-recovery acceptance are pending. Production remains accepted `99037c5` / build
-`f54906e304fe`, MCP disabled; no CF package is complete.
-[Increment 07 correction record](docs/cara-fleet-increment-07-2026-10-24.md).
-
-Published correction source `38b7d1` then failed CI 40094842974 on the standing
-specification guard: a hard-coded historical suite total had been copied into
-the rolling primary specs. The earlier two fixtures pass. Keep exact totals in
-the dated release record and use "the full offline Linux normal run" here.
-No application, test, guard, model or budget change; fresh full qualification
-and all installed/release gates remain pending.
-
-## October 24 - Increment 06 compatibility and proof candidate
-
-The existing host restart checks legacy token history under the same per-unit
-lock before fingerprint/effect. Executing/ambiguous same-unit records without a
-modern hold block fresh tokens. Malformed, unsafe or unscoped history fails
-closed; valid other-unit history stays independent. Known final receipts allow
-fresh sequential approval without rewriting old bytes/inodes/times. The scan is
-bounded to 4,096 entries, 4 MiB total and 16 KiB per record, and never migrates or
-expires authority by time. Source/card/fingerprint/expiry/double-token rules stay.
-
-The project renderer abbreviates only the typed repository display revision to
-12 characters, matching the existing CI reference style. Its complete typed
-revision remains; global credential redaction is unchanged. An actual Agent
-answer with disconnected CI proves useful revision visibility and precise gaps.
-
-Separate Linux focused receipts pass 103 cases / 6.298 s, three additional real
-fork/exit crash boundaries / 0.052 s, and 26 internal/MCP business parity cases /
-8.465 s. Corrected original-seven plus new-three fake-clock responsiveness cases
-also pass together; 90 logical seconds and simultaneous completions preserve
-owner/reminder progress and two-second pending cadence without a wall-clock wait.
-Original tests/specification bytes remain. No combined unique/full/model/live
-acceptance is inferred from these overlapping component receipts.
-
-Full normal/shuffled/CI/accounted-model, actual protected sources/stdio/service
-identity, full host-ledger backup/preservation, original data/backup/runtime/
-sandbox/monitor/recovery and operator acceptance remain pending. Exact source/
-archive/operator/window: UNSELECTED. Published base is `fca4ac4`; production remains
-accepted `99037c5` / build `f54906e304fe`, MCP disabled, all package criteria open.
-[Increment 06 contracts and release gates](docs/cara-fleet-increment-06-2026-10-24.md).
-
-## October 24 - Increment 05 per-resource restart candidate
-
-fleet_host protects the existing allowlisted restart with a nonblocking fcntl
-lock keyed by operation/unit in the fixed host ledger. Different-token same-unit
-contention returns resource_busy before fingerprint or host-token consumption.
-A separately fsynced non-content resource hold is published before the existing
-host token is consumed; executing/unknown survives process loss and lock release.
-Only a durable known final receipt for that hold's exact token/unit can settle it
-automatically. Missing, malformed or ambiguous evidence fails closed.
-
-The protected descriptor-relative ledger rejects unsafe paths/files. Hold fields
-are version, fixed service, token, state and time; no question, answer, task text or
-approval prose is stored. Preserve this operational evidence with consumed-token
-markers across content purge/recovery. No elapsed lease, changed fingerprint or
-fresh token proves settlement. No automated clear or new maintenance API exists.
-
-Original source/card/approval/fingerprint/token checks remain, with expiry checked
-again immediately before the unchanged 20-second systemctl restart. Closed RU/EN
-busy/unknown/expired explanations do not claim the prior uncertain effect stopped.
-MCP remains read-only for project state and exposes no restart.
-
-Published increment04 is `319dd95`. Network-isolated Linux passes 80 tests in
-4.645 s: 20 new resource guards plus 60 existing fleet cases; failed originals
-remain. Final full/model/CI/installed gates are pending. Exact source/archive/
-operator/window: UNSELECTED. Production remains accepted `99037c5` / build
-`f54906e304fe`, MCP disabled; all independent package criteria remain open.
-
-[Increment 05 contract and release gates](docs/cara-fleet-increment-05-2026-10-24.md).
-
-## October 24 - Increment 04 durable MCP/client candidate
-
-The stdlib base adapter shares fleet_requests/events, original asynchronous phases,
-budget accounting, retained evidence and typed lifecycle. Protected policy owns the
-caller/source/read scope; model parameters cannot supply targets or approval.
-Client prepare_start/start_investigation persists an inert admission_prepared row
-before stdio, with source-row key generation/recovery. Server-only atomic promotion
-starts the ordinary workflow; no table, outbox or competing ledger is added.
-
-Prepared intents join unchanged capacity, expiry/source fencing, cancellation,
-purge and checked restore. Facts cancellation waits with its live handle until
-settled; process loss yields unknown_outcome rather than a replay or false stop.
-The SQL-restricted same-UID API is not OS-level read-only isolation. Exact source/
-policy/schema and inherited sandbox remain required. Tasks is explicitly
-unsupported; base async does not depend on it.
-
-All 47 + 15 source cases are executable. Focused Linux 227 passes in 14.395 s,
-including 16 before-send intent tests. Seventeen operator/orchestration fixtures
-and a separate 18 gateway-updater fixtures pass as offline unbound-draft evidence,
-not release qualification. The nine-path frozen model-harness precheck makes zero
-paid calls/probes. The lossless task-page/managed-artifact adapter retains original
-bounds and exact answer content. The 45-test taskbridge suite, including ten new
-actual pipeline regressions, passes isolated Linux in 22.201 s; failed originals
-remain. Final full/model/CI, real binding/identity/readiness and guarded acceptance
-remain pending.
-Source/archive/operator/window: UNSELECTED. Production stays accepted `99037c5` /
-build `f54906e304fe` with MCP disabled; independent package criteria remain open.
-
-[Increment 04 contracts and release gates](docs/cara-fleet-increment-04-2026-10-24.md).
-Earlier candidate entries retain their historical checkpoint status.
-
-
-## October 24 - Increment 03 typed project-read candidate
-
-Pure existing-monitor projections are separate from root-bound protected file I/O.
-The observer binds one validated snapshot to its fixed latest pointer and rechecks
-the pointer before publication; proxy collection preserves the inner sample date.
-Only monitor sources opt into a 2 MiB input limit; existing64 KiB reads, v1 payloads
-and legacy wire bounds remain compatible.
-
-The fixed-public-GitHub exporter makes no network call. Exact reviewed
-source/revision/hash policy and root-only atomic install produce the additive
-Actions date contract while retaining last good data. Sampled CI/issues do not
-establish completion or deployment. Detailed tables retain full evidence, and
-only explicitly qualified historical append-only read contracts remain accepted.
-
-Project-only focused Linux 201 passes in 0.622 s. It is not a frozen full release
-receipt. Exact full/model/CI, protected real bindings and installed identity/gates
-remain pending. Source/archive/operator/window: UNSELECTED. Production remains
-accepted `99037c5` / build `f54906e304fe`. Parallel durable MCP/client/15-case-runner changes
-are UNCOMMITTED separate work, with their own upcoming record; MCP remains disabled
-and all CF packages retain independent acceptance.
-
-[Increment 03 contracts and release limits](docs/cara-fleet-increment-03-2026-10-24.md).
-Earlier October24 candidate entries below are retained checkpoints.
-
-## October 24 - Shared investigations and MCP facts candidate
-
-Durable task steps can wait on one source-bound fleet investigation and finish
-through the existing immutable task receipt and task delivery. Actual fleet model
-attempts reserve and reconcile the original task limits; restart, cancellation,
-unknown-paid outcomes and purge cannot readmit work or duplicate delivery. Shared
-status/result reads preserve canonical owner scope and dated retained evidence.
-
-The optional MCP facts client uses one bounded background slot and the same
-code-owned answer cells, provenance, format and policy as internal facts. Owner
-updates and reminders stay responsive. A recovered phase uses equivalent checked
-local facts without resubmitting stdio. Default remains disabled; production is
-still accepted 99037c5. MCP creation/Tasks/cancellation and full acceptance remain
-open. [Candidate and qualification limits](docs/cara-fleet-increment-02-2026-10-24.md).
-
-## October 24 - Typed project evidence candidate
-
-Project-only reads can opt into strict application-health, dated backup and
-repository/CI/issue projections through fixed root-owned policy. They retain
-source dates, stale/failed attempts, restore coverage and missing fields. Process
-activity, host totals, CI success and closed issues do not imply project load,
-end-user health, deployment or completion. Legacy collection limits and formats
-remain compatible. A manual read-only backup-evidence publisher observes existing
-jobs; it starts no backup, timer or restore.
-
-Focused isolated Linux checks pass. Exact combined release, authenticated source
-binding and production acceptance remain pending. Production stays on accepted
-source99037c5; CF-05 remains open. [Candidate and release gates](docs/cara-fleet-increment-02-2026-10-24.md).
-
-## October 24 - Grounded fleet business release accepted
-
-Source `99037c5`, build `f54906e304fe`, was accepted at 10:46:31 UTC.
-Published descriptive facts answer address/provider/placement questions without
-host inspections; semantic RU/EN plans preserve requested fields and formats.
-Nonblocking durable model phases, bounded executor starts/cancellation, grounded
-concise/detail replies, content-preserving cleanup, shared local lookup and typed
-fleet content-purge coverage are live. Existing budgets, exact maintenance cards,
-history, backups and unrelated applications retain their behavior.
-
-The exact full Linux orders, CI, accounted model qualification, real facts reader,
-scoped gateways, sandbox/readiness and recovery gates pass. Operator harness
-failures and their safe continuations are retained. No completed controller,
-installer or gateway update was replayed. MCP remains disabled. Rich project
-adapters, shared investigation tasks and MCP client integration are subsequent
-increments; no CF package is declared complete.
-[Release evidence and limitations](docs/cara-fleet-increment-01-2026-10-24.md).
-
-## October 24 - Fleet backlog implementation started
-
-The owner requested implementation, publication and deployment of CF-01–CF-07.
-The first independent increment includes the unchanged public corpus in the isolated
-test payload under an exact named-file allowlist. It repairs content-erasing emphasis cleanup and
-includes consumable fleet requests in the existing two-second pending-work poll
-cadence. Meaningful emphasized names survive; narrated physical gestures remain
-suppressed. Waiting owner approvals and terminal requests retain normal idle
-polling. Existing voice/album cadence, source bindings, budgets and exact
-maintenance cards retain their meanings.
-
-This is partial CF-03/CF-04 progress. It does not qualify asynchronous model I/O,
-facts synchronization, semantic answers, project adapters, lifecycle or MCP.
-Every package retains its independent acceptance and release criteria; the original
-47 business and 15 MCP/parity specifications remain unchanged. See the
-[increment record](docs/cara-fleet-increment-01-2026-10-24.md) and
-[backlog](docs/backlog/cara-fleet-2026-10-24/README.md).
-
-## October 24 - Fleet and project development backlog (proposed)
-
-A [self-contained developer backlog](docs/backlog/cara-fleet-2026-10-24/README.md)
-records six work packages for synchronized descriptive facts, semantic query modes,
-adaptive grounded LLM replies, responsiveness, project read adapters and governed
-capability/content lifecycle. A seventh downstream package adds a proposed read-only
-MCP interface and Cara client, while the original six business packages keep their
-priorities and independent completion gates. It includes dependencies, compatibility/release gates
-and the original 47 synthetic regression specifications plus 15 MCP/parity scenarios,
-including missing-model fallbacks,
-shared style and mixed emphasis/gesture cleanup. The owner explicitly permits LLM
-interpretation of free-form questions and appropriate reply format; known facts
-must not require host probes.
-
-This is planning only. Current runtime behavior, permissions and accepted releases
-remain unchanged; no implementation or deployment is claimed. See
-[ADR-0033](docs/adr/ADR-0033-fleet-knowledge-and-project-capability-backlog.md) and
-[tracking issue #7](https://github.com/promptinvest/tg-ingest-agent/issues/7).
-
-## October 23 - Fleet evidence/report architecture accepted
-
-Fleet investigations persist explicit owner-bound host/project/check scope.
-Inherited/all scopes resolve in code; a newly selected project starts a new
-subject. Assistant narrative cannot define scope. Existing research, reminders,
-conversation, worker isolation and exact maintenance confirmations remain.
-
-Observations retain source, time, sample window and availability. Missing units,
-unconfigured project probes, unavailable observations and dated records stay
-distinct. Unknown service/container states stay outside observed-state fractions.
-Code renders every requested host, splits complete reports into pages and records
-page delivery without automatic replay after an interruption. Models select only
-verified findings and prerequisite-bound hypotheses; code bounds valid selections
-and permits one additional read inside the same scope and budgets. Unsupported
-analysis falls back to the measured report with explicit gaps.
-
-Accepted 2026-10-23T13:32:16.855166+00:00; source `e925af3`, build `38e1d657420c`,
-receipt `dee5d54d2808f8361681e36f`. All 1,861 Linux tests (nine unchanged skips), 85 focused
-fleet cases, pinned Ruff and CI pass. Real-model full-dispatch list/details/memory,
-Daily Lingo progress and PI backup conversations pass, including bounded follow-up
-reads and truthful gaps. Qualification used 14 accounted calls
-($0.07449064), zero Telegram messages and zero maintenance effects.
-All 54 original database tables/rows/schema objects and other applications remain.
-Six host gateways now collect LoadState; PI probe names match the actual timers,
-with no service restart. See [release](docs/cara-fleet-report-architecture-2026-10-23.md).
-
-## October 23 - Fleet contextual follow-ups and readable evidence accepted
-
-Short owner follow-ups (“Так и что?”, “Это не мой список”, “Сама узнай”) now
-remain bound to the original inventory request. Only canonical owner turns can
-create that scope; an unrelated owner task ends it. A conversation output guard
-blocks invented server rosters in that context. Resource/project/service/log
-observations render as bounded human summaries, without raw JSON or debug
-citations. Assessment and next steps remain complete; historical data stays dated.
-
-Accepted 2026-10-23T11:48:11.347028+00:00; source `a7168bd`,
-build `a01f3e740a3b`, receipt `ca0333cddc0bf2e810d97869`. All 1,836 Linux
-tests (nine unchanged skips),60 focused cases, the full observed exchange,
-adversarial model-output and actual-result rendering fixtures, pinned Ruff and
-CI pass. All54 original tables/rows/schema objects and unrelated behavior remain.
-See [complete correction](docs/cara-fleet-contextfix-2026-10-23.md).
-
-## October 23 - Fleet inventory and identity correction accepted
-
-The real “Напиши список моих VPS” request reached local stats, and its follow-up
-reached general chat and invented hosts. Inventory and identity questions now
-resolve directly from configured records and actual prior report scope. Local
-stats name PD; multiple possible hosts require a target. Conversation receives
-trusted inventory names and treats old assistant claims as unverified. Lists use
-plain text and require no model call or SSH probe. Existing skills, effects,
-approvals, budgets and history remain preserved.
-
-Accepted 2026-10-23T11:32:46.882938+00:00; source `54b7e15`,
-build `86db8e9d2812`, receipt `902d076941789cfaa6a57743`. All1,830 Linux
-tests (nine unchanged skips),54 focused cases, exact full-dispatch replay against
-the real six-host inventory, pinned Ruff and CI pass. All54 original database
-tables/rows/schema objects remain exact at the stopped gate; no schema additions.
-See [correction and acceptance](docs/cara-fleet-answerfix-2026-10-23.md).
-
-## October 23, 2026 - Natural-language fleet management accepted
-
-Cara answers ordinary RU/EN questions and follow-ups about resources, services
-and configured project state across PD, Utah, Armenia, Russia, Exit and PI. Fresh
-structured evidence is separate from dated records and historical observations.
-Missing CI/issues, historical measurements or a maintenance runbook remain explicit
-gaps. The first write runbook restarts only Cara's isolated worker after a fresh,
-exact, one-time confirmation card; an explicit text reply binds that same card.
-Overlapping confirmations require a target. Uncertain execution is never retried.
-
-Accepted 2026-10-23T09:42:36.751288+00:00; source `fb20e4d`, build `bb4054457736`,
-receipt `783c4e2526aed3d08e9bc581`. All 1,821 Linux tests (nine unchanged skips),
-45 focused fleet tests, pinned Ruff, GitHub CI and five bounded model routing/planning
-scenarios pass. Real observations from all six hosts pass through the installed
-executor. The two additive workflow tables preserve all 52 original tables/rows
-at the stopped migration gate. Existing history, reminders, budgets, recovery,
-worker isolation, speech and neighboring Daily Lingo runtime remain preserved.
-Testing 130.49.190.246 stays excluded: host-key identity is unverified and the KB
-does not establish retirement. No live maintenance trial or manual test message.
-See [accepted release](docs/cara-fleet-deployment-2026-10-23.md),
-[ADR-0031](docs/adr/ADR-0031-natural-language-fleet-management.md) and
-[operator runbook](ops/fleet/README.md).
-
-## October 19, 2026 - Host clutter cleanup
-
-Owner-approved maintenance clears63 empty draft keys,13 legacy keys with no live
-source references and7 expired cooldowns. A root-only SQLite backup precedes the
-short transaction; only the selected kv/cooldown rows change, with no triggers,
-schema change or VACUUM. Integrity/FK checks pass. User history and recovery data
-remain. Completed scratch/source/log/controller copies have a verified lossless
-archive and manifest before removal; rebuildable caches need no backup. Cara's
-running source/build and all service identities remain the accepted reply release.
-See [host cleanup evidence](docs/cara-host-cleanup-2026-10-19.md).
-
-## October 19, 2026 - Reminder correctness fixes
-
-The existing reminder module keeps the three reviewed corrections. The proactive
-tick captures overdue targets before delivery and persists the delivered message
-ID in the existing bounded single/batch notification map, restricted to the three
-visible titles. Explicit Telegram replies therefore use their own target rather
-than the pending snooze choice. Failed delivery does not create a binding.
-
-Each reminder draft stores its delivered card ID in the existing pending payload,
-without resetting its expiry. Set/cancel/time/move callbacks must match that ID;
-move also matches the offered twin. Each newly delivered card is a revision.
-Unbound historical buttons require fresh confirmation; text yes/no stays supported.
-Draft and partial prompts bind explicit text replies to their delivered revision.
-Deterministic and model-based confirm/amend/cancel paths check that identity.
-Explicit delivered-alarm replies resolve before reminder draft/reopen/pick guards,
-while preserving any unrelated draft and its original expiry.
-
-A shared schedule guard rejects unsupported recurrence, interval and end conditions
-before reminder creation, rescheduling, or pending-draft mutation. The router also
-validates those fields; source-based repeat checks cover model omission. Existing
-low-level normalization and calendar behavior remain, while reminder execution
-cannot silently apply part of a repeat request. Schema, services, budgets, models,
-stored history and normal one-time/daily/weekly creation are unchanged.
-Russian number-word intervals and «раз в месяц» are checked in the source even if
-the router omits repetition. CI runs pinned Ruff F-rule checks, including undefined
-names; production stays stdlib-only. README, entry-module and voice architecture
-descriptions reflect the existing helper thread and isolated worker.
-See the accepted [reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md)
-and preserved [original correction](docs/cara-reminder-safety-2026-10-19.md).
-The follow-up passes 56 focused cases and 1,776 full Linux tests (nine skips).
-
-## October 14, 2026 - Nikki retirement compatibility
-
-Nikki is retired at the owner's request. The three Cara worker/Mentor unit
-files now prefix only the three retired Nikki `InaccessiblePaths` entries with
-`-`: missing companion paths no longer prevent a future service start, while
-existing paths remain inaccessible. All Cara private paths remain mandatory
-and denied. Runtime modules, environment, state, reminders, learning, speech
-and backups are unchanged. Live Cara, worker and whisper processes were not
-restarted. Missing-path namespace checks and credential-access denial passed.
-
-
-Local checkout and shared KB paths (updated September 20, 2026):
-[working agreement](CLAUDE.md#local-workspace-and-kbs).
-
-Current running release: code `6a430ad`, build `4cc84f818306`, accepted
-2026-10-19 09:19:30 UTC; see the [October 19 reply and CI follow-up](docs/cara-reply-completeness-2026-10-19.md).
-The [October 13 procedural learning release](docs/cara-learning-2026-10-13.md) remains included.
-The [monthly digest correction](docs/cara-digest-fix-2026-10-07.md) remains included.
-The earlier [review and archive-recovery record](docs/cara-review-fixes-2026-10-07.md) remains preserved.
-
-The [October 7 reminder conversation correction](docs/cara-conversation-fix-2026-10-07.md)
-extends the existing reminder module and deterministic dispatch. The escalation
-previously hid an applied move, then cleared the fired context: a later day or
-yes fell through to pending-only router rejection and conversation repair.
-Only repeated same-day postponements now offer the optional day-or-close choice,
-after a truthful success line. `reminder_snooze_choice` binds that question to
-the effective one-shot for 30 minutes; yes cannot choose or close implicitly.
-Explicit stored-title/time commands bypass inference while retaining existing
-numbered, compound and unmatched-title routing. Ambiguity pins the shown ids;
-recurring fires still create echoes without moving the series anchor. Identical
-absolute-day actions avoid duplicate writes and preserve undo. Foreign pending
-cards, subject guards, owner isolation and action-truth validation remain.
-The repair prompt requests missing information instead of repeating a complete
-command or offering an unbound yes. This release is deployed and accepted.
-The final card-reply check adds `source_reminder_id` to that choice: the original
-recurring card and its effective echo are the same bound question. Replies to
-that source move the existing echo; unrelated explicit alarm replies still win.
-
-The owner-facing poller and isolated local worker are the active runtime.
-Mentor and its candidate runner are stopped and disabled; their code, tests,
-source snapshots and prior results remain preserved. A delivery-gated monthly
-open-issue digest replaces their automatic weekly cycle (ADR-0029), first eligible
-on October 7 at 10:00 owner-local time. The digest uses existing issue records,
-uses dated RU/EN summaries and short sanitized owner examples. Recent activity
-and older entries still marked open appear separately; counts refer to open
-entries, not lifetime incidents. Completed repair/learning observations remain
-in history and are omitted from the unresolved list. Technical bodies, internal
-kind names and zero-resolution claims are omitted. Whole entries fit the message
-budget, with an explicit count of any omitted entries. The October delivery
-receipt remains unchanged; installing this formatter sends no replacement digest.
-The digest stays quiet when no actionable entries are open and applies no changes.
-See the [focused October 7 digest fix](docs/cara-digest-fix-2026-10-07.md).
-
-Own voice transcription runs on one helper thread without a SQLite connection.
-The poll thread continues callbacks, messages and scheduler ticks, meters the
-result, saves a durable transcript and resumes the original update. Text received
-while transcription is running may be answered first. Other inference is bounded
-by an absolute 90-second turn deadline; each network attempt has its existing
-profile cap. Late transport results never receive the database connection.
-
-Every paid gateway request reserves its conservative maximum cost before sending.
-Successful known usage settles that new row; ambiguous failures retain an explicit
-unknown-usage reserve across restarts. Definite rejected requests release theirs.
-Recent genuine successful chat calls replace redundant paid health probes.
-
-Reminder event times and notification times are separate: explicit relative
-notification offsets are calculated from the source text; a request lacking a time
-asks for one. Named weekdays work on fired follow-ups. Short Latin entity names
-such as SSL inherit the conversation language. An explicit Telegram reply to the
-gratitude reminder remains journal-bound after its short pending window expires.
-KB answers display only validated verbatim excerpts with actual retrieved note
-numbers; empty or invalid evidence produces a deterministic refusal.
-
-Local checked snapshots run daily (`BACKUP_LOCAL_INTERVAL_DAYS=1`); encrypted
-off-box delivery keeps the existing weekly `BACKUP_INTERVAL_DAYS=7` anchor and
-monthly restore check. Existing weekly local recovery points are protected from
-daily rotation; only automated snapshots at/before the off-box anchor count as
-weekly points, so manual copies and newer daily copies cannot displace them. No key escrow is inferred or claimed. Search is advertised as
-unavailable without its key; calendar availability describes the .ics fallback.
-
-Router replay keeps 14 turns but clips each routing hint to 400 characters plus
-up to 16 note references; the current user turn is included once. Stored history
-and warm-conversation replay remain verbatim. Spend reports expose mean/p95 router
-input and unknown reservations. `media_svc.py` and `converse_svc.py` contain pure
-moves of Agent methods; the public composed Agent interface stays compatible.
-Tests use a shared fixture library and separate gateway/media/backup modules.
-`run_tests.py` supports named subsets, full discovery, seeded shuffled order and
-per-case timings; plain deployment always runs the full offline Linux gate.
-
-The CI-only Ruff gate checks the full F-rule family with the pinned development
-version. Intentional compatibility imports are explicit re-exports. Synthetic
-golden fixtures pin complete router, conversation and Hermes requests; an
-intentional prompt change requires reviewing the full diff before explicit fixture
-regeneration. `task_json.py` preserves the legacy task wire encoding across the
-agent, isolated worker and canary; isolated MCP fixtures include that dependency.
-Operator scripts share `env_file.py` while
-retaining private atomic backups, stale-temp refusal and bootstrap-only directory
-fsync and the existing operator module mock boundaries. These helpers add no
-new dependency, model call or capability.
-
-> **Research & Decision Intelligence v1 (shipped 2026-07-29):** governed
-> provider-neutral search now composes with three provenance-bound fetches,
-> citation-validated synthesis, and a managed Markdown decision brief. The
-> reviewed first adapter is Brave Search and remains disabled without its API
-> key. Per-task query, time, response-size, result-count, and spend limits are
-> reserved before execution. External pages are data, never instructions or
-> authority. This release adds no email integration, browser/shell surface,
-> autonomous external writes, or model change.
->
-> **Chief-of-staff upgrade (shipped 2026-07-29):** the locked architecture,
-> data contracts, risk-tiered approval model, self-improvement boundary, local
-> worker isolation and acceptance evidence are in
-> [`CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md`](CARA-CHIEF-OF-STAFF-IMPLEMENTATION.md).
-> The adversarial design gate forbids planner-invented targets, blind retries
-> after ambiguous external effects, replayable/stale approvals, treating worker
-> prose as evidence, and feeding model-authored summaries into policy truth.
->
-> **Production checkpoint:** all phases are deployed. `tool_broker.py` exposes
-> only the reviewed neutral registry; `tasking.py` and `task_runner.py` execute
-> provenance-bound durable plans; approvals are exact and one-time; receipts,
-> delivery ambiguity, cancellation and recovery are persisted; improvement
-> proposals require exact replay evidence and never self-deploy;
-> `cara-worker` runs the compiled-in worker surface under a separate no-network
-> OS boundary; the retained Mentor/runner pair is disabled with its
-> inference-only and networkless OS boundary files preserved. The full discovery suite is green; its adversarial
-> cases cover injected/malicious sources, forged citations, tainted URL
-> substitution, unauthorized writes, budget exhaustion, ambiguous Telegram
-> delivery, forged Mentor results, unsafe patch paths and forbidden candidate
-> capabilities. The live runtime/manifest/isolation verifier is green.
-
-**Cara** (`@cara_assist_bot`) is a personal conversational AI assistant living
-in Telegram, self-hosted on a DigitalOcean droplet — the **PD-VPS**
-(`174.138.108.85`). Her former Pilot-VPS home was retired in 2026-06; there is
-no active standby there.
-All model inference runs on DigitalOcean Gradient serverless inference. Her
-owner ("boss") talks to her in free-form **Russian or English — text or voice,
-no slash commands**. She **converses warmly like a person**, and for anything
-operational a closed-world router assigns the request to a specialized skill;
-anything that changes state is confirmed conversationally before it becomes
-final. She replies only to her owner, in whichever language he wrote in.
-
-Stdlib-only Python 3, long polling (no inbound ports), one owner-facing
-service plus an isolated worker; two retained Mentor services are disabled.
-
----
+The accepted runtime is ADR-0026 source `75f0f34`; its dated acceptance and
+verification are recorded in [the release record](docs/cara-adr26-release-2026-11-01.md).
+ADR-0027 adds documentation coverage checks without changing installed runtime,
+prompts, schema, budgets, stored history or service activation.
+
+Current specification text describes present behavior. Historical release
+checkpoints and the complete previous specification remain in the
+[byte-exact pre-ADR0027 archive](docs/history/SOLUTION.pre-adr27-2026-11-02.md).
+[CARA §9](CARA.md#9-operations-runbook) is the operational runbook.
 
 ## 1. Design principles
 
@@ -1123,56 +126,42 @@ service plus an isolated worker; two retained Mentor services are disabled.
  └────────────────────────────────────────────────────────────────────────────────┘
                             │
               DigitalOcean Gradient serverless inference
-   (chat: deepseek-4-flash · default fallback openai-gpt-oss-20b · embeddings: BGE-M3)
+   (budget-guarded configured role profiles and embeddings)
 ```
 
 ### Module map
 
-| Module | Responsibility |
-|---|---|
-| `tg_ingest_agent.py` | entry point: poll loop, dispatch, pending-action resolution, scheduler ticks, maintenance jobs (installed as `agent.py`) |
-| `router.py` | closed-world intent router (LLM, JSON-only, confidence gate, context recall) |
-| `converse.py` | **free-form warm conversation as Cara** — persona, her evolving life, boss facts, language matching. A reply may open with a `[[react:emoji]]` tag → a Telegram reaction; the handler also tolerates models that instead return a `["emoji", "text"]` array, unwrapping it to a reaction + clean text so the raw literal never reaches the boss. |
-| `hermes.py` | Cara's business register: the `ACTIONS` domain set, the Hermes `PERSONA` prompt, and `HermesMixin` (KB ask/fetch, budget_set, review, export handlers) — mixed into the Agent, same object (§5a) |
-| `notes_svc.py` | `NotesMixin`: the notes/inbox handler domain — lists, item detail, show media, discard/recategorize/merge, purge staging + typed-phrase resolve, journals, problem log (extracted from hermes, 2026-07-01 stage 2a/2b) |
-| `reminders_svc.py` | `ReminderMixin`: reminder create/list/cancel/reschedule/rename/undo, partial drafts, deterministic fired-reminder follow-ups, the fire/expiry sweeps (extracted 2026-07-01). Phase A (2026-09-07): fired/batch/draft card buttons (`handle_reminder_callback`), ONE `resolve_fired_action` shared by text and buttons, the 09:00 re-ping, the announced/reversible expiry, deterministic draft yes/no/time (`resolve_reminder_draft_text`) |
-| `tasks_svc.py` | `TasksMixin`: durable task creation/list/show/cancel/resume, exact approval review, delivery and feedback handling |
-| `tasking.py` | strict bounded plan/provenance validation, task state transitions and truthful rendering |
-| `tool_broker.py` | closed risk-tiered tool registry, input/budget/policy gates, exact one-time approvals and typed receipts |
-| `task_runner.py` | dependency-ordered durable task execution, crash reclaim, cancellation and terminal delivery recovery |
-| `web_search.py` | provider-neutral bounded search dispatcher and reviewed Brave Search adapter; fixed endpoint, no redirects/proxies, sanitized public URLs |
-| `deployment_notice.py` | atomic per-attempt deployment manifests and durable exact/ambiguous Telegram receipt state |
-| `improvement.py` | builds redacted immutable evidence, persists Mentor cycles, binds proposals/candidates to source and evidence, and keeps acceptance separate from application |
-| `mentor_client.py` / `mentor_protocol.py` | strict one-way spool transport, result/envelope binding, target allowlist, patch size/topology/capability checks, and atomic no-follow writes |
-| `cara_mentor.py` | separate inference-only reviewer with a fixed DigitalOcean HTTPS endpoint, a weekly reserve-before-call cap, no Telegram/deploy/DB secret, and read-only immutable source |
-| `mentor_runner.py` | separate networkless candidate evaluator: disposable source copy, fixed-argv patch/compile/full-suite gate, resource limits, scratch-local branch/commit, bounded result |
-| `worker_client.py` / `cara_worker.py` | hash-bound one-way spool protocol and isolated compiled-in worker surface (`worker.echo` only in v1; no arbitrary command/file/network API) |
-| `backup.py` | daily checked SQLite snapshot + gzip rotation, weekly encrypted off-box (rolling `BACKUP_INTERVAL_DAYS`, atomic `.tmp`→`os.replace`, stray-file sweep, retention before encryption); off-box copies only as AES-256-CBC/PBKDF2-encrypted `.db.gz.enc` (Spaces or fleet chat), a size-blocked copy raises an issue instead of staying silent; plus the MONTHLY restore self-check (`verify_restore`: decrypt → gunzip → `PRAGMA integrity_check` in a scratch dir that is always removed) |
-| `ingest.py` | message parsing, URL extraction (UTF-16-safe), category + facts + summary suggestion |
-| `pdftext.py` | best-effort PDF text-layer extraction (pdfminer.six, with a stdlib regex fallback) |
-| `knowledge.py` | document chunking, cosine retrieval, grounded-answer prompt (the `ask` skill) |
-| `reminders.py` | reminder drafts, recurrence, local-time rendering |
-| `gcal.py` | Google Calendar (service-account JWT) + .ics export |
-| `spend.py` | AI-usage aggregation and reports |
-| `review.py` | performance review (chat + Markdown exports), weekly schedule, trace summary |
-| `self_model.py` | Cara's deterministic self-knowledge — answers "what can you do" in her warm voice (capabilities + safety rule), NEVER as software/infrastructure (no "VPS/SQLite/long polling/not a chatbot" — that was a persona-breaking disclaimer leak) |
-| `boss_model.py` | structured boss profile (confirmed vs inferred, sensitivity floors, address resolution) |
-| `memory_curator.py` | proposes memory candidates from evidence + learns from conversation |
-| `relationship.py` | grounded working history (real events, never fabricated) |
-| `persona.py` | boss-preference hint for prompts (persona-below-rules is enforced structurally in the prompt content, not a table) |
-| `proactive.py` | suggestion-only heartbeat (nudges, throttle, quiet hours) |
-| `skill_manifest.py` | permission registry: per-skill risk, confirmation mode, proactive eligibility |
-| `trace.py` | structured tracing (one trace per update/tick; stages) |
-| `events.py` / `jobs.py` / `runtime.py` | durable event/job tables + handler registry + drain |
-| `action_truth.py` | guard so "done/saved/scheduled" wording can't precede the DB write; `freeform_claims_action` / `action_claim_match` also block a `converse` turn that CLAIMS a completed change (dash- and markdown-normalised, verb-less shapes included, data-object-anchored so her narrative voice survives, with questions/denials/offers/past-actions carved out; the create/place verb family is covered and the scan resumes one character past a REJECTED verb, so a denial cannot carry a claim beside it through) |
-| `sysinfo.py` | read-only host stats from `/proc` + statvfs (no root, no shell) |
-| `fetch.py` | remote URL reader with SSRF guard |
-| `storage.py` | binary backend: local default; DO Spaces (S3 SigV4 in stdlib), dormant |
-| `llm.py` | DO Gradient gateway: chat profiles + failover + cooldowns, embeddings, STT, pricing, budgets. **Transient-429 resilience (2026-07-01):** a DO "Platform overloaded" 429 (or 5xx/timeout) on a model gets ONE quick same-model retry (~0.8s) before failover and only a ≤20s cooldown — so a single fast-router blip no longer benches `deepseek-4-flash` for the full 300s and strands every request on the weaker `openai-gpt-oss-20b` (the driver behind the mis-routes: gratitude `**` list, photo-description hallucination). A hard error (403 tier-lock / 401) still fails over immediately with the full cooldown (`_is_transient_llm_error`). |
-| `store.py` | SQLite schema + helpers; additive migrations (one atomic `BEGIN IMMEDIATE` transaction since 2026-07-25; a steady-state `open_db` writes nothing) |
-| `tg_api.py` | Telegram Bot API client (send message/photo/document, **reactions**, getFile) |
-| `texts.py` | bilingual (ru/en) reply templates with tone/intensity variants — Cara's transactional voice |
-| `common.py` | config loading, language detection, shared helpers |
+<!-- documentation-contract:modules -->
+| Modules | Current responsibility |
+| --- | --- |
+| `tg_ingest_agent.py` | Poll entry, owner gate, dispatch, pending actions, scheduler and durable recovery; installed under the sole entry filename agent.py. |
+| `router.py`, `skill_manifest.py`, `self_model.py` | Closed intent set, permissions and deterministic capability descriptions. |
+| `converse.py`, `converse_svc.py`, `hermes.py`, `persona.py` | Warm and business registers, conversation handlers and grounded preference hints. |
+| `notes_svc.py`, `ingest.py`, `journals.py`, `media.py`, `media_svc.py`, `pdftext.py` | Confirmation-gated notes, journals, catalog capture and attachment handling. |
+| `reminders.py`, `reminders_svc.py`, `reminder_time.py`, `gcal.py` | Reminder state, reply bindings, time parsing and calendar export. |
+| `knowledge.py`, `fetch.py`, `web_search.py` | Grounded saved-document answers and bounded external reads; search requires configured credentials. |
+| `tasks_svc.py`, `tasking.py`, `task_runner.py`, `tool_broker.py`, `task_json.py` | Durable task UI, plans, execution, exact approvals and compatible task serialization. |
+| `analysis_engine.py`, `analysis_lifecycle.py`, `answer_policy.py` | Read-only grounded analysis, evidence lifecycle and bounded answer obligations. |
+| `fleet.py`, `fleet_answers.py`, `fleet_context.py`, `fleet_report.py` | Owner-bound fleet scope, evidence normalization and code-owned findings. |
+| `fleet_async.py`, `fleet_lifecycle.py`, `fleet_lifecycle_svc.py`, `fleet_investigation.py` | Asynchronous investigation, maintenance, reconciliation and follow-through. |
+| `fleet_catalog.py`, `fleet_facts.py`, `fleet_facts_publish.py` | Published, source-bound fleet facts and capability catalog. |
+| `fleet_project.py`, `fleet_project_adapters.py`, `fleet_project_report.py`, `fleet_project_publish.py`, `fleet_development_publish.py` | Project evidence adapters, reports and authenticated publication. |
+| `fleet_shared_reads.py`, `fleet_queries.py`, `fleet_inference.py`, `fleet_monitor_adapters.py` | Scoped read authorization, query planning, inference and monitor normalization. |
+| `fleet_broker.py`, `fleet_queue.py`, `fleet_protocol.py`, `fleet_relay.py` | Restricted executor protocol, queue, approvals and transport. |
+| `fleet_mcp.py`, `fleet_mcp_admission.py`, `fleet_mcp_client.py` | Optional read-only MCP tools, principal admission and bounded client transport. |
+| `cara_fleet.py`, `fleet_host.py` | Separate capped executor and fixed root-owned host gateways. |
+| `worker_client.py`, `cara_worker.py` | Hash-bound spool and networkless compiled-in worker. |
+| `improvement.py`, `mentor_client.py`, `mentor_protocol.py`, `cara_mentor.py`, `mentor_runner.py` | Retained proposal/candidate machinery; Mentor services remain disabled. |
+| `learning.py`, `memory_curator.py`, `boss_model.py`, `relationship.py` | Source-bound procedural guidance, proposed memories and evidence-based working history. |
+| `llm.py`, `call_budget.py`, `cache_usage.py`, `inference_io.py` | Budget reservations, model gateway, validated cache accounting and bounded inference transport. |
+| `voice_svc.py` | Deferred STT transport with database work retained on the poll thread. |
+| `store.py`, `storage.py`, `backup.py` | Atomic SQLite migrations, binary storage and checked local/encrypted off-box backups. |
+| `events.py`, `jobs.py`, `runtime.py`, `trace.py` | Durable events/jobs, handler drain and bounded telemetry. |
+| `action_delivery.py`, `action_truth.py` | Durable outcome/delivery receipts and truthful action wording. |
+| `spend.py`, `review.py`, `issue_digest.py`, `proactive.py` | Metering reports, reviews, monthly issues and gated proactive suggestions. |
+| `deployment_notice.py`, `verify_installed_layout.py`, `verify_task_runtime.py`, `verify_mentor_runtime.py` | Deployment receipts, renamed-entry layout and isolated runtime verification. |
+| `common.py`, `texts.py`, `tg_api.py`, `sysinfo.py` | Configuration, bilingual replies, Telegram transport and read-only host statistics. |
+<!-- /documentation-contract:modules -->
 
 ### Skill permission model
 
@@ -1326,9 +315,9 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Retained Mentor review (disabled)** | Historical machinery, preserved but unscheduled: reviews redacted explicit feedback and unresolved issue patterns, creates a source/evidence-bound improvement proposal, and may quarantine-test a low/medium behavior-only candidate patch. Raw conversations stay with Cara; high-risk/tool/policy/model/infrastructure work is proposal-only; passing code remains an exportable artifact and is never merged or deployed automatically. | Owner may accept/reject a ready proposal, but acceptance is workflow state only and applies no code. |
 | **Ingest** | Stores forwarded posts and notes (text, URLs, photos; an album = one message) with forward origin, **t.me source link**, and post date. A vision-capable LLM suggests a category from the confirmed taxonomy (matched by meaning across RU/EN), a summary, and up to 5 **key facts** in the source language. Re-forwarded posts are deduplicated. A **referential save** (a thin typed "save a note about *this*" with no subject of its own) is enriched with the recent conversation so the note captures the actual resolved subject, not the literal command. A model reply that won't parse is **never stored verbatim** — the category/summary are salvaged by regex, else the summary is left empty so the note shows its real `raw_text` (no raw JSON in a note, as #9 showed). Long lists are paged rather than cut at Telegram's limit. The ingest prompt is **journal-aware** and a singular/plural variant snaps to the journal's exact name; `store.ensure_category` enforces that identity at the write boundary too, so a manual plural correction cannot create a parallel inbox category beside a singular journal. A referential save whose subject can't be resolved falls back to its real `raw_text` instead of a blank "(no summary)" note. | Category confirmed by reply or button; corrections logged as feedback. |
 | **Files & forward rules** | For a forward, the **text is parsed first**; only **images** (vision) and **PDFs** (text extraction — pdfminer.six with a stdlib regex fallback) are analyzed; **every other attachment** (voice, audio, video, documents…) is **stored** by `file_id`, fetchable later — never parsed. Only the boss's *own* voice notes are transcribed (commands); forwarded voice is stored, not transcribed. "покажи детали"/"покажи файл" re-sends the actual file. | — |
-| **Media capture from own photos (2026-07-27, plan B1+B2; core accuracy repair; live-run identification fixes 2026-07-28)** | A picture-only own-photo turn is vision-CLASSIFIED (`media.classify`: media/document/other) and media gets a separate evidence-preserving EXTRACT pass (`media.extract`). The schema is `layout` (single work vs list) + title + explicit same-work aliases + kind + visible creator/year/genre + useful visible context; localized titles printed on one cover/poster stay one entry, and every visible value has `photo` provenance. Same-work collapsing happens INSIDE one photo's read (`media._collapse_photo`: alias links always, plus same-kind entries on a `layout="single"` photo), because the batch dedup only ever saw titles that already knew about each other — the live poster printing «NOWHERE» and «В никуда» shipped as two entries and became two notes. The layout-driven fold is bounded by `_same_work_by_layout` + `MAX_SINGLE_LAYOUT_ENTRIES`: a "single" read of more works than a poster can print, entries of different kinds, entries whose visible creators/years disagree, and any fold that would push a title past the alias budget all stay separate — a mis-fused work writes a `photo: alias:` fact, which is a dedup KEY, and there is no un-merge command. An absent/unknown layout is treated as a list, so a shelf photo can never lose a work. Visible evidence is authoritative WITHIN a kind, but a caption that NAMES the kind outranks it (`media.force_kind`, below). Missing fields are enriched before the card: OpenLibrary for books and the Wikipedia search+summary APIs (`action=query&list=search` + REST summary; see the F1 row below) for movies/books through the SSRF-pinned fetch path, then one budgeted model fallback. Same-title candidates are context-scored against visible creator/year/platform/context; unresolved ambiguity is rejected (honest-missing beats confidently attaching another work). Discovery alone tolerates joined/split title words and a leading article the CANDIDATE carries but our read lacks (one-way — see F1), while storage matching remains strict. Unicode creator names are preserved. There is no general web-search API. Lookup calls retain the 5 s timeout, 10-call batch cap and fail-fast behavior; optional fallback failure never discards extracted evidence. One card covers ≤20 entries/photo, ≤30/card and Telegram's rendered-length budget; the staged set is exactly the displayed set and cap/unread/truncation/caption disclosures survive correction re-staging. Own photos are always temporary and deleted in `try/finally`; no own-photo `images`/`files` rows are created, while forwarded-media behavior is unchanged. On explicit confirm, each entry becomes a `Movies`/`Books` reference note with `photo:` aliases/visible fields, `photo: context:` free context and `lookup:`/`model:` enriched fields, indexed for ask/list/detail/delete/recategorize/export. Dedup matches category plus canonical title **or an explicit alias**, then refreshes field facts and appends context. **The merge is resolved and PREVIEWED at card time, not at confirm time (2026-07-28)** — `Agent._resolve_media_merges` binds each staged entry to the note a confirm would update and `media.merge_previews` computes the fields that merge actually leaves (the capture's values, plus the note's own values for everything this capture missed), which the card renders. An inherited value carries the card-only source `media.INHERITED_SRC` («уже в записи»), never the note's original `photo`/`lookup` provenance: that would claim the photo just sent shows a director it never showed, or a lookup this turn never ran. This is what makes the TTL-less stash sound: the live run's card showed «не нашла: режиссёра, год, жанр» while `merge_facts` kept the target note's older director/year, and the save line printed the capture's title while a differently-titled row was what changed. The preview lives under `entry['merge']` and never in the entry's own fields, so re-rendering a corrected card cannot inherit twice or relabel an inherited value as this capture's find. `_media_confirm` re-resolves before writing; if the catalog moved (another confirm, an edit, a delete, or a RENAME of the target — the title is part of the comparison, because the card names that row and the confirm re-indexes it under that name) it re-stages the card with `media_card_recheck`, appended only when absent, stores nothing and returns `"redrawn"` so the ✅ button answers 👀 instead of a checkmark for a save that did not happen. At write time `_media_store_entries` merges each entry onto what THIS confirm has already left on that row, so two staged entries resolving to one note cannot discard each other. Merge resolution builds `media.catalog_index` once per category per pass (`find_in_index`) instead of re-scanning the category per entry, since the pass runs inline on the poll loop's only thread at card time, on every correction and again at confirm. Titles render through `media.quoted_title`, which strips one matching outer quote pair before wrapping, so a verbatim «В никуда» no longer prints as ««В никуда»» while a title that merely contains quotes is untouched. Corrections are deterministic and strict on multi-entry cards (explicit reference or «unclear»), and relaxed on a SINGLE-entry card, where there is no ambiguity about which entry: an ASSERTION corrects it («Не книга, а фильм», «тут вообще-то фильм», «убери его» — `_ASSERTION_RE`), with negation deciding the asserted kind when both vocabularies match. A no-number message is never a correction when it is a request (`_REQUEST_WORDS`, checked before the contrast and single-entry branches so «посоветуй не книгу, а фильм» cannot bypass the router the way the 2026-07-24 fix forbade), a question (`_QUESTION_RE` — «что за фильм?», «это какой фильм?»), or names a foreign object; a bare command with no assertion («удали всё») routes too. A kind flip clears and re-enriches incompatible fields, and it is followed by a fresh `dedup_entries` pass because dedup keeps kinds apart — a novel and its film tie-in captured under one title would otherwise card twice and insert two notes. **Both flip paths are ONE routine (`media.flip_kind`, 2026-07-28 review):** the caption's `force_kind` and the card's reply-correction differ only in who said it, and they had drifted — the caption path preserved the flipped entry's photo-visible text as honest comment context and re-deduped, while `resolve_media_correction` called `clear_enrichment` bare, destroying values the boss had just READ under «на фото» (and stripping the disambiguators the re-enrichment lookup needs), with no dedup pass, so «№1 — фильм» could leave the same work on the card twice and insert two Movies notes. Sharing the routine is the fix; parallel patches would have drifted again. `flip_kind` also records what it moved (`flipped_seen`) and marks a caption-forced entry (`forced_kind`); both travel through `_merge_entry`, because the re-dedup keeps the FIRST entry and a flipped one folded into an unflipped twin would otherwise lose its veto exemption (turning the rescued text back into the veto it exists to prevent) and its disclosure. The exemption ends when the entry is flipped BACK to the kind those values came from (`flipped_from`): they then describe the reading he has just restored and gate the lookup like any other visible context. Same-title candidate scoring matches context terms against the candidate's WORD SET (`_blob_words`), so a short term cannot hit inside an unrelated word («АСТ» in «фантастика») and become the unique score that picks a work. **Disambiguation honesty, both directions (2026-07-28 review).** (a) `_lookup_json` returns None indistinguishably for "budget exhausted", "transport failed" and "no summary", so a truncated summary loop used to hand `_select_context_candidates` ONE survivor of an ambiguous set — and the single-candidate branch (`score >= 0`) is far more permissive than the multi one, turning «three same-title works, refuse» into a confident wrong «нашла». `lookup_wikipedia` now bails with `{}` whenever a same-title rival went UNREAD: truncation means undecided. The SLICE counts as truncation too — more exact-title rivals than `MAX_WIKI_SUMMARIES` is undecidable within the budget, so it bails before paying for a single summary rather than deciding among the first three of five. (b) A tie is no longer automatic ambiguity — `_agreeing_fields` keeps the fields every tied candidate agrees on (OpenLibrary routinely returns several editions of one book, all confirmed by the photo's author) and leaves only the disputed ones missing. (c) A photo-read NAME confirms by STEM (`_name_matches`, 5-char prefix), because RU prose DECLINES creators — the word-set fix had made «Михаил Булгаков» unable to match «Михаила Булгакова», so the commonest shape this feature targets (a cover printing author + title) was guaranteed to return nothing while burning lookup calls. Declension is the only thing the tolerance is for, so it applies to CYRILLIC terms only: an unrestricted stem let «Peter Jackson» collect a full confirmation (and satisfy the lone-candidate veto) against a page mentioning «Peterson» in «Jacksonville». No stem bridges a transliteration — «Булгаков» and «Bulgakov» share no prefix — so a transliterated record can only fail to CONFIRM, and what its silence means is decided by script (`_creator_absence_refutes`): a Cyrillic name's absence from an ENGLISH candidate is uninformative and is neither scored nor vetoed on, while its absence from a RUSSIAN one (whose own prose, i.e. its words minus the title we searched with, is Cyrillic) is real counter-evidence and still refutes. Judging by the raw blob would have judged by OUR title, which makes every candidate for «Мастер и Маргарита» look Russian. The unconditional exemption shipped in between reversed the module's contract for the RU book covers this feature exists for: a lone same-title work by ANOTHER author scored 0, passed `score >= 0` and was stored as a `lookup:` fact rendered «нашла». (d) The veto (`_strong_context_terms`) is restricted to things that IDENTIFY a work — a platform, a photo-visible creator/year, or a capitalized NAME run in the comment (`_proper_noun_terms`) — instead of any two content words: the extract prompt asks for visible context, and «смотрели вместе» vetoing a correct unique match made stronger context produce worse answers. Case alone cannot separate a name from cover MARKETING prose («НОВИНКА МЕСЯЦА» is printed in capitals exactly like «ZACH BOHANNON», which must keep vetoing), so that phrasebook is stop-worded instead; an unlisted all-caps phrase still vetoes, a residue that fails toward honest-missing rather than toward the wrong work. Values a kind flip moved into the comment are excluded from that veto (they describe the reading he overruled, so they must not kill the lookup the forcing enables) until the entry is flipped back. Media captions have a deliberately small in-flow contract: bare «Фильм»/«Книга» is an AUTHORITATIVE kind statement — `media.force_kind` applies it to every entry BEFORE enrichment so the lookups run for the named kind, dropping a flipped entry's fields (a cover's visible «author» must never resurface as «режиссёр») and keeping the text as photo context; the card then states what she did with the caption — worded without quoting it back, since `{kind}` is the canonical word and «Кино»/«Найди этот фильм» are not what he typed — and stays silent when it changed nothing, instead of the old «как команду её тут не выполняла», which was untrue for a caption she was in fact using. «Найди этот фильм/эту книгу» is an identification intent answered by the card, and every other caption is disclosed but not separately executed. Staging remains in `kv:media_capture:{chat}`; buttons work from the stash, a newer card replaces it, and another pending confirmation does not get overwritten. `media.catalog_markdown` exports any category with structured media columns. **Card/label/disclosure seams closed in the same review (2026-07-28).** Free photo context is stored under its own reserved label (`photo: context: …`, mirroring `photo: alias: …`) — d31f2ba had widened `_CATALOG_FACT_RE` to `^(photo|lookup|model):` for legitimate `photo: author:` facts and deleted 41a5818's guard, so a transcribed comment beginning «author: …» won the creator column over the real `lookup: author:` fact and PURGED it on merge; `_fact_dupe_key` keeps a re-capture from appending a second copy of a comment a note already holds in the older shape. The guard is structural for NEW writes only and there is deliberately no backfill: a note captured between d31f2ba and 2026-07-28 may still hold a transcribed comment as `photo: <label>: <value>`, and nothing distinguishes it from the LEGITIMATE visible fields written in the same shape (the visible-field list was never stored), so a migration would have to guess. Such a fact still reads back as that note's creator/year/genre; `fact_key` means a fresh fact for the same field now replaces it, so the residue only surfaces on a note no later capture has refreshed. `merge_facts` replaces on the abstract field (`fact_key`: author|director → creator), so a fresh author fact replaces a note's stale `director:` — the label seam that let a recategorized note print a director under «Автор» in the export. `facts_fields`/`merge_previews` carry the note's own LABEL with the value, and the card renders an inherited creator with THAT label instead of re-deriving it from the capture's kind. `_resolve_media_merges` previews entries that resolve to one row TOGETHER (`media.merge_previews`), so both lines describe the row the confirm actually produces, with a sibling's contribution labeled `media.SIBLING_SRC` («из этой же карточки») rather than «уже в записи» — nothing is on file before his yes. `_stage_media_card` stages NOTHING when the card's `sendMessage` fails (the consent invariant is "the card shows exactly what a confirm stores"; there was no card), and it recomputes the `media_card_kind_forced` line from the entries' current kinds on every draw instead of carrying it in the stash, so a correction that reverses the forcing cannot leave the card contradicting itself. That recomputation lives INSIDE `_fit_media_card`'s loop, against the entries that survive the length fit: computed once against the full batch, the line outlived the entry it described whenever truncation dropped it from the tail — the same self-contradiction reached by length instead of by correction. `handle_media_capture` counts a failed download and an unusable classify into the same `unread` disclosure as a failed extract (a photo she read and found to be a document is not "unread"). A photo-visible genre outside `_GENRES` is kept rather than dropped and then replaced by a model guess (the vocabulary still gates lookup prose, which is what it was written for), casefolded like the canonical values so one catalog column cannot group case-sensitively. `parse_correction` applies the existing negation handling to REMOVALS, reaching across a short modal («не удаляй №2» AND «не надо удалять №2»/«не стоит убирать №2» keep the entry — the adjacent-particle rule caught only the bare imperative, so the ordinary phrasing still deleted what he protected; a protect+remove sentence is «unclear»), treats a demonstrative REQUEST as a request but never a REMOVAL as one («хочу убрать это» corrects the card, «хочу посмотреть этот фильм» routes), and answers a kind op that changes nothing with `media_correction_noop` instead of an identical re-draw. Returning False there — the first attempt — routes a message that is explicitly ABOUT the open card to the LLM, where `confirm` is a valid action for a live `media_capture` pending: a model reading «это фильм» as agreement would store the whole staged set on a turn that was not a yes, which is strictly worse than the swallowed turn it was fixing. | Card per batch; stored ONLY on explicit ✅/«да»; corrections by reply. |
-| **Catalog repair from the live run (2026-07-28: F1 lookups, F2 one catalog identity, F3 forwarded posters, F4 years in listings)** | Four defects the owner hit on real captures. **F1 — the SEARCH was broken, not the veto.** Four of five captures returned «не нашла: режиссёра, год, жанр». `lookup_wikipedia` searched the BARE title through `opensearch`, which matches a title PREFIX: verified against the live API, «FALL» answers «Fall of the Western Roman Empire», «Fallout (franchise)», … and the (correct, freshly hardened) strong-context veto rightly discarded all of it. The candidates were garbage; the selection rules were not. The query is now `action=query&list=search` — a full-text search, so it can carry what identifies the work: `_wiki_search_query` = title + the photo-visible YEAR (only when `year_src == 'photo'`; a guessed year would narrow the search to our own guess and then "confirm" it) + a kind qualifier (`_WIKI_SEARCH_QUALIFIER`, per script: film/book vs фильм/книга). «FALL film» answers «Fall (2022 film)» first. `_wiki_candidates` had to grow a real "is this our title?" test because `list=search` is fuzzy where `opensearch` was prefix-anchored: two tiers (exact base title / compact-spacing variant, then article-relaxed) with the article relaxation deliberately ONE-WAY: a candidate may CARRY an article our read lacks (`Frighteners` → `The Frighteners`), while a candidate MISSING an article our read has is rejected, since the poster is what he SAW — which is exactly what keeps «The Colony» from resolving to «Colony (2026 film)» as a lone candidate rendered «нашла». A page whose own parenthetical names the OTHER kind is dropped (`_wiki_disambig_kind`) — the search already asked for this kind — and that parenthetical also fills a year the summary left unsaid (`_wiki_disambig_year`): it is the article's identifier, not remote prose. **Review fixes on the same code (2026-07-28):** `_wiki_disambig_kind` answers `''` when a tag names BOTH vocabularies («novel series», «comic book series» — «series» is a movie hint and «novel» a book one), because dict order made every such page a MOVIE and the new exclusion then dropped a book's own correct page: a new false negative in the exact direction F1 exists to repair, so the tightening now ships with its legitimate-content-survives fixture. And only the CANDIDATE's parenthetical is stripped — the entry's own is part of the work's name and rides the query, so comparing a stripped «Дюна (Часть вторая)» against «Дюна (фильм, 2021)» could answer for the wrong instalment. `_wiki_result_titles` parses BOTH shapes, so a legacy `opensearch` payload still works and the defensive-parsing contract is unchanged. Only the entry's own TITLE is searched: a Russian alias against en.wikipedia.org would search a wiki that does not hold the work under that name, and any hit would be a coincidence labelled «нашла». Everything else is untouched by construction — `_LookupBudget`, `LOOKUP_MAX_BYTES`, `LOOKUP_TIMEOUT`, the deadline factor, `_select_context_candidates`, `_strong_context_terms`, the truncation-means-undecided rule and `_clean_line` on every value. The real failing cases are fixtures: FALL resolves to the 2022 film; «The Colony» (genuinely ambiguous — released as «Tides» in some markets) and «Wild Republic» (absent from EN Wikipedia) stay honestly missing. **F2 — ONE catalog identity.** His films sat in «Фильмы» (ingest) AND «Movies» (capture) at once, so `list_items` showed one and a free-form answer pulled from both, and an md export of «Movies» missed note #23 entirely. `store.CATALOG_CATEGORY_ALIASES` + `catalog_canonical_name` make the RU names aliases of the English canon at every resolution point: `canonical_category` and `_ensure_category_row` (a name that exists under neither is CREATED canonical, so a capture or a recategorize phrased in Russian cannot re-open the split). The existing rows are folded by `_migrate_catalog_categories`, a marker-guarded (`catalog_category_alias_v1`) step inside `_migrate`'s single transaction that reuses `merge_categories`' semantics through the extracted `_merge_category_rows` rather than inventing a second fold — `ensure_category`/`merge_categories` keep their commits, the no-commit variants exist because a commit inside `_migrate` would end its transaction. **Review fixes on the same code (2026-07-28), all four load-bearing on LIVE owner data.** (a) The alias step runs LAST in `canonical_category`, after the exact-`norm_key` lookup: an existing category always answers to its own name, so a «Кино» he keeps for something else is not shadowed by «Movies» and a «Фильмы» the migration REFUSED to fold still resolves to itself. (b) The catalog row is skipped when its `kind` is `journal`, and `set_category_kind` resolves with `canonicalize=False` (threaded through `ensure_category`/`_ensure_category_row`) — without those two, `canonical_category('Фильмы')` handed back a «Movies» DIARY (films confirmed as journal entries, «покажи фильмы» listing the diary) and «сделай Кино дневником» converted the whole film catalog into one. `_ensure_category_row` also declines to CREATE the canonical name when a row already sits on that `norm_key` (a journal), which would otherwise hit the `UNIQUE norm_key` constraint. (c) The alias is resolved inside `store.list_messages_filtered` — ONE place — instead of a `do_list_items`-only helper, because `resolve_item`, `resolve_items` and the bulk `do_recategorize` all hand a category to `store.list_messages` and all answered NOTHING after the fold. (d) The migration's fold set (`CATALOG_MIGRATION_ALIASES`) is deliberately NARROWER than the runtime alias table — «Фильмы» and «Книги» only, the two names the live split actually produced — because resolution creates nothing while this step DELETES a category row and there is no un-merge command; and `_merge_category_rows` now moves `category`/`suggested_category` by Cyrillic casefold (the `_messages_in_category` pattern) rather than SQL `=`, since `set_suggestion` writes whatever `ingest.suggest` returned and a pending note suggested as «фильмы» was left behind under a row that no longer existed. **F3 — forwarded posters.** Note #44 came from a forwarded post: the ingest path stored the image and made its "title" a paragraph, so the same act produced a catalog entry or a blob depending only on whether it was forwarded. `Agent._forwarded_media_capture`, called at the top of `finalize` (the ONE funnel for single forwards, forwarded albums and the startup replay), classifies a forwarded picture-only message and hands a MEDIA classification to `handle_media_capture(..., forwarded=True)`. The scope decision is deliberate and stated: a forwarded photo routed into media capture follows the MEDIA rule (parsed, not stored) — that is the consistency asked for — while a forwarded NON-media photo keeps storing exactly as today. Three differences fall out of the caption being CHANNEL text: `caption_intent` is not consulted (a forced kind would make the card say «ты сказал, что это фильм» about words he never wrote); the caption is preserved on the entries as `media.FORWARD_LABEL` (`forwarded post: …`), deliberately outside the `photo|lookup|model` alternation so it can only ever read back as a comment and never fill a field; and the card discloses both the divert and the text. Every outcome that is not a STAGED card returns `handled=False` so the post falls through to the unchanged ingest path — no entries read, a failed `sendMessage` (`_stage_media_card` now returns whether it staged), a budget stop — because diverting a forward without a card he can answer would be a new way to lose inbox content. A post that is ALREADY a note (a redelivery, or the startup replay of an update whose first pass crashed mid-`finalize`) is never diverted either: the existing-row check hands it to the repair path, since carding it twice would also strand the half-written row unrepaired forever. **Review fixes and stated costs (2026-07-28):** the channel caption is a NEW untrusted-text path into a durable fact and thence into note context, so it is flattened, capped at 300 chars and `common.neutralize_untrusted`-ed, with a malicious/legit test pair like every other untrusted source; `_stage_media_card` clears the previous stash only AFTER a successful send, so a forward that ends up filed as a plain note can no longer destroy an unrelated, still-answerable card (the failure branch consequently leaves that card's pending slot alone too); the `BudgetExceeded` fallthrough comment no longer claims «nothing was spent» — the raise comes from a paid call, the point is that there is no CARD; the DECLINE path is pinned by a golden test and disclosed in the card copy («если откажешься, от поста не останется вообще ничего»), because cancelling a diverted forward files nothing at all; each forwarded picture costs ONE extra classify vision call, and a non-media forward then still pays its `describe_image` call — accepted and documented rather than threaded back through `finalize`; and the replay guard cannot see a DIVERTED post (it has no `messages` row), so a crash between staging the card and marking the durable update done re-pays classify+extract and re-draws the card — accepted: the stash is single-slot and the confirm re-resolves, so nothing is stored twice. **F4 — years in listings.** `NotesMixin._catalog_meta` appends the stored year (and creator, which is what tells two same-titled films apart) to a catalog note's list line, read through `media.parse_catalog_facts` — the same reader the md export uses — so a listing can only ever show what is stored: no year, no placeholder. `_note_line` is shared by the plain list and the pager, so note numbers and pagination are untouched. Known and accepted: this issues one `store.message_facts` query per row of a catalog listing page (≤8 rows, short-circuited by `is_catalog_category` for every other category) rather than one aggregate — the same shape the limited `list_messages_filtered` path already uses. | Live-run repair; F2 migrates real owner data (idempotent, journal-protected, no note ever merged). |
-| **Action-truth batch (2026-07-28: guard hole, honest repair, no learning from a fabrication, catalog grounding)** | Four fabricated confirmations reached the owner in one exchange — «Готово — сохранила … #51», «#51 теперь «X» вместо «Y»», a restore and a renumbering — and nothing between them happened. **T1 — the guard's PATTERN, not its wiring, failed.** `do_converse` did check every reply; `_ACTION_CLAIM_RE` passed all four. Three independent holes: (a) the optional «готово» prefix was `(?:готово[,!:.\s-]*)?`, whose class holds an ASCII hyphen, and she wrote an EM DASH — so `normalize_claim_text` now folds every dash (U+2010…U+2015, U+2212, fullwidth), exotic space and zero-width joiner BEFORE matching; (b) the alternation had no `добавила`/`восстановила`/`вернула`/`заменила`/`обновила`/`исправила`/`переместила`/`привязала`/`назначила`/`отметила` (nor `added/restored/replaced/updated/fixed`) — added, together with their short passives in EVERY gender (the subjects here — «запись», «заметка», «задача», «категория» — are feminine, so «Запись #51 обновлена» is the likelier shape and the neuter-only set missed it), while future/infinitive forms stay OUT so an OFFER survives — except a COMPLETED auxiliary (`успела/удалось/смогла` + infinitive), which is a completion, not an offer; (c) two of the four claimed a completed change with NO verb, so verb-less SHAPES are matched in their own right — «#N теперь/уже …» and «теперь под #N …» (the «вместо» was never the claim), «#N is now/in … now», «Готово:» + a note number under ANY marker (`-`, `•`, `1.`, `✅`), and an enumerated line whose outcome verb sits at the end. Two further holes closed in the same pass: position is no longer the anchor (a verb behind any lead-in — «Ок, сохранила», «Поняла! Уже добавила его в Movies» — is a claim), and markdown emphasis is folded because `_` is a word character and `_сохранила_` defeated every `\b`. To keep the widening from eating her shared-world voice, the verb set is SPLIT: narrative-capable verbs (`поставила`, `вернула`, `отметила`, `обновила`, `переместила`) fire only next to one of HIS data objects (`#N`, note/task/reminder/file/category, «Movies», «Books») or under a «Готово» header, so «Поставила чайник» stays a story and «Поставила напоминание» is a claim — a false positive is no longer cheap (it spends a model call, writes an issue and closes the memory paths for a whole curation window). One regex became `_CLAIM_PATTERNS` + three carve-outs: negation (now required ADJACENT to the verb — «не волнуйся, я добавила #52» is not a denial), question (decided on the CLAUSE the verb sits in, not on the next 120 characters, so a confirmation closed by an offer question — «Готово — сохранила … #51, хочешь, поищу режиссёра?» — is still a claim while «А #51 ты сохранила?» is not), and an explicit reference to an EARLIER real action («вчера я сохранила это в Movies под #51»), because denying a save that really happened is the same lie with the sign flipped. Each has a legitimate-content-survives sibling test, because a guard that eats honest copy would eat the honest reply itself. `action_claim_match` returns the tripping phrase so the issue row names the shape. **T2 — a blocked reply is honest AND useful.** It used to become the flat `action_not_done`; blocking now spends one more metered `converse_warm` call (the owner's explicit budget relaxation) on a reply that states plainly she has not done it and names the concrete route that would, grounded in `skill_manifest.capability_titles`. The rewrite runs IN CHARACTER (`converse.CHARACTER` is prepended — she never breaks it) and receives the same `_catalog_grounding` block, so it can distinguish «never existed» from «exists, saved earlier» instead of producing a confident false DENIAL of a real save; rule 4 permits only numbers from HIS message or that block, never one the rejected draft invented. Both passes now share `_clean_converse_output` (array unwrap → reaction → roleplay/id strip → photo placeholder → blank-line collapse), so the documented deepseek-v4-pro `["👍", "text…"]` shape can no longer ship raw on the repaired path. If the second pass claims an action too, the deterministic template wins. Both attempts are logged (`converse_action_claim` + `converse_action_repaired` / `converse_action_claim_retry` / `converse_action_repair_failed`), every new kind has ru/en `issue_kind_*` copy so «покажи проблемы» never shows a raw slug, and the retry/repair-failed/ungrounded-number kinds are in `review.py`'s `actionable` tuple. **T3 — no rule is ever learned from a fabrication.** The same exchange stored «Запомнила: Не удаляй существующие записи…» from a deletion that never happened. A tripped guard now records the CONVERSATION ROW ID of the tainted exchange in `fabrication_guard:<chat>`, and `maybe_curate_conversation` returns before the curator runs for as long as `store.convo_rows_after` says that row is still inside `memory_curator.CONVO_WINDOW` — the curator mines ROWS, so a gate counted in delivered replies expired while the fabrication-provoked instruction was still quotable as evidence. It logs `curation_skipped_after_fabrication` and says nothing about remembering, clears its own key once the exchange scrolls out (real corrections keep being learned, asserted against durable `boss_profile_items` state, not a mock), and is forward-looking only — rows already stored this way are left alone. **T4 — catalog statements are read, not recalled.** «нет записи #52 … последняя, которую я вижу, — #28» was said while #49/#50/#51 existed. `_catalog_grounding` fetches the real facts for a catalog-shaped message (a `#N`, a count, «последняя запись», a category): visible-note count and per-category counts from ONE aggregate (`store.category_counts`, not a full row materialisation), highest number ever issued (`store.note_no_max` — the counter and the outcome ledger, so a DELETED number still counts as issued; its `kv` LIKE scan is `ESCAPE`d like `_purge_all_message_kv`), the newest `#N` via a LIMITED `list_messages`, **every `#N` he just named resolved one by one** through `message_by_note_no` (EXISTS with its category and lifecycle state, or NO SUCH NOTE — an ARCHIVED or journal note is invisible to the ordinary listing, and denying a note that exists is the same lie with the sign flipped), and **every TITLE he named** looked up too, so the absolute numbers rule doesn't turn «какой номер у заметки про ремонт?» into a dead end. The whole block is injected as AUTHORITATIVE with a ban on any number or count outside it and an instruction to say she'll look it up when the note he means isn't there. The trigger is WORD-BOUNDED (`_CATALOG_CUE_RE`): the first cut used bare substrings, so «Категорически не согласен», «Сколько ты меня любишь?», «я записался к врачу», «ты сохранила мне вечер» and "listen to this" all dragged his newest titles and the category histogram into turns that never asked — and on a RELATIONAL message only the numbers he literally named are emitted, never his catalog. `_NOTE_REF_RE` matches the full digit run and SKIPS an over-long one instead of truncating it (`#1234567` used to be answered as an authoritative «#123456: NO SUCH NOTE»). Because a prompt can only ask, there is a deterministic mirror: `_ungrounded_note_numbers` blocks a reply naming a number above the highest ever issued that he never mentioned (in this turn or the last few), logs `converse_ungrounded_number` and routes it through the same honest-rewrite path. `_converse_grounding` emits the block even when nothing is embedded (the old body returned '' first, which is exactly the state a fresh note leaves), and `converse.CHARACTER` carries the same rule. | Suite green; revert-proof recorded (sources reverted → the new tests fail, re-applied → green). |
+| **Media catalog capture** | Own pictures are classified before an evidence-preserving extraction. Visible title, explicit same-work aliases, kind, creator, year and context retain photo provenance; bounded same-work folding never merges conflicting kinds or creators. OpenLibrary and Wikipedia lookups use SSRF-pinned reads and reject ambiguous matches; optional budgeted model enrichment cannot discard visible evidence. Temporary pictures are deleted and create no image/file rows. A capped confirmation card previews the actual catalog merge, labels inherited values as already stored, and re-resolves against current data before writing; changed targets redraw without saving. Strict multi-entry targeting and request/question guards preserve ordinary routing. | Confirmation required; the staged set equals the displayed set. |
+| **Catalog identity and retrieval** | Wikipedia discovery uses full-text search with kind and photo-supported year. Title matching preserves source-title meaning, applies one-way article relaxation only to discovery, rejects wrong-kind candidates and honors strong context. Canonical Movies/Books categories are normalized without merging note identities or journal categories. Forwarded posters can enter the same confirmation card while ambiguous non-media content keeps normal ingestion. Listings and exports show stored year/creator only, without guessed placeholders; list paging and note numbers stay stable. | Catalog writes retain explicit confirmation; no automatic note merge. |
+| **Truthful action language and catalog grounding** | Warm conversation and its bounded repair pass the action-truth guard before delivery. Dash, space and Markdown normalization, completed auxiliaries, passive and verbless outcome forms cannot disguise a claimed write. Narrative-capable verbs need the owner-data context; bounded negations, questions, offers and historical facts remain valid. A failed claim receives a bounded honest repair that is guarded again; fabricated outcomes cannot become learned facts. Catalog grounding uses authoritative saved counts and identifiers, and rejects invented note numbers while preserving quoted and explicitly supplied references. | Conversation performs no write; real handlers report committed outcomes. |
 | **Capability batch (2026-07-28: catalog_add from text, add-never-replace, field-across-list, stale titles)** | The Truth batch stopped the fabricated confirmations; this one removes the REASON she improvised. **C1 — she had no way to do what he asked.** After she declined to file his own photo, «Это фильм» and «Это другой фильм. "везде всё и сразу" 2022» had NO deterministic route, so converse answered them — and converse cannot write. New closed-world action **`catalog_add`** (params `title` + optional `kind`/`year`/`creator`) builds the entry in `media.text_entry`, in exactly the shape the photo flow's staging/confirm code consumes, and runs the SAME `media.enrich_entries` pass, the SAME `_stage_media_card` confirmation card (only the header template differs — a text route may not say «вот что я вижу на фото»), and the SAME confirm-time `_media_store_entries`. There is deliberately no second catalog writer. Values he STATES carry a new provenance `media.BOSS_SRC` (`boss:` facts, «с твоих слов»), which is EVIDENCE rather than enrichment and therefore has two consequences in code: `media.seen_value` puts it in `SEEN_SRCS` so it gates/steers the lookups exactly like visible photo text (a typed «2021» reaches `_wiki_search_query`), and `clear_enrichment` no longer deletes it on a kind flip. An unstated kind is filed under the assumed one and DISCLOSED (`catalog_card_kind_assumed`, recomputed per draw beside the forced-kind line, so a correction removes it); no title at all replies `catalog_add_which` — she asks. **C2 — add, never silently replace** («Зачем ты стёрла предыдущий? Надо было добавить новый!»). Three code-level guarantees: (a) `media.names_other_work(text, titles)` — a quoted title matching nothing staged, or an explicit «другой»/«не тот»/"different"/"wrong" — makes `parse_correction` return None, so a message naming ANOTHER work is no longer swallowed as a kind no-op on the open card but routes to `catalog_add` as a NEW entry (a quoted title the card DOES show still corrects it); (b) the same signal is latched for the turn (`_turn_names_other_work`, reset in `_reset_turn_state`, read-once in `resolve_pending`) so even a router `confirm` cannot turn that message into a yes — the write boundary stays shut and she asks which work he means; (c) a title that matches an existing entry binds through the ordinary `_resolve_media_merges` path, so the card NAMES the note it would refresh. Replacement lives only in `note_edit`, which now asks (row above). **C3 — field-across-list follow-ups.** «Покажи год каждого» right after a 3-item listing returned ONE note's detail card. New read-only action **`list_field`** (year|creator|genre, resolved from `params.field` or his own wording — «а режиссёры?», "and the authors?") answers for EVERY item of the list she actually showed. The review-snapshot mechanism is generalized (`_pin_shown`/`_shown_slots`; `_review_snapshot_set`/`_review_snapshot_rows` now delegate) into a second pinned snapshot `shown_list_snapshot` (1 h), written by `do_list_items` and `handle_page_callback` only AFTER delivery (`_notes_page` returns its rendered rows; `edit_message` returns a bool) and by `do_note_review`. Values come from stored provenance-tagged facts (`media.facts_fields`) ONLY — a missing field is said per item, an item deleted since the listing is reported as gone, and with no live snapshot she says so instead of re-deriving "the newest notes". **C4 — stale blob titles.** `note_edit` works on a catalog entry: the listing, the detail card and the catalog dedup index all read `summary or raw_text`, so retitling #44 («Форвард кинофильма "The Ledge" …») fixes all three at once; the note's facts are left alone and nothing is bulk-rewritten. **Review fixes (same batch, 2026-07-28).** The C2 diversion had to NAME a work: `_OTHER_WORK_RE` now requires a kind noun beside the marker («другой ФИЛЬМ», «не та КНИГА», "a different movie", "wrong one"), a quoted CARD word is not a title (`_NOT_A_TITLE_RE` — «убери "второй"» is emphasis), and the check runs after the number parse so an explicit indexed removal wins over the lexical marker («убери №2 — другой фильм» stays a card correction instead of routing, where «убери №2» reads as a delete of his real note #2); a quoted UNSTAGED title still wins over an index. The refused-confirm path carries the work he named (`media.named_work` — quoted title + `_YEAR_RE`) into `do_catalog_add` instead of asking for a title he just typed; with nothing quoted it still asks. `media.stated_kind` is built on the caption path's `_kind_named`/`_kind_negated`, so «не книга» no longer files a movie under Books with no disclosure, and `flip_kind` drops `assumed_kind` (a kind he NAMED is never assumed again — and a kind-settling no-op re-draws the card instead of leaving the stale «Ты не сказал…» line on screen). `shown_list_snapshot` lives 10 minutes, not an hour, and is CLEARED by every action that puts another view on his screen (`_LIST_REPLACING_ACTIONS` → `_shown_list_clear`, checked before dispatch), so the «по каждому из последнего списка» header can only ever describe the last list. The `year` cue is spelled out as real inflections (`год|года|году|годы|…`) because `год\w*` also matches «годовщина»/«годится» and `_list_field_name` falls back to the raw message. `do_note_edit` yields the single pending slot when another question owns it (`note_edit_slot_busy`), so a «да» meant for a media card can never land on a text replacement. | Card-time preview == confirm-time write (one writer); his words never relabeled as photo/lookup; a new title is never a replacement; list answers are pinned, never re-derived; missing values are stated, never filled. |
 | **Re-categorize** | "поменяй категорию #2 на Документы", "переложи это в Чеки" (most recent), "переложи всё из crypto в news" (bulk). Logged as a correction → feeds learning. | — |
 | **Merge categories (dedup)** | "объедини «AI tools» в «AI Tools & Resources»" folds a duplicate category into another — moves every item over (ids/embeddings preserved, only the category string changes) and deletes the now-empty one. Distinct from re-categorize (which keeps both). | — |
@@ -1362,7 +351,7 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Show media** | "покажи фото/файл из #2" → re-sends stored photos and documents by `file_id` (no re-upload). | — |
 | **Fetch** | "прочитай https://…" → fetches a public page (or public t.me web view), extracts text, ingests it. SSRF-guarded. | As ingest. |
 | **VPS stats** | "как сервер?" → CPU load, memory, disk, uptime, Cara's own footprint. | — |
-| **Discard / delete / purge** | Decline a fresh suggestion (`discard`); delete stored items by id/ids/count (`item_delete`); **bulk purge** by scope (all / category / stats / reminders / messages / issues / **journal**) with a **typed confirmation phrase**. Preview == execute (2026-07-16): `stats` never touches `conversation`; `all` is the only scope that deletes it and its preview counts the turns. The `journal` scope (shipped 2026-07-17, recorded here 2026-07-26 — this row listed six scopes while `store.PURGE_SCOPES` has had seven) has its OWN phrase («да, очистить дневник X») and empties a diary without deleting it: entries and their source messages go, the category row and the `journal_definitions` entry stay. **2026-07-25:** `stats` also spares journal categories (the `kind` row IS the protection), and `all` scrubs the verbatim `telegram_updates` payloads it used to leave behind, disclosed in the preview. | Discard immediate; delete & purge confirmed (purge requires the exact phrase). |
+| **Discard / delete / purge** | Decline suggestions immediately; confirm stored-item deletion and bulk purge. Each purge scope has an exact typed phrase and a preview matching its actual effects. Journal purge removes entries/source messages while retaining its journal definition/category; stats preserves journals and conversation. Scope all additionally removes conversation, task steps/approvals/receipts/artifacts/feedback, Mentor records, evaluations, learned procedures and fleet evidence; it requires authenticated task/fleet quiescence and scrubs retained terminal inbound/outbox/analysis content copies while preserving other pending updates. Usage charges and preferences remain. See the complete retention map in §8. | Delete confirmed; purge requires the exact phrase. |
 | **Proactive nudges** | Gentle, suggestion-only heads-up (overdue reminders and memory candidates) — throttled and quiet-hours-aware (§6). Automatic saved-note review invitations are opt-in (`proactive_note_review`, default off); manual note review is unchanged, and the morning brief omits the suggested-note line while the preference is off. A fresh deictic «Не пиши это каждый день» or a direct stop request disables only this nudge. On successful delivery `proactive_context` snapshots the nudge type + row ids for 15 minutes; «Давай»/«Да» opens that exact queue. A fired one-shot awaiting “готово” is not overdue and cannot re-trigger an urgent overdue nudge. | Suggestion-only; never acts. |
 | **Trace / why** | "почему ты так решила?" → the last trace timeline. Issues are logged; weekly digest + trace-summary export. | — |
 | **Report a problem** | Strict "запиши в проблемы" / "добавь в ошибки" bypasses but preserves an unrelated pending card and logs the preceding user message plus bounded exchange context; a `:`/dash suffix is the explicit detail. The trigger itself is never echoed as the issue. | Explicit command; write is only to the issue log. |
@@ -1373,9 +362,9 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Backup + disk death-spiral break (2026-07-25, review WP1)** | Five findings composed into one loop: a failed backup leaked disk, a full disk crash-looped the service, and nothing warned first. `snapshot()` now removes the raw `.db` and the half-written archive in a `finally` (a failed gzip used to leave a full DB copy that `rotate()`'s `ingest-*.db.gz` glob cannot see) and gives the archive its rotation-visible name only via `.gz.tmp` → `os.replace`, so a partial archive can never be mistaken for a backup; `rotate()` also sweeps the stray files this module itself makes — `ingest-<stamp>.db`, `.db.gz.tmp` and `.db.gz.enc.tmp` (wording corrected 2026-07-26: the sweep is scoped to that exact machine-generated name form, never a hand-made copy), counts and prunes only `ingest-<stamp>.db.gz` for retention, and runs even when `snapshot()` itself raises — a nearly full disk is precisely what makes it raise. `run()` **rotates before encrypting**, so a `BackupEncryptionError` (missing key file) no longer skips local retention forever. An off-box copy blocked by the 45 MB Telegram cap now logs a `backup_offbox_blocked` issue and returns `OFFBOX_BLOCKED` (recorded in the job result) instead of a green job plus a misleading "no off-box target" warning, with a one-time kv-flagged `backup_offbox_near_limit` issue past ~35 MB. A terminally failed `db_backup` job **for today** is announced to the boss once per UTC day (`backup_failed`) and holds the retry an hour: the query is date-scoped (failed job rows survive `TELEMETRY_RETENTION_DAYS`, so an unscoped one would open with a three-week-old error quoted as «сегодняшний бэкап»), dedup is per day rather than per job id (a permanent cause produces a new job — and a new id — every hour, which meant ~20 identical alerts), and the announced-day stamp is written only after `_send_all` confirms delivery, with undelivered notices retried on the standard `backup_notice` send backoff. The every-iteration tick list moved to a class-level `Agent.SCHEDULER_TICKS` table so a monitor cannot silently drop out of the poll loop unnoticed. `jobs.fail()` moves `available_at` +600 s so both attempts no longer burn in the same drain pass, and `backup_day` is stamped by the job's success path instead of at enqueue — a failed morning is retried the same day. New `check_disk_space` tick (30 min, `DISK_ALERT_MIN_FREE_PCT`, default 10, 0 disables) mirrors `check_model_health` exactly: one alert on the way down (+ `disk_low` issue), one on recovery past threshold + 2 pct, kv `disk_space` holding the ANNOUNCED state. The installer keeps only the newest 10 pre-install backup dirs (each holds a secrets copy) and `chmod 700`s their root. | Retention enforced on every attempt; no silent off-box stop; alerts are transition-only and day-deduped, stamped only on confirmed delivery. |
 | **Crash-loop containment + atomic migrations (2026-07-25, review WP2)** | The other half of the disk-full death spiral. Everything Cara does is a SQLite write, so `ENOSPC` surfaced as `sqlite3.OperationalError` in the durable-inbox bookkeeping (`telegram_update_receive`/`_attempt`/`trace.start`, which ran OUTSIDE the per-update `try`), inside the dead-letter `except` block (itself five more DB writes), and at the bare offset `kv_set` — each exited `run()`, systemd restarted after 10 s, the same write failed again, and Cara was permanently and **silently** dead even though sending a Telegram message needs no disk at all. The whole per-update body now runs under a `sqlite3.Error` containment guard: log, pause `DB_STALL_BACKOFF_SECONDS` (5 s, stop-aware), stop the batch **without advancing the offset** so Telegram redelivers — at-least-once semantics unchanged. The dead-letter ledger writes get an inner guard that logs the original error first (journald needs no disk) and hands the DB error to the containment guard rather than dead-lettering an update whose failure was never recorded. The offset write is guarded too (an unpersisted offset costs one redelivery; the durable inbox dedupes `done`/`failed` rows). `main()` is the backstop: a "disk is full" `OperationalError` — including one from `open_db` itself, before any loop exists — sends ONE `db_full_fatal` alert via a direct `tg_api` call (no DB access on that path), sleeps `DB_FULL_PAUSE_SECONDS` (300) so restarts stay paced, and exits. Startup was equally stuck: `open_db` rewrote every `memory_candidates` row and the gratitude category row on EVERY start, so a full disk blocked STARTUP as well; both are now condition-guarded and a steady-state open performs **zero** writes. `open_db` is only half of a start, though — `Agent.__init__` runs `self_model.seed` right after it, and that UPSERT stamped a fresh `updated_at` on every seeded row (ten real page writes plus ten commits) every single time, so the start still failed on a full disk. **Since 2026-07-25 `self_fact_set` reads before writing** (value/scope/status compared first), which makes a repeat *start* — not just a repeat `open_db` — zero-write, leaves the seeding contract intact (an edited `SEED_FACTS` entry still overwrites), and gives `self_facts.updated_at` a real meaning. `_migrate` runs inside one `BEGIN IMMEDIATE`/`commit` — Python's legacy transaction control autocommits DDL while the paired backfills wait for the end-of-open commit, so a crash between an `ALTER TABLE` and its backfill left a column that existed but was never filled and whose `if "x" not in columns` guard then skipped it forever (helpers no longer commit midway; `ensure_note_no` takes `commit=False`). A disk-full error raised by `handle_update` itself is routed to the same containment guard instead of counting as a failed attempt: otherwise three redeliveries inside one disk-full window would exhaust `UPDATE_MAX_ATTEMPTS` and dead-letter a perfectly good message, telling the boss to resend it onto a disk that is still full. The carve-out is deliberately narrow — matched on "disk is full", exactly like the `main()` backstop — so any *other* `sqlite3.Error` **raised by the handler** (a deterministically poisonous update) still dead-letters rather than wedging the loop in a 5 s retry forever. That distinction matters: an error raised by the *bookkeeping* around the handler has no dead-letter route at all — the ledger is precisely what is broken — and containment alone therefore turned a PERSISTENT failure that is not a full disk (a volume remounted read-only after an I/O error, a database file that lost write permission, a corrupted image) into a permanent silent wedge: retry, 5 s, break, no offset advance, forever, with `systemctl is-active` reporting `active (running)` while Cara was stone deaf. **Since 2026-07-25 the guard counts consecutive breaks** and after `DB_STALL_ALERT_AFTER` (12, ≈1 min of retries) sends ONE direct `db_stalled` message — `tg_call` only, because `reply()` records the turn in `conversation` and `lang()` reads `preferences`, both of which fail on the very condition being reported — latched until an update goes through end to end, which is also what resets the streak. The escalation stops at the alert on purpose: re-raising to let systemd surface a `failed` unit would also destroy the one capability a contained process still has, namely the ability to say what happened. Finally, a terminally dead-lettered update is announced to the boss (`update_dead_letter`) instead of silently vanishing. | Offset never advances on a containment break; one honest alert beats a silent crash loop; a persistent DB failure is loud instead of an `active (running)` zombie; migrations are all-or-nothing; a full disk never dead-letters good work. |
 | **Identity & atomicity integrity (2026-07-25, review WP3)** | Five defects that all came from keying durable state on something that is NOT stable. (1) `ensure_note_no` took `MAX(note_no)+1` over the **live** rows, so deleting the newest note handed its number straight back — save #1, #2 → delete #2 → save → the new note was #2 again. That broke the promise the boss is given («номера не переиспользуются») and, worse, the milestone partial-unique index on `note_outcomes` then **swallowed the new note's `captured` row**: every recycled number silently left the saved-to-used KPI, the one metric the ledger exists to keep ungameable. The number now comes from a durable per-chat kv counter (`note_no_next:{chat}`), claimed inside the caller's transaction and seeded once from `max(MAX(messages.note_no), MAX(note_outcomes.note_no)) + 1` so existing databases continue where they left off. Only purge scope `all` — which deletes the ledger too, leaving nothing a number could collide with — resets the counter; scope `messages` keeps it, because the ledger survives there. (2) The retrieval vector cache was fingerprinted by `(count, max_id, sum_id)` over `chunks.id`, and `chunks.id` has no `AUTOINCREMENT`: deleting the newest note and saving one with the same chunk count reproduced an **identical** fingerprint, so after «удали заметку» retrieval kept grounding answers in the DELETED note's chunks while the new note was invisible to semantic recall. `set_chunks`, `delete_message` and `purge_execute` now bump a kv `vec_gen` generation (folded into the fingerprint) *and* call `invalidate_vector_cache(conn)` — which existed but had never been called from production code. The cache itself moved from `id(conn)` (which aliases recycled connection objects) to a `weakref.WeakKeyDictionary` keyed by the connection. (3) `messages.id` is a plain rowid that SQLite reuses, and per-message kv state (`capture_action:{id}`, `journal_draft:{id}`) outlived the row — a new note inherited a deleted note's reminder draft or journal payload. `delete_message` now sweeps those keys (`MESSAGE_KV_KEYS`, with the rule written down: any future per-message key belongs there), and the whole-table purge fast paths sweep the prefixes. (4) `finalize()` spans many autocommits with network downloads in between; a crash after `insert_message` committed left a text-only note, and the redelivery hit `ON CONFLICT(chat_id, tg_message_id) DO NOTHING`, logged "skipping redelivered message" and lost **all** media and URLs while the boss saw a normal confirmation. The conflict path now adopts the existing row (`message_by_tg_id`) and repairs it — attachments are idempotent on Telegram's `file_unique_id`, URLs on their text — then resumes the suggestion pipeline if the note is still `pending`, or backfills media only and leaves a finished note alone. (5) `convo_add` was a plain INSERT recorded before routing, so at-least-once redelivery duplicated the boss's message in `conversation` and he "repeated himself" in every prompt and in the verbatim readback; user turns now carry their `update_id` (additive column) under a partial unique index and use `INSERT OR IGNORE`, while Cara's own turns pass NULL and are untouched. Plus turn-state hygiene: `turn_reply_quote` / `turn_extra` / `turn_reply_reminder_id` / `turn_lang` were reset at the START of the next inbound message (and `turn_lang` only once per POLL CYCLE), so a background `retry_sweep` → `suggest_row` → `_is_referential_save` read a previous turn's quote, an album flush inherited it, and the second update of a batch answered in the first one's language. `handle_update` now resets them before and in a `finally` after every update, and the voice transcript's language is detected BEFORE the quote echo is sent. **Review follow-ups (same day):** the counter's guarantee is honest only from its first claim onward — a number issued before the counter existed and deleted while the note was still merely `suggested` left no trace in `messages` OR `note_outcomes` (the ledger records `captured` at CONFIRM time), so the one-time seed can re-issue exactly that number once; CARA.md now scopes the promise instead of overstating it. `_store_attachments`/`_repair_attachments` return what THIS pass stored, because the DB-derived `file_count` made a resumed save log a second identical `document_saved` relationship event when the first pass had died later (in `suggest_row`/`present_suggestion`) — a duplicate the pre-fix early return could not produce. The counts line stays DB-derived on purpose and is now honest about an uncompressed image sent as a **document**: it was stored as an image but incremented neither counter, so the card reported «фото: 0 · файлов: 0» for a forward that did save something. The repair's skip set deliberately KEEPS `NULL`: `files.tg_file_unique_id` is nullable, and discarding NULL made such a row unmatchable, so every redelivery re-inserted it — unbounded duplicates on the one path whose whole contract is idempotence (missing one repair is the strictly safer failure). `_migrate`'s legacy JSON→blob embedding conversion bumps `vec_gen` too (guarded by `if legacy:` so a steady-state start still writes nothing): it rewrites rows without changing an id, which the id fingerprint cannot see. And the terminal dead-letter notice keeps the language of the turn that failed — `handle_update`'s `finally` clears `turn_lang` before `process_update_batch` sends it, so the reset stashes `_last_turn_lang` for that one consumer. One accepted trade: the repair path re-runs `download_file`, and an `OSError` from writing into `MEDIA_DIR` is NOT covered by WP2's sqlite-only "disk is full" carve-out, so a forwarded photo on a full disk can now burn its retry budget and dead-letter — loud, where the pre-fix behaviour was to "succeed" text-only with the media silently gone, and WP1/WP2 already alert before the disk gets there. | A number, a rowid and a cache key are only as trustworthy as the thing they are derived from; deleting content must delete everything keyed to it, and an at-least-once transport needs every write on the inbound path to be idempotent or transactional — including the events it emits, which must fire on what THIS pass did, not on what the row now holds. |
-| **Purge semantics (2026-07-25, review WP4)** | Three ways a purge reached past what the boss was shown. (1) Scope `stats` ran `DELETE FROM categories`, and `categories.kind` is the SINGLE source of truth for journal protection (list exclusion, purge exemption, dated recall) — so «сбросить всю статистику» silently demoted every boss-marked diary to an ordinary category: its entries flooded the general `#N` note lists and the next «удали все заметки» deleted the diary the spec explicitly promises to spare. Only the built-in gratitude journal re-binds itself at the next start (`_migrate_gratitude_builtin`); any other diary lost protection permanently, with nothing in the preview hinting at it. The scope now deletes `WHERE kind != 'journal'` and the preview counts the same rows, keeping preview == execute. (2) Scope `all` deleted content everywhere except the durable inbox, which keeps a **verbatim** copy of every update (message text included) in `telegram_updates.payload`; `prune_telemetry` only removes `done` rows, so a dead-lettered one survived «удали всё» indefinitely and rode along in the daily off-box backups. Execute now scrubs the payload to `'{}'` on every non-`pending` row and the preview discloses the count (`updates_scrubbed` → «служебных копий входящих сообщений»), like the conversation-turn disclosure of 2026-07-16. The row itself stays: its `update_id` is the dedupe key that stops Telegram redelivering an already-handled update. `pending` rows are deliberately exempt — they are unprocessed work `replay_pending_updates` must still read (a scrubbed one would raise `KeyError('update_id')` outside the sqlite-only containment guard, i.e. a startup crash loop); their content is the turn in flight — the confirmation itself, a buffered forwarded-album part, or an update awaiting redelivery after a non-terminal failure — and is scrubbed by the NEXT purge, once it reaches a terminal state. `events.payload` / `trace_events.data` were checked and left alone: they carry ids, stage names and counts, never message text. The free-text `trace_events.message` / `traces.summary` are the one bounded exception — `trace.event(…, repr(exc))` / `trace.finish(…, repr(exc)[:200])` can quote the offending text inside an exception repr — but they are truncated to 500/200 chars and swept by `prune_telemetry`, so they are accepted residue rather than a second verbatim archive; scrubbing them would destroy the trace timeline «почему ты так решила?» reads. A fourth, smaller reach in the same family: `do_purge`'s emptiness guard listed only the OLD disclosure keys, so a database whose only remaining content was dead-lettered inbox rows answered «удалять нечего» and returned — no typed phrase, no execute, and the one destructive effect the guard could not see never ran. The guard now covers `updates_scrubbed` too: every key the preview can disclose is a key that can keep the purge alive. (3) The scope-`messages` fast path (a whole-table DELETE, taken only when no journal exists) skipped the `deleted_used`/`deleted_unused` rows the per-id path writes, so whether a bulk wipe appeared in the saved-to-used KPI depended on the unrelated fact of whether the boss keeps a diary. One `INSERT … SELECT` now mirrors the per-id predicate (`status='confirmed' AND knowledge_state IS NOT NULL`, `use_count > 0` → used), preceded by a number claim for the rare note that never got one — exactly what `note_outcome_record` would do. | A purge's blast radius must equal its preview: no protection stripped as a side effect, no verbatim residue outliving «удали всё» (the 2026-07-24 audit found one the row had missed — `telegram_updates.last_error`, up to 1000 chars of an exception that routinely quotes the failing text; scrubbed with the payload since 2026-07-26, and the WHERE clause now also picks up a row that has only the error left), and the same ledger whichever code path runs. |
-| **Deterministic reminder/note precision (2026-07-25, review WP5)** | The deterministic paths exist BECAUSE they are meant to beat the probabilistic router — and every one of them failed OPEN, acting on a different object instead of saying «не нашла». The reminder-target guard already had the discipline («never silently picks one when an explicit id/title was given»); notes, media and the follow-up parser did not. Ten fixes, one rule: **an explicit target that cannot be resolved is a not-found, never a substitute.** Parsing: (1) `_parse_fired_followup` tested tomorrow with `"завтра" in t`, and «послезавтра» CONTAINS it — «отложи на послезавтра» re-armed the alarm a full day EARLY; the day-offset branch is now shared (`_followup_day_due`) and «послезавтра» is matched FIRST (the scaffold whitelist already admitted the word, so it reached here). (2) The absolute-clock regex accepted an optional `час(а|ов)?|ч` suffix, so the idiomatic DURATION «отложи на 2 часа» (postpone BY two hours) full-matched the absolute branch, resolved to 02:00, found it already passed and asked the boss to clarify — the branch now carves out `на N час(а/ов)/ч` (no `HH:MM`) as `+N hours` while «до N» and a unit-less «на N» stay absolute. (3) `_parse_reminder_selector` regex-searched ANY 1–3-digit number anywhere, so «давай лучше в 2 часа» during a which-reminder disambiguation bound reminder #2 and applied the STALE time; only a bare or `#`-prefixed number is a pick now (rejected when preceded by «в/на/до/at» or followed by a unit/`:`), and a message carrying a fresh time abandons the pending and re-routes. (4) `_is_reminder_ack` substring-matched acks, and «пока» contains «ок» — a goodbye kept the fired pending alive, which the router then confirmed into a closed alarm; matching is now anchored at a word start (an explicit non-word delimiter, since `\b` is unreliable next to Cyrillic), with `+`/✅/👍 as exact-match specials. Targeting: (5) `do_reschedule` gated the multi path on `len(ids) > 1`, so `{"ids":[2]}` was DISCARDED and `has_target` stayed false — the op silently landed on the last-touched reminder; a one-element list is now folded into `params["id"]` inside `_resolve_reminder_target`, which also gives rename the same protection. (6) `resolve_fired_followup` honoured the TG-reply binding only while that reminder was still `active` and otherwise **fell through** to the live pending / last-touched one — the exact 2026-07-23 incident class, one status transition later. A reply to a closed (or purged) alarm now gets an honest `reminder_already_closed` and touches nothing; the refusal is gated on the message actually parsing as a follow-up, so substantive content replied to a closed alarm still routes normally. **Scope of that claim, made exact 2026-07-26:** the guard only sees the wordings `_parse_fired_followup` recognises — everything else reaches the router, where a targetless reschedule/rename still bound to the last-touched reminder. The rule therefore also sits in `_resolve_reminder_target`: a message that is a Reply to a fired notification and names no target of its own resolves to THAT reminder while it is active, and to a refusal once it is closed — never to a different one. An explicit `#N`/title in the same message still wins. (7) `resolve_items` fell through to `resolve_item(params)` → **the newest note** when every explicit id failed to resolve, and lifecycle ops skip confirmation: «в архив #7 и #9» with both numbers gone archived an unrelated note instantly. An explicit `ids` list now resolves to exactly what it names (possibly `[]` → `items_empty`), and an unparseable `count` returns `[]` rather than taking the newest. (8) The note-review snapshot compacted deleted rows out before mapping ordinals, shifting every position after the gap — «третье» archived the fourth item he was shown; rows now keep their slot as `None` (`keep_gaps=True`) so ordinals stay positional and naming a deleted one returns `[]` (not-found) instead of a neighbour. (9) `do_read_media` resolved an explicit note id through `resolve_item` (which itself falls back to `list_messages(limit=1)`) and then `mfiles or rows`-ed onto the 5 most recent chat-wide files, so «что в файле из #12» could read an UNRELATED file and present it as the answer; an id now resolves strictly by stable `#N` and a miss (or a note with no files) replies `read_media_none_note` scoped to that number — the recent-files fallback survives only for id-less requests. (10) `handle_correction` ran `llm.normalize_category(text)` on ANY textual reply to a suggestion card, and that helper accepts any sentence: «а зачем это сохранять?» became the note's category and CONFIRMED it. A reply is now read as a category only when it plausibly is one — ≤40 chars, no `?`, and either matching `_CATEGORY_PATTERNS` or fuzzy-matching an EXISTING category — otherwise `handle_correction` returns False and the message falls through to normal dispatch with the card left pending (which also routes «неправильно» to the existing rejection handler instead of coining a category from it). **Review follow-ups (same day):** the fail-closed rule had been applied to the `ids` LIST only, while the single explicit `id` — the router's canonical output for the far more common «убери #5 в архив» — still fell through `resolve_item` to the newest note, so `resolve_items` now resolves a present `id` strictly too (this is what `do_recategorize` passes as well). The T5.10 fall-through created a NEW wrong-target path: `pending_actions` holds one row per chat while a reply names a specific card, so a declined reply that later resolved to a category (router `amend`, or dispatch's explicit branch) confirmed the LATEST card — the turn now remembers the replied-to card (`turn_reply_suggestion_id`, reset with the rest of the turn state) and `resolve_pending` targets it, clearing the pending only when they are the same row; and an explicit «категория: …» phrase is honoured before the ≤40-char/`?` gate, because dispatch's deterministic branch would have applied it anyway — just to the wrong card, or, with no pending left, through the router onto the newest note. `has_target` now counts any non-empty `ids`, closing the partly-resolvable case (`{"ids":[1,99]}` builds one target, skips the multi path, and used to land on `last_reminder_id`). The disambiguation pick-guard covered only hour/minute units, so «через 2 дня» still bound reminder #2 with the stale time — day/week units and «через/спустя» are in the guard now. The ack matcher anchored only the LEFT side, so «давай» (and any «да…»/«ок…» word of the bound reminder's own title, which the extra-words guard admits) still read as an ack: verb stems keep the open suffix, the short particles get a right boundary too. The English half of the «послезавтра» fix was unreachable — `followup_extra_words` rejected "day after tomorrow" as substantive before the branch could run — so "day"/"after" joined `_FOLLOWUP_SCAFFOLD` and the EN path is now tested. `do_read_media`'s `is not None` id check admitted a falsy-but-present router id and interpolated it raw («У # нет голосового…»); the id is normalized with `int()` first and an unreadable one is treated as id-less. And the review-snapshot resolver only claimed a position that both existed and still had a row, so an out-of-range ordinal («четвёртое» after a three-item review) or a snapshot whose rows were ALL deleted fell through to the newest note — a live snapshot plus an ordinal stem is now always a claim, answered `[]` when it cannot be honoured. | An explicit target is a target: unresolvable means not-found, never the newest/last-touched/most-recent. Ordinals are positional against what was SHOWN. A closed object is closed — a follow-up to it is refused, not redirected. And a fall-through is a decision: whatever the deterministic path declines still has to reach the right object. |
-| **Ingest, media and fetch correctness (2026-07-25, review WP6)** | Thirteen fixes whose common thread is *inline work on the one thread* and *confirming more than was actually stored*. (1) `fetch()` passed its `timeout` as the per-socket-op timeout only, and `response.read(max_bytes + 1)` blocks until the server closes: a drip feed of a few bytes every ~15 s satisfied it for **hours to days**, and because a fetch runs inline in the single-threaded poll loop — auto-triggered by any link-centric forwarded post, since `INGEST_READ_LINKS` defaults true — one hostile server denied service to the entire bot, reminders included, from a single forward. Every fetch now carries a total wall-clock budget of `DEADLINE_FACTOR × timeout` (2×) started at the FIRST hop and **shared across redirect hops**: the body is read in 64 KB chunks with the deadline checked before each one (`fetch deadline exceeded`), the per-hop socket timeout is clamped to the remaining budget, and a hop that starts past the deadline never opens a socket. (2) The boss's OWN album saved with a caption like «сохрани» stored only `parts[0]` — `handle_own_media` forwarded the first part into dispatch and `do_ingest` finalized `[msg]`, so parts 2..N were **unrecoverable** (their updates had already been marked done) while he got an ordinary confirmation card. The full parts list is stashed for the turn (`_own_media_parts`, mirroring `_own_photo_turn`, cleared in the same `finally` and in `_reset_turn_state`) and `ingest` files all of them. (3) Own-media album parts returned `None`, so their inbox rows were consumed at buffer time and a crash inside the settle window lost the album silently; they now `"defer"` exactly like forwarded parts (one shared `buffer_album_part`, with the same redelivery dedupe), so the startup replay recovers them. Consequence handled: a flush error now dead-letters the part rows for BOTH kinds — leaving deferred own-media parts pending would replay them into the same failure after every restart. (4) The SIGTERM force-flush finalized half-arrived albums, so late parts became a SECOND note after restart, and it did LLM/network work inside systemd's stop window; shutdown now leaves any album whose rows are durable to the startup replay (`flush_albums(..., shutdown=True)`). (5) `is_stt_noise` matched its Whisper-hallucination phrases as SUBSTRINGS, so a genuine transcript that merely CONTAINED «спасибо за просмотр» or «продолжение следует» — real outros, which is exactly why Whisper hallucinates them — was discarded entirely, deterministically, on every retry. A transcript is noise only when the phrases are essentially the WHOLE of it: strip every matched phrase and require ≤ `STT_NOISE_REMAINDER` (15) characters of remainder, which keeps multi-phrase credit lines ("Subtitles by the Amara.org community" → "the  community") classified as noise. (6) `zlib.decompress(raw)` on attacker-supplied PDF streams was unbounded — a few KB inflates to gigabytes and OOM-kills the process, which systemd restarts straight back into the retry; `_inflate_bounded` caps each stream at `4 × max_chars` via `decompressobj().decompress(raw, limit)` (never `max_length=0`, which means unlimited) and at most `MAX_STREAMS` (200) streams are read. That alone would have fixed nothing on the live box: `extract_text` calls **pdfminer first** (the installer apt-installs `python3-pdfminer`), pdfminer inflates FlateDecode with an unbounded `zlib.decompress`, and the stdlib fallback runs only AFTER it returned — i.e. after the OOM. So the bomb is refused in front of both: `_is_decompression_bomb` walks the same streams with an incremental decompressor that only ever COUNTS bytes (at most one 1 MB chunk held) and stops the instant the running total crosses `MAX_INFLATED_BYTES` (128 MB — far above any real text PDF, given Telegram caps a download at 20 MB, and far below what would kill the process). It is best-effort by construction: it sees the streams this module's regex can find, so a PDF that hides them from the regex still reaches pdfminer unbounded — the docs say that rather than promising a guarantee the code does not make. (7) The sticker branch was gated on `not is_forward`, so a FORWARDED sticker fell through to auto_store and became a "(no analyzable content)" junk note; stickers are now detected regardless of forward status. (8) Telegram marks a bare domain as a `url` entity WITHOUT a scheme, which fetch later rejected as "unsupported scheme" — entity URLs get `https://` prefixed and the same trailing-punctuation strip the regex path uses. (9) A bogus or quoted `charset=` raised `LookupError` and aborted the whole fetch; the token is unquoted and decode falls back to UTF-8. (10) `_ip_blocked` missed 100.64.0.0/10 (carrier-grade NAT / Tailscale), which is neither private nor reserved — `not ip.is_global` is now the catch-all beside the explicit checks. (11) The JSON-salvage unescape chained `.replace()` calls, so `\\` then `\n` rewrote each other's output and `C:\new` became `C:\ ew`; one regex pass consumes each escape exactly once. (12) The malformed-JSON retry prompt listed only 4 keys, silently dropping `note_purpose`/`saved_reason`/`review_policy`/`action_candidate` — every capture-metadata feature disappeared on the retry path; both prompts now render the one `ingest.JSON_SCHEMA`. (13) A fetched page's synthetic `tg_message_id` was `-int(unix seconds)`, so two fetches in the same second collided on `(chat_id, tg_message_id)` and the second stored NOTHING while `ingest_fetched` returned silently; the id is `-time.time_ns()` and an insert that still returns None replies `fetch_store_failed` and logs a `fetch_not_stored` issue instead of falling silent after «Читаю ссылку…». **Review follow-ups (same day):** three of the fixes were placed where the failing statement is not, and two created a new defect. The deadline was checked BETWEEN chunk reads while the blocking statement is the read itself — `response.read(n)` blocks until it HAS n bytes, so at one drip per socket timeout the loop would not have looked at the clock again for ~15 days; the body is now read with `read1` ("at most one underlying system call"), which is what makes the deadline reachable at all, and the regression test measures simulated wall-clock at abort (45 s with `read1`, 16.7 HOURS with `read`) rather than merely asserting that a `FetchError` eventually came. **What that budget actually bounds (stated honestly 2026-07-26, after the audit called the row an overclaim): the hop chain and the BODY.** The deadline is enforced at every hop boundary and before every body chunk; inside one hop `opener.open()` — DNS, connect, TLS and the response headers — is a single opaque blocking call (urllib reads headers with `readline` on the buffered socket) that this code cannot interrupt, so there the only bound is the per-socket-operation timeout, already clamped to the remaining budget. A server that dribbles header bytes just under that timeout can still outlive the budget within one hop; bounding that would need a socket-level deadline, which is a bigger change than the finding warrants. The PDF bound went in front of pdfminer, above. The STT remainder budget was 20, materially more aggressive than the approved `len(phrase) + 15` rule — «Спасибо за просмотр, перезвони Ване» (16 chars of remainder) was still discarded, the exact failure the task exists to stop — so it is 15, with the boundary pinned in both directions and the residual short-dictation loss written down as a decision instead of left to the constant. Filing EVERY own-album part re-enabled own-photo storage: `_pictures_only` is all-or-nothing, so a mixed [photo, photo, отчёт.pdf] album with «сохрани» downloaded and stored the boss's own photos — N at a time where the pre-fix bug could leak at most one — and `ingest` now drops picture parts from what it files. Deferring own-media parts made a flush error consume them TERMINALLY, while the reply and the `issue_add` were still forwarded-only: the boss's album vanished with nothing in the chat and nothing in the weekly digest, so both kinds record the incident and own media gets its own copy (`own_album_failed` — «перешли ещё раз» is wrong for something he sent himself). Plus: the salvage unescape's catch-all `\\(.)` swallowed the marker of every escape it does NOT map, turning `\uXXXX` into the literal "u0416" (indistinguishable from real text, and ensure_ascii JSON is exactly what this malformed-reply path receives) — the pattern is restricted to the five escapes the old chain handled. The synthetic `-time.time_ns()` note id is a storage key, not a message id, and `retry_sweep` hands a still-pending fetched page's id straight into `reply(reply_to=…)`: `Agent.reply` now drops any non-positive `reply_to` (`allow_sending_without_reply` covers a MISSING target, not a parameter Telegram rejects as out of range — a 400 there would leave the note pending forever). And `buffer_album_part`'s flag was named `store`, shadowing the `store` MODULE for the whole method — harmless today, an `AttributeError` on a bool in the crash-recovery path the first time someone reaches for `store.telegram_update_*` there. | Any network read on the single thread needs a wall-clock deadline, not a per-operation timeout — and the deadline has to be reachable: a check between blocking calls bounds nothing when one call can span them all. Put a guard in front of the path production actually takes, not the fallback that runs after the damage. A confirmation must describe what was actually stored; a filter that decides to THROW AWAY the boss's words has to match the whole thing, not a substring of it; and making a loss recoverable must never make it silent. |
+| **Purge boundary and preserved evidence** | Scope all clears user content across notes, journals, tasks, retained Mentor workflows, learning and fleet/analysis contexts after the existing quiescence check. Terminal inbox dedupe rows are retained with scrubbed payloads; the confirming update is scrubbed after the database commit. Required ambiguous recovery receipts, bounded trace evidence and other protected state follow their existing retention rules. Scope messages spares journals and records the same content-free deletion outcomes as per-item deletion. Scope stats preserves journal identity. User-facing preview and execution share the same scope; ?8 lists each table and its retention class. | No new deletion or retention behavior is introduced. |
+| **Explicit-target precision** | A specified id, title, reply binding or displayed-list ordinal resolves to that object or a truthful not-found result; it never substitutes the newest or last-touched object. Relative-day and duration parsing keeps day-after-tomorrow distinct from tomorrow and hours-from-now distinct from wall-clock times. A new time cannot silently select a stale disambiguation target. Reminder acknowledgements use bounded tokens; closed or cancelled reply targets cannot redirect to another reminder. Media ids are normalized, and review ordinals bind to the displayed snapshot even if the row was deleted. | Existing pending-state precedence and undo remain. |
+| **Bounded ingestion and media recovery** | Fetches check a shared wall-clock budget across redirects and bounded body reads; uninterruptible header dribbling remains a documented residual risk. Albums retain all parts in the durable inbox, defer completion until handling, and recover after restart; shutdown leaves durable partial albums for replay. STT noise filters match an entire hallucinated transcript rather than discarding real speech containing a familiar phrase. Source text, safe JSON salvage and reply ids remain truthful; confirmations describe the actual stored set. Forwarded content stays inert, own-photo retention stays disabled, and failed processing remains visible through the existing recovery ledger. | Existing confirmation, privacy and transport limits apply. |
 | **LLM stack, budget and availability (2026-07-25, review WP7)** | Eleven fixes about *silence*: the meter, the speech backend and the process itself could all be wrong without anyone finding out. (1) An unpriced model slug bills at the punitive `DEFAULT_CHAT_PRICE` ($3/$15) — the mechanism behind the 2026-06-19 budget lock, where Cara refused all work on phantom dollars — and `DO_CHAT_MODEL`/`ROUTER_MODEL`/`VISION_MODEL`/`LLM_PROFILES_JSON` are free-form env strings that nothing ever checked against the table. Detection now exists at all three points where it can be noticed: a startup warning naming every configured slug that is missing (`llm.unpriced_models`), a log + `llm.unpriced_model` trace event the first time such a slug is actually BILLED in a process, and a `(default-priced!)` flag beside that model in the spend report. The flag is restricted to rows with `kind='chat'`, because STT is priced per audio minute and embeddings have their own rate — their model names are legitimately absent from the chat table and flagging them would train the boss to ignore the warning. (2) A router few-shot bundled «поставь месячный бюджет 20» with `"period": "day"`, i.e. it actively taught the model to cap the wrong window; daily and monthly are separate examples now. (3) `params.get("amount") or ""` swallowed a numeric `0` — the ONE documented cap-disable value (`llm.budget_limits` enforces only `limit > 0`) answered "I couldn't read the amount"; `0` now works and gets its own confirmation, because «лимит $0.00» reads as the exact opposite of "no cap". (4) `local_server` STT raised on the first `URLError` with no retry and no fallback, even though whisper-server's unit has `RestartSec=5` (most outages are seconds) and the cold `whisper-cli` sits next to it: one ~3 s retry, then the CLI, and the server joins the model-health sweep. `HTTPError` is deliberately excluded from that path — it is a `URLError` subclass, and a 500 from a LIVE server must not spend a retry plus a cold CLI run. (5) Truncated/unparsable response bodies (`IncompleteRead`, a body cut mid-Cyrillic) took the HARD-error path: no same-model retry and a full 300 s bench of the preferred model over what is a connection accident. (6) `profiles()`/`pricing_table()` re-parsed their env JSON — and re-logged their warnings — on every call; both are memoized on the config object and keyed by the strings they are built from, so a mutated `cfg.do_model` still invalidates. (7) The `chars//4` token estimate undercounts Cyrillic 2-3×, and that estimate IS the metering backstop when a provider omits its `usage` block; it is script-aware now, and an estimated row is marked on the trace (`llm.usage_estimated`) so a guess is visibly a guess. (8) The dead `review_balanced` profile was removed (the weekly review is deterministic; nothing requested it). (9) An unknown `STT_MODE` fell through to `remote` — a typo in an env file would have shipped the boss's private voice audio off the box — so it is validated at startup like the token and the allowlist. (10) `do_read_media` always passed `duration_seconds=0`, billing any stored recording as one second in remote mode; `files` keeps Telegram's `duration` (additive column) and old rows fall back to a size estimate. (11) Availability: `check_model_health` probed three models at the full `LLM_TIMEOUT` **inline on the only thread** — 4.5 minutes of a frozen bot during exactly the outage it exists to report — so probes are capped at 10 s; and a *wedged* poll loop reported `active (running)` forever, so the agent now sends `WATCHDOG=1` between units of work with `NotifyAccess=main` + `WatchdogSec=900` in the unit. Two deliberate choices there: `Type=simple`, not `Type=notify` (a missing `READY=1` under `notify` is a startup FAILURE, i.e. a crash loop on the live box), and 900 s rather than the 180 s the plan suggested — a cold transcription can legitimately run `STT_LOCAL_TIMEOUT_SECONDS` (600) plus ffmpeg, so 180 s would have restarted Cara mid-voice-note. **Review follow-ups (same day):** the watchdog as first written derived its budget from the WRONG unit of work and would have SIGABRTed a healthy process. The pings sat only between whole updates and ticks, so the budget had to exceed one entire update or tick — an unbounded quantity: with the provider hanging rather than refusing, an LLM timeout is classified transient, so one `chat_profile` is primary+fallback × 2 attempts × `LLM_TIMEOUT` ≈ 360 s, the memory consolidation makes ≥4 of those under a single tick, and `runtime.drain` runs up to 5 durable jobs under one. Worse than the wedge being fixed: a SIGABRT is not an exception, so `process_update_batch`'s dead-letter branch never runs — the update replays after restart and is killed again, forever. The pings therefore moved INSIDE the long primitives (`llm.chat`, `llm.embed`, `llm.transcribe`, each whisper-server attempt, the CLI fallback, each drained job), which makes the longest un-pinged span exactly one bounded network/subprocess wait — the only span whose worst case is a number anyone can write down. The coarse pings stay; the docs no longer claim the budget "can never" kill her mid-voice-note, since `STT_LOCAL_TIMEOUT_SECONDS` is operator-settable and the unit's 900 is not (she logs a startup WARNING when the two cross). Six smaller corrections in the same pass: the size-based duration estimate applied the OGG/Opus VOICE bitrate to every audio kind, so a 10 MB WAV sent as a *document* (Telegram attaches no duration to documents — this is not only legacy rows) estimated ~3000 s and OVER-billed remote STT 50×, the phantom-dollar lock with the sign flipped — the estimate is now voice-only and anything else returns 0. The whisper-server outage reused the provider alert templates, which name the wrong remedy («загляни в доступ к моделям» for an on-box unit) and claim «держусь на запасной» even when `whisper_bin` does not exist; the speech backend has its own down/back pair, names `systemctl restart whisper-server`, and only promises the CLI when the binary AND the model file are on disk — and because that probe is free, it now runs even while the budget is stopped. The CLI fallback checked only the binary, so a renamed model file turned a server blip into "local transcription tool missing", hiding the outage that actually happened; it requires both halves and chains the original error. `estimated` was keyed on `prompt_tokens` alone, so a provider that reports the prompt and omits the completion wrote a half-guessed row that looked provider-reported. `_estimate_prompt_tokens` made ONE script decision for the joined prompt, and Cara's prompts are an English schema block plus Russian content — a majority-Latin prompt reverted to `//4` and reinstated the Cyrillic undercount for the most common case; each part is scored on its own script. The `(default-priced!)` flag was not scoped to the report's period, so a slug whose rows this week are all STT could be flagged for a chat row from another month. And the spend report still rendered a disabled cap as `/0.00` — the exact "blown budget" misreading the new cap-disable wording exists to avoid, in the one place the boss reads the numbers. | A guard is only as good as its loudest symptom: billing, speech and liveness all failed in ways whose only signal was silence. When a fix adds a killer (a watchdog, a fail-fast), its threshold must be derived from the slowest thing the system legitimately does — and the unit that threshold measures has to be one whose worst case is bounded, or the number is a guess wearing a justification. An estimate that is wrong in the generous direction costs the same budget lock as one that is wrong in the stingy direction. |
 | **Audit fixes on the WP1–WP7 packages (2026-07-26)** | An independent read-only audit of the seven work packages found 48 of 51 tasks complete — and a set of defects the pre-commit reviews had missed, most of them the SAME bug one layer over. (1) **WP5's fail-closed rule had been applied to `resolve_items` (plural) and not to `resolve_item` (singular)**, which is what `do_note_edit`, `do_show_media`, `item_detail_text`/`do_item_detail` and `_note_reminder_title` call: a stale «#7» therefore rewrote the NEWEST note's summary, sent another note's photos, showed another note's card, or titled and outcome-linked a reminder to a note he never named — all without confirmation, and none of them naming the substitute back to him. An explicit number (a present `id`, however malformed, or a bare-number query) now resolves strictly or not at all; an id-LESS request keeps the old meaning, and `_note_reminder_title` returns None so `do_reminder_create` answers `items_empty` instead of drafting a reminder about someone else's note. (2) **`correction_category` accepted either subset direction.** `match_category_fuzzy` matches when EITHER token set contains the other — right for a model-coined variant, wrong for a sentence the boss typed: «это точно не финансы» is short, has no «?», and CONTAINS «Финансы», so a rejection filed the note into it. The reply path now passes `value_subset_only=True` (every significant word he wrote must belong to the existing name); ingest's snapping keeps both directions. (3) **WP3 closed rowid reuse for kv KEYS but not for kv VALUES.** `note_review_snapshot` stored bare `messages.id` lists, so deleting the newest shown note and saving a new one — SQLite hands the rowid straight back — let «второе» resolve to a note that was never in the review; the snapshot and `last_resurfaced` now pin each id to its stable `note_no` and re-check it (mismatch = the shown item is gone = not-found, never a substitute), legacy snapshots without identities still resolve until they expire, and because scope `all` restarts BOTH the rowids and the `#N` counter — where pinning cannot help — the whole-table purges drop those pointers outright. Reminder ids are rowids too: a reminders purge now clears `fired_reminder_msgs`/`last_reminder_id`, so a reply to an old alarm cannot bind to whatever new reminder inherited the id. The kv sweeps also escape `_`, a single-character wildcard in `LIKE`. (4) **The T5.4 closed-alarm guard only covered wordings the deterministic parser recognises**; everything else reached the router, where a targetless reschedule/rename bound to the last-touched reminder — the same incident, one route later. `_resolve_reminder_target` now honours the reply binding directly. Smaller ones, each real: `finalize`'s `done` repair branch returned before `storage.offload`, so a crash-repaired note's images never got their durable copy; a photo whose FIRST download failed was stored with `local_path` NULL and thus counted as present by the repair skip set, so no redelivery ever fetched it (it is re-downloaded and UPDATED in place — inserting would duplicate on every redelivery); `_transcribe_local_server` fell back to the CLI only on `URLError`, so a server that accepts the connection and never answers (OOM thrash on a 4 GB box) raised `socket.timeout` — an `OSError` — and refused the voice note terminally; `_warn_if_watchdog_budget_is_too_tight` guarded only `STT_LOCAL_TIMEOUT_SECONDS` while `LLM_TIMEOUT_SECONDS` is equally operator-settable and sits in the same ping-to-ping span; a MIXED own album dropped its picture parts with no word to the boss beyond «фото: 0» on a card; and `pdftext`'s bomb pre-scan measured each stream only up to the `endstream` the non-greedy regex found, so a payload CONTAINING those literal bytes (a stored deflate block copies its input verbatim) was measured as a harmless prefix while pdfminer, which takes the length from the object dictionary, still inflated the whole bomb — the pre-scan now measures to end-of-file and lets zlib find its own end. **Refuted:** `budget_limits._eff`'s `or default` does NOT swallow a stored 0 — `pref_set` stringifies (`str(0.0)` = `"0.0"`, truthy) and `preferences.value` is TEXT, so the documented cap-disable works; the idiom would only bite on an empty-string pref, which no writer produces. Docs: four overclaims corrected in place (the `rotate()` sweep list, the fetch budget's real reach, «no verbatim residue», the closed-alarm claim) plus the user-visible half of `e95c975` that had never reached CARA.md. | Fixing a class in one function is not fixing the class: grep every call site of the resolver you hardened, and every value that stores what you just stopped storing in a key. A guard is only as wide as the parser in front of it. And a doc promise the code cannot keep is a defect — narrow the sentence or widen the code, never leave the promise. |
 | **Second review of the audit-fix batch (2026-07-26)** | Reviewers read the audit fixes above before they shipped, and the headline finding is that one of them was worse than the bug. (1) **The PDF bomb pre-scan.** Measuring each stream past its `endstream` marker is right; feeding zlib `view[m.start(1):]` — payload start to END OF FILE — once per stream is not. Whatever zlib is handed but does not consume it copies back out, and at `Z_STREAM_END` CPython memcpy's the whole remainder into `unused_data`, so the scan went from O(filesize) to O(streams × filesize): a 20 MB forward of ~800 000 eight-byte VALID streams costs ~8 TB of memcpy with the single poll thread frozen — no reminders, no replies — then a WatchdogSec kill and a replay of the same PDF from the durable inbox. A benign 5 MB / 500-stream document paid ~1.25 GB it had never paid before. `MAX_STREAMS` would have been a cure worse than the disease (a bomb at stream 201 walks past it), so the WORK is bounded instead: input reaches zlib in `_SCAN_INPUT_CHUNK` (64 KB) windows starting at the regex's own group, and the scan only reads PAST the marker when zlib says the stream did not end there — which a well-formed PDF never says. That past-marker read has its own document-wide `MAX_SCAN_TAIL_BYTES` (16 MB) allowance, because a payload can consume input while producing nothing (empty stored blocks) and would otherwise slip under the inflated-bytes ceiling; a document that exhausts it is unverifiable and refused like a bomb. (2) `_resolve_proactive_followup` overwrote the snapshot `do_note_review` had just written, rebuilding it from the queued ids filtered ONLY by row existence — while the card also drops a note that lost its `knowledge_state`, and writes no snapshot at all when the reply was not delivered. So «второе в архив» could hit the wrong note, or one he was never shown. `do_note_review` now returns what it RENDERED and only that list is re-stamped. (3) The widened closed-alarm guard sits in `_resolve_reminder_target`, but `do_reminder_undo` resolves its own target: a Reply to an acked «заметка #9» notification saying «верни как было» fell to the sole-rescheduled fallback and silently restored an unrelated reminder's previous time. It honours the same binding now. (4) `value_subset_only` killed the long-sentence direction, but `toks()` filters no stopwords, so a LONE word that happens to be a token of a multi-word category still matched: «позже» is a subset of «Прочитать позже», and `correction_category` hands a match straight to `apply_category_confirm` — a final, unconfirmed write. A single-token reply now matches only a single-token category, which the exact-match path already covers. (5) The watchdog warning gained `FETCH_TIMEOUT_SECONDS` — `fetch.fetch` contains no `watchdog_ping` at all and its span is `DEADLINE_FACTOR` × the knob — and now names EVERY step over budget instead of only the largest. (6) `message_by_note_no` did a bare `int(n)`: with every explicit path fail-closed, one malformed router value («#7», «7.») became a hard «ничего не нашла» on a note that exists, so the same forms the query regex accepts are normalized first. The decision about a present-but-UNUSABLE id is now pinned rather than implied: it is a router artefact, not a number he named, so it may fall through to a SEARCH (which can only return a real match) but never to «the most recent» — while a usable number that resolves to nothing stays a not-found, query or no query. (7) `fetch.py` still carried the budget overclaim the docs had already corrected; the module note and `fetch()`'s docstring now say what the code enforces (the hop chain and the body), because the next reader reads the code. (8) The new mixed-album line promised what the note WOULD contain («в заметку пойдут только файлы») before the card he still has to confirm — it passed `action_truth` only because «пойдут» is not in `FINAL_VERBS`. It now says only what is NOT kept, like its `own_photo_not_stored` sibling. Tests closed the gaps the reviewers named: the pre-scan's work is asserted by counting the bytes handed to zlib (a regression the old code fails by two orders of magnitude); `last_resurfaced` and the already-scrubbed `telegram_updates` row are driven through their REAL producers instead of hand-written fixtures; the closed-alarm binding gets a golden transcript through `handle_update` (with an assertion that the router really was consulted — the wording the earlier test used turned out to be one the deterministic parser CAN read); the offload ordering is asserted on `images.object_key` with the real `storage.offload`, which a before-the-backfill call could not satisfy; plus the image-document picture branch, the repair pass's must-not-re-download row, the `note_review_shown` sweep prefix, and ordinal-beats-reply-binding. **Refuted:** `budget_limits._eff` (already recorded in the row above — preference values are TEXT, so a stored 0 survives as the truthy string «0»); no code change, and the plan's stale entry is struck instead. | A fix that removes a bound is a regression even when it closes a bypass — measure the WORK the new code does on the worst input, not only the output it refuses. And a test that hand-writes the value its production writer is supposed to produce proves the reader, not the writer. |
@@ -1406,6 +395,16 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Reacting to his OWN photo (`handle_own_media` / `describe_own_media`)** | A photo the boss SENDS (not a forward) is conversation, not a note: it's vision-described and folded into `converse` so she reacts to the actual image. **Fallback (2026-07-01):** when vision returns nothing usable (empty / declined — a *nano* model often does, esp. on complex/intimate photos), converse is now told *"he showed you a photo but it didn't come through — acknowledge it and ask, and NEVER invent its content"*, so she stops silently talking past a photo she couldn't see (the "убрала ✔️" non-reaction). **Garbled-read guard (2026-07-01):** an open vision model sometimes returns a **non-empty but wrong-script** read — llama-4-maverick leaked a whole Chinese sentence (`精神白种人的顺从情妇…`) and deepseek-v4-pro then parroted Chinese / `Article 1(5)(1)…` / invented *"это мой автопортрет"*. `llm._vision_text_is_garbled` now discards a read that's empty, wrong-script (>10% CJK), or letterless, so garbage is treated as "no read" → the warm acknowledge path above; the vision prompt is also **language-pinned** (ru/en). And the described-branch context now states the photo is **HIS, not her own selfie**. **No-read hallucination guard (2026-07-01):** when he asks "опиши фото" but NO vision read reached this turn (nothing attached, or it fell to `converse` under a router 429), converse used to invent a description ("два бокала красного вина при свечах" pulled from the earlier wine talk). Its system prompt now carries an ABSOLUTE RULE never to describe a photo/screenshot/image without a real read of *this* image — with none, say she doesn't see it and ask him to resend; never invent a view/wine/face/colour from mood or memory. **Model note:** on this DO tier the strong vision models (Claude / GPT-4o) are **403 (tier-locked)**; the Nemotron nanos are weak. **`VISION_MODEL` switched to `llama-4-maverick` (2026-07-01)** — an available open multimodal model that describes accurately (verified end-to-end through the app: correctly read a red/blue test image the nano couldn't). Priced in `DEFAULT_PRICING` (est. `(0.20, 0.85)`) so it doesn't hit the `$3/$15` default. **Own-photo storage RETIRED (2026-07-16, owner decision):** his own pictures are conversation ONLY — even an explicit «сохрани эти фото» is declined honestly (`own_photo_not_stored` template) instead of stored. The legacy carve-out ("save this" filed the photo) was also broken for albums: the never-read `_turn_media_parts` stash meant only the FIRST album part was saved while Cara confirmed success for all. `do_ingest` now guards on `_own_photo_turn` (`_pictures_only`: photos / image-documents; a text/PDF document or voice/video attachment keeps the turn storable — his .md/.txt→KB flow is untouched, as are forwards). | — |
 
 ---
+
+### Fleet, analysis and accounting contracts
+
+| Capability | Current behavior | Boundary |
+| --- | --- | --- |
+| **Fleet and project evidence** | Owner-bound host/project scope uses fixed authenticated read gateways and a separate capped executor. Findings distinguish fresh, stale, partial, missing and unknown evidence; runtime, release, backup and development claims keep their own provenance. Optional MCP exposes the admitted read-only subset. Only the reviewed worker restart has an exact-card maintenance path. | Closed capability registry; no general shell or new maintenance authority. |
+| **Read-only grounded analysis** | Bounded synthesis/comparison uses saved notes, reminders and published authenticated project facts. Task artifacts retain source/coverage bindings and unknowns through durable delivery. | Read-only; existing task, budget and evidence limits. |
+| **Action and delivery continuity** | Durable receipts separate committed actions, known-unsent messages and ambiguous outcomes. Recovery retries only the safe delivery path and never re-executes an uncertain external effect. Source-bound context keeps actual evidence separate from quoted instructions. | Existing confirmation and exact approvals remain. |
+| **Procedural learning** | Evidence-bound corrections supply relevant guidance to conversation, routing and planning, with exact-version owner undo. | No added action, deployment or model authority. |
+| **Measured cache reporting** | Spend and engineering review report measured coverage, token-weighted reuse and per-model coverage separately from priced coverage, cost and net savings. Historical NULL remains unknown. Frozen dated published tariffs include write costs; invoice amounts and configured flat-rate budget charges stay distinct. | Anticipated savings never release a reservation; no retrospective charge rewrite. |
 
 ## 4. Conversation, grounded Q&A, and persona
 
@@ -1775,61 +774,125 @@ Budget warnings and the weekly digest keep their own dedicated notifiers.
 
 ## 8. Data model (SQLite, WAL)
 
-Core: `messages` (lifecycle `pending → suggested → confirmed`, plus `failed` /
-`duplicate`; unique per chat+message id; forward origin, username, dates) ·
-`urls` · `images` (`local_path`, `object_key`) · `files` (forwarded documents by
-`file_id`) · `facts` · `chunks` (BGE-M3 embeddings) · `categories` (Cyrillic-safe
-dedup; `kind` = `inbox`|`journal`) · `reminders` (`prev_due_utc`, `closed_at`,
-`close_reason`) + `reminder_events` · `note_outcomes` (content-free durable
-capture/use/triage/delete ledger by stable note number; no message FK) · `feedback` ·
-`preferences` (identity/config) · `pending_actions` (per-chat,
-TTL) · `conversation` (recent turns; `update_id` under a partial unique index for
-redelivery idempotence, and `tg_message_id` — 2026-07-26 — so an `edited_message` can
-rewrite exactly that turn) · `kv`.
+SQLite runs in WAL mode with foreign keys enabled. `store.open_db` assembles
+DDL from `store.py`, `fleet_protocol.py` and `action_delivery.py`, then applies
+additive migrations atomically. The map below covers the application tables
+created by that path; SQLite's internal `sqlite_sequence` is not an application
+table. Historical literal DDL inventories do not establish a live schema count.
 
-Spend & reliability: `llm_usage` (ts/skill/kind/model/tokens/cost/request-seconds/trace) ·
-`model_cooldowns` (failover).
+Retention classes describe the existing code, not a new deletion policy.
+`TELEMETRY_RETENTION_DAYS` defaults to 90; a nonpositive value disables that
+sweep. Its cutoff applies only to the rows named below. Live work, terminal inbox
+failures, spend, conversation and memory are not silently aged out.
 
-Personality & memory: `self_facts` · `boss_profile_items` (status + sensitivity + evidence)
-· `memory_candidates` (evidence/source trace/recurrence/first+last seen) ·
-`relationship_events` (title + trace) · `cara_life` (`status` = `active`|`merged` since
-2026-07-26 — consolidation folds a duplicate beat instead of DELETEing it; readers filter
-`active`, while the seed marker `life_count` counts every row on purpose).
+<!-- documentation-contract:tables -->
+| Table | Retention class | Stored role and removal boundary |
+| --- | --- | --- |
+| `action_receipts` | Durable deduplication | Committed reminder-action results; no age sweep or content-purge deletion. |
+| `assistant_tasks` | Task content | Plans, objectives, delivery/accounting state; explicit `all` purge deletes them after task/analysis/fleet quiescence. A source purge erases affected new analysis copies without erasing historical delivery identities. |
+| `assistant_task_steps` | Task child | Step inputs/bindings and execution state; cascades with its task; affected analysis inputs are scrubbed on source erasure. |
+| `boss_profile_items` | Protected memory | Confirmed/inferred owner profile and evidence; no age sweep; content purge retains it. |
+| `cara_life` | Protected memory | Active/merged character facts; consolidation changes status; no age sweep or content-purge deletion. |
+| `categories` | Configuration/content index | Explicit category/`all` purge removes categories; `stats` removes only non-journal categories. Merge/reclassification keeps journal protection explicit. |
+| `chunks` | Note child | Source text and packed float32 embedding BLOBs; cascades with the source message or is replaced on reindexing. |
+| `conversation` | Conversation content | Stored turns; no age sweep; only explicit `all` purge deletes history. |
+| `deployment_notifications` | Operational receipt | Deployment outcome and notice-attempt evidence; no age sweep or content-purge deletion. |
+| `evaluation_cases` | Evaluation content | Versioned cases and source references; no age sweep; explicit `all` purge deletes them. |
+| `evaluation_runs` | Evaluation child | Results, evaluator versions and costs; no age sweep; cascades with its case during `all` purge. |
+| `events` | Terminal telemetry | Only `done`/`failed` rows older than the configured cutoff are pruned; pending/claimed work remains. |
+| `facts` | Note child | Extracted source facts; replaced on extraction or cascaded with its message. |
+| `feedback` | Correction content | Recorded suggestion/correction evidence; no age sweep; explicit `stats`/`all` purge deletes it. |
+| `files` | Note child | Attachment metadata and local paths; cascades with its message. |
+| `fleet_events` | Fleet content | Source-bound reports/events; no age sweep; explicit `all` purge deletes them after authenticated executor/accounting quiescence. |
+| `fleet_requests` | Fleet content | Investigation/approval/context records; same guarded `all` lifecycle as fleet events. |
+| `images` | Note child | Image metadata and storage references; cascades with its message. |
+| `improvement_proposals` | Improvement content | Evidence, hypotheses, review decisions and metrics; no age sweep; explicit `all` purge deletes it. |
+| `issue_patterns` | Issue evidence | Normalized open/resolved/legacy lifecycle; no age sweep; explicit `issues`/`stats`/`all` purge deletes it. |
+| `issues` | Issue evidence | Incident observations and source traces; no age sweep; explicit `issues`/`stats`/`all` purge deletes them. |
+| `jobs` | Terminal telemetry | Only `done`/`failed` rows older than the configured cutoff are pruned; pending/claimed work remains. |
+| `journal_definitions` | Protected configuration | Stable journal identity, category and opt-in prompt settings; retained by every content-purge scope. |
+| `journal_entries` | Journal child | Validated derived payload tied to a source message; manually deleted before the message. Journal purge retains the journal definition/category. |
+| `kv` | Mixed durable state | Configuration, counters, recovery markers and bounded context/drafts; targeted consumption/removal only. `all` clears named content pointers and resets note counters, retaining unrelated config and consumed authorization evidence. |
+| `learning_events` | Learning child | Exact-version learning/undo events; no age sweep; cascades with learning versions on explicit `all` purge. |
+| `learning_lessons` | Learned content | Active/disabled owner-bound procedures; no age sweep; exact-version undo retains history; explicit `all` purge deletes it. |
+| `learning_task_observations` | Learning/task child | Task-to-lesson capture evidence; explicit `all` purge deletes it; task deletion cascades and lesson deletion clears the lesson reference. |
+| `learning_versions` | Learning child | Source hashes, validated instructions and recipes; no age sweep; cascades with its lesson on explicit `all` purge. |
+| `list_views` | Opportunistic one-day TTL | Pagination-filter snapshots; note/journal list creation prunes rows older than one day. This is not a timed background deletion guarantee. |
+| `llm_usage` | Protected accounting | Original token/cost/outcome rows and nullable per-call cache usage/dated estimates; never age-pruned or content-purged. Historical missing cache data remains unknown. |
+| `memory_candidates` | Protected memory | Evidence-bound candidate/decision history; no age sweep; content purge retains it. |
+| `mentor_attempts` | Mentor child | Proposal/candidate attempt and acknowledgement history; no age sweep; cascades with its cycle on explicit `all` purge. |
+| `mentor_cycles` | Mentor content | Retained proposal/candidate/recovery evidence; automatic Mentor units remain disabled; no age sweep; explicit `all` purge deletes it. |
+| `messages` | Note content | Ingest and knowledge lifecycle, stable note numbers, text/provenance; explicit deletion/purge only. `review_at`/`expires_at` are advisory. `messages` purge spares journals. |
+| `model_cooldowns` | Expired telemetry | Rows whose `until_at` is older than the configured telemetry cutoff are pruned; active cooldowns remain. |
+| `note_outcomes` | Durable usage metrics | Content-free capture/use/archive/delete history; normal note deletion retains it; explicit `stats`/`all` purge clears it. No age sweep. |
+| `pending_actions` | Expiring workflow | Per-chat confirmation/draft payload; consumed/replaced by its flow, expiry sweep deletes expired rows, and `all` purge clears it. |
+| `preferences` | Protected configuration | Identity/config and budget overrides; content purge and telemetry retention never delete them; explicit preference changes remain supported. |
+| `proactive_log` | Telemetry | Heartbeat decision/send evidence; rows older than the configured cutoff are pruned. |
+| `relationship_events` | Protected memory | Evidence-bound working-history events; no age sweep or content-purge deletion. |
+| `reminder_events` | Reminder telemetry | Lifecycle detail; pruned by telemetry cutoff or cascaded when a reminder is removed. |
+| `reminders` | Reminder content | Active and closed reminders; closing retains the row; explicit `reminders`/`all` purge deletes every status. No age sweep. |
+| `reply_outbox` | Durable delivery identity | Outbound intents and sent/failed/ambiguous receipts; no age sweep. `all` scrubs content/results/errors and fails unsent work, retaining deduplication identities; reminder/source purges scrub their affected copies. |
+| `self_facts` | Protected memory | Cara's grounded self-facts; no age sweep or content-purge deletion. |
+| `task_approvals` | Task child | Exact preview/target/version-bound decisions; expiry revokes authority without deleting evidence; cascades with its task on explicit `all` purge. |
+| `task_artifacts` | Task child | Produced-file identity/path/hash and delivery state; cascades with its task on explicit `all` purge, which also requests file removal. |
+| `task_feedback` | Task correction content | Derived owner feedback and hashes; no age sweep; task removal clears its task reference; explicit `all` purge deletes it. |
+| `task_note_uses` | Task child | Delivered note-use evidence; no age sweep; cascades with task/receipt and is explicitly cleared by `all` purge. |
+| `task_step_attempts` | Task child | Durable invocation attempts and outcome/error evidence; no age sweep; cascades with its task/step. Source erasure scrubs affected analysis errors. |
+| `telegram_updates` | Durable inbox/recovery | Only old `done` rows are telemetry-pruned. Pending work and terminal failures remain recovery evidence. `all` scrubs non-pending payload/error copies while retaining dedupe keys; the confirmed purge's own update is separately scrubbed by its handler. |
+| `tool_receipts` | Task child | Immutable tool identity/status/version and evidence; cascades with its task/step on `all` purge. Source erasure tombstones affected analysis payloads while preserving identities/accounting. |
+| `trace_events` | Trace child | Bounded diagnostic messages/data; cascades with its trace under telemetry retention. |
+| `traces` | Telemetry | Inbound/scheduler trace summaries; rows older than the configured cutoff are pruned. |
+| `urls` | Note child | Source URL rows; replaced on URL rewrite or cascaded with its message. |
+<!-- /documentation-contract:tables -->
 
-Embedding storage (retrieval): vectors in `chunks` are stored as
-**packed float32 BLOBs** (4 B/dim, ~5× smaller than the old JSON-text form and far
-cheaper to decode; `store.pack/unpack_embedding`, with a one-time JSON→BLOB
-`_migrate`). The retrieval hot path (converse grounding, ask)
-ranks via a **decoded-vector cache** keyed weakly on the connection object
-(`WeakKeyDictionary` — `id(conn)` aliased recycled connections) and invalidated
-by a fingerprint that pairs the cheap chunk aggregates (count / max rowid / id
-sum) with the durable **`vec_gen` generation counter**, bumped by every write to
-`chunks` AND by the `messages`-side category rewrites the cached rows carry
-(WP3 2026-07-25: the aggregate triple alone collided under SQLite rowid reuse
-and kept serving a deleted note's chunks; §12 has the full account). Embeddings
-are therefore decoded only when the data really changed — keeping the
-single-file, in-process design while deferring any need for a vector index well
-into the tens-of-thousands-of-chunks range. A `grounding.ranked` trace event logs
-chunk count + latency so that future decision stays data-driven.
+### Deletion and recovery boundaries
 
-Observability: `traces` · `trace_events` · `issues` (immutable incident evidence,
-`status=observed`, fingerprint) · `issue_patterns` (the normalized actionable lifecycle:
-`open`/`resolved`/`legacy`, occurrence count, resolution and context — 2026-07-13) ·
-`events` · `jobs` · `proactive_log`.
+Bulk purge requires its exact typed confirmation and an unchanged impact preview.
+Scope `all` removes notes/journal entries, categories, all reminder statuses,
+conversation, issue/correction/usage-metric content, task plans and children,
+artifacts, task feedback/note-use records, evaluation cases/runs, Mentor
+cycles/attempts/proposals, learned procedures/versions/events, and fleet
+request/report/context/transport content. It waits for task-worker, analysis and
+fleet quiescence and model accounting; failed acknowledgement preserves content.
+The committed database deletion and external-file cleanup have separate durable
+acknowledgements, so a pending cleanup is reported rather than called complete.
 
-Cascade deletes and the `purge` scopes keep related rows and media consistent;
-**`llm_usage` (spend history) and `preferences` (identity) are never purged.** The
-user-facing note number is the **stable `messages.note_no`** — assigned once, monotonic,
-never reused, permanent gaps on deletion (see Capabilities → Note numbering — STABLE);
-**reminder numbers** remain a contiguous **1..N display position** over active reminders
-(due order, from `reminders.id`) that compacts on fire/cancel. Neither ever changes the
-ids that attachments/embeddings/memory/calendar/fired-pending references rely on.
-Normal note/category/message deletion retains `note_outcomes`; only explicit
-`stats`/`all` scopes preview and clear that historical metric ledger — and since
-2026-07-25 a bulk note wipe ledgers `deleted_used`/`deleted_unused` on the fast
-whole-table path too, `stats` keeps `kind='journal'` category rows (that row IS the
-diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates`
-(non-`pending` rows; ids kept for redelivery dedupe).
+`all` retains `llm_usage`, `preferences`, journal definitions, protected memory,
+deployment/action/delivery identities, unrelated configuration and consumed
+authorization markers. It does not recall older checked backups or alter their
+rotation. Inbound and outbound content copies are scrubbed with dedupe keys kept;
+still-pending inbound work remains replayable except the confirmed purge update,
+which its handler explicitly scrubs. Source-specific note/journal/reminder purges
+also erase dependent new analysis snapshots and conclusions, preserving historical
+delivery/accounting identities and original unrelated dialogue/legacy tasks.
+
+`messages` spares every journal; a journal's own purge removes its entries/source
+messages but keeps its definition/category. `stats` preserves journal categories
+and conversation; `issues` targets only the issue ledger. Normal note deletion
+retains `note_outcomes`, while `stats`/`all` explicitly clear that metric history.
+Message/reminder deletion clears its named draft and reply-binding pointers;
+`all` alone restarts note numbering after clearing all notes and their outcome
+ledger. These are scoped content operations, not a complete erasure claim for
+protected memory, operational evidence, external copies or historical backups.
+
+### Source and identity design
+
+Source messages retain raw text/provenance; journal payloads, extracted facts and
+retrieval chunks are derived children. Packed float32 embedding BLOBs avoid
+repeated JSON decoding. A weak connection-keyed decoded-vector cache includes
+durable `vec_gen` as well as row aggregates, so row-id reuse and category-only
+rewrites cannot keep deleted or mislabelled grounding material alive.
+
+Stable note numbers are independent of SQLite row ids; only an explicit `all`
+purge resets the counter after deleting both live notes and usage outcomes.
+Reminder list numbers remain transient positions. Conversation stores turns to
+4096 characters and binds inbound deduplication/edits with update/message ids;
+long voice transcripts and already-clipped historical turns retain their stated
+limits. Per-consumer prompt bounds do not rewrite the stored conversation.
+
+No migration, purge scope, retention interval or memory policy changes merely
+because this map documents it. The manual map is checked against a synthetic
+`store.open_db` schema; it makes no perpetual production-state claim.
 
 ---
 
@@ -1911,9 +974,10 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
 
   (No `sqlite3` CLI on the box? The last step is
   `python3 -c "import sqlite3;print(sqlite3.connect('/var/tmp/cara-restore/restore.db').execute('PRAGMA integrity_check').fetchone()[0])"`
-  — which is what the monthly job runs. Putting the file back into service is
-  `systemctl stop tg-ingest-agent`, move it to `/var/lib/tg-ingest-agent/ingest.db`
-  (`chown tg-ingest:tg-ingest`, `chmod 600`, and remove any stale `-wal`/`-shm`), start.)
+  -- which is what the monthly job runs. This example checks an isolated copy.
+  Returning data to service requires the preservation and compatibility gates in
+  [CARA section 9](CARA.md#9-operations-runbook); no live database replacement is
+  authorized by an integrity check.)
 
   **What the check does NOT prove, stated plainly:** the passphrase file lives on the same
   droplet as the backups it protects, so a green result means "this archive and this key
@@ -1924,6 +988,24 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
 ---
 
 ## 10. Security
+
+Service isolation follows the current operations contract in
+[CARA §9](CARA.md#9-operations-runbook). The repository unit inventory is:
+
+<!-- documentation-contract:services -->
+| Unit source | Security boundary and policy |
+| --- | --- |
+| `tg-ingest-agent.service` | Owner-gated poller; protected application environment and SQLite, non-root `tg-ingest`. |
+| `cara-worker.service` | Enabled networkless worker; dedicated request/result spool, no application secrets or production DB. |
+| `cara-fleet.service` | Enabled restricted executor; fixed authenticated gateways and separate SSH identities, no application environment/DB access. |
+| `cara-mentor.service` | Retained, stopped/disabled reviewer; separate bounded inference configuration and read-only source snapshot. |
+| `cara-mentor-runner.service` | Retained, stopped/disabled networkless candidate runner; separate spool and no inference/Telegram credentials. |
+| `cara-failed-notify@.service` | Root failure-notice one-shot with fleet-notification credentials; not a persistent agent. |
+<!-- /documentation-contract:services -->
+
+The generated `whisper-server.service` is a separate loopback-only support
+unit. Retained disabled units and retired optional-denial paths do not authorize
+reactivation, deletion of evidence or a new recovery attempt.
 
 - **Owner-only:** a message/callback is processed only when both the chat id and
   the sender's user id are on the allowlist; everyone else is logged and ignored.
@@ -2004,12 +1086,16 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   variant; Cara won't claim a real-world action she didn't perform.
 - Off-box DB snapshots are encrypted before leaving the host; plaintext backup
   uploads are rejected. An independently retained recovery key outside the VPS/repo
-  must be verified; its existence is not inferred from a successful local check.
+  remains unverified; successful local archive checks do not establish key custody
+  or host-loss recovery. See the runbook before any recovery operation.
 - Secrets in `/etc/tg-ingest-agent.env` (0600), staged via files during rotation
   — never in argv, shell history, or the journal; access keys redacted from
   logged HTTP errors.
-- systemd hardening: non-root user, `NoNewPrivileges`, `ProtectSystem=strict`,
-  `PrivateTmp`, writable only in `/var/lib/tg-ingest-agent`.
+- systemd hardening: non-root business services, `NoNewPrivileges` and
+  `ProtectSystem=strict`, with each unit's explicit writable-path allowlist.
+  The poller owns application state and designated request/cancel spools;
+  worker results are read-only to it. Worker/fleet/reviewer boundaries remain
+  separate, as documented in the service and state-root tables.
 - Dedicated bot token and dedicated DO inference key (independent billing &
   revocation).
 - **Housekeeping:** voice notes and orphaned media auto-purged after processing;
@@ -2029,173 +1115,44 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
 
 ## 11. Operations
 
-- **Host:** PD-VPS, `174.138.108.85:22` (SSH key-only; details in the PD-VPS KB).
-  systemd services `tg-ingest-agent`, `cara-worker`, `cara-mentor`, and
-  `cara-mentor-runner`; app `/opt/tg-ingest-agent/`, app state
-  `/var/lib/tg-ingest-agent/`, isolated worker state `/var/lib/cara-worker/`,
-  Mentor state `/var/lib/cara-mentor/`, networkless runner state
-  `/var/lib/cara-mentor-runner/`, and immutable candidate source
-  `/opt/cara-mentor-source/`. The former Pilot-VPS is retired.
-- **Mentor isolation:** `/etc/cara-mentor.env` contains only the copied
-  inference credential and bounded reviewer settings; the runner's env contains
-  only its test timeout. One-way spool ownership prevents either service from
-  replacing Cara-owned requests. The Mentor cannot read production state or
-  writable source, and the runner has `PrivateNetwork=yes`. Deployment
-  verification checks unit hardening, process environments, protected-path
-  denials, spool ownership/deletion, source hash/version equality, and a real
-  paid-call-free candidate canary that runs the full suite.
-- **Deploy:** single-connection `deploy.sh` (tar → test → install → verify) with
-  an idempotent installer that backs up replaced files, preserves env, gates on
-  `py_compile`, and restarts only when secrets are complete; `--pull`/`--rollback`
-  supported.
-- **One copy of each operational truth (2026-07-26, review WP10).** The installer used
-  to carry its own heredoc of the systemd unit AND its own 40-line env template, with the
-  tracked `tg-ingest-agent.service` and `tg-ingest-agent.env.example` sitting beside them
-  as documentation nobody deployed. They had already drifted (different budget defaults,
-  dozens of missing keys, no `STT_MODE` — whose default `remote` ships voice audio off the
-  box). Now `deploy.sh` ships both files and the installer installs them
-  (`install -m 0644` for the unit, `install -m 0600` for the env — the latter ONLY when
-  `/etc/tg-ingest-agent.env` does not exist, because the installer runs on every deploy).
-  Two invariants are pinned by tests: the installer contains no `[Service]` heredoc, and
-  the seeded env still matches the installer's `^KEY=REPLACE_ME` guard (the `=` is
-  load-bearing) so a fresh box stays stopped until its secrets are filled in. The unit
-  also gained the cheap sandbox directives; `SystemCallFilter=@system-service` is the one
-  thing the suite cannot prove, because the failure lands on a FORKED child (ffmpeg,
-  whisper-cli, openssl) — the unit file names the check and the escape hatch. It is paired
-  with `SystemCallErrorNumber=EPERM` (2026-07-26 review): the default action is SIGSYS, and
-  with `Restart=always` + `RestartSec=10` a killed MAIN process could never reach systemd's
-  start limiter (5 starts per 10 s), so an incomplete filter would have been an indefinite
-  crash loop instead of a unit that fails and stays failed. An errno the code raises and
-  logs is the recoverable version of the same block.
-- **Ops scripts (2026-07-26).** Binding an owner is no longer implicit: `bootstrap_chat_id.py`
-  demands the expected id, lists candidates otherwise, refuses to run against a live
-  poller (instead of a raw 409 traceback), and replaces the env file through a
-  temp+`fsync`+`os.replace` with a `.bak`, since the old truncate-and-write could take the
-  bot token and the DO key with it (a stale `.tmp` from a killed run is now explained
-  instead of raising a bare `FileExistsError`, and the `.bak` is re-chmodded 0600 even when
-  it already existed). Reading the queue is deliberately shallow: a plain **no-offset**
-  `getUpdates` is the only call the Bot API promises consumes nothing. The first WP10
-  implementation paged BACKWARDS with negative offsets on the reading that a negative
-  offset "confirms nothing"; the API documents the opposite in the same paragraph ("all
-  previous updates will be forgotten"), which would have made the fix destroy exactly what
-  it was written to protect. Negative paging is now the opt-in `--deep-read` for a flooded
-  queue, and it prints what it discards. Even opted-in it is ONE `offset=-limit` call
-  (2026-07-27): the first destructive read leaves only the newest page in the queue, so a
-  second, deeper offset has nothing older left to address — the earlier ten-page "pager"
-  re-read the same window on page two, and its "reaches the END after up to 1000 updates"
-  promise was unkeepable. Update ids are sequential, so a tail window starting more than
-  one id past the oldest page proves updates in between were destroyed unseen — that GAP
-  is what the operator is warned about now. `apply_token.py`/`apply_do_key.py` validate BEFORE
-  they write and append a missing key line rather than silently doing nothing; all three
-  refuse a duplicated key rather than half-updating it (systemd honours the LAST
-  assignment), report that refusal as a message instead of a traceback, and substitute with
-  a callable so a backslash in a secret is not read as a regex escape.
-  `stt_probe.py` is labelled for what it is (2026-07-26, review T14.5): a MANUAL research
-  tool, imported by nothing, that calls the inference endpoint directly — so its four probes
-  are **unmetered**, bypassing the budget guard, `llm_usage` and the spend report by design
-  (the point is to discover which model slugs answer at all, before anything can be priced).
-  Its `except (URLError, Exception)` printed a typo in the script as a probe "FAIL" against
-  the endpoint — exactly the wrong conclusion for a research tool — and now catches transport
-  errors only, letting programming errors raise.
-  `migrate-cara-to-pd.sh` stages secrets outside the OneDrive-synced repo, cleans up on
-  every exit path, and creates the remote snapshot 0700 under `umask 077`. `deploy.sh`
-  names the scripts it ships instead of globbing `*.sh`, so no future one-shot at the repo
-  root can ride onto the live box (`migrate-cara-to-pd.sh`, which stops services and
-  overwrites the env file, is deliberately not shipped and is syntax-checked in a checkout).
-- **The env catalogue is enforced, not maintained by hand (2026-07-26, review WP11).**
-  WP10 made `tg-ingest-agent.env.example` the file that seeds `/etc/tg-ingest-agent.env`
-  on a fresh box; the same audit found it missing **23 keys** `common.load_config` reads,
-  and the "Vision-capable model id" comment sitting over `DO_CHAT_MODEL` — an operator
-  following it verbatim would swap Cara's main chat model for a vision model, and one
-  rebuilding a host from it would lose photo description (`VISION_MODEL` undocumented and
-  therefore empty) with nothing said. The keys were added and the comment moved, but the
-  durable part is the **guard test**: it AST-walks every function in `common.py` that
-  takes an `env` parameter (so a future helper split out of `load_config` is covered
-  without anyone remembering), collects the literal keys read from it, and diffs that set
-  against every key the example carries commented or active — failing in **both**
-  directions, so a dead knob or a typo (`VISON_MODEL=`) is caught as loudly as a missing
-  one. Chosen deliberately in the shape of the `MODULES` guard: that list crash-looped
-  production once, got a mechanical test, and has not drifted since; the env had no
-  guard and drifted by 23 keys. **Names were not enough (same day, review round 2):**
-  every template line's VALUE is now loaded through `common.load_config` too, because
-  every commented line in that file is one uncomment away from production — a documented
-  `QUIET_HOURS_START=22:00` would pass a names-only guard and then raise inside `int()`
-  at startup, which systemd turns into a restart loop. The values are also compared
-  against the code defaults (a named `ILLUSTRATIVE_VALUES` list holds the deliberate
-  exceptions: the box's real budgets, the `REPLACE_ME` placeholders and example values
-  for knobs whose default is empty), and a duplicate-key check catches the class that
-  shipped here — a prose sentence beginning `# STORAGE_BACKEND=spaces, else …`, which
-  documented that key twice and looked exactly like a line to uncomment. The key-set
-  guard also pins its own SHAPE (`env.get("LITERAL")` only, no `env[...]`, no computed
-  key), because a read it cannot see is a key it cannot require.
-- **Two doc facts are now machine-checked (2026-07-26).** The specs are not in
-  `deploy.sh`'s payload, so a doc invariant skips cleanly on the box and really runs in
-  a full checkout — which is where CI runs the suite. Both facts had already rotted
-  under hand-maintenance: the hard-coded test count was wrong three times over
-  (456 → 529 → 575), so no spec may carry a `\d{3,4} tests` phrase at all; and
-  SOLUTION.md's purge capability row listed six scopes for nine days while
-  `store.PURGE_SCOPES` had seven, so every member of that tuple must appear in the row.
-- **The suite is now guarded against lying about itself (2026-07-26, review WP12).**
-  Three tests asserted less than they claimed. `test_overdue_is_urgent_and_bypasses_cap`
-  planted its "cap already spent" row through `proactive_log_add` **without `day=`**, so
-  the row took the real wall-clock date while `run()` was driven at a fixed 2026-06-15:
-  the cap was never spent, and the test passed with the urgent-bypass logic *deleted* —
-  verified by deleting it (`not urgent and …`) and watching the whole suite stay green,
-  which also showed that nothing else covered that branch. It now pins the day, asserts
-  the spent count, and asserts the inverse — a non-urgent candidate in the same DB is
-  suppressed with the `daily cap` reason, which is the only thing that proves the cap
-  real. The `ask`-prompt test's `assertIn(…) if "didn't find" in … else None` was an
-  expression, not an assertion, and its condition never held (the prompt phrases honesty
-  differently); it now pins the wording the prompt actually carries. `EventJobTests` ended
-  in `runtime._HANDLERS.clear()`, erasing the production handlers every constructed Agent
-  registers — a process-global wipe that made later tests depend on test ORDER; it now
-  snapshots in `setUp` and restores in `tearDown` (the pattern WP7 used for
-  `llm._UNPRICED_SEEN`), and the proof runs `EventJobTests` in-process with a foreign
-  handler already in the registry. Three standing guards were added, one per silent
-  failure mode. (a) No duplicate method or class name may shadow an earlier one in these
-  files — every method, not just `test*`, since a shadowed `setUp` changes the fixture
-  for a whole class; not revert-proven, nothing duplicates a name today. (b) No `ast.Expr`
-  statement may be a conditional expression (`IfExp`/`BoolOp`) — the exact shape of the
-  `ask`-prompt bug, which is invisible by eye; this one IS revert-proven: run against the
-  pre-fix file it flags that line and nothing else in ~15k lines. (c) The CI unit job must
-  keep `timeout-minutes: 10`, asserted inside the slice bounded by that job's own block —
-  the first version split on `\n  unit:\n` and read to EOF, so once a second job existed
-  its timeout would have satisfied the check after the unit job's own was deleted: a guard
-  that cannot trigger, which is the class of defect this whole review keeps finding. That
-  job's honest scope is now written
-  into the workflow: one pinned CPython with no optional system packages, so the pdfminer
-  path and parity with the box's distro `python3` are exercised ONLY by `deploy.sh`'s
-  on-VPS run; conversely the repo files outside the deploy payload (the specs, the
-  workflow) are checked in CI and skip on the box.
-- **README is a pointer, not a spec (2026-07-26).** It still described the pre-2026-07
-  system and contradicted the code on about five points (stickers/videos "ignored",
-  "unbounded media growth", a clarifying-question router, no `local_server` STT, a
-  10-module layout). Rather than re-synchronising a third document forever, its
-  Skills/Guardrails/Module-layout/Known-limitations sections were replaced by links, and
-  it now states outright that `CARA.md` and `SOLUTION.md` are the maintained specs. What
-  it keeps is what lives nowhere else: one-time setup, the deploy/test commands, the
-  chat-id bootstrap, the VPS layout table and the verification queries.
-- **Repo:** `git@github.com:promptinvest/tg-ingest-agent.git` (own deploy key);
-  pushed after every commit.
-- **Tests:** the full offline suite (no network; temp SQLite) — deliberately not a
-  number here, because every count this file has ever carried went stale within days
-  (2026‑07‑26). Run on the VPS as part of every deploy and in GitHub Actions — including a
-  **golden-transcript harness** that replays
-  end-to-end scenarios through `handle_update` (LLM scripted per skill, Telegram
-  captured) and asserts replies, DB writes, and **no state change before
-  confirmation** (an un-scripted LLM call fails the scenario).
-- **Observability:** journald (routing decisions with risk + confidence,
-  per-row lifecycle), `traces`/`trace_events`, `llm_usage` for spend, `issues`
-  and `proactive_log` for behavior, weekly digest + trace-summary export.
-- **Footprint:** tens of MB RSS; disk a small fraction of 48 GB.
+[CARA §9](CARA.md#9-operations-runbook) is the single operations runbook: service
+roles, schedules, state roots, verification and compatible source recovery.
+The accepted release and private operator receipts provide dated deployment
+history; current health requires a fresh observation. Historical specification
+checkpoints remain preserved in the linked archive.
+
+Operational facts have one source each: tracked service files and installer
+`MODULES`, the environment template checked against literal configuration reads,
+and the checkout documentation maps. The installer preserves a populated
+environment and never infers readiness from a successful copy or active process.
+Current release gates qualify the renamed `agent.py` payload, stopped data,
+protected settings, sandbox boundaries, scoped reads and native acceptance.
+A documentation-only publication with identical runtime bytes requires no
+production restart or invented runtime-acceptance receipt.
+
+Operator utilities preserve their existing contracts: owner bootstrap needs an
+expected identity and refuses a live poller; token/key writers validate before
+atomic replacement, reject duplicate keys and protect backups. Ordinary queue
+inspection uses one no-offset `getUpdates` call; destructive `--deep-read` is
+explicit and discloses the lost prefix. `stt_probe.py` remains a manual unmetered
+research tool outside application budgets. Migration and other completed one-shot
+helpers are not part of the named deployment payload and must not be replayed.
+
+The offline suite uses scripted model calls, captured Telegram and synthetic
+SQLite state. Normal and shuffled orders preserve process-global registries.
+CI checks checkout documents/workflows and one pinned CPython; Linux VPS scratch
+checks distro Python and optional PDF support. Guard tests reject duplicate class
+or method definitions, conditional expressions masquerading as assertions,
+missing environment keys/default drift, stale purge scopes and hard-coded suite
+counts. The CI unit job remains time-bounded. Runtime verification includes
+installed-layout behavior; source-layout or process-health checks alone are
+insufficient for a deployment.
 
 ---
-
 ## 12. Roadmap / known gaps
 
 > **Improvement backlog (2026-09-07 review):** the ordered backlog is the ADR index in
-> [`docs/adr/README.md`](docs/adr/README.md) (28 proposed decisions, status-tracked per
-> file). This section keeps the accepted limits and the closed items; an ADR that changes
+> [`docs/adr/README.md`](docs/adr/README.md) (status-tracked per file). This section keeps the accepted limits and the closed items; an ADR that changes
 > a limit rewrites the sentence here when it is implemented.
 
 - Google Calendar sync dormant until a service-account key is provisioned (.ics
@@ -2229,31 +1186,16 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   — the registry is closed and only `gratitude` is active.
 - **TTS** (Cara replying with voice) is the one researched-but-unbuilt item —
   parked pending a decision (a real engine install on a small box).
-- **Conversation turns are stored to 4096 characters** (2026-07-26, review WP11) —
-  Telegram's own message maximum, so for every TYPED turn a stored turn is the whole
-  turn and the verbatim readback `recall_conversation` promises is literally true. It
-  was 1000, which clipped a long pasted or forwarded message and then read the clipped
-  version back as his words. **One inbound path is not bounded by Telegram's limit and
-  is still clipped: a transcribed voice note** (`handle_update` overwrites the message
-  text with the transcript; neither `llm.transcribe` nor `transcribe_voice` caps its
-  length, and `STT_LOCAL_TIMEOUT_SECONDS` allows minutes of dictation), so the promise
-  is about typed messages, not about a long dictation. The honest cost: every prompt
-  that replays this table pays it — router (14 turns), converse (20), the ingest
-  referential context (8) and the memory curator (12) — because `convo_replay_text`
-  applies no length bound, i.e. the replayed history is bounded by turn COUNT only. Up
-  to four times the input tokens of the old clip, and **forwarded posts are the ordinary
-  long turn** (every forward's text is stored as a conversation turn), so that is the
-  common case rather than the rare one; at the far end it is a context-window risk and
-  not only a budget one. Accepted deliberately — storage stays verbatim because the
-  readback is the promise this table exists for, and the surgical fix if cost ever bites
-  is a per-row clip at the router/converse call sites. `recall_conversation` keeps its
-  own separate 7000-character render budget, unchanged — but that budget now covers
-  **fewer turns** (under two maximum-length turns where the old cap fitted six, oldest
-  sliced mid-word and unmarked): truer per turn, shorter per conversation. Both halves
-  are pinned by tests on the READER, not only on the stored row.
+- **Conversation storage and prompt context:** stored conversation turns retain
+  up to 4096 characters for faithful readback; a long transcribed voice turn can
+  exceed that storage bound. Recall has a separate 7000-character render budget.
+  Router history is deliberately clipped per turn with a bounded set of explicit
+  references retained (`router.py`); verbatim storage does not imply full replay
+  into every prompt. Other callers retain their own existing context limits.
 - Deferred by design (single-user posture): multi-channel adapters, any web
-  console/webhooks, MCP adapter, independent multi-agent processes, plugin
-  marketplace, and shell/browser automation — none are implemented.
+  console/webhooks, unrestricted multi-agent processes, plugin marketplace and
+  shell/browser automation. Optional read-only MCP and the restricted worker/fleet
+  executors are implemented within their closed authorization boundaries.
 - **Closed by the 2026-07-24 review programme, so no longer listed as gaps:** the
   disk-full crash-loop class (WP1/WP2 — leaked snapshots, retention that skipped
   itself precisely when the disk was full, an unguarded update path, a low-disk
@@ -2264,146 +1206,3 @@ diary's protection), and `all` scrubs the verbatim payloads in `telegram_updates
   memory consolidation that could drop a CONFIRMED fact (WP9), and edit-blindness
   (WP9 — `allowed_updates` never asked for `edited_message`, so an edit was never
   delivered at all; §3, with its remaining honest exclusions in CARA.md §10).
-```
-
-## Evidence-bound procedural learning — October 13, 2026
-
-The first learning release adds `learning.py` within Cara's existing process.
-Supported normal owner corrections create source-bound lesson versions; completed,
-successfully delivered task workflows create input-free recipes from validated
-plans and successful receipts. Relevant lessons reach conversation, routing and
-planning. Existing normal standing guidance also reaches matching router/planner
-requests without backfilling or changing historical memory rows. Learned procedures
-cannot override current instructions, tool availability, permissions, source
-bindings, fresh write approvals, budgets or fixed policy.
-
-`/learning` lists new procedural lessons. `/learning undo N vV` disables the exact
-current lesson version, retaining prior versions, the undo event and original
-source memory. Automatic capture cannot re-enable a disabled rule. A rejected,
-changed or missing source, outdated tool contract or negative task feedback stops
-reuse. Purge-all includes the derived lessons; other purge scopes keep their
-existing meanings. Lesson IDs are monotonic to prevent a stale undo binding to a
-new lesson after purge.
-
-The bounded scheduler learns at most five newly delivered tasks per minute.
-A durable startup cutoff excludes old completed tasks; no old Mentor cycle or
-delivery is replayed. Learning adds no model calls; existing curator/router/planner
-calls keep their current budget gateway. Structural/provenance checks are recorded;
-practical quality improvement is explicitly unmeasured until new observations
-establish it. This first release does not create new executable tools or deploy
-code fixes automatically. The monthly digest and retained disabled Mentor units
-remain. See [ADR-0030](docs/adr/ADR-0030-evidence-bound-procedural-learning.md).
-
-Accepted deployment October 13: source `7de363c`, build `05f8e80d1687`, receipt
-`387cd0c8d238f0b087484eaa`. Exact 1,743-case gate passed (nine unchanged skips);
-all 59 installed source files and protected historical rows verified.
-[Release and preservation record](docs/cara-learning-2026-10-13.md).
-
-## October 24 - Descriptive facts contract and reviewed publication
-
-CF-01 now has a versioned, validated descriptive schema and an operator publisher.
-Scalar facts, placement relations, lifecycle exclusions, completeness and source
-check times remain distinct. Conflicts/unknowns stay explicit; history and exclusion
-records cannot silently disappear. Facts grant no execution target or permission.
-The workstation exporter verifies reviewed source hashes and publishes only the
-sealed sanitized projection; raw sources and the private source register stay local.
-Root-owned Linux installation atomically retains the last good revision and receipt.
-
-The contract/publisher pass 70 focused isolated Linux tests. Publication, periodic
-source-change review and production installation are still pending; no package is
-complete and no new schedule is installed. See the incremental runbook and backlog.
-## October 24 - Budgeted nonblocking fleet inference primitive
-
-The shared LLM client now separates owner-thread preparation/accounting from bounded
-connection-free transport. A fleet profile pump reuses the existing profile retry,
-failover, cooldown and JSON/length policy without blocking the owner loop. Immutable
-source/input/inventory/facts/capability bindings and a persisted reservation callback
-precede paid transport. Unknown paid outcomes are settled conservatively and are not
-resent. One background transport leaves one of the unchanged two global slots for
-foreground requests; budgets, model configuration and providers are unchanged.
-
-Eighteen focused isolated Linux cases pass, including foreground access while a
-background request is blocked and database/error/cancellation boundaries. Durable
-fleet phase integration, queue rollout and production acceptance remain pending.
-## October 24 - Closed project-read contracts and dispatch adapter
-
-CF-05 adds a separate versioned read scope with canonical project IDs and a closed
-capability registry. Selected projects derive their full configured host union;
-project-only reads collect only their root-mapped files, containers and components.
-The executor discovers the scoped gateway contract before reading and reports a
-capability gap on older gateways, with no broad legacy retry. Existing host/all
-observations and the exact worker-restart card/wire retain their original meaning.
-
-Release, application checks, containers, runtime components, verified backups and
-development evidence stay distinct. Missing backup/development adapters return
-not-configured; process activity does not establish project health or progress.
-Thirty-two isolated Linux contract/dispatch cases pass. Runtime composition,
-production gateway binding and full acceptance remain pending; CF-05 is partial.
-## October 24 - Descriptive query and answer obligations
-
-The shared CF-02 catalog query contract lets the existing planner select canonical
-subjects, requested fields, detail and prose/list/table/names presentation. Code
-resolves inherited/all scope and placement relationships, renders every requested
-cell from validated facts, and preserves conflicts, specific unknowns, completeness
-and evidence dates. Model prose cannot supply a fact or execution authority.
-Optional no-model shortcuts provide question-aligned fallback during outages.
-
-Thirty-four isolated Linux query cases pass, including frozen obligations from
-17 catalog specifications in the unchanged original corpus. This is contract
-qualification, not a claim that free-form model behavior or all 47+15 scenarios pass.
-Full-dispatch integration and actual-model/release acceptance remain separate gates.
-## October 24 - Offline MCP facts parity contract
-
-CF-07 now has an optional stdio facts adapter/client over the same validated query
-cells. The pinned modern protocol uses per-request version metadata and discovery;
-trusted local root-owned configuration binds caller scope. Discovery cannot grant
-new tools or authority. Scope denials are not bypassed, and interface failure uses
-the same already-bound internal facts and answer obligations. Transport has bounded
-output/deadline/concurrency, an explicit restricted environment and no extra model.
-
-Twenty-seven isolated Linux checks pass. This is an offline facts-only increment:
-no production endpoint/client is enabled, no investigation/project API or Tasks is
-advertised, and no new content ledger exists. Durable read parity, unprivileged
-installation, owner-loop responsiveness and complete CF-07 acceptance remain open.
-## October 24 - Integrated fleet business implementation
-
-The current candidate routes published address/provider/placement facts to local
-obligations, uses the existing budgeted planner for free-form RU/EN fields/format,
-and combines catalog and selected live answers without broadening project scope.
-Known facts remain available during executor/model outages. Corrections retain
-canonical owner scope; runtime formatting can reuse retained evidence with its
-original timestamp and no extra host probe. Meaningful names survive cleanup.
-
-Model transport runs outside the owner loop with durable source/revision/reservation
-bindings, unknown-paid no-resend recovery and foreground capacity. Exact executor
-readiness enables separate queue/start deadlines and cancellation receipts; legacy
-uncancelled envelopes/cards remain compatible. A typed all-content purge now counts
-fleet content/copies, quiesces transport/model work, renews changed previews and
-recovers by the same nonce. Budgets, preferences, facts, backup/release evidence and
-consumed effect markers are retained. An explicit installed lifecycle setting keeps
-this coverage when fleet investigation is disabled; malformed settings fail closed.
-
-Shared explanatory guidance honors confirmed preferences/current requested detail.
-Ordinary fleet replies show question-relevant evidence and material gaps; explicit
-detail retains full reports/page receipts. The shared task broker gains only local
-fleet.lookup, with canonical owner authority, actual-facts revalidation, useful
-answers and existing immutable receipts. A narrow validated projection preserves
-structural hashes while rejecting secret-shaped free text; legacy redaction stays.
-
-Focused Linux evidence includes 25 original-corpus/parity business tests, 36 query,
-26 broker, 28 lifecycle, 17 executor queue and 12 queue-client cases, alongside
-existing fleet/task/backup checks. The 47+15 source specifications are unchanged.
-Actual-model qualification exposed a valid relation-names plan, now resolved in
-code without hiding partial/unknown relations; fresh qualification is pending.
-Full exact-source normal/shuffled tests, CI, private facts/gateway publication,
-backups/runtime/sandbox checks and guarded deployment are still required. No CF
-package is complete. Advanced project adapters and durable MCP reads remain later
-independent increments; MCP is not enabled by this candidate.
-
-The exact-source full gate for76ecf87 passed the remaining suite and failed the unchanged config-catalogue check because the new lifecycle setting was missing from the environment example (nine unchanged skips). The correction documents its defaultfalse and installedtrue semantics only; Python runtime and model prompts are byte-identical. The original archive/log/failure and successful six-case model receipt are retained. Fresh full gates remain required; no assertion or runtime guard is relaxed.
-
-The shared registry regression asserts the admitted source-bound read and its exact risk, budgeted-model and delivery contract; effect tools remain absent. The retained old unimplemented-read expectation was corrected after full-gate failure, without changing runtime behavior.
-
-Fleet task planning now describes the closed catalog field array, full literal investigation clause and existing grounded answer contract. Invalid model selectors remain rejected. Offline fixture helpers explicitly isolate facts from installed production publications; application defaults are unchanged.
-
-Task planning receives the exact source character count for literal bindings; model-supplied spans remain fully validated. Test Agent fixtures carry their own absent facts path through full dispatch.

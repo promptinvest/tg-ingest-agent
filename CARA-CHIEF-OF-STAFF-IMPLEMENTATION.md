@@ -1,5 +1,10 @@
 # Cara Chief-of-Staff Upgrade
 
+> **Status: historical implementation reference.** The shipped capabilities and
+> current boundaries are maintained in [CARA.md](CARA.md) and
+> [SOLUTION.md](SOLUTION.md); [the ADR backlog](docs/adr/README.md) tracks remaining
+> work. Approval, sequence and rollout instructions below describe their original
+> dated plan and do not authorize replaying completed work or one-shot helpers.
 Status: shipped and production-verified
 Decision date: 2026-07-29
 
