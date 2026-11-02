@@ -112,19 +112,11 @@ Only one poller may hold a bot token: never run the agent, a test, or a manual
 
 ## Backups
 
-Off-box database backups require `BACKUP_ENCRYPTION_KEY_FILE` (default
-`/etc/tg-ingest-agent-backup.key`). Keep a recovery copy outside both the VPS
-and this repo. Restore an `.enc` object with OpenSSL AES-256-CBC, PBKDF2 and
-`-iter 200000`, then gunzip the resulting `.db.gz`.
+The backup policy, protected state roots and recovery limits are documented in
+[CARA section 9](CARA.md#9-operations-runbook). Keep independently retained key
+custody distinct from an on-box integrity check; it remains unproved.
 
-## Quick verification queries (on the VPS)
+## Operational checks
 
-```bash
-sqlite3 /var/lib/tg-ingest-agent/ingest.db \
-  "SELECT id, category, status, substr(summary,1,60) FROM messages ORDER BY id DESC LIMIT 5;"
-sqlite3 /var/lib/tg-ingest-agent/ingest.db \
-  "SELECT day, skill, model, ROUND(SUM(cost_usd),4) FROM llm_usage GROUP BY day, skill, model;"
-sqlite3 /var/lib/tg-ingest-agent/ingest.db \
-  "SELECT id, title, due_utc, recurrence, status FROM reminders ORDER BY id DESC LIMIT 5;"
-journalctl -u tg-ingest-agent -n 30 --no-pager
-```
+Use [CARA section 9](CARA.md#9-operations-runbook) for current verification and
+recovery. Inspect owner content only within the authorized diagnostic scope.

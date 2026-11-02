@@ -9,6 +9,9 @@ prompts, schema, budgets, stored history or service activation.
 The source-recovery documentation guard follows the recipe into the single
 CARA runbook and also pins its existing compatibility/data-preservation warnings.
 
+The documentation contract is verified; [the implementation record](docs/cara-adr27-2026-11-02.md)
+retains test results, limitations and publication evidence.
+
 Current specification text describes present behavior. Historical release
 checkpoints and the complete previous specification remain in the
 [byte-exact pre-ADR0027 archive](docs/history/SOLUTION.pre-adr27-2026-11-02.md).

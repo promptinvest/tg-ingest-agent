@@ -1,0 +1,84 @@
+{
+  "schema": "cara.adr27-verification/v1",
+  "status": "verified_documentation_and_checkout_guards",
+  "implementation_source": "196a3e5b58a79f9d8abfeb1d8f784645a4d9c4ba",
+  "source_archive_sha256": "3f8ae3050cf579d78156bbed6c1297eb8ee221cc13ed81f2ba6a4aab3f58e875",
+  "scope": {
+    "runtime_files_changed": false,
+    "schema_changed": false,
+    "production_installation": false,
+    "service_restart": false,
+    "paid_calls": 0,
+    "application_tables": 55,
+    "sqlite_internal_tables": 1,
+    "shipped_python_modules": 95,
+    "service_definitions": 6
+  },
+  "ci": {
+    "run_id": 41408739155,
+    "job_id": 125156647520,
+    "status": "success",
+    "source_commit": "196a3e5b58a79f9d8abfeb1d8f784645a4d9c4ba",
+    "normal": {
+      "tests": 3334,
+      "skipped": 62,
+      "seconds": 96.737
+    },
+    "shuffled": {
+      "tests": 3334,
+      "skipped": 62,
+      "seconds": 95.514,
+      "seed": 20261007
+    },
+    "compile": "passed",
+    "full_f_rules": "passed",
+    "operator_helper_suites": "passed",
+    "shell_syntax": "passed",
+    "shellcheck": "passed"
+  },
+  "linux_focused": {
+    "source_commit": "196a3e5b58a79f9d8abfeb1d8f784645a4d9c4ba",
+    "tests": 41,
+    "skipped": 0,
+    "seconds": 7.939,
+    "returncode": 0,
+    "log_sha256": "a620a31e7682ded9e3db3412497b996a5c5d3bdcb9ae77746ea9d3b9beb70be9"
+  },
+  "linux_stage": {
+    "source_commit": "c9a28caa8ac37e89c68afc97fb269ccbd214205f",
+    "archive_sha256": "17f2eacbbcaf4414436fd5bc2c6911be988f9aa442d5b26dd9f7a64ba14d9e53",
+    "installed_layout": "passed",
+    "normal_report": {
+      "tests": 3334,
+      "skipped": 9,
+      "seconds": 232.758,
+      "reported_result": "OK"
+    },
+    "terminal_supervisor_receipt": null,
+    "ssh_transport": "incomplete; local connection stopped after targeted remote process audit",
+    "shuffled_run_launched": false,
+    "complete_native_gate_claimed": false
+  },
+  "preserved_failures": [
+    {
+      "ci_run_id": 41407653059,
+      "source": "9e1c9f216241cb8c3251d82c0b5de7f221bb6d2b",
+      "causes": [
+        "purge scope enumeration omitted from condensed documentation",
+        "dated cache fixture aged outside real rolling week"
+      ]
+    },
+    {
+      "ci_run_id": 41408298311,
+      "source": "c9a28caa8ac37e89c68afc97fb269ccbd214205f",
+      "cause": "old documentation assertion required moved recovery recipe in README"
+    }
+  ],
+  "archives": {
+    "CARA.md": "ab2b6d8c4deb934bd1a3c49c9d10be1b32973a1bdd00c9f84de9faf4e5233715",
+    "SOLUTION.md": "220e2498d2dccdb6718746881ce85ded567740daeffbfc0d906ad2d0e0dc1c24",
+    "byte_exact_to_source": "8ed48bd8dee325d3e5760c64bfa1d9867613fdca"
+  },
+  "production_runtime_retained": "75f0f345a6a0195bcad519045ab8473abcfa72d5",
+  "next_reconciled_adr": "ADR-0018 narrow follow-ups; existing owner/evidence boundaries remain"
+}

@@ -6,6 +6,9 @@ ADR-0027 adds documentation coverage checks and freezes a cache-report test cloc
 to its existing fixture date, without changing installed runtime,
 prompts, schema, budgets, stored history or service activation.
 
+The documentation contract is verified; [the implementation record](docs/cara-adr27-2026-11-02.md)
+retains test results, limitations and publication evidence.
+
 Current specification text describes present behavior. Historical release
 checkpoints and the complete previous specification remain in the
 [byte-exact pre-ADR0027 archive](docs/history/CARA.pre-adr27-2026-11-02.md).
