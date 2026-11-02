@@ -10,7 +10,8 @@ failed before installation at the online-to-stopped data comparison. The accepte
 ADR-0018 services were resumed and independently checked; the new generic undo
 command is not live. The [release hold](docs/cara-adr24-release-2026-11-02.md)
 records the preserved failure and the proposed single-timestamp guard decision.
-Detailed operator receipts remain private; the public record gives source and test status.
+The public record gives source and test status; detailed operator receipts and
+consumed attempt identities are retained in the private operator workspace.
 
 ADR-0027 adds documentation coverage checks and freezes a cache-report test clock
 to its existing fixture date, without changing installed runtime,
