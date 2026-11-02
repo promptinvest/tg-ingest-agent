@@ -3,6 +3,14 @@
 The accepted runtime is ADR-0018 source `6e947694` (build `ee4aa3446c7d`).
 Native acceptance and the independent audit are recorded in
 [the release record](docs/cara-adr18-release-2026-11-02.md).
+
+ADR-0024 source `2b6da6ee` is implemented and verified, merged through
+[PR 15](https://github.com/promptinvest/tg-ingest-agent/pull/15). Its deployment
+failed before installation at the online-to-stopped data comparison. The accepted
+ADR-0018 services were resumed and independently checked; the new generic undo
+command is not live. The [release hold](docs/cara-adr24-release-2026-11-02.md)
+records the preserved failure and the proposed single-timestamp guard decision.
+
 ADR-0027 adds documentation coverage checks and freezes a cache-report test clock
 to its existing fixture date, without changing installed runtime,
 prompts, schema, budgets, stored history or service activation.
@@ -205,8 +213,8 @@ or `task_start` creates a bounded durable plan whose steps pass the broker and
 pause on exact approval where required → reply sent; conversation, task,
 receipt, trace and issue tables updated.
 
-**Pre-router and parameters:** `PRE_ROUTER` holds guard order and allowed pending
-kinds; a behavior matrix pins winners and state refreshes before model dispatch.
+**ADR-0024 source, awaiting deployment — pre-router and parameters:**
+`PRE_ROUTER` holds guard order and allowed pending kinds; a behavior matrix pins winners and state refreshes before model dispatch.
 Its per-turn context retains fired-reminder restoration evidence through model
 and budget failures. `skill_manifest.PARAM_CONTRACTS` describes every router
 action's optional fields. Validation refuses unusable supplied shapes while
@@ -214,8 +222,8 @@ preserving existing missing-field questions/defaults, scalar coercions, safe
 handler-validated selectors and ignored extension fields. Existing analysis and
 unsupported-schedule guards retain their original precedence.
 
-**Latest supported action inverse:** the explicit «отмени последнее действие» /
-“undo last action” command uses a per-chat ten-minute record for reminder close,
+**ADR-0024 source, awaiting deployment — latest supported action inverse:**
+the explicit «отмени последнее действие» / “undo last action” command uses a per-chat ten-minute record for reminder close,
 reschedule/rename and note category/lifecycle mutations. A narrow local transaction
 commits each existing mutation and its inverse record together without moving
 network calls into the transaction. Undo verifies stable identity and the exact
@@ -854,7 +862,7 @@ failures, spend, conversation and memory are not silently aged out.
 | `jobs` | Terminal telemetry | Only `done`/`failed` rows older than the configured cutoff are pruned; pending/claimed work remains. |
 | `journal_definitions` | Protected configuration | Stable journal identity, category and opt-in prompt settings; retained by every content-purge scope. |
 | `journal_entries` | Journal child | Validated derived payload tied to a source message; manually deleted before the message. Journal purge retains the journal definition/category. |
-| `kv` | Mixed durable state | Configuration, counters, recovery markers and bounded context/drafts; targeted consumption/removal only. One `action_undo:<chat>` record is replaced by the next supported mutation or consumed by successful undo; expiry revokes its ten-minute authority. Affected source deletion/purge removes its content. `all` clears named content pointers and resets note counters, retaining unrelated config and consumed authorization evidence. |
+| `kv` | Mixed durable state | Configuration, counters, recovery markers and bounded context/drafts; targeted consumption/removal only. Prepared ADR-0024 source, not live: one `action_undo:<chat>` record is replaced by the next supported mutation or consumed by successful undo; expiry revokes its ten-minute authority. Affected source deletion/purge removes its content. `all` clears named content pointers and resets note counters, retaining unrelated config and consumed authorization evidence. |
 | `learning_events` | Learning child | Exact-version learning/undo events; no age sweep; cascades with learning versions on explicit `all` purge. |
 | `learning_lessons` | Learned content | Active/disabled owner-bound procedures; no age sweep; exact-version undo retains history; explicit `all` purge deletes it. |
 | `learning_task_observations` | Learning/task child | Task-to-lesson capture evidence; explicit `all` purge deletes it; task deletion cascades and lesson deletion clears the lesson reference. |
@@ -1219,8 +1227,9 @@ insufficient for a deployment.
   (`_resume_compound` after every message/button turn; 10-minute TTL). Everything else
   is declined honestly ("one at a time") — the `multi_action` route is a reply, not a
   plan. The planner (`task_start`) is research-only; it never had a close/reschedule tool,
-  and the old wiring returned a paid refusal in planner prose. The splitter shipped
-  within ADR-0024's pinned precedence table: the pause-at-card rule keeps the
+  and the old wiring returned a paid refusal in planner prose. The existing splitter
+  retains its precedence in the prepared ADR-0024 table;
+  that table is not installed yet. The pause-at-card rule keeps the
   single pending slot from being clobbered.
 - **Journals — SHIPPED, no longer deferred (corrected 2026-07-26).** This list still
   named the optional daily "record today's entry?" nudge and the per-journal markdown

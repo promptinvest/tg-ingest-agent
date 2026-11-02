@@ -1,6 +1,6 @@
 # ADR-0024: Pre-router precedence is a table pinned by a matrix test; every immediate action has an inverse
 
-- Status: Accepted 2026-11-02; implementation and verification in progress
+- Status: Implemented/verified 2b6da6ee, 2026-11-02; rollout failed before installation, release held
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -43,6 +43,17 @@ router-dispatch#4, #6, #12, architecture#6 in part
 nothing
 
 ## Status log
+
+- 2026-11-02: exact source `2b6da6ee` passed 208 focused checks and 3,450
+  checks in each normal/shuffled Linux run, with nine skips retained, plus static,
+  installed-layout and CI gates. [PR 15](https://github.com/promptinvest/tg-ingest-agent/pull/15)
+  is merged. The fresh rollout failed before installation because only the existing
+  `kv.learning_last_scan` value advanced between online and stopped
+  backups; the frozen stopped backup and live database matched across all 56
+  tables. No guard was waived. Accepted `6e947694` services were resumed and
+  independently verified. A new reviewed attempt needs an explicit decision on
+  [the narrow guard proposal](../cara-adr24-release-guard-proposal-2026-11-02.md).
+  The failed attempt remains consumed; [release evidence](../cara-adr24-release-2026-11-02.md).
 
 - 2026-11-02: owner requested “implement next Cara ADR”; the current reconciliation
   selects ADR-0024. Owner selected preserving existing phrases and adding
