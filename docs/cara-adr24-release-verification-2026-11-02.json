@@ -1,0 +1,68 @@
+{
+  "accepted_runtime": {
+    "build_version": "ee4aa3446c7d",
+    "source_commit": "6e947694518659e4a41d516f6f35c4f3012f49f6",
+    "status": "unchanged_accepted_source_availability_independently_verified"
+  },
+  "candidate": {
+    "accepted": false,
+    "archive_sha256": "be7b83b2d33b844c98ae02749fca7cc17d692e3d1c246533571a2f26f9161725",
+    "installed": false,
+    "merged_commit": "daf1ffe931c5f38d2c8e8f309f0edaddba377e20",
+    "new_generic_undo_live": false,
+    "prompt_model_budget_changes": 0,
+    "pull_request": "https://github.com/promptinvest/tg-ingest-agent/pull/15",
+    "runtime_files_changed": 8,
+    "schema_changes": 0,
+    "source_commit": "2b6da6ee0ca43f7c8aa1073fe5fddb069bfd91b2"
+  },
+  "date": "2026-11-02",
+  "deployment": {
+    "candidate_accepted": false,
+    "candidate_installed": false,
+    "data_restored": false,
+    "diagnosis": "only the existing public learning_last_scan timestamp advanced during online-to-stopped capture; frozen stopped/live equality passed",
+    "exact_writer_attribution_proven": false,
+    "failed_attempt_replay_allowed": false,
+    "release_guards_waived": false,
+    "source_rolled_back": false,
+    "status": "failed_before_installation"
+  },
+  "documentation": {
+    "installation_or_restart_required": false,
+    "native_checkout_checks": 14,
+    "preservation_contract_checks": 29,
+    "runtime_test_script_changes": 0
+  },
+  "private_operator_evidence": "Detailed receipts, consumed-attempt identities, original failures, synthetic proposal artifacts and file manifests are retained privately; no database, environment, key or private log is included in this public summary.",
+  "proposal": {
+    "default_strict_comparator_unchanged": true,
+    "first_fixture_failure_preserved": true,
+    "lint_compile": "passed",
+    "linux_synthetic_checks": 24,
+    "live_operations": 0,
+    "new_release_selected": false,
+    "policy": "only a bounded advance of the existing learning_last_scan timestamp in online-to-stopped comparison; all other data and all frozen-state checks exact",
+    "status": "PROPOSED_NOT_AUTHORIZED"
+  },
+  "schema": "cara.adr24-public-source-status/v1",
+  "verification": {
+    "actual_cgroup_cleanup_cases": 3,
+    "actual_nonroot_import_roles": 2,
+    "ci_run_url": "https://github.com/promptinvest/tg-ingest-agent/actions/runs/41430788706",
+    "exact_head_ci_passed": true,
+    "focused_checks": 208,
+    "historical_assertion_lines_reference_only": 12452,
+    "historical_original_subset_files": 110,
+    "historical_subset_map_sha256": "5381a3088fc41608b202045d3bdadc8959b387921389d9216ec7b14de599a5ed",
+    "installed_layout_scenarios": 5,
+    "normal_tests": 3450,
+    "operator_tests": 103,
+    "original_current_map_sha256": "a7542be6a9c20f248c33fe1c4449feb78e689099980a5a400fb5d70426e8c661",
+    "original_current_test_support_files": 112,
+    "original_files_byte_preserved": true,
+    "shuffled_tests": 3450,
+    "skips_each_order": 9,
+    "transport_tests": 20
+  }
+}
