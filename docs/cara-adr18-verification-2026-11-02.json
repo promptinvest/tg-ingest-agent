@@ -1,5 +1,7 @@
 {
     "schema":  "cara.adr18-source-verification/v1",
+    "record_role": "historical_pre_approval_source_checkpoint",
+    "superseded_by_release_verification": "cara-adr18-release-verification-2026-11-02.json",
     "status":  "implemented_verified_published_source_release_held",
     "verified_source":  "0be55ffbf800f6dd83282dafeb849bcc9f694676",
     "source_archive_sha256":  "0032b0d64385d4276211256a8ace8d99e4f7f5ee26e1850ac87b0593413ae250",

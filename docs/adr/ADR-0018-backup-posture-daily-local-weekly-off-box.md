@@ -1,6 +1,6 @@
 # ADR-0018: Backup posture: daily local, weekly off-box, verified before rotation
 
-- Status: Narrow source follow-ups implemented/verified/published 0be55ff, 2026-11-02; deployment pending strict guard/owner decision; custody unproved; failed-inbox deletion excluded
+- Status: Narrow follow-ups deployed/accepted 6e947694, 2026-11-02; independent audit passed; custody/off-box provenance unproved; failed-inbox deletion excluded
 - Date: 2026-09-07
 - Phase: Phase C — robustness, operations, security
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -58,3 +58,12 @@ owner confirms the 2026-08-21 weekly decision concerned the off-box post, not lo
   separate evidence; failed-inbox deletion is excluded.
   [Implementation and evidence](../cara-adr18-2026-11-02.md) distinguish completed
   source work from the held release and remaining independent-custody evidence.
+
+- 2026-11-02: the owner's later “I approve” selected one exact healthcheck
+  exception for this release. Fresh exact-source verification, all 21 native
+  release phases and the separate audit passed for source `6e947694`; native
+  acceptance completed at 09:25:38.717106 UTC. The exception is consumed;
+  retained records are unchanged and every new unknown remains blocking.
+  [Release and verification](../cara-adr18-release-2026-11-02.md) supersede the
+  earlier held release checkpoint without replacing its evidence. Independent
+  custody/off-box provenance remain unproved; failed-inbox deletion is excluded.
