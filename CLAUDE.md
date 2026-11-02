@@ -130,15 +130,11 @@ lives in these specs, and facts about the boss's data must always be real) ·
 weaken the closed-world router.
 
 ## Deploy / test discipline
-- **One command deploys to PD** (push working tree → test → install → verify, in a
-  single SSH connection the hardened box prefers):
-  ```bash
-  DEPLOY_HOST=root@174.138.108.85 DEPLOY_PORT=22 \
-    DEPLOY_KEY="$HOME/.ssh/digitalocean-dataplatform-asus" \
-    DEPLOY_KH=known_hosts_pd_dataplatform bash deploy.sh
-  ```
-  `deploy.sh --test` runs tests only (no install). Connection details (key,
-  known_hosts) are in the PD-VPS KB and `../Codex/.env.pd-digitalocean-secrets`.
+- Follow [CARA section 9](CARA.md#9-operations-runbook) for transport, source
+  recovery and the complete current release gates. deploy.sh is a transport and
+  installer, not complete release acceptance. Connection details remain in the
+  protected PD-VPS KB. Documentation-only changes with identical runtime files
+  are published without an installation or service restart.
 - Tests run on the VPS stage dir (`python3 -m unittest discover -p 'test_*.py'`)
   — keep test execution off the OneDrive-synced working copy. The remote
   scripts run `set -o pipefail` (fixed 2026-07-02), so a FAILED test run or a

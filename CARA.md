@@ -2,7 +2,8 @@
 
 The accepted runtime is ADR-0026 source `75f0f34`; its dated acceptance and
 verification are recorded in [the release record](docs/cara-adr26-release-2026-11-01.md).
-ADR-0027 adds documentation coverage checks without changing installed runtime,
+ADR-0027 adds documentation coverage checks and freezes a cache-report test clock
+to its existing fixture date, without changing installed runtime,
 prompts, schema, budgets, stored history or service activation.
 
 Current specification text describes present behavior. Historical release
@@ -2302,7 +2303,7 @@ ambient proxies, and only three sanitized public result URLs may cross the other
 closed untrusted-to-fetch boundary.
 
 Retained dormant Mentor configuration: `MENTOR_ENABLED=false`; `IMPROVEMENT_WEEKDAY=6` / `IMPROVEMENT_HOUR=4` ·
-`MENTOR_ENABLED=true` · `MENTOR_REVIEW_SPOOL=/var/lib/cara-mentor/spool` ·
+`MENTOR_REVIEW_SPOOL=/var/lib/cara-mentor/spool` ·
 `MENTOR_RUNNER_SPOOL=/var/lib/cara-mentor-runner/spool` ·
 `MENTOR_RESULT_TIMEOUT_HOURS=48` · `MENTOR_MODEL` (= Cara's current chat model) ·
 `MENTOR_LLM_TIMEOUT_SECONDS=90` · `MENTOR_MAX_CALLS_PER_WEEK=4` ·
