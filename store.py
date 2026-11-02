@@ -1492,6 +1492,9 @@ def open_db(path):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Pin the native SQLite build's existing SECURE_DELETE default explicitly.
+    # This is no claim about erasure from WAL, FTS structures or older backups.
+    conn.execute("PRAGMA secure_delete=ON")
     from action_delivery import SCHEMA as DELIVERY_SCHEMA
     conn.executescript(SCHEMA + DELIVERY_SCHEMA)
     _migrate(conn)

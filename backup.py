@@ -501,6 +501,56 @@ def integrity_check(db_path):
     return len(tables)
 
 
+BACKUP_KEY_MAX_BYTES = 64 * 1024
+
+
+def _record_key_confirmation_issue(conn, detail):
+    try:
+        store.issue_add(conn, None, "backup_key_not_escrowed", detail)
+    except Exception:  # noqa: BLE001 - an observation must not mask a restore outcome
+        log("could not record the backup key confirmation issue", level="warning")
+
+
+def verify_key_confirmation(cfg, conn=None, *, events=None):
+    """Compare key-file bytes to an optional operator-confirmed fingerprint.
+
+    Matching bytes do not prove independent custody or off-box provenance. This
+    observation neither blocks backup/restore nor changes the monthly schedule.
+    No key is opened without configuration, and no secret/path enters an issue.
+    """
+    expected = getattr(cfg, "backup_key_escrow_sha256", "")
+    if not expected:
+        return None
+    status = "unreadable"
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(cfg.backup_encryption_key_file, flags)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= BACKUP_KEY_MAX_BYTES:
+                raise ValueError("not a bounded regular key file")
+            with os.fdopen(fd, "rb", closefd=False) as source:
+                contents = source.read(BACKUP_KEY_MAX_BYTES + 1)
+            if not 0 < len(contents) <= BACKUP_KEY_MAX_BYTES:
+                raise ValueError("not a bounded key file")
+            status = ("operator-confirmation-match" if hashlib.sha256(contents).hexdigest() == expected
+                      else "operator-confirmation-mismatch")
+        finally:
+            os.close(fd)
+    except (OSError, ValueError):
+        pass
+    if status != "operator-confirmation-match":
+        detail = ("The backup key file could not be compared with the operator-confirmed fingerprint. "
+                  if status == "unreadable" else
+                  "The backup key file differs from the operator-confirmed fingerprint. ")
+        detail += "Independent key custody and off-box provenance remain unverified."
+        if events is not None:
+            events["issues"].append(("backup_key_not_escrowed", detail))
+        elif conn is not None:
+            _record_key_confirmation_issue(conn, detail)
+    return {"status": status, "custody_verified": False, "offbox_provenance_verified": False}
+
+
 def verify_restore(cfg, conn=None, *, events=None):
     """Prove the newest snapshot restores. Returns a result dict for the job log;
     raises when it does not — ANY failure (BackupRestoreError, or an OSError from
@@ -509,6 +559,7 @@ def verify_restore(cfg, conn=None, *, events=None):
     out_dir = backups_dir(cfg)
     scratch = out_dir / RESTORE_CHECK_DIR
     try:
+        key_confirmation = verify_key_confirmation(cfg, conn, events=events)
         src, encrypted = latest_snapshot(cfg)
         if src is None:
             raise BackupRestoreError(
@@ -554,8 +605,11 @@ def verify_restore(cfg, conn=None, *, events=None):
         tables = integrity_check(db_path)
         log(f"backup restore self-check OK: {src.name} -> {written} bytes, "
             f"{tables} tables")
-        return {"file": src.name, "encrypted": encrypted, "bytes": written,
-                "tables": tables, "integrity": "ok"}
+        result = {"file": src.name, "encrypted": encrypted, "bytes": written,
+                  "tables": tables, "integrity": "ok"}
+        if key_confirmation is not None:
+            result["key_confirmation"] = key_confirmation
+        return result
     except Exception as exc:  # noqa: BLE001 — every failure leaves the documented signal
         # Deliberately NOT `except BackupRestoreError`. The setup steps
         # (disk_usage, rmtree/mkdir/chmod, the copyfile of the archive) raise
@@ -589,7 +643,10 @@ def _background_events(conn):
 
 def _apply_background_events(conn, events):
     for kind, detail in events["issues"]:
-        store.issue_add(conn, None, kind, detail)
+        if kind == "backup_key_not_escrowed":
+            _record_key_confirmation_issue(conn, detail)
+        else:
+            store.issue_add(conn, None, kind, detail)
     for key, value in events["kv"]:
         store.kv_set(conn, key, value)
 
