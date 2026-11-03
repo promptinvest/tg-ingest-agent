@@ -1,14 +1,27 @@
 # Cara — Capabilities and Architecture
 
-The accepted runtime is ADR-0028 source `125aaefe` (build `2fec08f110b0`).
-Pending confirmations use the thirteen table-selected handlers on the same Agent,
-with existing card ownership, cancellation and delivery contracts. Mixin
-dependencies are checked against the complete composed class. Native acceptance,
-the separate audit, final physical closure and production-tag publication passed.
-The [release record](docs/cara-adr28-release-2026-11-03.md) retains the verification
-and preserved preparation failures. Existing ADR-0024 routing,
-parameter contracts, undo behavior and command meanings remain compatible.
+The accepted runtime is ADR-0038 source `edf5d81e` (build `7c37b7fc8e7d`).
+Voice downloads and transcription use one admitted transport with durable inbox
+overflow; committed transcripts own bounded routing retries. Scheduled sends
+keep occurrence identities across uncertain delivery, and later health episodes
+remain eligible. Knowledge limits count confirmed notes, provider response and
+usage contracts are checked before settlement, and expired fleet cards leave
+ordinary confirmations available. Existing models, prompts, budgets, schema 56
+and stored history/cache remain preserved.
+
+Acceptance, the separate read-only audit, final physical closure and production
+publication passed. The [release record](docs/cara-adr38-release-2026-11-03.md)
+retains the failed first native attempt separately from the fresh same-installed
+forward completion. Its verified deployment marker and existing single notice
+remain unchanged; no reinstallation or historical result rewrite occurred.
 Detailed operator receipts remain in the private operator workspace.
+
+ADR-0028 pending confirmations retain the thirteen table-selected handlers on
+the same Agent, existing card ownership/cancellation/delivery contracts and the
+complete mixin-composition guard. The
+[earlier release](docs/cara-adr28-release-2026-11-03.md) retains its dated evidence.
+Existing ADR-0024 routing, parameter contracts, undo behavior and command
+meanings remain compatible.
 
 ADR-0027 adds documentation coverage checks and freezes a cache-report test clock
 to its existing fixture date, without changing installed runtime,
