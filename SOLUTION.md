@@ -787,6 +787,16 @@ Calendar slots and accounting periods select periodic occurrences; raw
 health transitions select alert episodes, retaining disk hysteresis.
 Grouped model-announcement state settles atomically after transport.
 
+Successful chat, embedding, remote transcription and loopback Whisper bodies
+are limited to 8 MiB before text decoding or JSON parsing. The reader uses
+bounded chunks and one overflow byte, measuring actual bytes independently of
+Content-Length. An oversized reply raises a transient typed error and keeps
+any paid reservation unknown; existing budget checks and failover rules apply.
+HTTP error diagnostics read at most 64 KiB, retain existing redaction and the
+500-character display limit, and close the error stream. HTTP status continues
+to determine rejection accounting. These byte limits do not change socket or
+turn deadlines, models, prompts, prices, stored history or configuration.
+
 - **Permission manifest (`skill_manifest`).** Single source of truth for every
   action's risk, whether it writes state, its confirmation mode, and whether it
   may run proactively. Enforced live: startup fails fast if a router action lacks

@@ -402,8 +402,13 @@ class AsyncProfileGateway(unittest.TestCase):
                 return self
             def __exit__(self, *args):
                 return False
-            def read(self):
-                return json.dumps(body()).encode("utf-8")
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        return json.dumps(body()).encode('utf-8')
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
 
         def opener(request, timeout=None):
             messages = json.loads(request.data)["messages"]

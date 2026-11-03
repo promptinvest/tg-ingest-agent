@@ -184,10 +184,15 @@ class CallerDeliveryTests(unittest.TestCase):
                 return self
             def __exit__(self, *args):
                 pass
-            def read(self):
-                if not ready.wait(3):
-                    raise AssertionError("due alarm did not progress during delayed curation")
-                return b"{}"
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        if not ready.wait(3):
+                            raise AssertionError('due alarm did not progress during delayed curation')
+                        return b'{}'
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
 
         def curate(chat_id, lang=None, force=False):
             calls.append((chat_id, lang, force))

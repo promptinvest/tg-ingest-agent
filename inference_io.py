@@ -77,6 +77,40 @@ def turn_budget(seconds=90):
         deadline.reset(token)
 
 
+# Bound the complete encoded body before UTF-8 decoding or JSON allocation.
+# The extra success byte distinguishes an exact-limit response from overflow.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+ERROR_RESPONSE_BYTES = 64 * 1024
+_READ_CHUNK_BYTES = 64 * 1024
+
+
+def _read_bounded(response, limit):
+    body = bytearray()
+    while len(body) < limit:
+        chunk = response.read(min(_READ_CHUNK_BYTES, limit - len(body)))
+        if not chunk:
+            break
+        body.extend(chunk)
+    return bytes(body)
+
+
+def read_response(response, error_type):
+    """Read a complete allowed inference body, with at most one overflow byte."""
+    body = _read_bounded(response, MAX_RESPONSE_BYTES + 1)
+    if len(body) > MAX_RESPONSE_BYTES:
+        error = error_type(
+            f"inference response exceeds {MAX_RESPONSE_BYTES}-byte limit; completion usage unknown",
+            transient=True)
+        error.usage_unknown = True
+        raise error
+    return body
+
+
+def read_error_prefix(response):
+    """Read only the bounded diagnostic prefix; HTTP status still owns rejection."""
+    return _read_bounded(response, ERROR_RESPONSE_BYTES)
+
+
 def json_request(opener, request, timeout, error_type):
     started = _monotonic()
     local_end = started + float(timeout)
@@ -98,7 +132,7 @@ def json_request(opener, request, timeout, error_type):
     def transport():
         try:
             with opener(request, timeout=socket_timeout) as response:
-                result.put((True, json.loads(response.read().decode("utf-8"))))
+                result.put((True, json.loads(read_response(response, error_type).decode("utf-8"))))
         except Exception as exc:  # propagate the original HTTP/transport error on the DB thread
             result.put((False, exc))
         finally:

@@ -205,10 +205,15 @@ class BackgroundMaintenanceTests(unittest.TestCase):
                 return self
             def __exit__(self, *args):
                 closed.set()
-            def read(self):
-                entered.set()
-                release.wait(3)
-                return b"{}"
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        entered.set()
+                        release.wait(3)
+                        return b'{}'
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
 
         lease = inference_io.BackgroundLease()
         self.assertTrue(lease.acquire())

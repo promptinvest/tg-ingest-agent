@@ -4689,7 +4689,14 @@ class KnowledgeTests(unittest.TestCase):
             class FakeResp:
                 def __enter__(self): return self
                 def __exit__(self, *a): return False
-                def read(self): import json as j; return j.dumps(fake).encode()
+                def read(self, size=-1):
+                    if not hasattr(self, "_response_stream"):
+                        import io
+                        def payload():
+                            import json as j
+                            return j.dumps(fake).encode()
+                        self._response_stream = io.BytesIO(payload())
+                    return self._response_stream.read(size)
 
             try:
                 with mock.patch.object(llm, "urlopen", return_value=FakeResp()):
@@ -6279,7 +6286,13 @@ class ReviewFixes20260716Tests(unittest.TestCase):
         class Cut:
             def __enter__(self): return self
             def __exit__(self, *a): return False
-            def read(self): return b'{"choices": [{"message": {"content": "\xd0'
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        return b'{"choices": [{"message": {"content": "\xd0'
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
         with mock.patch.object(llm, "urlopen", return_value=Cut()):
             with self.assertRaises(llm.LLMError):
                 llm.chat(cfg, self.conn, "ingest", [{"role": "user", "content": "hi"}])
@@ -8075,7 +8088,13 @@ class DurableNoteOutcomesAndLatency20260720Tests(unittest.TestCase):
             def __init__(self, body): self.body = body
             def __enter__(self): return self
             def __exit__(self, *args): return False
-            def read(self): return json.dumps(self.body).encode("utf-8")
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        return json.dumps(self.body).encode('utf-8')
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
 
         with mock.patch.object(llm, "urlopen", return_value=Resp(chat_body)), \
                 mock.patch.object(llm.time, "monotonic", side_effect=[10.0, 11.25]):
@@ -11456,13 +11475,20 @@ class LlmStackBudgetAvailability20260725Tests(unittest.TestCase):
             self._body = body
 
         def __enter__(self):
+            if hasattr(self, "_response_stream"):
+                del self._response_stream
             return self
 
         def __exit__(self, *a):
             return False
 
-        def read(self):
-            return json.dumps(self._body).encode("utf-8")
+        def read(self, size=-1):
+            if not hasattr(self, "_response_stream"):
+                import io
+                def payload():
+                    return json.dumps(self._body).encode('utf-8')
+                self._response_stream = io.BytesIO(payload())
+            return self._response_stream.read(size)
 
     def _chat_body(self, content="ok", usage=None):
         body = {"choices": [{"message": {"content": content}}]}
@@ -19418,8 +19444,13 @@ class CatalogAddFromText20260728Tests(unittest.TestCase):
         def __init__(self, body):
             self._body = body
 
-        def read(self):
-            return self._body
+        def read(self, size=-1):
+            if not hasattr(self, "_response_stream"):
+                import io
+                def payload():
+                    return self._body
+                self._response_stream = io.BytesIO(payload())
+            return self._response_stream.read(size)
 
         def __enter__(self):
             return self
@@ -20599,7 +20630,13 @@ class August2026ConversationIncidentTests(unittest.TestCase):
         class Response:
             def __enter__(self): return self
             def __exit__(self, *args): return False
-            def read(self): return json.dumps(body).encode("utf-8")
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        return json.dumps(body).encode('utf-8')
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
 
         def fake_open(request, **_kwargs):
             payloads.append(json.loads(request.data.decode("utf-8")))
