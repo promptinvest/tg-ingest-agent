@@ -1,6 +1,28 @@
 # Cara ADR reconciliation — 1 November 2026
 
-## Current checkpoint — 3 November, ADR0028 native acceptance
+## Current checkpoint — 3 November, ADR0038 accepted
+
+ADR-0038 is deployed and accepted as source `edf5d81e`, build `7c37b7fc8e7d`,
+deployment `2adbff506160eedd86df7095`. Fresh same-installed forward acceptance
+completed at 10:55:20.036644 UTC (`c006b324`), the separate read-only audit at
+10:55:59.330167 UTC (`d7571560`) and independent physical closure at
+10:56:50.037273 UTC (`7fee2f66`). All four services were active with zero recorded
+restarts; recorded actors/groups and the owned tool cgroup were absent. The
+[release record](cara-adr38-release-2026-11-03.md) preserves the first native
+FAILED result after 16 phases and the later strict read-only observation
+separately. The fresh forward chain passed 13 phases without reinstallation,
+re-marking the verified deployment, rewriting or refunding retained usage, or
+sending another deployment notice.
+Production tag `production-2026-11-03-adr38-durable-handoffs` is verified at exact
+source `edf5d81e`; all 16 earlier tags and 31 earlier tag refs remain exact.
+
+The selected fixes preserve models, prompts, budgets, schema 56, history/cache,
+ordinary confirmations and capability/notification policy. Strict current
+unknowns were zero and all 40 historical unknown rows remained exact. ADR-0022
+stays postponed; independent backup-key custody and host-loss recovery remain
+unproved. The older checkpoints below are dated history.
+
+## Previous checkpoint — 3 November, ADR0028 native acceptance
 
 ADR-0028's remaining source work is implemented and installed as source
 `125aaefe`, build `2fec08f110b0`. All 21 native phases completed at

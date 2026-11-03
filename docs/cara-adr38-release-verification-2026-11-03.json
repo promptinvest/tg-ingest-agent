@@ -1,0 +1,178 @@
+{
+  "schema":  "cara.adr38-public-verification-summary/v1",
+  "adr":  "ADR-0038",
+  "status":  "deployed_and_accepted",
+  "source_commit":  "edf5d81e259a5530b01595395aefc007a792aa63",
+  "source_archive_sha256":  "fd406d16459d582f72072d4d7d312e1c2e3837c3aaf2cda244eb04cee9ec19cf",
+  "publication":  {
+            "source_pr":  "https://github.com/promptinvest/tg-ingest-agent/pull/20",
+            "merged_commit":  "51d95516fac427bd64003dc451c13ca3e237c149",
+            "source_ci":  "https://github.com/promptinvest/tg-ingest-agent/actions/runs/41612475526",
+            "production_tag":  "production-2026-11-03-adr38-durable-handoffs",
+            "tag_annotation_sha":  "e8e77761836de29c28e3cbca35b749367873b131",
+            "tag_peeled_source":  "edf5d81e259a5530b01595395aefc007a792aa63",
+            "verified_at_utc":  "2026-11-03T10:57:43.817926+00:00",
+            "tag_publication_sha256":  "97b4c38dc32cddc3b6e69b033a2289a51d7998447042b5510621b842b924c142",
+            "earlier_tags_preserved":  true,
+            "earlier_tag_count":  16,
+            "earlier_tag_ref_count":  31,
+            "added_refs":  2
+          },
+  "scope":  {
+         "durable_voice_transcript_and_usage_handoff":  true,
+         "bounded_voice_download_transport_and_durable_overflow":  true,
+         "no_automatic_ambiguous_paid_stt_replay":  true,
+         "stable_scheduled_occurrence_identity":  true,
+         "later_health_episode_eligibility_preserved":  true,
+         "atomic_acknowledged_group_state":  true,
+         "expired_fleet_card_filter_preserves_explicit_card_and_live_ambiguity":  true,
+         "confirmed_note_eligibility_precedes_result_limit":  true,
+         "strict_provider_response_and_usage_validation":  true,
+         "existing_estimates_prices_and_history_preserved":  true,
+         "new_runtime_modules":  0,
+         "new_services":  0,
+         "schema_migrations":  0,
+         "models_changed":  false,
+         "prompts_changed":  false,
+         "budgets_changed":  false,
+         "capabilities_changed":  false
+       },
+  "verification":  {
+            "focused_linux":  {
+                        "status":  "passed",
+                        "tests":  224
+                      },
+            "full_linux_normal":  {
+                          "status":  "passed",
+                          "tests":  3516,
+                          "skipped":  9
+                        },
+            "full_linux_shuffled":  {
+                          "status":  "passed",
+                          "tests":  3516,
+                          "skipped":  9
+                        },
+            "new_application_tests":  46,
+            "committed_files_match_tested_bytes":  393,
+            "source_byte_parity_sha256":  "b27003c10b50bceed2fc5e6a646f1a9108878e05907d65cd6cc03bd5c6b6808a",
+            "linux_evidence_sha256":  "907ef349bd2e9f529b08d0de416cbc1752276e947c0e72af04dfe86149d67fde",
+            "native_qa_sha256":  "264b8d67fac7ea03ad5cd547b8cedbc5fe314cc9a7f295efd97be944368bfa8e",
+            "source_review_sha256":  "2fcb77a0a2daa92ebaff2722137fcc885ac2c95c3ae1b819e3452997ced4e6cc",
+            "original_test_support_files_preserved":  120,
+            "original_assertions_preserved":  true,
+            "static_compile_shell_helper_gates":  "passed",
+            "installed_layout":  {
+                         "status":  "passed",
+                         "scenarios":  5
+                       },
+            "original_operator":  {
+                          "status":  "passed",
+                          "tests":  139
+                        },
+            "unchanged_historical_operator":  {
+                                "status":  "passed",
+                                "tests":  139
+                              },
+            "transport":  {
+                      "status":  "passed",
+                      "tests":  27
+                    },
+            "nonroot_import_roles":  2,
+            "actual_cgroup_cleanup_cases":  3,
+            "fresh_forward_qualification":  {
+                              "status":  "passed",
+                              "original_tests":  139,
+                              "forward_and_support_tests":  54,
+                              "qualification_sha256":  "f64aa78a655368a753a2d302236a2b9eaa3c5d579e64d12a7077aae3ee88cbf2",
+                              "frozen_package_receipt_sha256":  "5ea4c204b5821850636a1512f2ff78a9c4045723d9ed467644be310ecac43342",
+                              "static_checks":  "passed"
+                            },
+            "readonly_observer_cases":  12
+          },
+  "first_native_attempt":  {
+                "status":  "failed_preserved",
+                "failed_at_utc":  "2026-11-03T10:11:05.098105+00:00",
+                "completed_phases":  16,
+                "failure_sha256":  "f7eae52c613657419939a704b555306ca176d9b5adaa77d67a4218200d86195b",
+                "containment_sha256":  "820856df9fa7d25d92b8ccc9f66ab20568508783bbd277f09c8e642934902f9e",
+                "independent_failure_closure_sha256":  "6a29b1ae73bfb7b09fd99d8d9a4efd9ebc1001f0d6e71ccc25de04d5c482a695",
+                "guard_rejection":  "current-process unknown inference blocks release; no new approval applies",
+                "actual_failed_reservation_identity":  "unproved",
+                "provider_fault":  "unproved",
+                "canonical_acceptance_produced":  false,
+                "successful_independent_audit_produced":  false,
+                "failure_rewritten":  false,
+                "parent_files_preserved":  1062,
+                "parent_and_custody_bytes_modes_preserved":  true
+              },
+  "forward_completion":  {
+                "status":  "accepted",
+                "same_installed_candidate":  true,
+                "inherited_successful_phase_proofs":  16,
+                "fresh_forward_phases":  13,
+                "reinstallations":  0,
+                "mark_verified_calls":  0,
+                "database_restores":  0,
+                "earlier_controllers_replayed":  0,
+                "bounded_readonly_observation_seconds":  30,
+                "strict_validator_unchanged":  true,
+                "fresh_read_transactions_and_stable_process_birth_required":  true,
+                "persistent_unknowns_still_fail":  true,
+                "historical_unknown_exemptions":  0,
+                "new_owner_approval_claimed":  false,
+                "canonical_acceptance_at_utc":  "2026-11-03T10:55:20.036644+00:00",
+                "canonical_acceptance_sha256":  "c006b324bc3c38133d2414fe3d17728d62c8afc6593afdc3397762ebc0710b3a",
+                "independent_audit_at_utc":  "2026-11-03T10:55:59.330167+00:00",
+                "independent_audit_sha256":  "d7571560b10170578590621b48c730509d3c9e05d2fd04b88613a985121ec646",
+                "independent_physical_closure_at_utc":  "2026-11-03T10:56:50.037273+00:00",
+                "independent_physical_closure_sha256":  "7fee2f66c8aadee5a17124b519f7943ca929c1ea52d6e96490346a9a6c3eb16f",
+                "actual_native_and_foreground_results_zero":  true,
+                "recorded_actor_groups_absent":  4,
+                "outer_process_absent":  true,
+                "owned_tool_cgroup_absent":  true,
+                "sealed_files_preserved":  429,
+                "four_services_active_zero_restarts_at_closure":  true
+              },
+  "native_release":  {
+              "status":  "deployed_and_accepted",
+              "build_version":  "7c37b7fc8e7d",
+              "deployment_id":  "2adbff506160eedd86df7095",
+              "native_manifest_sha256":  "3929e80d81064a395658bad144f0f28d2a3906e5e91aace1e6d99050aa30e5e6",
+              "current_unknown_count":  0,
+              "historical_unknown_rows_preserved":  40,
+              "historical_usage_and_reservations_preserved":  true,
+              "schema_tables":  56,
+              "effective_daily_usd":  2,
+              "effective_monthly_usd":  12,
+              "effective_task_usd":  0.15,
+              "models_prompts_budgets_and_capabilities_preserved":  true,
+              "history_cache_and_peer_state_preserved":  true,
+              "existing_deployment_notice_status":  "sent",
+              "existing_deployment_notice_attempts":  1,
+              "forward_notice_send_attempts":  0
+            },
+  "preserved_additional_failures":  {
+                     "initial_source_defect_baseline":  {
+                                        "status":  "expected_defects_reproduced",
+                                        "tests":  38,
+                                        "actual_returncode":  1
+                                      },
+                     "first_forward_qualification":  {
+                                       "status":  "failed_preserved",
+                                       "fixture_failure":  "inert Mock lacked explicit assert_stopped",
+                                       "original_assertions_preserved":  true,
+                                       "runtime_source_changed":  false
+                                     }
+                   },
+  "limits":  {
+          "private_operator_paths_and_raw_data_omitted":  true,
+          "public_summary_is_not_release_authority":  true,
+          "source_verification_is_separate_from_native_acceptance":  true,
+          "first_failure_and_later_observation_are_separate":  true,
+          "independent_backup_key_custody_and_host_loss_recovery":  "unproved",
+          "adr0022":  "postponed_separate_design_decision",
+          "response_byte_cap":  "unselected",
+          "documentation_closeout_changes_runtime":  false,
+          "dated_closure_is_not_continuing_health_claim":  true
+        }
+}
