@@ -223,11 +223,16 @@ class InferenceResponsivenessTests(unittest.TestCase):
             def __exit__(self, *_args):
                 return False
 
-            def read(self):
-                self_result = release.wait(2)
-                if not self_result:
-                    raise AssertionError("owner heartbeat never ran")
-                return json.dumps({"answer": "ready"}).encode()
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        self_result = release.wait(2)
+                        if not self_result:
+                            raise AssertionError('owner heartbeat never ran')
+                        return json.dumps({'answer': 'ready'}).encode()
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
 
         def heartbeat():
             observed.append(threading.get_ident())

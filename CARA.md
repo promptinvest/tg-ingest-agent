@@ -1841,6 +1841,15 @@ tools and host service ownership are documented separately in §9.
 Provider response envelopes and reported token counts are checked before
 settlement. Invalid counters retain the conservative unknown reservation
 and raise a typed gateway error; current rates and historical rows remain.
+Successful chat, embedding, remote transcription and loopback Whisper bodies
+are limited to 8 MiB before text decoding or JSON parsing. The reader uses
+bounded chunks and one overflow byte, measuring actual bytes independently of
+Content-Length. An oversized reply raises a transient typed error and keeps
+any paid reservation unknown; existing budget checks and failover rules apply.
+HTTP error diagnostics read at most 64 KiB, retain existing redaction and the
+500-character display limit, and close the error stream. HTTP status continues
+to determine rejection accounting. These byte limits do not change socket or
+turn deadlines, models, prompts, prices, stored history or configuration.
 - **Model profiles** with primary + fallback + per‑profile temperature/max‑tokens/
   json‑required: `router_fast`, `ingest_balanced`, `ask_grounded`, `converse_warm`,
   `memory_curator`, `memory_consolidate` (the dead `review_balanced` was removed
@@ -2417,7 +2426,7 @@ is documented twice. The lists above stay as the short tour; they are not the ca
 Cara runs on PD-VPS (`174.138.108.85`) with key-only SSH and no public bot
 listener. Protected connection material and operator receipts belong in the
 shared PD-VPS KB and operator workspace, outside Git. Pilot-VPS is retired.
-The [accepted release](docs/cara-adr18-release-2026-11-02.md) is dated evidence;
+The [accepted release](docs/cara-adr38-release-2026-11-03.md) is dated evidence;
 inspect the host before treating it as current health.
 
 ### Services and boundaries

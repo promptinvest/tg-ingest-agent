@@ -351,10 +351,15 @@ class ActionDeliveryTests(unittest.TestCase):
         class Response:
             def __enter__(self): return self
             def __exit__(self, *args): pass
-            def read(self):
-                if not ready.wait(3):
-                    raise AssertionError("the owner-thread alarm heartbeat did not run")
-                return b'{}'
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        if not ready.wait(3):
+                            raise AssertionError('the owner-thread alarm heartbeat did not run')
+                        return b'{}'
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
 
         def sender(token, method, params, **kwargs):
             result = self.send(token, method, params, **kwargs)

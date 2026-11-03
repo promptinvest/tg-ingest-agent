@@ -188,7 +188,13 @@ class GatewayTests(unittest.TestCase):
         class Resp:
             def __enter__(self): return self
             def __exit__(self, *a): return False
-            def read(self): return json.dumps(body).encode("utf-8")
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        return json.dumps(body).encode('utf-8')
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
         with mock.patch.object(llm, "urlopen", return_value=Resp()):
             llm.chat(cfg, self.conn, "converse", [{"role": "user", "content": "x" * 400}],
                      model="deepseek-4-flash")
@@ -206,7 +212,13 @@ class GatewayTests(unittest.TestCase):
         class Resp:
             def __enter__(self): return self
             def __exit__(self, *a): return False
-            def read(self): return json.dumps(body).encode("utf-8")
+            def read(self, size=-1):
+                if not hasattr(self, "_response_stream"):
+                    import io
+                    def payload():
+                        return json.dumps(body).encode('utf-8')
+                    self._response_stream = io.BytesIO(payload())
+                return self._response_stream.read(size)
         with mock.patch.object(llm, "urlopen", return_value=Resp()):
             with self.assertRaises(llm.LLMError):
                 llm.chat(cfg, self.conn, "converse", [], model="deepseek-4-flash")
@@ -241,7 +253,13 @@ class GatewayTests(unittest.TestCase):
             class Resp:
                 def __enter__(self): return self
                 def __exit__(self, *a): return False
-                def read(self): return b'{"text": "  \xd0\xbd\xd0\xb0\xd0\xbf\xd0\xbe\xd0\xbc\xd0\xbd\xd0\xb8  "}'
+                def read(self, size=-1):
+                    if not hasattr(self, "_response_stream"):
+                        import io
+                        def payload():
+                            return b'{"text": "  \xd0\xbd\xd0\xb0\xd0\xbf\xd0\xbe\xd0\xbc\xd0\xbd\xd0\xb8  "}'
+                        self._response_stream = io.BytesIO(payload())
+                    return self._response_stream.read(size)
             with mock.patch.object(llm, "urlopen", return_value=Resp()) as up:
                 text = llm.transcribe(cfg, self.conn, "stt", str(p), 4)
             self.assertEqual(text, "напомни")  # JSON {"text"} parsed + trimmed

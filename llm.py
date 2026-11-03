@@ -210,9 +210,15 @@ _BEARER_PATTERN = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+")
 
 def _redacted_http_error(exc, access_key):
     try:
-        body = exc.read().decode("utf-8")
+        body = inference_io.read_error_prefix(exc).decode("utf-8")
     except Exception:
         body = ""
+    finally:
+        # The bounded prefix may leave unread bytes on an HTTP error stream.
+        try:
+            exc.close()
+        except Exception:
+            pass
     if access_key:
         body = body.replace(access_key, "<redacted>")
     body = _BEARER_PATTERN.sub(r"\1<redacted>", body)
@@ -1056,7 +1062,7 @@ def _transcribe_local_server(cfg, conn, skill, audio_path, duration_seconds):
         try:
             with urlopen(Request(url, data=body, headers=headers, method="POST"),
                          timeout=cfg.stt_local_timeout) as response:
-                raw = response.read().decode("utf-8", errors="replace")
+                raw = inference_io.read_response(response, LLMError).decode("utf-8", errors="replace")
             if attempt:
                 log("whisper-server answered on retry")
             break
