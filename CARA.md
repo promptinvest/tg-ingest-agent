@@ -1027,6 +1027,9 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   review/resurfacing features.
 
 ### Knowledge & answers
+Task and grounded-analysis knowledge searches count confirmed eligible
+notes toward their limit; newer unconfirmed suggestions cannot hide them.
+General browsing keeps its existing visibility and ordering.
 - **Ask (KB Q&A)** (`ask`): "когда мой рейс?", "что по плану на сегодня?" → semantic
   retrieval (BGE‑M3) over *your own stored notes*, then a grounded answer in the
   question's language citing `(#id)`; refuses if it isn't in your notes.
@@ -1779,7 +1782,11 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
 ### Owner-facing process plus isolated worker and Mentor boundaries
 
 The owner-facing poll process delegates STT transport to a bounded thread;
-SQLite work stays on its owner thread. Separate worker and fleet executors use
+SQLite work stays on its owner thread. Own-voice downloads and transcription
+share one admitted transport job; overflow remains in the durable inbox.
+Completed transcripts survive SQLite settlement failures and retry routing
+without another transcription. An interrupted paid transcription retains its
+unknown charge and cannot dispatch again automatically. Separate worker and fleet executors use
 restricted spools. Mentor code is retained with both units disabled. The shared
 Whisper service is host-managed, outside the application installer. The map
 covers the installer MODULES and the renamed source entry point; checkout-only
@@ -1818,6 +1825,9 @@ tools and host service ownership are documented separately in §9.
 <!-- /documentation-contract:modules -->
 
 ### LLM gateway (`llm.py`)
+Provider response envelopes and reported token counts are checked before
+settlement. Invalid counters retain the conservative unknown reservation
+and raise a typed gateway error; current rates and historical rows remain.
 - **Model profiles** with primary + fallback + per‑profile temperature/max‑tokens/
   json‑required: `router_fast`, `ingest_balanced`, `ask_grounded`, `converse_warm`,
   `memory_curator`, `memory_consolidate` (the dead `review_balanced` was removed
@@ -1908,6 +1918,14 @@ tools and host service ownership are documented separately in §9.
   (or one whose note number is unreadable) uses the most recent file.
 
 ### Durable runtime & observability
+Scheduled delivery binds a stable occurrence to each recipient. Ambiguous
+outcomes cannot be resent under a fresh identity; known-unsent failures
+retain their bounded retry. Morning/weekly/monthly slots and budget/backup
+periods remain distinct. Health/disk observations identify later episodes
+without changing debounce, hysteresis or notification preferences. Grouped
+model-announcement bookkeeping commits after delivery as one transaction.
+Expired fleet approvals leave unquoted confirmations to their current
+owner; explicit replies to old cards still receive their expired outcome.
 - **Permission manifest** (`skill_manifest`) is enforced live: startup fails fast if a
   router action lacks a policy; dispatch records each action's risk on the trace;
   destructive actions must be typed‑phrase‑gated; proactive code calls its gate.

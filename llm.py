@@ -338,6 +338,53 @@ def transport_chat(prepared):
         urlopen, prepared["request"], prepared["timeout"], LLMError)
 
 
+def _chat_response_parts(data):
+    """Validate provider-owned shapes before a reservation can be settled.
+
+    Missing/null/zero counters keep the existing conservative estimation path.
+    Invalid reported counters are ambiguous paid outcomes, never ledger credits.
+    """
+    def invalid(field):
+        error = LLMError(
+            "inference response truncated/malformed: invalid " + field, transient=True)
+        error.usage_unknown = True
+        return error
+
+    if not isinstance(data, dict):
+        raise invalid("response object")
+    choices = data.get("choices")
+    if choices is None:
+        choices = []
+    if not isinstance(choices, list):
+        raise invalid("choices")
+    content = ""
+    if choices:
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise invalid("choice")
+        message = choice.get("message")
+        if message is None:
+            message = {}
+        if not isinstance(message, dict):
+            raise invalid("message")
+        content = message.get("content")
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            raise invalid("content")
+    usage = data.get("usage")
+    if usage is None:
+        usage = {}
+    if not isinstance(usage, dict):
+        raise invalid("usage")
+    for key in ("prompt_tokens", "completion_tokens"):
+        value = usage.get(key)
+        if value is not None and (
+                type(value) is not int or not 0 <= value <= cache_usage.MAX_TOKENS):
+            raise invalid(key)
+    return choices, content, usage
+
+
 def finish_chat(cfg, conn, prepared, data=None, error=None, meta=None):
     """Accept/meter one transport outcome on the SQLite owner thread."""
     reserved, model = prepared["reserved"], prepared["model"]
@@ -383,8 +430,7 @@ def finish_chat(cfg, conn, prepared, data=None, error=None, meta=None):
         wrapped.usage_unknown = True
         raise wrapped from exc
     elapsed = max(0.0, time.monotonic() - started)
-    choices = data.get("choices") or []
-    content = str((choices[0].get("message") or {}).get("content") or "") if choices else ""
+    choices, content, usage = _chat_response_parts(data)
     if isinstance(meta, dict):
         meta["finish_reason"] = str((choices[0].get("finish_reason") if choices else "") or "")
     # Meter the call BEFORE the no-choices guard so a billed-but-empty response is still
@@ -392,7 +438,6 @@ def finish_chat(cfg, conn, prepared, data=None, error=None, meta=None):
     # text length (script-aware, see _estimate_tokens) instead of logging $0 — an
     # unmetered model silently under-counts the budget and the real DO bill can then
     # blow past the "enforced" cap.
-    usage = data.get("usage") or {}
     # EITHER side may be missing on its own (providers that report prompt_tokens and
     # omit completion_tokens are common), and a half-guessed row must not look
     # provider-reported.

@@ -3,6 +3,7 @@ import calendar
 import re
 from datetime import datetime, timedelta, timezone
 
+import action_delivery
 import store
 import tasking
 from texts import TEXTS
@@ -151,7 +152,9 @@ class IssueDigestMixin:
             return
         body = text(self.conn, self.lang(), store.kv_get(self.conn, "issue_digest_delivered_at"),
                     now=now, tz_offset=self.tz_offset())
-        if not body or self._send_all(body):
+        with action_delivery.scheduled(self, "issue_digest", month):
+            delivered = not body or self._send_all(body)
+        if delivered:
             store.kv_set(self.conn, "issue_digest_month", month)
             if body:
                 store.kv_set(self.conn, "issue_digest_delivered_at", now.isoformat())

@@ -3864,7 +3864,7 @@ def messages_missing_chunks(conn, limit=3):
 
 
 def list_messages(conn, category=None, query=None, limit=10, state=None,
-                  chat_id=None):
+                  chat_id=None, *, confirmed_only=False):
     """Recent stored messages, optionally filtered by category (exact,
     case-insensitive incl. Cyrillic) or a substring query over text, summary,
     key facts, category, and source. Delegates to list_messages_filtered —
@@ -3873,11 +3873,12 @@ def list_messages(conn, category=None, query=None, limit=10, state=None,
     which silently blinded bulk recategorize / resolve_item / the router's
     recent-item hint to anything older once the inbox outgrew 200.)"""
     return list_messages_filtered(conn, category=category, query=query, limit=limit,
-                                  state=state, chat_id=chat_id)
+                                  state=state, chat_id=chat_id,
+                                  confirmed_only=confirmed_only)
 
 
 def list_messages_filtered(conn, category=None, query=None, limit=None, state=None,
-                           chat_id=None):
+                           chat_id=None, *, confirmed_only=False):
     """Visible notes matching the filter, newest-first (Python-filtered for Cyrillic
     casefold). limit=None returns the full list (pagination callers slice); a limit
     stops the scan EARLY. The messages cursor is iterated LAZILY (ORDER BY id DESC is a
@@ -3885,7 +3886,8 @@ def list_messages_filtered(conn, category=None, query=None, limit=None, state=No
     every-turn recent-item hint (limit=1, no query) touches a single row, not the whole
     inbox. Facts: a full scan builds one GROUP_CONCAT map; a limited query looks facts up
     per candidate (idx_facts_message). Confirmed journal entries are hidden from the general
-    list (own dated journal) unless a category filter is given."""
+    list (own dated journal) unless a category filter is given. confirmed_only
+    applies status eligibility before the limit; default browsing is unchanged."""
     q = str(query).casefold() if query else None
     cat = str(category).casefold() if category else None
     if cat and catalog_canonical_name(cat):
@@ -3917,7 +3919,8 @@ def list_messages_filtered(conn, category=None, query=None, limit=None, state=No
         return r["f"] if r else None
 
     out = []
-    sql = "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested')"
+    sql = ("SELECT * FROM messages WHERE status = 'confirmed'" if confirmed_only else
+           "SELECT * FROM messages WHERE status IN ('confirmed', 'suggested')")
     args = ()
     if chat_id is not None:
         sql += " AND chat_id = ?"

@@ -619,7 +619,19 @@ class _FleetCore:
                 return False
             row = matching[0]
         else:
-            active = [r for r in rows if r["state"] == "approval"]
+            active = []
+            for candidate in rows:
+                if candidate["state"] != "approval":
+                    continue
+                try:
+                    expires = json.loads(candidate["payload"])["approval"]["expires"]
+                    if protocol.age(expires) >= 0:
+                        continue
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    # Only proved expiry releases an unquoted answer. An
+                    # invalid card still needs its own explicit resolution.
+                    pass
+                active.append(candidate)
             if not active:
                 return False
             if len(active) != 1 or store.pending_get(self.conn, chat_id) or store.task_approvals_live(self.conn, chat_id):

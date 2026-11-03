@@ -167,12 +167,9 @@ def _evidence(evidence_id, label, trust="confirmed_local", source=None):
 
 
 def _knowledge_search(conn, task, step, inputs):
-    rows = [
-        row for row in store.list_messages(
-            conn, query=inputs["query"], limit=inputs.get("limit", 5),
-            chat_id=task["chat_id"])
-        if row["status"] == "confirmed"
-    ]
+    rows = store.list_messages(
+        conn, query=inputs["query"], limit=inputs.get("limit", 5),
+        chat_id=task["chat_id"], confirmed_only=True)
     results, evidence = [], []
     for row in rows:
         note_no = row["note_no"]
