@@ -1,0 +1,209 @@
+{
+  "schema": "cara.adr28-public-verification-summary/v1",
+  "adr": "ADR-0028",
+  "status": "deployed_and_accepted",
+  "source_commit": "125aaefe242134e6135291eb0d5cf32da59cdb8d",
+  "source_archive_sha256": "1cb38c7dbba4c5f88ba988ed2875cc69294686a1204bb3a45ad74bdd1a36e4f6",
+  "publication": {
+    "source_pr": "https://github.com/promptinvest/tg-ingest-agent/pull/18",
+    "merged_commit": "b239d749e811037730ce251f2ac520b4ac91569c",
+    "source_ci": "https://github.com/promptinvest/tg-ingest-agent/actions/runs/41593508555",
+    "production_tag": "production-2026-11-03-adr28-pending-resolvers",
+    "tag_annotation_sha": "bb03d09c97dca9d75b9b55cac479051ff9c9a04e",
+    "tag_peeled_source": "125aaefe242134e6135291eb0d5cf32da59cdb8d",
+    "earlier_tags_preserved": true,
+    "earlier_tag_count": 15,
+    "earlier_tag_ref_count": 29
+  },
+  "scope": {
+    "table_selected_existing_pending_handlers": 13,
+    "handler_body_ast_parity": true,
+    "same_agent_and_live_method_lookup": true,
+    "shared_card_and_reply_guards_preserved": true,
+    "journal_correction_precedence_preserved": true,
+    "cancellation_cleanup_preserved": true,
+    "unknown_kind_clear_only_fallback_preserved": true,
+    "outer_delivery_wrapper_and_receipt_identity_preserved": true,
+    "general_mixin_mro_dependency_guard": true,
+    "static_guard_proves_declarations_not_path_initialization": true,
+    "new_runtime_modules": 0,
+    "new_services": 0,
+    "schema_migrations": 0,
+    "router_prompt_changes": false,
+    "model_changes": false,
+    "budget_changes": false,
+    "capability_changes": false
+  },
+  "verification": {
+    "focused_linux": {
+      "status": "passed",
+      "tests": 216
+    },
+    "full_linux_normal": {
+      "status": "passed",
+      "tests": 3470,
+      "skipped": 9
+    },
+    "full_linux_shuffled": {
+      "status": "passed",
+      "tests": 3470,
+      "skipped": 9
+    },
+    "committed_files_match_tested_bytes": 383,
+    "source_byte_parity_sha256": "5a0c2612e54b5ec42419ee7e337ce23c79a089e8174947d2717c4af220969e8d",
+    "actual_linux_result_sha256": "a889d23007224b827c0172e43234b87e90a2e877cb28e19bf46434e1d5094a2d",
+    "linux_evidence_sha256": "b24f04013e5959d18c4dda7a74e0dc3497061d4a83952f0ed3f1dd8396306478",
+    "source_compatibility_review": "passed",
+    "original_test_support_files_preserved": 117,
+    "original_test_assertions_preserved": true,
+    "static_compile_shell_gates": "passed",
+    "installed_layout": {
+      "status": "passed",
+      "scenarios": 5
+    },
+    "helper_suites": {
+      "model_trial": 154,
+      "capability_release": 21,
+      "analysis_release": 6,
+      "cache_release": 29
+    },
+    "operator": {
+      "status": "passed",
+      "tests": 139,
+      "static_checks": "passed",
+      "compile_checks": "passed"
+    },
+    "unchanged_historical_operator": {
+      "status": "passed",
+      "tests": 139
+    },
+    "transport": {
+      "status": "passed",
+      "tests": 27,
+      "static_compile_shell_checks": "passed"
+    },
+    "nonroot_import": {
+      "status": "passed",
+      "roles": 2
+    },
+    "cgroup_fault_cleanup": {
+      "status": "passed",
+      "cases": 3
+    },
+    "preparer_real_timeout_cleanup": {
+      "status": "passed",
+      "cases": 1,
+      "term_resistant_leader_killed_and_reaped": true,
+      "owned_group_absent": true
+    },
+    "operator_qualification_sha256": "1581ca49ec59edb2f8eb44482aa5eb60c1c159b3ccb41fd6c19eaab0f1e0266c",
+    "preparation_continuation": {
+      "status": "passed",
+      "tests": 45,
+      "qualification_sha256": "f6933dc97f1e53a1b5ea119fb2988d05a483d307205a6ff3513aac8d6a85e6a5",
+      "review_sha256": "a4046d90eec2b37d144979273de6287e959e37e2c36a74aa9d2d86533086f041",
+      "original_consumed_claim_and_root_preserved": true,
+      "original_native_operator_unchanged": true,
+      "original_protected_entries": 136,
+      "disjoint_accepted_adr24_additions": 4,
+      "old_claim_reset": false,
+      "old_collector_or_controller_replayed": false,
+      "new_owner_approval_claimed": false
+    },
+    "final_physical_observer": {
+      "status": "passed",
+      "fixture_static_checks": 6,
+      "qualification_sha256": "4d485502dfd98fdcc9d2893ce0462d6a92d0f4d87d562e67b552bb348defd4c3",
+      "independent_observation_sha256": "951bb1621d174a2ee20f7856aa81aced6965a26c62c9bf37f6d043ec54fe9c7b",
+      "foreground_ssh_returncode": 0,
+      "recorded_controller_supervisor_guardian_audit_generations_absent": true,
+      "recorded_groups_absent": true,
+      "owned_tool_cgroup_absent": true,
+      "four_services_healthy": true,
+      "earlier_failed_observer_preserved": true,
+      "service_actions": 0,
+      "database_mutations": 0,
+      "model_calls": 0,
+      "messages_sent": 0
+    }
+  },
+  "preserved_preparation_failures": {
+    "operator_first_qualification": {
+      "status": "failed_preserved",
+      "tests": 139,
+      "assertion_failures": 4,
+      "production_actions": 0
+    },
+    "first_readonly_preparation": {
+      "status": "failed_preserved",
+      "child_returncode": 1,
+      "child_group_absence_observed": true,
+      "native_authorization_created": false,
+      "native_controller_dispatched": false,
+      "service_actions": 0,
+      "old_claim_reset": false
+    },
+    "protected_map_diagnostic": {
+      "status": "observed",
+      "original_entries": 136,
+      "unchanged_original_entries": 136,
+      "missing_entries": 0,
+      "changed_entries": 0,
+      "added_entries": 4,
+      "accepted_state_exact_overlay": true,
+      "sha256": "10f92aed7df4dc50c6b8f5fc6b42a9b41e25e8fc1535e2608b92763e2aae67f0"
+    },
+    "first_final_physical_observer": {
+      "status": "failed_preserved",
+      "cause": "standard_io_audit_guard_refused_dev_null_before_public_unit_query",
+      "foreground_ssh_returncode": 1,
+      "success_receipt_produced": false,
+      "service_actions": 0,
+      "database_calls": 0,
+      "model_calls": 0,
+      "messages_sent": 0
+    }
+  },
+  "native_release": {
+    "status": "deployed_and_accepted",
+    "build_version": "2fec08f110b0",
+    "deployment_id": "5ea41d8ef1cbae19d4134d3f",
+    "native_manifest_sha256": "95d6906e5e3077c1ec7922051043ea865a7a8176fa4d840385d107a274c7b089",
+    "acceptance_at_utc": "2026-11-03T08:04:41.793556+00:00",
+    "acceptance_sha256": "39d6f0f3cd27500896e835fb225ee11703eecf696da8cf570cbdc5517ef9620a",
+    "native_phases_passed": 21,
+    "independent_audit_at_utc": "2026-11-03T08:07:18.879686+00:00",
+    "independent_audit_sha256": "a73d7c78ec8c922f945d6968a719d7a9538710c12cbfee8fa4dbfe435f3e1db6",
+    "controller_returncode": 0,
+    "foreground_ssh_returncode": 0,
+    "actual_owned_processes_and_groups_absent": true,
+    "independent_closure_sha256": "951bb1621d174a2ee20f7856aa81aced6965a26c62c9bf37f6d043ec54fe9c7b",
+    "independent_closure_at_utc": "2026-11-03T08:22:25.484564+00:00",
+    "current_unknown_count": 0,
+    "historical_unknown_rows_preserved": 40,
+    "original_schema_rows_usage_cache_preserved": true,
+    "peer_services_and_configuration_preserved": true,
+    "deployment_notice_sent_once": true,
+    "authorization_sha256": "30160ffe096be592dd8e36441b77d7e84a083d3ac871587f470ed7ccd5f04ad2",
+    "materialization_sha256": "3c604c9168c628708c94edc58ede53b424293fd5f4a34242c8d7c53ffedc66d9",
+    "supervisor_returncode": 0,
+    "guardian_returncode": 0,
+    "independent_audit_native_returncode": 0,
+    "independent_audit_foreground_ssh_returncode": 0,
+    "supervisor_receipt_sha256": "f12b402edbe200c3a1c133a39ff9f248c9b24f53e8ed811c271ab6620244c045",
+    "guardian_receipt_sha256": "86bceb97614ca8b27366ca61e9a5ab0d2b99595373a1493ae4f510481d5b0cc5",
+    "independent_audit_return_receipt_sha256": "7a66b98f36db422cf88d1138fb3c960c63b957176b669e13e725ac2c819612ae",
+    "models_prompts_budgets_and_capabilities_preserved": true,
+    "schema_tables": 56,
+    "actual_owned_tool_cgroup_absent": true,
+    "four_services_healthy_at_closure": true,
+    "independent_closure_foreground_ssh_returncode": 0
+  },
+  "limits": {
+    "pending_values_are_not_acceptance_claims": true,
+    "private_operator_paths_and_raw_data_omitted": true,
+    "independent_backup_key_custody_and_host_loss_recovery": "unproved",
+    "adr0022": "postponed_separate_design_decision",
+    "public_summary_is_not_release_authority": true
+  }
+}

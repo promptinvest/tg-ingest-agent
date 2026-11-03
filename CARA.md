@@ -1,10 +1,13 @@
 # Cara — Capabilities and Architecture
 
-The accepted runtime is ADR-0024 source `2b6da6ee` (build `2b8c4237a9a4`).
-The precedence table, compatible route contracts and explicit latest-action undo
-are live. Existing undo phrases retain their meanings. The
-[release record](docs/cara-adr24-release-2026-11-02.md) records source verification,
-the preserved failed attempts and the separate read-only final acceptance/audit.
+The accepted runtime is ADR-0028 source `125aaefe` (build `2fec08f110b0`).
+Pending confirmations use the thirteen table-selected handlers on the same Agent,
+with existing card ownership, cancellation and delivery contracts. Mixin
+dependencies are checked against the complete composed class. Native acceptance,
+the separate audit, final physical closure and production-tag publication passed.
+The [release record](docs/cara-adr28-release-2026-11-03.md) retains the verification
+and preserved preparation failures. Existing ADR-0024 routing,
+parameter contracts, undo behavior and command meanings remain compatible.
 Detailed operator receipts remain in the private operator workspace.
 
 ADR-0027 adds documentation coverage checks and freezes a cache-report test clock

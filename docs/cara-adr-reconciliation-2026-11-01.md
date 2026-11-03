@@ -1,5 +1,23 @@
 # Cara ADR reconciliation — 1 November 2026
 
+## Current checkpoint — 3 November, ADR0028 native acceptance
+
+ADR-0028's remaining source work is implemented and installed as source
+`125aaefe`, build `2fec08f110b0`. All 21 native phases completed at
+08:04:41.793556 UTC with canonical acceptance `39d6f0f3`; the separate audit
+passed at 08:07:18.879686 UTC as `a73d7c78`. Exact-source normal/shuffled gates,
+pending-confirmation regressions and the general mixin contract guard pass.
+Strict current unknowns remain zero; all 40 historical unknown rows and original
+usage/cache/schema/configuration/model/budget and peer-state boundaries remain.
+Separate physical closure `951bb162` proved recorded actors/groups and the owned
+tool cgroup absent, with four healthy services; the earlier observer failure
+remains preserved. Production tag `production-2026-11-03-adr28-pending-resolvers`
+is verified at exact source `125aaefe`; all previous tags remain exact. The
+[release record](cara-adr28-release-2026-11-03.md) distinguishes the separate
+verification and acceptance evidence and preserves the earlier preparation
+failures. This work does not select ADR-0022, new backup policy or key-custody
+claims; those existing boundaries remain.
+
 ADR-0018's narrow follow-ups are deployed and accepted as source `6e947694`,
 build `ee4aa3446c7d`, deployment `7189e6368a3717ed1fa129ec`. Native acceptance
 completed on 2 November at 09:25:38.717106 UTC; the separate audit passed at
@@ -28,7 +46,9 @@ not establish population quality, backup escrow or uninterrupted health.
 | 0024 | Implemented/deployed/accepted 2b6da6ee: precedence table/matrix, compatible route contracts and explicit generic undo. Existing phrases and history preserved; [release](cara-adr24-release-2026-11-02.md). |
 | 0026 | Complete 2026-11-01: full F-rule lint, exact synthetic prompt snapshots and compatible legacy task/env helper consolidation passed exact-source verification, native acceptance and independent audit. The contained first deployment failure and forward continuation are retained in the release record. |
 | 0027 | Complete 2026-11-02: curated module/service/retention maps, synthetic schema guards, current contracts and one operations runbook are verified. Byte-exact previous specs retain historical evidence; runtime unchanged. |
-| 0028 | Media/conversation moves are complete. Pending-resolver table and general mixin-composition checks remain, after precedence is pinned. |
+| 0028 | Pending-resolver table and general mixin-composition guard implemented/deployed/accepted as 125aaefe, 2026-11-03; separate audit, physical closure and production tag verified. [Release evidence](cara-adr28-release-2026-11-03.md). |
+
+Historical 1–2 November source-disposition checkpoint:
 
 ADR0018's narrow implementation and release are complete. ADR0024 is implemented, deployed and accepted as recorded above. ADR0028 is the
 next source remainder; it is not selected by this closure.
