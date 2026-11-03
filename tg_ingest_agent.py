@@ -1115,6 +1115,8 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             return min(self.PENDING_WORK_POLL_SECONDS, self.cfg.poll_timeout)
         if getattr(self, "_fleet_mcp_facts_pending", None):
             return min(self.PENDING_WORK_POLL_SECONDS, self.cfg.poll_timeout)
+        if self.voice_work_pending():
+            return min(self.PENDING_WORK_POLL_SECONDS, self.cfg.poll_timeout)
         if self.albums or getattr(self, "voice_jobs", {}):
             return self.PENDING_WORK_POLL_SECONDS
         if getattr(self.cfg, "fleet_enabled", False):
@@ -1137,6 +1139,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     def run(self):
         self.fleet_async = True
         self.voice_async = True
+        self.voice_download_async = True
         self.background_maintenance = True
         try:
             tg_call(self.cfg.token, "deleteWebhook", {"drop_pending_updates": False})
@@ -1315,7 +1318,8 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if key == "budget_stop":
             self._reply_delivery_metadata = dict(prior or {}, conversation_source="operational:budget_stop")
         try:
-            delivered = self._send_all(text)
+            with action_delivery.scheduled(self, "budget_notice", flag):
+                delivered = self._send_all(text)
         finally:
             self._reply_delivery_metadata = prior
         if delivered:
@@ -4371,7 +4375,9 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         reason = str(row["error"] or "")[:200]
         # Mark the day announced only on a real delivery (same rule as the model-health
         # and disk alerts) — a Telegram blip must not swallow the one proactive notice.
-        if self._send_all(T(self.lang(), "backup_failed", reason=reason)):
+        with action_delivery.scheduled(self, "backup_failure", today):
+            delivered = self._send_all(T(self.lang(), "backup_failed", reason=reason))
+        if delivered:
             store.kv_set(self.conn, "backup_notice_fails", "0")
             store.kv_set(self.conn, "backup_failed_day", today)
         elif self._sched_send_gave_up("backup_notice"):
@@ -4863,6 +4869,10 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 results[model] = (kind,) + tuple(probe())
             except Exception as exc:  # never crash the loop on a health check
                 log(f"model health check error for {model}: {exc}")
+        transition_slots = {
+            model: action_delivery.transition_slot(self, "model:" + model, "ok" if ok else "down")
+            for model, (_kind, ok, _reason) in results.items()
+        }
         # Pass 1: debounce every probe into confirmed transitions.
         went_down = []      # (kind, model, reason, transient)
         came_back = []      # (kind, model, reason)
@@ -4905,8 +4915,10 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                     or any(x[1] == m for x in went_down))
         chains = {p: [p] + self._fallbacks_for(p, prof) for p in primaries}
         dead_chains, revived_chains = [], []
+        chain_slots = {}
         for p, chain in chains.items():
             alive = any(_ok(m) for m in chain)
+            chain_slots[p] = action_delivery.transition_slot(self, "chain:" + p, "ok" if alive else "down")
             state = store.kv_get(self.conn, f"mhc:{p}")
             if not alive and state != "dead" and all(_confirmed_down(m) for m in chain):
                 members = [(m, r, t) for k, m, r, t in went_down if m in chain]
@@ -4925,22 +4937,27 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         # -- down: ONE message per transition, listing every dead chain's primary --
         if dead_chains:
             key = "model_down_transient" if all(t for p, r, t in dead_chains) else "model_down"
-            if self._send_all(T(lang, key, models=", ".join(p for p, r, t in dead_chains),
-                                reason=dead_chains[0][1])):
-                for p, r, t in dead_chains:
-                    store.kv_set(self.conn, f"mhc:{p}", "dead")
-                    for m in chains[p]:
-                        if any(x[1] == m for x in went_down):
-                            store.kv_set(self.conn, f"mh:{m}", "down")
-                            self._record_health_transition(m, "down", r, True)
-                    log_err(f"model health: chain {p} dead ({r}), owner notified")
+            occurrence = sorted((p, chain_slots[p]) for p, _r, _t in dead_chains)
+            with action_delivery.scheduled(self, "model_down", occurrence):
+                delivered = self._send_all(T(lang, key, models=", ".join(p for p, r, t in dead_chains),
+                                           reason=dead_chains[0][1]))
+            if delivered:
+                with action_delivery.local_transaction(self.conn):
+                    for p, r, t in dead_chains:
+                        store.kv_set(self.conn, f"mhc:{p}", "dead")
+                        for m in chains[p]:
+                            if any(x[1] == m for x in went_down):
+                                store.kv_set(self.conn, f"mh:{m}", "down")
+                                self._record_health_transition(m, "down", r, True)
+                        log_err(f"model health: chain {p} dead ({r}), owner notified")
         for m, r in speech_down:
             if self._whisper_cli_available():
                 self._notify_fleet(T("en", "fleet_speech_down", label=label, model=m, reason=r))
                 store.kv_set(self.conn, f"mh:{m}", "down")
                 store.kv_set(self.conn, f"mh_user:{m}", "0")
                 self._record_health_transition(m, "down", r, False)
-            elif self._send_all(T(lang, "speech_down_no_fallback", model=m, reason=r)):
+            elif self._scheduled_send_all("speech_down", transition_slots[m],
+                                          T(lang, "speech_down_no_fallback", model=m, reason=r)):
                 store.kv_set(self.conn, f"mh:{m}", "down")
                 store.kv_set(self.conn, f"mh_user:{m}", "1")
                 self._record_health_transition(m, "down", r, True)
@@ -4958,18 +4975,20 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
                 self._record_health_transition(m, "down", r, False)
                 log(f"model health: {m} ok -> down ({r}), fallback holding — fleet only")
         # -- back: only a «down» the boss heard about earns a «back» in chat --
-        if revived_chains and self._send_all(
+        if revived_chains and self._scheduled_send_all(
+                "model_back", sorted((p, chain_slots[p]) for p in revived_chains),
                 T(lang, "model_back", models=", ".join(revived_chains))):
-            for p in revived_chains:
-                store.kv_set(self.conn, f"mhc:{p}", "ok")
-                for m in chains[p]:
-                    if any(x[1] == m for x in came_back):
-                        store.kv_set(self.conn, f"mh:{m}", "ok")
-                        self._record_health_transition(m, "back", "", True)
-                log(f"model health: chain {p} serving again, owner notified")
+            with action_delivery.local_transaction(self.conn):
+                for p in revived_chains:
+                    store.kv_set(self.conn, f"mhc:{p}", "ok")
+                    for m in chains[p]:
+                        if any(x[1] == m for x in came_back):
+                            store.kv_set(self.conn, f"mh:{m}", "ok")
+                            self._record_health_transition(m, "back", "", True)
+                    log(f"model health: chain {p} serving again, owner notified")
         for m in speech_back:
             if store.kv_get(self.conn, f"mh_user:{m}") == "1":
-                if self._send_all(T(lang, "speech_back", model=m)):
+                if self._scheduled_send_all("speech_back", transition_slots[m], T(lang, "speech_back", model=m)):
                     store.kv_set(self.conn, f"mh:{m}", "ok")
                     store.kv_set(self.conn, f"mh_user:{m}", "0")
                     self._record_health_transition(m, "back", "", True)
@@ -5011,6 +5030,9 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         # `disk_space` holds the last ANNOUNCED state ("low"/"ok"), not the raw
         # reading — so a healthy box stays quiet and a low one is reported once.
         prev = store.kv_get(self.conn, "disk_space")
+        observed = ("low" if free_pct < threshold else "ok"
+                    if free_pct >= threshold + self.DISK_RECOVER_MARGIN_PCT else None)
+        occurrence = action_delivery.transition_slot(self, "disk_space", observed, initial=prev or "ok")
         self.turn_lang = None
         lang = self.lang()
         args = {"pct": f"{free_pct:.1f}", "free": sysinfo.fmt_bytes(free),
@@ -5018,7 +5040,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if free_pct < threshold:
             if prev == "low":
                 return  # already announced; don't repeat every half hour
-            if self._send_all(T(lang, "disk_low", **args)):
+            if self._scheduled_send_all("disk_low", occurrence, T(lang, "disk_low", **args)):
                 store.kv_set(self.conn, "disk_space", "low")
                 store.issue_add(self.conn, self._owner_chat(), "disk_low",
                                 f"{free_pct:.1f}% free ({free} of {total} bytes)")
@@ -5027,7 +5049,7 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if prev == "low":
             if free_pct < threshold + self.DISK_RECOVER_MARGIN_PCT:
                 return  # back above the line but not clearly — wait for real room
-            if self._send_all(T(lang, "disk_ok", **args)):
+            if self._scheduled_send_all("disk_ok", occurrence, T(lang, "disk_ok", **args)):
                 store.kv_set(self.conn, "disk_space", "ok")
                 log(f"disk space recovered: {free_pct:.1f}% free")
         elif prev is None:
@@ -5040,6 +5062,10 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
     # Telegram day can't wedge the schedule forever.
     SCHED_SEND_RETRY_MINUTES = 15
     SCHED_SEND_MAX_ATTEMPTS = 3
+
+    def _scheduled_send_all(self, name, occurrence, text):
+        with action_delivery.scheduled(self, name, occurrence):
+            return self._send_all(text)
 
     @action_delivery.caller_finalized
     def _send_all(self, text):
@@ -5104,7 +5130,9 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         if not text:
             store.kv_set(self.conn, "morning_brief_day", day)  # nothing worth a ping today
             return
-        if self.reply(chat_id, text):
+        with action_delivery.scheduled(self, "morning_brief", day):
+            delivered = self.reply(chat_id, text)
+        if delivered:
             store.kv_set(self.conn, "morning_brief_fails", "0")
             store.kv_set(self.conn, "morning_brief_day", day)
         elif self._sched_send_gave_up("morning_brief"):
@@ -5138,7 +5166,9 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
         text = T(lang, "review_weekly_intro", name=self.owner_name()) + "\n" + report
         # Advance the schedule only once the review actually reached the boss —
         # a transient send failure retries (bounded) instead of skipping a week.
-        if self._send_all(text):
+        with action_delivery.scheduled(self, "weekly_review", nxt):
+            delivered = self._send_all(text)
+        if delivered:
             store.kv_set(self.conn, "weekly_review_fails", "0")
             store.kv_set(self.conn, "next_review_utc", self.next_review_dt(now).isoformat())
             relationship.log_event(self.conn, "weekly_review",

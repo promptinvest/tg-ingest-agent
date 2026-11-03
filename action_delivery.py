@@ -209,12 +209,48 @@ def reminder_action(predicate=None):
     return decorate
 
 
+
+@contextmanager
+def scheduled(agent, name, occurrence):
+    """Bind a scheduler-owned logical occurrence across attempts and restarts."""
+    previous = getattr(agent, "_scheduled_delivery_scope", None)
+    agent._scheduled_delivery_scope = _digest(_json([name, occurrence]))
+    try:
+        yield
+    finally:
+        agent._scheduled_delivery_scope = previous
+
+
+def transition_slot(agent, name, state, *, initial="ok"):
+    """Give repeated observations one identity, and later transitions a new one.
+
+    Only the observed transition token is stored here. Announcement policy,
+    debounce, delivery acknowledgement and its domain bookkeeping stay with the
+    original caller. No old outbox or history row is reclassified.
+    """
+    key = "delivery_transition:" + name
+    raw = store.kv_get(agent.conn, key)
+    try:
+        current = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        current = None
+    if state is None:
+        state = current.get("state", initial) if isinstance(current, dict) else initial
+    if not isinstance(current, dict) or current.get("state") != state:
+        current = {"state": state, "token": uuid.uuid4().hex}
+        store.kv_set(agent.conn, key, _json(current))
+    return current["token"]
+
+
 def enqueue(agent, method, params, *, record=False, history_text=None):
     tx = getattr(agent, "_reminder_transaction", None)
     source = getattr(agent, "_active_update_id", None)
     fixed = getattr(agent, "_reply_delivery_key", None)
+    scope = getattr(agent, "_scheduled_delivery_scope", None)
     if fixed:
         key = fixed
+    elif scope and tx is None:
+        key = "scheduled:" + _digest(_json([scope, method, params.get("chat_id")]))
     elif tx:
         count = tx["send_sequence"]
         tx["send_sequence"] += 1

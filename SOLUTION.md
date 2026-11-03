@@ -186,6 +186,9 @@ checkpoints and the complete previous specification remain in the
 <!-- /documentation-contract:modules -->
 
 ### Skill permission model
+Unquoted fleet confirmations consider only unexpired approvals. Explicit
+old-card replies preserve expiry checks and never confirm another action;
+multiple live owners and malformed approval data remain fail-closed.
 
 `skill_manifest.py` is the canonical permission registry; startup fails if any router
 action lacks a policy (`assert_covers(router.ACTIONS)`). Each action declares its risk,
@@ -456,6 +459,11 @@ Ask, reminders/calendar, memory/learning and the proactive heartbeat are detaile
 | **Measured cache reporting** | Spend and engineering review report measured coverage, token-weighted reuse and per-model coverage separately from priced coverage, cost and net savings. Historical NULL remains unknown. Frozen dated published tariffs include write costs; invoice amounts and configured flat-rate budget charges stay distinct. | Anticipated savings never release a reservation; no retrospective charge rewrite. |
 
 ## 4. Conversation, grounded Q&A, and persona
+Task knowledge search applies confirmed-note eligibility before limiting
+results, preserving owner scope, journal exclusions and general browsing.
+The inference gateway validates response shapes and nonnegative bounded
+integer token counters before settling usage. Malformed responses retain
+unknown reservations and use typed errors; rates and history are unchanged.
 
 Cara has **two LLM-generated reply paths**, both bounded:
 
@@ -749,6 +757,22 @@ Budget warnings and the weekly digest keep their own dedicated notifiers.
 ---
 
 ## 7. Durable runtime & observability
+Own-voice work has one admitted serial download/transcription transport;
+overflow stays in the durable inbox without a thread or paid reservation.
+Only captured configuration, paths and file identifiers cross the thread
+boundary. SQLite settlement and transcript routing stay on the owner.
+Completed results survive transient settlement failure; cached transcripts
+retry through the running loop with the existing update attempt cap. A
+durable remote-dispatch marker prevents automatic repetition of an unknown
+paid transcription after restart. Listening notices and transcript replies
+have separate stable delivery identities.
+
+Scheduled notices reuse an occurrence/recipient identity through retries
+and restart. Ambiguous sends retain their uncertainty and are not sent
+again under a new key; explicit rejections preserve existing retries.
+Calendar slots and accounting periods select periodic occurrences; raw
+health transitions select alert episodes, retaining disk hysteresis.
+Grouped model-announcement state settles atomically after transport.
 
 - **Permission manifest (`skill_manifest`).** Single source of truth for every
   action's risk, whether it writes state, its confirmation mode, and whether it
