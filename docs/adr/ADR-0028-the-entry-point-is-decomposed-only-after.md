@@ -1,6 +1,6 @@
 # ADR-0028: The entry point is decomposed only after behaviour work settles
 
-- Status: Implementation prepared 2026-11-03; exact-source verification and guarded release pending
+- Status: Implemented/deployed/accepted 125aaefe, 2026-11-03; independent audit, physical closure and production tag verified
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -26,6 +26,25 @@ architecture#6, tests-quality#8 in part
 everything above
 
 ## Status log
+
+- 2026-11-03: source `125aaefe` is merged in PR18 and installed as build
+  `2fec08f110b0`. All 21 native release phases passed; canonical acceptance is
+  `39d6f0f3`, 08:04:41.793556 UTC, and the separate independent audit passed as
+  `a73d7c78`, 08:07:18.879686 UTC. Strict accounting retained all 40 historical
+  unknown rows with zero current unknowns; original usage/cache/schema,
+  configuration, models, budgets and peer state remain preserved. Exact-source
+  216 focused and 3,470 normal/shuffled checks passed with nine retained skips.
+  Failed qualification/preparation artifacts remain unchanged. A fresh reviewed
+  preparation continuation passed 45 checks and added only four hash-bound
+  accepted ADR0024 metadata entries to the exact original 136. The native
+  controller, supervisor, guardian and foreground waits returned zero. Separate
+  physical closure `951bb162` proved recorded actors/groups and the owned tool
+  cgroup absent, with four healthy services. The earlier physical observer's
+  standard-I/O guard failure remains preserved. Production tag
+  `production-2026-11-03-adr28-pending-resolvers` peels to exact source `125aaefe`;
+  all 15 previous tags and 29 previous refs remain exact. See the
+  [release record](../cara-adr28-release-2026-11-03.md). No consumed exception or
+  old controller was reused.
 
 - 2026-11-03: owner requested "implement next Cara ADR" after accepted ADR0024.
   The selected remainder is the pending-resolver table and general mixin contract
