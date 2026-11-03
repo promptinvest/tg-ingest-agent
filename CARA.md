@@ -113,6 +113,13 @@ Telegram update (owner-only: chat AND sender must be on the allowlist)
   other chat (e.g. a group), are ignored.
 - **State changes are confirmed** conversationally ("да", "нет, лучше крипта",
   "через полчаса") or via inline buttons. Bulk **purge** needs an exact typed phrase.
+  `PENDING_RESOLVERS` maps the thirteen existing confirmation kinds to handlers
+  on the same Agent. Shared reply/card checks and cancellation cleanup keep their
+  order; journal date corrections retain their earlier ownership, and unknown
+  kinds keep the existing clear-only fallback. Reminder delivery receipts still
+  wrap `resolve_pending`. A static composition guard checks required mixin
+  attributes against declarations across the complete Agent MRO; optional probes
+  remain optional. It verifies declarations, not initialization on every path.
   **Acknowledgements never reach the model (2026‑09‑07, ADR‑0006):** while a reminder
   draft or partial is pending, «да»/«нет»/«не надо»/«через 20 минут»/«в 18:30»/«завтра
   вечером» are parsed deterministically; with nothing pending a bare

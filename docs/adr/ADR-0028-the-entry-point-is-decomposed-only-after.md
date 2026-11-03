@@ -1,6 +1,6 @@
 # ADR-0028: The entry point is decomposed only after behaviour work settles
 
-- Status: Partially implemented 2026-10-07 (media and converse pure moves; pending resolver table remains)
+- Status: Implementation prepared 2026-11-03; exact-source verification and guarded release pending
 - Date: 2026-09-07
 - Phase: Phase E — maintainability and documentation
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -26,6 +26,16 @@ architecture#6, tests-quality#8 in part
 everything above
 
 ## Status log
+
+- 2026-11-03: owner requested "implement next Cara ADR" after accepted ADR0024.
+  The selected remainder is the pending-resolver table and general mixin contract
+  guard. All thirteen resolver bodies are pure moves on the existing Agent;
+  journal-correction precedence, shared stale-card checks, cancellation cleanup,
+  unknown-kind fallback and the outer reminder delivery wrapper remain intact.
+  No new runtime module, installer entry, schema, prompt or service is needed.
+  Baseline characterization passed nineteen checks and failed only the missing
+  table coverage check as expected. Exact-source full verification and guarded
+  release remain pending; previous failed/completed controllers stay consumed.
 
 - 2026-09-07: proposed by the review; not yet discussed with the owner.
 
