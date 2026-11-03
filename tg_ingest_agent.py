@@ -240,6 +240,32 @@ _DISPATCH = {
                                                      c.params.get("question")),
 }
 
+# Pending resolution keeps its shared card/cancellation guards on Agent.
+# Each body is a pure move from the original kind chain.
+_PendingCtx = namedtuple("_PendingCtx", "chat_id action params pending lang")
+
+
+def _pending_default(s, c):
+    store.pending_clear(s.conn, c.chat_id)
+
+
+PENDING_RESOLVERS = {
+    "journal_correction": lambda s, c: s._resolve_pending_journal_correction(*c),
+    "category": lambda s, c: s._resolve_pending_category(*c),
+    "media_capture": lambda s, c: s._resolve_pending_media_capture(*c),
+    "reminder": lambda s, c: s._resolve_pending_reminder(*c),
+    "reminder_fired": lambda s, c: s._resolve_pending_reminder_fired(*c),
+    "reminder_expired": lambda s, c: s._resolve_pending_reminder_expired(*c),
+    "note_archive": lambda s, c: s._resolve_pending_note_archive(*c),
+    "delete": lambda s, c: s._resolve_pending_delete(*c),
+    "habit": lambda s, c: s._resolve_pending_habit(*c),
+    "boss_sensitive": lambda s, c: s._resolve_pending_boss_sensitive(*c),
+    "note_edit": lambda s, c: s._resolve_pending_note_edit(*c),
+    "note_retitle": lambda s, c: s._resolve_pending_note_retitle(*c),
+    "journal_prompt": lambda s, c: s._resolve_pending_journal_prompt(*c),
+}
+
+
 # Actions that put a DIFFERENT view on his screen, so the C3 "list she just
 # showed" pin stops describing anything (review fix 2026-07-28). `list_items`,
 # `note_review` and the paging callback are absent on purpose: each one re-pins
@@ -3457,12 +3483,9 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             self.reply(chat_id, T(lang, "nothing_pending"))
             return
         kind, payload = pending["kind"], pending["payload"]
+        context = _PendingCtx(chat_id, action, params, pending, lang)
         if kind == "journal_correction":
-            answer = "yes" if action == "confirm" else "no" if action == "cancel" else ""
-            if not answer or not self.resolve_journal_correction(
-                    chat_id, lang, pending, answer,
-                    card_id=getattr(self, "turn_reply_message_id", None)):
-                self.reply(chat_id, T(lang, "journal_date_needed"))
+            PENDING_RESOLVERS[kind](self, context)
             return
         if kind == "reminder" and self._reject_reminder_draft_reply(chat_id, lang, pending):
             return
@@ -3486,228 +3509,257 @@ class Agent(fleet_lifecycle_svc.FleetLifecycleMixin, fleet.FleetMixin, learning.
             store.pending_clear(self.conn, chat_id)
             self.reply(chat_id, T(lang, "cancelled"))
             return
-        if kind == "category":
-            # A REPLY to a specific suggestion card names THAT card, even when a
-            # NEWER card is the one pending (pending_set keeps one row per chat).
-            target_id = getattr(self, "turn_reply_suggestion_id", None)
-            row = store.get_message(self.conn, target_id if target_id is not None
-                                    else payload.get("row_id"))
-            if not row:
-                store.pending_clear(self.conn, chat_id)
-                return
-            category = (llm.normalize_category(params.get("category"))
-                        if action == "amend" else None)
-            category = category or row["suggested_category"] or self.cfg.fallback_category
-            self.apply_category_confirm(chat_id, row, category, reply_to=None)
-        elif kind == "media_capture":
-            if action == "amend":
-                # Corrections are deterministic (resolve_media_correction runs
-                # BEFORE the router) — an amend that reached here anyway gets the
-                # hint instead of a guess over untrusted photo-read titles.
-                self.reply(chat_id, T(lang, "media_correction_unclear"))
-                return
-            # Read ONCE and consumed: the flag describes THIS message, and a
-            # guard that could latch would refuse every later confirm too.
-            names_other = getattr(self, "_turn_names_other_work", False)
-            other_work = dict(getattr(self, "_turn_other_work", None) or {})
-            self._turn_names_other_work = False
-            self._turn_other_work = {}
-            if names_other:
-                # «Это другой фильм — "везде всё и сразу" 2022» is not a yes to
-                # the card in front of him, whatever the router made of it: he
-                # named a work the card does not show. The write boundary stays
-                # shut and the staged set is never stored on this turn (C2,
-                # 2026-07-28).
-                #
-                # It carries the work he NAMED into the new card (review fix
-                # 2026-07-28): the refusal used to pass empty params, so she
-                # answered «Что добавить в каталог? Напиши название…» to the
-                # message whose quotes hold that very title. With no quoted
-                # title she still asks — that is the honest end of the road,
-                # not the default one.
-                log("media confirm refused: the message names another work")
-                self.do_catalog_add(chat_id, lang, other_work)
-                return
-            if not self._media_confirm(chat_id, lang):
-                store.pending_clear(self.conn, chat_id)
-                self.reply(chat_id, T(lang, "nothing_pending"))
-        elif kind == "reminder":
-            if self._reject_reminder_schedule(chat_id, lang, params):
-                return
-            if action == "amend":
-                merged = dict(payload)
-                merged.update({k: v for k, v in params.items() if v is not None})
-                draft = reminders.validate_draft(merged)
-                if not draft:
-                    self.reply(chat_id, T(lang, "clarify"))
-                    return
-                if payload.get("note_msg_id"):  # keep the note→reminder link through amends
-                    draft["note_msg_id"] = payload["note_msg_id"]
-                if payload.get("src_msg_id"):  # and the source-turn link (edit notice)
-                    draft["src_msg_id"] = payload["src_msg_id"]
-                twin = reminders.find_twin(store.reminders_active(self.conn, chat_id),
-                                           draft["title"])
-                if twin is not None:
-                    draft["twin_id"] = twin["id"]
-                store.pending_set(self.conn, chat_id, "reminder", draft)
-                self._send_reminder_draft(chat_id, lang, draft, twin=twin)
-                return
-            rid = store.reminder_add(
-                self.conn, chat_id, payload["title"], payload["due_utc"], payload["recurrence"]
-            )
-            relationship.log_event(self.conn, "reminder_set",
-                                   f"set a reminder: {payload['title']}", importance=1,
-                                   source_table="reminders", source_id=rid,
-                                   title=payload["title"])
-            if payload.get("note_msg_id"):
-                # A saved note led to a real action (MET-001 outcome).
-                events.record_done(self.conn, "note_reminder_created", chat_id=chat_id,
-                                   payload={"message_id": payload["note_msg_id"],
-                                            "reminder_id": rid})
+        PENDING_RESOLVERS.get(kind, _pending_default)(self, context)
+
+    def _resolve_pending_journal_correction(self, chat_id, action, params, pending, lang):
+        answer = "yes" if action == "confirm" else "no" if action == "cancel" else ""
+        if not answer or not self.resolve_journal_correction(
+                chat_id, lang, pending, answer,
+                card_id=getattr(self, "turn_reply_message_id", None)):
+            self.reply(chat_id, T(lang, "journal_date_needed"))
+        return
+
+    def _resolve_pending_category(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        # A REPLY to a specific suggestion card names THAT card, even when a
+        # NEWER card is the one pending (pending_set keeps one row per chat).
+        target_id = getattr(self, "turn_reply_suggestion_id", None)
+        row = store.get_message(self.conn, target_id if target_id is not None
+                                else payload.get("row_id"))
+        if not row:
             store.pending_clear(self.conn, chat_id)
-            self._remember_reminder(rid)  # so a follow-up "это напоминание" binds to it
-            # NOW the reminder exists — an edit of the command turn that
-            # produced it gets the honest «осталось со старыми деталями» line.
-            self._remember_turn_artifact(payload.get("src_msg_id"), "reminder")
-            # …and re-show the numbered list (ADR-0004): a create re-orders it.
-            self.reply(chat_id, T(
-                lang, "reminder_set", rid=self.reminder_no(chat_id, rid), title=payload["title"],
-                when_local=reminders.fmt_local(payload["due_utc"], self.tz_offset()),
-            ) + "\n\n" + self._reminder_list_body(chat_id, lang))
-            if (store.pref_get(self.conn, "auto_calendar") or "").casefold() in ("1", "true", "yes", "да"):
-                row = store.reminder_get(self.conn, rid)
-                self.send_to_calendar(chat_id, gcal.event_from_reminder(
-                    row, self.cfg.event_duration_minutes))
-        elif kind == "reminder_fired":
-            # The context may be SYNTHESIZED (a reply-bound or last-fired
-            # follow-up) while the stored pending is an unrelated confirmation
-            # mid-flight (last night: acting on a replied-to alarm wiped the
-            # boss's open journal capture card). Only clear our own kind.
-            stored = store.pending_get(self.conn, chat_id)
-            ours = stored is None or stored.get("kind") == "reminder_fired"
-            if ours:
-                store.pending_clear(self.conn, chat_id)
-            # One implementation for text and buttons (reminders_svc): B4 re-arm /
-            # recurring echo, B5 close-on-«готово», batch cards and the journal
-            # variant all live there.
-            text, keyboard, remaining = self.resolve_fired_action(
-                chat_id, lang, payload, action, params)
-            if remaining and ours:
-                # «готово 2» on a batch card: the other members stay open on the slot.
-                titles = payload.get("titles") or []
-                keep = [t for i, t in zip(payload.get("reminder_ids") or [], titles)
-                        if int(i) in remaining]
-                store.pending_set(self.conn, chat_id, "reminder_fired",
-                                  {**payload, "reminder_ids": remaining,
-                                   "reminder_id": remaining[0], "titles": keep,
-                                   "title": keep[0] if keep else payload.get("title")},
-                                  ttl_seconds=1800)
-            self.reply(chat_id, text, reply_markup=keyboard)
-        elif kind == "reminder_expired":
-            # «да» to «Закрыла как просроченные: … — вернуть?» (ADR-0003).
+            return
+        category = (llm.normalize_category(params.get("category"))
+                    if action == "amend" else None)
+        category = category or row["suggested_category"] or self.cfg.fallback_category
+        self.apply_category_confirm(chat_id, row, category, reply_to=None)
+
+    def _resolve_pending_media_capture(self, chat_id, action, params, pending, lang):
+        if action == "amend":
+            # Corrections are deterministic (resolve_media_correction runs
+            # BEFORE the router) — an amend that reached here anyway gets the
+            # hint instead of a guess over untrusted photo-read titles.
+            self.reply(chat_id, T(lang, "media_correction_unclear"))
+            return
+        # Read ONCE and consumed: the flag describes THIS message, and a
+        # guard that could latch would refuse every later confirm too.
+        names_other = getattr(self, "_turn_names_other_work", False)
+        other_work = dict(getattr(self, "_turn_other_work", None) or {})
+        self._turn_names_other_work = False
+        self._turn_other_work = {}
+        if names_other:
+            # «Это другой фильм — "везде всё и сразу" 2022» is not a yes to
+            # the card in front of him, whatever the router made of it: he
+            # named a work the card does not show. The write boundary stays
+            # shut and the staged set is never stored on this turn (C2,
+            # 2026-07-28).
+            #
+            # It carries the work he NAMED into the new card (review fix
+            # 2026-07-28): the refusal used to pass empty params, so she
+            # answered «Что добавить в каталог? Напиши название…» to the
+            # message whose quotes hold that very title. With no quoted
+            # title she still asks — that is the honest end of the road,
+            # not the default one.
+            log("media confirm refused: the message names another work")
+            self.do_catalog_add(chat_id, lang, other_work)
+            return
+        if not self._media_confirm(chat_id, lang):
             store.pending_clear(self.conn, chat_id)
-            if action != "confirm":
-                self.reply(chat_id, T(lang, "cancelled"))
+            self.reply(chat_id, T(lang, "nothing_pending"))
+
+    def _resolve_pending_reminder(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        if self._reject_reminder_schedule(chat_id, lang, params):
+            return
+        if action == "amend":
+            merged = dict(payload)
+            merged.update({k: v for k, v in params.items() if v is not None})
+            draft = reminders.validate_draft(merged)
+            if not draft:
+                self.reply(chat_id, T(lang, "clarify"))
                 return
-            ids = [int(i) for i in payload.get("reminder_ids") or []]
-            self.reply(chat_id, self.reopen_reminders(chat_id, lang, ids))
-        elif kind == "note_archive":
-            if action == "confirm" and not self.note_confirmation_current(payload):
-                store.pending_clear(self.conn, chat_id)
-                self.reply(chat_id, T(lang, "card_expired"))
-                return
+            if payload.get("note_msg_id"):  # keep the note→reminder link through amends
+                draft["note_msg_id"] = payload["note_msg_id"]
+            if payload.get("src_msg_id"):  # and the source-turn link (edit notice)
+                draft["src_msg_id"] = payload["src_msg_id"]
+            twin = reminders.find_twin(store.reminders_active(self.conn, chat_id),
+                                       draft["title"])
+            if twin is not None:
+                draft["twin_id"] = twin["id"]
+            store.pending_set(self.conn, chat_id, "reminder", draft)
+            self._send_reminder_draft(chat_id, lang, draft, twin=twin)
+            return
+        rid = store.reminder_add(
+            self.conn, chat_id, payload["title"], payload["due_utc"], payload["recurrence"]
+        )
+        relationship.log_event(self.conn, "reminder_set",
+                               f"set a reminder: {payload['title']}", importance=1,
+                               source_table="reminders", source_id=rid,
+                               title=payload["title"])
+        if payload.get("note_msg_id"):
+            # A saved note led to a real action (MET-001 outcome).
+            events.record_done(self.conn, "note_reminder_created", chat_id=chat_id,
+                               payload={"message_id": payload["note_msg_id"],
+                                        "reminder_id": rid})
+        store.pending_clear(self.conn, chat_id)
+        self._remember_reminder(rid)  # so a follow-up "это напоминание" binds to it
+        # NOW the reminder exists — an edit of the command turn that
+        # produced it gets the honest «осталось со старыми деталями» line.
+        self._remember_turn_artifact(payload.get("src_msg_id"), "reminder")
+        # …and re-show the numbered list (ADR-0004): a create re-orders it.
+        self.reply(chat_id, T(
+            lang, "reminder_set", rid=self.reminder_no(chat_id, rid), title=payload["title"],
+            when_local=reminders.fmt_local(payload["due_utc"], self.tz_offset()),
+        ) + "\n\n" + self._reminder_list_body(chat_id, lang))
+        if (store.pref_get(self.conn, "auto_calendar") or "").casefold() in ("1", "true", "yes", "да"):
+            row = store.reminder_get(self.conn, rid)
+            self.send_to_calendar(chat_id, gcal.event_from_reminder(
+                row, self.cfg.event_duration_minutes))
+
+    def _resolve_pending_reminder_fired(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        # The context may be SYNTHESIZED (a reply-bound or last-fired
+        # follow-up) while the stored pending is an unrelated confirmation
+        # mid-flight (last night: acting on a replied-to alarm wiped the
+        # boss's open journal capture card). Only clear our own kind.
+        stored = store.pending_get(self.conn, chat_id)
+        ours = stored is None or stored.get("kind") == "reminder_fired"
+        if ours:
             store.pending_clear(self.conn, chat_id)
-            if action != "confirm":  # bulk archive only on an explicit yes
-                self.reply(chat_id, T(lang, "cancelled"))
-                return
-            ids = payload.get("row_ids") or []
-            with store.action_undo_group(self.conn, chat_id, 'note_lifecycle'):
-                archived = [rid for rid in ids if store.note_archive(
-                    self.conn, rid, reason="bulk archive by boss")]
-                for rid in archived:
-                    events.record_done(self.conn, "note_archived", chat_id=chat_id,
-                                       payload={"message_id": rid})
-                self.reply(chat_id, T(lang, "note_archived_multi", n=len(archived)))
-        elif kind == "delete":
-            if action != "confirm":  # deletion only on an explicit yes
-                store.pending_clear(self.conn, chat_id)
-                self.reply(chat_id, T(lang, "cancelled"))
-                return
-            if not self.note_confirmation_current(payload):
-                store.pending_clear(self.conn, chat_id)
-                self.reply(chat_id, T(lang, "card_expired"))
-                return
+        # One implementation for text and buttons (reminders_svc): B4 re-arm /
+        # recurring echo, B5 close-on-«готово», batch cards and the journal
+        # variant all live there.
+        text, keyboard, remaining = self.resolve_fired_action(
+            chat_id, lang, payload, action, params)
+        if remaining and ours:
+            # «готово 2» on a batch card: the other members stay open on the slot.
+            titles = payload.get("titles") or []
+            keep = [t for i, t in zip(payload.get("reminder_ids") or [], titles)
+                    if int(i) in remaining]
+            store.pending_set(self.conn, chat_id, "reminder_fired",
+                              {**payload, "reminder_ids": remaining,
+                               "reminder_id": remaining[0], "titles": keep,
+                               "title": keep[0] if keep else payload.get("title")},
+                              ttl_seconds=1800)
+        self.reply(chat_id, text, reply_markup=keyboard)
+
+    def _resolve_pending_reminder_expired(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        # «да» to «Закрыла как просроченные: … — вернуть?» (ADR-0003).
+        store.pending_clear(self.conn, chat_id)
+        if action != "confirm":
+            self.reply(chat_id, T(lang, "cancelled"))
+            return
+        ids = [int(i) for i in payload.get("reminder_ids") or []]
+        self.reply(chat_id, self.reopen_reminders(chat_id, lang, ids))
+
+    def _resolve_pending_note_archive(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        if action == "confirm" and not self.note_confirmation_current(payload):
             store.pending_clear(self.conn, chat_id)
-            ids = payload.get("row_ids") or ([payload["row_id"]] if payload.get("row_id") else [])
-            deleted, labels = [], []
-            for rid in ids:
-                if store.get_message(self.conn, rid) is not None:
-                    labels.append(self.note_no(rid))  # capture the number before it's gone
-                    for path in store.delete_message(self.conn, rid):
-                        Path(path).unlink(missing_ok=True)
-                    deleted.append(rid)
-            log(f"deleted {len(deleted)} message(s) by operator: {deleted}")
-            if len(deleted) == 1:
-                self.reply(chat_id, T(lang, "deleted", row_id=labels[0]))
-            elif deleted:
-                self.reply(chat_id, T(lang, "deleted_multi", n=len(deleted)))
-            else:
-                self.reply(chat_id, T(lang, "items_empty"))
-        elif kind == "habit":
+            self.reply(chat_id, T(lang, "card_expired"))
+            return
+        store.pending_clear(self.conn, chat_id)
+        if action != "confirm":  # bulk archive only on an explicit yes
+            self.reply(chat_id, T(lang, "cancelled"))
+            return
+        ids = payload.get("row_ids") or []
+        with store.action_undo_group(self.conn, chat_id, 'note_lifecycle'):
+            archived = [rid for rid in ids if store.note_archive(
+                self.conn, rid, reason="bulk archive by boss")]
+            for rid in archived:
+                events.record_done(self.conn, "note_archived", chat_id=chat_id,
+                                   payload={"message_id": rid})
+            self.reply(chat_id, T(lang, "note_archived_multi", n=len(archived)))
+
+    def _resolve_pending_delete(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        if action != "confirm":  # deletion only on an explicit yes
             store.pending_clear(self.conn, chat_id)
-            source = payload["source_chat_id"]
-            if action == "confirm":
-                store.pref_set(self.conn, f"auto_cat:{source}", payload["category"])
-                self.reply(chat_id, T(lang, "habit_enabled",
-                                      source=payload.get("source_title") or source,
-                                      category=payload["category"]))
-            else:
-                store.pref_set(self.conn, f"auto_cat_declined:{source}", "1")
-        elif kind == "boss_sensitive":
+            self.reply(chat_id, T(lang, "cancelled"))
+            return
+        if not self.note_confirmation_current(payload):
             store.pending_clear(self.conn, chat_id)
-            if action == "confirm":
-                boss_model.remember_explicit(self.conn, payload["value"], payload["kind"])
-                # Stored only now — the edit notice pointer follows the store.
-                self._remember_turn_artifact(payload.get("src_msg_id"), "memory")
-                self.reply(chat_id, T(lang, "boss_remembered", value=payload["value"]))
-            # cancel handled by the generic branch above; an unrelated message
-            # leaves the flagged item unsaved, which is the safe default.
-        elif kind == "note_edit":
-            # Applying his edit to a SAVED note happens only on an explicit yes;
-            # anything else leaves the note exactly as he confirmed it.
-            store.pending_clear(self.conn, chat_id)
-            row_id = payload.get("row_id")
-            if action == "confirm":
-                self.apply_note_edit(chat_id, row_id, lang)
-            else:
-                self.decline_note_edit(chat_id, row_id, lang,
-                                       note_no=payload.get("note_no"))
-        elif kind == "note_retitle":
-            # Replacing a saved note's TEXT (C2, 2026-07-28). Additive work needs
-            # no permission; this is not additive — the old text does not survive
-            # it — so it happens only on an explicit yes, and anything else
-            # leaves the note exactly as it was.
-            store.pending_clear(self.conn, chat_id)
-            if action == "confirm":
-                self.apply_note_retitle(chat_id, lang, payload)
-            else:
-                self.reply(chat_id, T(lang, "note_edit_declined",
-                                      row_id=payload.get("note_no") or "?"))
-        elif kind == "journal_prompt":
-            # Opt-in journal prompt (plan v1.1 §D-06/JRN-006): enabled ONLY on
-            # an explicit yes; anything else leaves prompts off.
-            store.pending_clear(self.conn, chat_id)
-            if action != "confirm":
-                self.reply(chat_id, T(lang, "cancelled"))
-                return
-            store.journal_def_update(
-                self.conn, payload["slug"], proactive_enabled=1,
-                prompt_config_json=json.dumps({"hour": int(payload.get("hour") or 21)}))
-            self.reply(chat_id, T(lang, "journal_prompt_enabled",
-                                  category=payload.get("display") or payload["slug"],
-                                  hour=int(payload.get("hour") or 21)))
+            self.reply(chat_id, T(lang, "card_expired"))
+            return
+        store.pending_clear(self.conn, chat_id)
+        ids = payload.get("row_ids") or ([payload["row_id"]] if payload.get("row_id") else [])
+        deleted, labels = [], []
+        for rid in ids:
+            if store.get_message(self.conn, rid) is not None:
+                labels.append(self.note_no(rid))  # capture the number before it's gone
+                for path in store.delete_message(self.conn, rid):
+                    Path(path).unlink(missing_ok=True)
+                deleted.append(rid)
+        log(f"deleted {len(deleted)} message(s) by operator: {deleted}")
+        if len(deleted) == 1:
+            self.reply(chat_id, T(lang, "deleted", row_id=labels[0]))
+        elif deleted:
+            self.reply(chat_id, T(lang, "deleted_multi", n=len(deleted)))
         else:
-            store.pending_clear(self.conn, chat_id)
+            self.reply(chat_id, T(lang, "items_empty"))
+
+    def _resolve_pending_habit(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        store.pending_clear(self.conn, chat_id)
+        source = payload["source_chat_id"]
+        if action == "confirm":
+            store.pref_set(self.conn, f"auto_cat:{source}", payload["category"])
+            self.reply(chat_id, T(lang, "habit_enabled",
+                                  source=payload.get("source_title") or source,
+                                  category=payload["category"]))
+        else:
+            store.pref_set(self.conn, f"auto_cat_declined:{source}", "1")
+
+    def _resolve_pending_boss_sensitive(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        store.pending_clear(self.conn, chat_id)
+        if action == "confirm":
+            boss_model.remember_explicit(self.conn, payload["value"], payload["kind"])
+            # Stored only now — the edit notice pointer follows the store.
+            self._remember_turn_artifact(payload.get("src_msg_id"), "memory")
+            self.reply(chat_id, T(lang, "boss_remembered", value=payload["value"]))
+
+    def _resolve_pending_note_edit(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        # Applying his edit to a SAVED note happens only on an explicit yes;
+        # anything else leaves the note exactly as he confirmed it.
+        store.pending_clear(self.conn, chat_id)
+        row_id = payload.get("row_id")
+        if action == "confirm":
+            self.apply_note_edit(chat_id, row_id, lang)
+        else:
+            self.decline_note_edit(chat_id, row_id, lang,
+                                   note_no=payload.get("note_no"))
+
+    def _resolve_pending_note_retitle(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        # Replacing a saved note's TEXT (C2, 2026-07-28). Additive work needs
+        # no permission; this is not additive — the old text does not survive
+        # it — so it happens only on an explicit yes, and anything else
+        # leaves the note exactly as it was.
+        store.pending_clear(self.conn, chat_id)
+        if action == "confirm":
+            self.apply_note_retitle(chat_id, lang, payload)
+        else:
+            self.reply(chat_id, T(lang, "note_edit_declined",
+                                  row_id=payload.get("note_no") or "?"))
+
+    def _resolve_pending_journal_prompt(self, chat_id, action, params, pending, lang):
+        payload = pending["payload"]
+        # Opt-in journal prompt (plan v1.1 §D-06/JRN-006): enabled ONLY on
+        # an explicit yes; anything else leaves prompts off.
+        store.pending_clear(self.conn, chat_id)
+        if action != "confirm":
+            self.reply(chat_id, T(lang, "cancelled"))
+            return
+        store.journal_def_update(
+            self.conn, payload["slug"], proactive_enabled=1,
+            prompt_config_json=json.dumps({"hour": int(payload.get("hour") or 21)}))
+        self.reply(chat_id, T(lang, "journal_prompt_enabled",
+                              category=payload.get("display") or payload["slug"],
+                              hour=int(payload.get("hour") or 21)))
+
 
     # -- Calendar
 

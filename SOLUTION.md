@@ -666,6 +666,16 @@ otherwise the document drifts into describing a Cara who no longer exists.
   `apply_category_confirm`, `present_suggestion`) stay on the Agent and resolve via the mixins.
   The relocation test asserts each handler sits in its OWN mixin's `__dict__` (and is gone
   from hermes where it moved out), not on the Agent.
+- **Pending resolution and mixin contracts.** `PENDING_RESOLVERS` mirrors action
+  dispatch for thirteen existing pending kinds without introducing a new module
+  or process. Kind bodies stay on Agent, after the same shared card/reply guards
+  and cancellation cleanup; journal corrections keep their earlier branch.
+  The outer `resolve_pending` delivery transaction and unknown-kind clear-only
+  fallback retain their existing contracts. A source-based MRO guard checks each
+  mixin's required `self` reads against composed class members and instance
+  declarations, including required literal `getattr` reads. Optional probes do
+  not require a provider. This is declaration coverage, not path-sensitive
+  initialization analysis; the full behavioral suite remains the regression gate.
 
 
 The boss wanted Cara to be one person who flows between her **work** and **warm**
