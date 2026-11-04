@@ -1,0 +1,18 @@
+{
+  "schema": "cara.adr18-owner-closure/v1",
+  "status": "closed",
+  "decision_date": "2026-11-04",
+  "owner_instruction": "close ADR-0018 - we assume that it doesn't need a verification",
+  "remaining_full_service_configuration_media_verification": "waived_by_owner",
+  "complete_reconstruction_test_performed": false,
+  "complete_reconstruction_test_pass_claimed": false,
+  "previous_measured_database_recovery": "preserved",
+  "remaining_adr18_implementation_activation_verification": [],
+  "routine_backup_and_monthly_selfcheck_policy": "unchanged",
+  "retention_failed_inbox_and_release_recovery_guards": "unchanged",
+  "optional_fingerprint_setting": "unset_unchanged",
+  "runtime_configuration_service_changes": 0,
+  "deployment_performed": false,
+  "explicit_deployment_confirmation_required": true,
+  "ADR0022": "postponed"
+}
