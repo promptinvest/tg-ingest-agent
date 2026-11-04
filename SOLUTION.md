@@ -32,10 +32,13 @@ retains test results, limitations and publication evidence.
 
 ADR-0018 adds optional operator-confirmed fingerprint comparison to the existing
 monthly restore check and explicitly enables the native SQLite build's existing
-secure-delete mode. Independent key custody and off-box provenance remain
-unproved; failed inbox rows remain recovery evidence. The
-[implementation record](docs/cara-adr18-2026-11-02.md) retains source verification
-and the earlier release hold.
+secure-delete mode. Separately retained workstation keys and recovery of a
+selected off-box database archive are verified in the
+[independent recovery record](docs/cara-adr18-independent-recovery-2026-11-04.md).
+Complete service, configuration and media recovery remains untested. Failed inbox
+rows remain recovery evidence; the optional fingerprint setting remains unset.
+The [implementation record](docs/cara-adr18-2026-11-02.md) retains the earlier
+source verification and release hold.
 
 Current specification text describes present behavior. Historical release
 checkpoints and the complete previous specification remain in the
@@ -1082,11 +1085,14 @@ because this map documents it. The manual map is checked against a synthetic
   [CARA section 9](CARA.md#9-operations-runbook); no live database replacement is
   authorized by an integrity check.)
 
-  **What the check does NOT prove, stated plainly:** the passphrase file lives on the same
-  droplet as the backups it protects, so a green result means "this archive and this key
-  agree on this box" — if the droplet is wiped, the off-box copies are unopenable without
-  a key copy that is somewhere else. Keeping that OFF-BOX copy is an operator decision and
-  is deliberately outside the code: nothing here prints, moves or copies the key.
+  **Scope of proof:** the scheduled check uses the on-box archive and key.
+  Separate workstation key availability and a selected archive retrieved through
+  the existing Telegram notification bot are verified by the
+  [independent database rehearsal](docs/cara-adr18-independent-recovery-2026-11-04.md).
+  This proves the selected snapshot can be decrypted and opened off the VPS;
+  it does not prove complete service, configuration or media reconstruction,
+  uninterrupted custody history or current live-row parity. The verifier prints
+  no key material and never moves or copies the key.
 
 ---
 
@@ -1188,9 +1194,12 @@ reactivation, deletion of evidence or a new recovery attempt.
   for final-action wording, and a catalogue-wide test checks every language and
   variant; Cara won't claim a real-world action she didn't perform.
 - Off-box DB snapshots are encrypted before leaving the host; plaintext backup
-  uploads are rejected. An independently retained recovery key outside the VPS/repo
-  remains unverified; successful local archive checks do not establish key custody
-  or host-loss recovery. See the runbook before any recovery operation.
+  uploads are rejected. Existing independently retained workstation keys and
+  recovery of the selected off-box database archive are verified separately from
+  scheduled local checks. Complete service/configuration/media recovery remains
+  untested. See the runbook and the
+  [independent recovery evidence](docs/cara-adr18-independent-recovery-2026-11-04.md)
+  before any recovery operation.
 - `store.open_db` explicitly enables SQLite `secure_delete`, pinning the native
   build's existing enabled default. Existing row retention, failed-inbox recovery
   evidence, WAL policy and backups remain. This performs no retrospective scrub

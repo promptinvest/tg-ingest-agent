@@ -1,0 +1,56 @@
+{
+  "schema": "cara.adr18-independent-database-recovery/v1",
+  "status": "selected_database_recovery_verified",
+  "recorded_at": "2026-11-04T09:21:30.704925+00:00",
+  "runtime_source_unchanged": "5928fd966a77fbbb98799840311679919e22f30f",
+  "helper_source_commit": "46d8ed69a4770a681b9734a95d9f047e63441732",
+  "selected_snapshot_utc": "2026-10-31T00:01:16Z",
+  "archive_sha256": "17a04fd8ad42280b20e2584ddab4b7e1a4b07d5e7f27271e234f02904f33318e",
+  "archive_bytes": 5879584,
+  "retrieval": {
+    "source": "existing Telegram fleet notification bot",
+    "observed_in_logged_in_desktop": true,
+    "bytes_match_retained_host_archive": true,
+    "new_backup_or_message_sent": false
+  },
+  "key_availability": {
+    "pre_existing_workstation_copies_matching_current_key": 2,
+    "key_material_copied_or_exported": false,
+    "uninterrupted_custody_history_proved": false
+  },
+  "measured_recovery": {
+    "bytes": 43999232,
+    "integrity": "ok",
+    "tables": 56
+  },
+  "max_expansion_bytes": 268435456,
+  "actual_local_returncode": 0,
+  "started_at": "2026-11-04T09:21:17.309310+00:00",
+  "completed_at": "2026-11-04T09:21:20.394679+00:00",
+  "artifact_unchanged": true,
+  "key_unchanged": true,
+  "plaintext_scratch_empty": true,
+  "effects": {
+    "openssl_decrypts": 1,
+    "scratch_database_opens": 1
+  },
+  "existing_helper_regressions": {
+    "tests": 2,
+    "skips": 0,
+    "actual_returncode": 0,
+    "environment": "isolated workstation source outside OneDrive"
+  },
+  "private_recovery_receipt_sha256": "837148cc950a533ac23c54a4a5ca74f2ee32202292867216cb006ab3cb368597",
+  "runtime_or_configuration_changes": 0,
+  "production_service_actions": 0,
+  "backup_policy_changes": 0,
+  "deployment_performed": false,
+  "deployment_confirmation_required": true,
+  "remaining": {
+    "complete_service_configuration_and_media_recovery": "untested",
+    "current_live_row_parity": "not claimed",
+    "optional_fingerprint_setting": "unset",
+    "failed_inbox_deletion": "excluded",
+    "ADR0022": "postponed"
+  }
+}

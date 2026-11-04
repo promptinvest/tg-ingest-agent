@@ -1,5 +1,18 @@
 # Cara ADR reconciliation — 1 November 2026
 
+## Current recovery evidence — 4 November, ADR0018 selected database rehearsal
+
+Existing workstation key copies match the current on-box key. The selected
+October 31 archive, retrieved from the existing Telegram notification bot,
+matches the retained host archive and passed off-VPS decrypt, bounded expansion
+and read-only database integrity/schema checks. This establishes selected
+database recovery and current independent key availability; complete service,
+configuration and media reconstruction remains untested.
+[Evidence](cara-adr18-independent-recovery-2026-11-04.md) keeps those limits
+separate. Runtime/configuration and backup policy are unchanged; no deployment
+was needed. The owner requires explicit confirmation before any deployment.
+The earlier release checkpoints below retain their original evidence dates.
+
 ## Current checkpoint — 4 November, ADR0039 accepted
 
 ADR-0039 is deployed and accepted as source `5928fd96`, build `7787d9c8e55c`,
@@ -83,7 +96,7 @@ not establish population quality, backup escrow or uninterrupted health.
 
 | ADR | Verified current remainder |
 | --- | --- |
-| 0018 | Narrow follow-ups deployed/accepted as `6e947694`, 2026-11-02, with a separate passing audit: optional operator-confirmed fingerprint comparison and explicit existing secure-delete mode. Independent custody/off-box provenance remain unproved; failed-inbox deletion stays excluded. [Release evidence](cara-adr18-release-2026-11-02.md). |
+| 0018 | Narrow follow-ups deployed/accepted as `6e947694`, 2026-11-02, with a separate passing audit: optional operator-confirmed fingerprint comparison and explicit existing secure-delete mode. Existing workstation key copies and selected off-box database recovery verified 2026-11-04; complete service/configuration/media recovery remains untested. Failed-inbox deletion stays excluded. [Recovery evidence](cara-adr18-independent-recovery-2026-11-04.md). |
 | 0022 | Postponed by the owner's no-web-search decision. Later task/broker/fleet work makes the original dormant-runtime premise stale. The echo worker remains; scheduler order now also affects durable recovery/delivery. Reassess the design before changing capability manifests, scheduling or worker state. |
 | 0024 | Implemented/deployed/accepted 2b6da6ee: precedence table/matrix, compatible route contracts and explicit generic undo. Existing phrases and history preserved; [release](cara-adr24-release-2026-11-02.md). |
 | 0026 | Complete 2026-11-01: full F-rule lint, exact synthetic prompt snapshots and compatible legacy task/env helper consolidation passed exact-source verification, native acceptance and independent audit. The contained first deployment failure and forward continuation are retained in the release record. |

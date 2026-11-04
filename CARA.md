@@ -29,10 +29,13 @@ retains test results, limitations and publication evidence.
 
 ADR-0018 adds optional operator-confirmed fingerprint comparison to the existing
 monthly restore check and explicitly enables the native SQLite build's existing
-secure-delete mode. Independent key custody and off-box provenance remain
-unproved; failed inbox rows remain recovery evidence. The
-[implementation record](docs/cara-adr18-2026-11-02.md) retains source verification
-and the earlier release hold.
+secure-delete mode. Separately retained workstation keys and recovery of a
+selected off-box database archive are verified in the
+[independent recovery record](docs/cara-adr18-independent-recovery-2026-11-04.md).
+Complete service, configuration and media recovery remains untested. Failed inbox
+rows remain recovery evidence; the optional fingerprint setting remains unset.
+The [implementation record](docs/cara-adr18-2026-11-02.md) retains the earlier
+source verification and release hold.
 
 Current specification text describes present behavior. Historical release
 checkpoints and the complete previous specification remain in the
@@ -1545,10 +1548,12 @@ General browsing keeps its existing visibility and ordering.
   stamped only on success. It refuses to start when free disk cannot hold the expansion,
   and the gunzip is capped at that same budget — what a restore can legitimately produce,
   not what the disk could absorb — so the check can never be what fills the disk.
-  **Honest limit:** the key file lives on the same droplet as the backups, so a green
-  check means "archive and key agree here", not "the off‑box copy is openable after this
-  box is gone" — that needs an operator‑held OFF‑BOX copy of the key (never automated,
-  never printed by the code). The restore one‑liner is in SOLUTION.md §9.
+  **Scope of proof:** the scheduled check uses the on-box archive and key.
+  Separately retained workstation keys and the selected Telegram database archive
+  have passed an [off-VPS recovery rehearsal](docs/cara-adr18-independent-recovery-2026-11-04.md).
+  That evidence covers the selected snapshot; complete service, configuration and
+  media reconstruction remains untested. The code never prints or copies the key.
+  The restore command is in SOLUTION.md §9.
 - **Low‑disk alert (2026‑07‑25):** a `check_disk_space` scheduler tick (every 30 min)
   reads free space on the DB filesystem and tells the boss ONCE when it drops below
   `DISK_ALERT_MIN_FREE_PCT` (default 10%), with a `disk_low` issue row, and once again
@@ -2478,7 +2483,7 @@ Scheduling is in-process; these rows add no systemd timer.
 | `/etc/tg-ingest-agent.env` | Protected populated application environment (0600); installer seeds only a missing file. No secrets in argv, logs or Git. |
 | `/etc/cara-mentor.env` and `/etc/cara-mentor-runner.env` | Retained bounded settings; reviewer has no Telegram credential, runner no inference credential. |
 | `/etc/cara-fleet/` | Executor identities, pinned hosts and policies. Poller receives no unrestricted SSH identity; gateway policy is separately root-owned. |
-| `/etc/tg-ingest-agent-backup.key` | On-box encryption key. Optional fingerprint confirmation reads only a regular file of at most 64 KiB, rejects symlinks and reports no key, path or fingerprint. Matching exact file bytes does not establish independent custody. Independent off-box escrow and host-loss recovery remain unproved without separate evidence. |
+| `/etc/tg-ingest-agent-backup.key` | On-box encryption key. Optional fingerprint confirmation reads only a regular file of at most 64 KiB, rejects symlinks and reports no key, path or fingerprint. Matching exact file bytes alone does not establish independent custody. Separate workstation key availability and selected database recovery are evidenced in the [independent recovery record](docs/cara-adr18-independent-recovery-2026-11-04.md); complete service/configuration/media recovery remains untested. |
 | `/root/codex-hardening-backups/` | Root-only pre-install DB/source/config/unit copies; installer rotates newest 10 of its own `*-tg-ingest-agent` directories only. Separately pinned release/failure evidence remains protected. |
 | `/opt/whisper.cpp/` | Default speech binary/model root; warm service uses private temporary conversion files and a loopback listener. Verify configured root before repair. |
 
@@ -2517,10 +2522,13 @@ Scheduling is in-process; these rows add no systemd timer.
    later state and is unsafe for the current application. This runbook grants
    no database rollback or destructive recovery.
 6. Test encrypted backups in isolated scratch using the decrypt command in
-   [SOLUTION §9](SOLUTION.md#9-voice--storage) and the real integrity check;
-   never decrypt over the live DB. Independent recovery also requires verified
-   off-box provenance and separately retained key custody. Until evidenced,
-   report host-loss recovery as unproved.
+   [SOLUTION §9](SOLUTION.md#9-voice--storage) or the existing
+   `backup.verify_independent_recovery` helper with explicit supplied archive,
+   separately retained key, trusted SHA256 and expansion bound. Never decrypt over
+   the live DB. Keep authenticated off-box retrieval, key availability and measured
+   restoration as separate evidence. The [selected rehearsal](docs/cara-adr18-independent-recovery-2026-11-04.md)
+   verifies database recovery on the workstation; it does not establish current
+   live-row parity or complete service/configuration/media reconstruction.
 
 Retain failed artifacts, historical usage charges and notification receipts.
 Free-space warnings and database-full containment do not guarantee a disk cannot

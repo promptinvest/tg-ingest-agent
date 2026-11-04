@@ -1,6 +1,6 @@
 # ADR-0018: Backup posture: daily local, weekly off-box, verified before rotation
 
-- Status: Narrow follow-ups deployed/accepted 6e947694, 2026-11-02; independent audit passed; custody/off-box provenance unproved; failed-inbox deletion excluded
+- Status: Narrow follow-ups deployed/accepted 6e947694, 2026-11-02; selected off-VPS database recovery and existing workstation keys verified 2026-11-04; complete service/configuration/media recovery untested; failed-inbox deletion excluded
 - Date: 2026-09-07
 - Phase: Phase C — robustness, operations, security
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -67,3 +67,15 @@ owner confirms the 2026-08-21 weekly decision concerned the off-box post, not lo
   [Release and verification](../cara-adr18-release-2026-11-02.md) supersede the
   earlier held release checkpoint without replacing its evidence. Independent
   custody/off-box provenance remain unproved; failed-inbox deletion is excluded.
+
+- 2026-11-04: the owner's continuation selected the outstanding recovery evidence.
+  Existing off-VPS key copies match the active key; the selected October 31
+  archive was retrieved from the existing Telegram notification bot and
+  matched exact retained host bytes. The unchanged recovery helper
+  decrypted, expanded and integrity-checked that snapshot on the
+  workstation, without production access during the rehearsal.
+  Complete service/configuration/media recovery remains untested. No
+  runtime/configuration, schedule, destination or retention change was
+  made; the optional fingerprint remains unset. The owner's explicit
+  deployment-confirmation requirement remains in force.
+  [Independent recovery evidence](../cara-adr18-independent-recovery-2026-11-04.md).
