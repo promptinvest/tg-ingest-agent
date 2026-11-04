@@ -32,7 +32,9 @@ monthly restore check and explicitly enables the native SQLite build's existing
 secure-delete mode. Separately retained workstation keys and recovery of a
 selected off-box database archive are verified in the
 [independent recovery record](docs/cara-adr18-independent-recovery-2026-11-04.md).
-Complete service, configuration and media recovery remains untested. Failed inbox
+ADR-0018 is closed by [owner decision](docs/cara-adr18-owner-closure-2026-11-04.md);
+further full service/configuration/media recovery verification is waived.
+Complete reconstruction remains untested. Failed inbox
 rows remain recovery evidence; the optional fingerprint setting remains unset.
 The [implementation record](docs/cara-adr18-2026-11-02.md) retains the earlier
 source verification and release hold.
@@ -1551,8 +1553,10 @@ General browsing keeps its existing visibility and ordering.
   **Scope of proof:** the scheduled check uses the on-box archive and key.
   Separately retained workstation keys and the selected Telegram database archive
   have passed an [off-VPS recovery rehearsal](docs/cara-adr18-independent-recovery-2026-11-04.md).
-  That evidence covers the selected snapshot; complete service, configuration and
-  media reconstruction remains untested. The code never prints or copies the key.
+  That evidence covers the selected snapshot. Complete service, configuration and
+  media reconstruction remains untested; the owner waives that additional
+  verification as an ADR-0018 completion requirement. Routine backup and
+  restore self-checks remain unchanged. The code never prints or copies the key.
   The restore command is in SOLUTION.md §9.
 - **Low‑disk alert (2026‑07‑25):** a `check_disk_space` scheduler tick (every 30 min)
   reads free space on the DB filesystem and tells the boss ONCE when it drops below
@@ -2483,7 +2487,7 @@ Scheduling is in-process; these rows add no systemd timer.
 | `/etc/tg-ingest-agent.env` | Protected populated application environment (0600); installer seeds only a missing file. No secrets in argv, logs or Git. |
 | `/etc/cara-mentor.env` and `/etc/cara-mentor-runner.env` | Retained bounded settings; reviewer has no Telegram credential, runner no inference credential. |
 | `/etc/cara-fleet/` | Executor identities, pinned hosts and policies. Poller receives no unrestricted SSH identity; gateway policy is separately root-owned. |
-| `/etc/tg-ingest-agent-backup.key` | On-box encryption key. Optional fingerprint confirmation reads only a regular file of at most 64 KiB, rejects symlinks and reports no key, path or fingerprint. Matching exact file bytes alone does not establish independent custody. Separate workstation key availability and selected database recovery are evidenced in the [independent recovery record](docs/cara-adr18-independent-recovery-2026-11-04.md); complete service/configuration/media recovery remains untested. |
+| `/etc/tg-ingest-agent-backup.key` | On-box encryption key. Optional fingerprint confirmation reads only a regular file of at most 64 KiB, rejects symlinks and reports no key, path or fingerprint. Matching exact file bytes alone does not establish independent custody. Separate workstation key availability and selected database recovery are evidenced in the [independent recovery record](docs/cara-adr18-independent-recovery-2026-11-04.md); complete reconstruction remains untested, with further verification waived for closed ADR-0018. |
 | `/root/codex-hardening-backups/` | Root-only pre-install DB/source/config/unit copies; installer rotates newest 10 of its own `*-tg-ingest-agent` directories only. Separately pinned release/failure evidence remains protected. |
 | `/opt/whisper.cpp/` | Default speech binary/model root; warm service uses private temporary conversion files and a loopback listener. Verify configured root before repair. |
 

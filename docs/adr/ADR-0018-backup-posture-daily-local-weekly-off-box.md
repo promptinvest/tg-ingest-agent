@@ -1,6 +1,6 @@
 # ADR-0018: Backup posture: daily local, weekly off-box, verified before rotation
 
-- Status: Narrow follow-ups deployed/accepted 6e947694, 2026-11-02; selected off-VPS database recovery and existing workstation keys verified 2026-11-04; complete service/configuration/media recovery untested; failed-inbox deletion excluded
+- Status: Implemented and CLOSED by owner decision, 2026-11-04; remaining full service/configuration/media recovery verification waived; measured database recovery pass preserved; failed-inbox deletion excluded
 - Date: 2026-09-07
 - Phase: Phase C — robustness, operations, security
 - Source: 2026-09-07 review of architecture, code and live behavior against build e3208b8 (report kept off-repo; findings are referenced by id)
@@ -16,6 +16,16 @@ one db_backup job: snapshot, rotate and encrypt daily when kv backup_day is a da
 ## Consequences
 
 seven daily encrypted local points; the off-box cadence the owner chose stays; no VACUUM, so restore_budget's bound holds.
+
+## Current closure
+
+The owner closes ADR-0018 and waives the remaining complete service,
+configuration and media recovery verification as a completion requirement.
+The selected database recovery pass remains measured evidence; complete
+reconstruction remains untested. No further implementation, configuration
+activation or verification is pending under this ADR. Routine backups,
+monthly restore self-checks, retention and release/recovery guards remain
+unchanged. [Owner decision](../cara-adr18-owner-closure-2026-11-04.md).
 
 ## Current reconciled scope
 
@@ -79,3 +89,10 @@ owner confirms the 2026-08-21 weekly decision concerned the off-box post, not lo
   made; the optional fingerprint remains unset. The owner's explicit
   deployment-confirmation requirement remains in force.
   [Independent recovery evidence](../cara-adr18-independent-recovery-2026-11-04.md).
+
+- 2026-11-04: owner instruction: "close ADR-0018 - we assume that it doesn't need a verification".
+  ADR-0018 is CLOSED. The remaining full service/configuration/media
+  recovery verification is waived, not performed or reclassified as passed.
+  The earlier measured database recovery, source release, exclusions,
+  routine backup/self-check policy and explicit deployment-confirmation
+  requirement are preserved. [Closure](../cara-adr18-owner-closure-2026-11-04.md).
