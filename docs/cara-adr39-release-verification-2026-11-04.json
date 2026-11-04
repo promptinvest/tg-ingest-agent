@@ -1,0 +1,145 @@
+{
+  "schema": "cara.adr39-public-verification-summary/v1",
+  "adr": "ADR-0039",
+  "status": "deployed_and_accepted",
+  "source_commit": "5928fd966a77fbbb98799840311679919e22f30f",
+  "source_archive_sha256": "887573ca081dec38474011759b7af8ba3421587493e8a6f8c1a4ecb5e894ef3d",
+  "publication": {
+    "source_pr": "https://github.com/promptinvest/tg-ingest-agent/pull/22",
+    "merged_commit": "71af9bc723e044e3c6d960963ec56d9472667b58",
+    "source_ci": "https://github.com/promptinvest/tg-ingest-agent/actions/runs/41643283178",
+    "production_tag": "production-2026-11-04-adr39-provider-response-limits",
+    "tag_annotation_sha": "624cfe2b412c02335e17761b84e6ef6d877f7394",
+    "tag_peeled_source": "5928fd966a77fbbb98799840311679919e22f30f",
+    "verified_at_utc": "2026-11-04T08:10:48.582477+00:00",
+    "tag_publication_sha256": "91a3c1f9c743566c187d89cc4943602367ac11089bd1fdea08902755544bc41f",
+    "earlier_tags_preserved": true,
+    "earlier_tag_count": 17,
+    "earlier_tag_ref_count": 33,
+    "added_refs": [
+      "refs/tags/production-2026-11-04-adr39-provider-response-limits",
+      "refs/tags/production-2026-11-04-adr39-provider-response-limits^{}"
+    ]
+  },
+  "scope": {
+    "success_body_bytes": 8388608,
+    "overflow_sentinel_bytes": 1,
+    "read_chunk_max_bytes": 65536,
+    "http_error_prefix_bytes": 65536,
+    "diagnostic_display_characters": 500,
+    "before_decode_and_json_parse": true,
+    "headers_not_trusted": true,
+    "oversized_dispatched_usage_unknown": true,
+    "oversized_local_whisper_no_extra_transcription": true,
+    "existing_below_limit_behavior_preserved": true,
+    "new_runtime_modules": 0,
+    "new_services": 0,
+    "schema_migrations": 0,
+    "models_changed": false,
+    "prompts_changed": false,
+    "budgets_changed": false
+  },
+  "verification": {
+    "focused_linux": {
+      "status": "passed",
+      "tests": 1618,
+      "skipped": 8
+    },
+    "full_linux_normal": {
+      "status": "passed",
+      "tests": 3535,
+      "skipped": 9
+    },
+    "full_linux_shuffled": {
+      "status": "passed",
+      "tests": 3535,
+      "skipped": 9
+    },
+    "new_application_tests": 19,
+    "committed_files_match_tested_bytes": 397,
+    "source_byte_parity_sha256": "7f054d3e35f17b85c91283fd08d8162a596feed973b0e0e278ea72db16c4df32",
+    "linux_evidence_sha256": "62d92e76f18670b2bab2e007bc5df7463f7f8e7bb7cb4d69f7fa8c84acef1d19",
+    "native_qa_sha256": "086142525f49423c18673346f64925333c445d7215ddd773a518688dcf4a7ed1",
+    "source_review_sha256": "f578a155f7ee4b4d1bc4574ff4afccc0d48fa6e115c24209c6af2bc5f8b428a1",
+    "source_qa_terminal_proof_sha256": "a341df682a9795166ed007eed605e751ee0af9a430593e06f3098fe45c7fdac7",
+    "original_test_support_files": 127,
+    "byte_exact_original_test_support_files": 119,
+    "adapted_fixture_files": 8,
+    "original_assertions_preserved": true,
+    "static_compile_shell_helper_gates": "passed",
+    "installed_layout": {
+      "status": "passed",
+      "scenarios": 5
+    },
+    "operator": {
+      "status": "passed",
+      "tests": 170,
+      "qualification_sha256": "f9ff6020db63527ef0475f879583eb44adb6492988e00cabf6b9cf0ad948e992"
+    },
+    "unchanged_historical_operator": {
+      "status": "passed",
+      "tests": 139
+    },
+    "transport": {
+      "status": "passed",
+      "tests": 27
+    },
+    "nonroot_import_roles": 2,
+    "actual_cgroup_cleanup_cases": 3,
+    "readonly_closeout_cases": 12
+  },
+  "native_release": {
+    "status": "deployed_and_accepted",
+    "phase_count": 21,
+    "build_version": "7787d9c8e55c",
+    "deployment_id": "caa2636ba2f71e9f8ac8b54b",
+    "native_manifest_sha256": "c833aa1d661be05142208f56bdbf0c5ea37b3dd5e8ae36f5aefbd86f098aa1e3",
+    "acceptance": {
+      "status": "accepted",
+      "at_utc": "2026-11-04T08:07:00.166678+00:00",
+      "sha256": "0bccf2fa5d8c515237502cc6ed1aac375a03dfe66ce77590f1e626b5121e48f2"
+    },
+    "independent_audit": {
+      "status": "passed",
+      "at_utc": "2026-11-04T08:07:57.439762+00:00",
+      "sha256": "d570d727e02529118adcc22e952a7da777ad5a8757371140a01d466d7497025f"
+    },
+    "physical_closure": {
+      "status": "passed",
+      "at_utc": "2026-11-04T08:09:22.168458+00:00",
+      "sha256": "2e9412d775023027c22068be33bb587c43009b4feee1acd7c0c960f58e88c4f2"
+    },
+    "actual_waits_zero": true,
+    "initial_ssh_is_dispatch_only": true,
+    "sealed_files_preserved": 690,
+    "recorded_actors_groups_and_owned_cgroup_absent": true,
+    "four_services_active_zero_restarts_at_closure": true,
+    "current_unknown_count": 0,
+    "historical_unknown_rows_preserved": 40,
+    "historical_usage_and_reservations_preserved": true,
+    "schema_tables": 56,
+    "effective_daily_usd": 2,
+    "effective_monthly_usd": 12,
+    "effective_task_usd": 0.15,
+    "models_prompts_budgets_history_cache_and_peer_state_preserved": true
+  },
+  "preserved_generations": {
+    "missing_guard_baseline": "expected_failure",
+    "initial_scratch": "failed_preserved_fixture_and_CRLF_packaging",
+    "first_full_qa": "transport_interrupted_preserved_normal_pass_not_complete",
+    "operator_v1_v2": "failed_preserved_diagnostic_fixtures",
+    "operator_v3": "failed_preserved_synthetic_inventory_count",
+    "operator_v4": "passed",
+    "old_controllers_replayed": 0
+  },
+  "limits": {
+    "encoded_body_not_total_json_memory_depth_or_parse_time": true,
+    "private_operator_paths_and_raw_data_omitted": true,
+    "public_summary_is_not_release_authority": true,
+    "source_verification_separate_from_native_acceptance": true,
+    "independent_backup_key_custody_and_host_loss_recovery": "unproved",
+    "adr0022": "postponed_separate_design_decision",
+    "documentation_closeout_changes_runtime": false,
+    "dated_closure_is_not_continuing_health_claim": true
+  }
+}

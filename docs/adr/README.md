@@ -16,7 +16,7 @@ completed 2026-10-25 09:08:55 UTC for `dcdd5ee`. The original implemented decisi
 
 | ADR | Title | Phase | Depends on | Status |
 |---|---|---|---|---|
-| [ADR-0039](ADR-0039-provider-response-byte-limits.md) | Provider response bytes are bounded before parsing | Owner implementation request | Existing inference transport and gateway | Accepted 2026-11-03; implementation/release verification in progress |
+| [ADR-0039](ADR-0039-provider-response-byte-limits.md) | Provider response bytes are bounded before parsing | Owner implementation request | Existing inference transport and gateway | Implemented/deployed/accepted 5928fd96, 2026-11-04; independent audit/closure and production tag verified; [release](../cara-adr39-release-2026-11-04.md) |
 | [ADR-0038](ADR-0038-durable-handoffs-and-boundary-validation.md) | Durable voice handoffs, scheduled delivery identity and boundary validation | Owner implementation request | Existing voice, delivery, fleet, knowledge and gateway modules | Implemented/deployed/accepted edf5d81e, 2026-11-03; independent audit/closure and production tag verified; [release](../cara-adr38-release-2026-11-03.md) |
 | [ADR-0037](ADR-0037-cache-usage-reporting.md) | Measured prompt-cache usage and dated price estimates | Owner implementation request | Existing gateway, usage ledger and reports | Deployed and accepted 2026-10-29, exact runtime e834c29; independent audit passed; savings unmeasured |
 | [ADR-0036](ADR-0036-read-only-grounded-analysis.md) | Read-only grounded analysis | Owner implementation request | Existing task skill, broker and scoped readers | Implemented e242516; accepted20:04UTC; observer/audit pass; production-2026-10-25-grounded-analysis verified |

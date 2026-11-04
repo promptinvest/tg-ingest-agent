@@ -1,20 +1,17 @@
 # Cara — Solution Specification
 
-The accepted runtime is ADR-0038 source `edf5d81e` (build `7c37b7fc8e7d`).
-Voice downloads and transcription use one admitted transport with durable inbox
-overflow; committed transcripts own bounded routing retries. Scheduled sends
-keep occurrence identities across uncertain delivery, and later health episodes
-remain eligible. Knowledge limits count confirmed notes, provider response and
-usage contracts are checked before settlement, and expired fleet cards leave
-ordinary confirmations available. Existing models, prompts, budgets, schema 56
-and stored history/cache remain preserved.
+The accepted runtime is ADR-0039 source `5928fd96` (build `7787d9c8e55c`).
+Provider success bodies are limited to 8 MiB before decoding or JSON parsing;
+HTTP diagnostics read only a 64 KiB prefix. Oversized replies retain unknown
+usage accounting. Existing voice handoffs, scheduled delivery identities,
+knowledge eligibility and fleet confirmation behavior remain. Models, prompts,
+budgets, schema 56 and stored history/cache remain preserved.
 
-Acceptance, the separate read-only audit, final physical closure and production
-publication passed. The [release record](docs/cara-adr38-release-2026-11-03.md)
-retains the failed first native attempt separately from the fresh same-installed
-forward completion. Its verified deployment marker and existing single notice
-remain unchanged; no reinstallation or historical result rewrite occurred.
-Detailed operator receipts remain in the private operator workspace.
+Native acceptance, the separate read-only audit, physical closure and production
+publication passed. The [release record](docs/cara-adr39-release-2026-11-04.md)
+retains exact verification and deployment bindings; detailed operator receipts
+remain private. The [previous release](docs/cara-adr38-release-2026-11-03.md)
+retains ADR-0038's failed attempt and same-installed forward completion.
 
 ADR-0028 pending confirmations retain the thirteen table-selected handlers on
 the same Agent, existing card ownership/cancellation/delivery contracts and the
