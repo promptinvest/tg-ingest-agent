@@ -1,6 +1,6 @@
 # ADR-0039: Bound provider response bytes before parsing
 
-- Status: Accepted; implementation and fresh release verification in progress
+- Status: Implemented/deployed/accepted `5928fd96`, 2026-11-04; separate audit, physical closure and production tag verified
 - Date: 2026-11-03
 - Selection: owner requested "implement this one: **Provider response-size limits** before JSON parsing". The standing implementation rule includes verified deployment.
 - Baseline: accepted ADR-0038 runtime `edf5d81e`, documentation/main `dec56e19`.
@@ -66,9 +66,29 @@ isolated Linux with eight environment skips. The initial scratch failure is
 retained: one reused fake needed a fresh stream on context entry, and the
 working-copy scratch package had Windows line endings in unchanged scripts.
 A fresh canonical-source package fixed packaging; all original assertions
-remain. Full exact-commit verification and native acceptance follow separately.
+remain. Exact-source Linux subsequently passed 3,535 checks in each normal
+and shuffled order, with nine existing skips, plus static/helper and five
+installed-layout scenarios. All 397 committed files match tested bytes.
+Of the original 127 test/support files, 119 remain byte-exact and eight contain
+only the selected finite-read fixtures; every original assertion remains.
+Source CI passed. The fresh operator passed 170 cases, the unchanged historical
+suite 139, transport 27, two nonroot import roles and three actual cgroup cases.
+The separate read-only closure helpers passed 12 cases, lint and compilation.
+
+All 21 native release phases passed, followed by separate audit and physical
+closure. The [release record](../cara-adr39-release-2026-11-04.md) and
+[verification summary](../cara-adr39-release-verification-2026-11-04.json)
+retain exact evidence, earlier failed/interrupted generations and remaining
+limits. The encoded-body cap does not bound total JSON allocation, nesting or
+parse time.
 
 ## Status log
 
 - 2026-11-03: owner selected provider response-size limits for implementation;
   implementation extends the existing transport and gateway with fixed byte caps.
+- 2026-11-04: exact source `5928fd96` merged through PR 22 as `71af9bc7`;
+  build `7787d9c8e55c`, deployment `caa2636ba2f71e9f8ac8b54b`, passed native acceptance,
+  separate audit and physical closure. Production tag
+  `production-2026-11-04-adr39-provider-response-limits` is verified at exact source;
+  all 17 previous tags remain exact. Models, prompts, budgets, history and
+  ADR-0022/backup-custody boundaries remain unchanged.

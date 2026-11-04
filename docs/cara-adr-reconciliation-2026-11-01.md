@@ -1,6 +1,26 @@
 # Cara ADR reconciliation — 1 November 2026
 
-## Current checkpoint — 3 November, ADR0038 accepted
+## Current checkpoint — 4 November, ADR0039 accepted
+
+ADR-0039 is deployed and accepted as source `5928fd96`, build `7787d9c8e55c`,
+deployment `caa2636ba2f71e9f8ac8b54b`. All 21 native release phases passed; acceptance
+completed at `2026-11-04T08:07:00.166678+00:00`, separate audit at `2026-11-04T08:07:57.439762+00:00` and physical
+closure at `2026-11-04T08:09:22.168458+00:00`. All four services were active with zero recorded
+restarts; the recorded actors/groups, outer parent and owned tool cgroup were
+absent. The [release record](cara-adr39-release-2026-11-04.md)
+separates source verification, native acceptance, audit and closure evidence.
+Production tag `production-2026-11-04-adr39-provider-response-limits`
+peels to exact source; all 17 earlier tags and 33 earlier refs remain exact.
+
+Success bodies are capped at 8 MiB before decoding/JSON parsing and HTTP error
+prefixes at 64 KiB. Oversized dispatched replies retain conservative unknown
+accounting. Existing below-limit behavior, models, prompts, budgets, schema 56,
+history/cache and notification policy remain. Current unknowns were zero and
+all 40 historical unknown rows remained exact. ADR-0022 stays postponed;
+independent backup-key custody and host-loss recovery remain unproved. Older
+checkpoints retain their dates and do not override this accepted release.
+
+## Previous checkpoint — 3 November, ADR0038 accepted
 
 ADR-0038 is deployed and accepted as source `edf5d81e`, build `7c37b7fc8e7d`,
 deployment `2adbff506160eedd86df7095`. Fresh same-installed forward acceptance
